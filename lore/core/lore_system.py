@@ -2,6 +2,7 @@
 """
 The unified LoreSystem - Primary implementation.
 This is the core module that contains all lore-related logic and operations.
+Complete refactor including ALL functionality from the original.
 """
 import logging
 import json
@@ -13,8 +14,9 @@ from agents import RunContextWrapper
 from lore.core.registry import ManagerRegistry
 from lore.core import canon
 from db.connection import get_db_connection_context
-from nyx.nyx_governance import AgentType
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
+from datetime import timedelta
 
 # Import all managers
 from lore.managers.education import EducationalSystemManager
@@ -68,13 +70,17 @@ class LoreSystem:
         self.world_politics_manager = WorldPoliticsManager(user_id, conversation_id)
         self.lore_dynamics_system = LoreDynamicsSystem(user_id, conversation_id)
         
-        # Track initialization state
+        # Store prohibited actions from directives
         self.prohibited_actions = []
+        # Store modifications from directives
         self.action_modifications = {}
+        
+        # Track which managers need governance registration
         self._managers_needing_registration = []
 
     @classmethod
     async def get_instance(cls, user_id: int, conversation_id: int) -> "LoreSystem":
+        """Singleton instance retrieval for a given user/conversation context."""
         key = f"{user_id}:{conversation_id}"
         if key not in cls._instances:
             instance = cls(user_id, conversation_id)
@@ -83,6 +89,7 @@ class LoreSystem:
         return cls._instances[key]
 
     async def ensure_initialized(self):
+        """Ensure the LoreSystem is initialized."""
         if self.initialized:
             return
         self.initialized = True
@@ -95,22 +102,30 @@ class LoreSystem:
 
     async def initialize(self, governor=None) -> bool:
         """Initialize the LoreSystem and all its components."""
+        # Guard against re-entry
         if self.initialized or self._initializing:
             logger.debug("[LoreSystem] Already initialized or initializing, skipping")
             return True
     
         self._initializing = True
         try:
+            # Use provided governor if available
             if governor:
                 self.governor = governor
                 logger.info("[LoreSystem] Using provided governor instance")
             
             logger.info("[LoreSystem] Starting initialization of data access components")
             
-            # Initialize all components without governance registration
+            # Check if governor is set
+            if self.governor:
+                logger.info("[LoreSystem] Governor already set, proceeding with initialization")
+            else:
+                logger.warning("[LoreSystem] No governor set yet, some features may be limited")
+    
+            # Initialize all components WITHOUT governance registration
             await self._initialize_components()
             
-            # Register with governance if available
+            # Now that all components are initialized, register with governance
             if self.governor:
                 await self._register_all_with_governance()
             
@@ -127,7 +142,7 @@ class LoreSystem:
 
     async def _initialize_components(self):
         """Initialize all components WITHOUT governance registration."""
-        # Initialize data access components
+        # Initialize the data access components
         logger.info("[LoreSystem] Initializing: NPCDataAccess")
         await self.npc_data.initialize()
 
@@ -140,32 +155,34 @@ class LoreSystem:
         logger.info("[LoreSystem] Initializing: LoreKnowledgeAccess")
         await self.lore_knowledge.initialize()
 
-        # Initialize integration components with governor
         logger.info("[LoreSystem] Initializing: NPCLoreIntegration")
+        # Set the governor on NPCLoreIntegration before initializing
         if hasattr(self.npc_integration, 'set_governor'):
             self.npc_integration.set_governor(self.governor)
         await self.npc_integration.initialize()
         self._managers_needing_registration.append(('npc_integration', self.npc_integration))
 
         logger.info("[LoreSystem] Initializing: ConflictIntegration")
+        # Set governor if the component supports it
         if hasattr(self.conflict_integration, 'set_governor'):
             self.conflict_integration.set_governor(self.governor)
         await self.conflict_integration.initialize()
         self._managers_needing_registration.append(('conflict_integration', self.conflict_integration))
 
         logger.info("[LoreSystem] Initializing: ContextEnhancer")
+        # Set governor if the component supports it
         if hasattr(self.context_enhancer, 'set_governor'):
             self.context_enhancer.set_governor(self.governor)
         await self.context_enhancer.initialize()
         self._managers_needing_registration.append(('context_enhancer', self.context_enhancer))
 
-        # Initialize generator
         logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
+        # Get the instance with the governor to avoid circular dependency
         self.generator = DynamicLoreGenerator.get_instance(self.user_id, self.conversation_id, self.governor)
         await self.generator.initialize()
         self._managers_needing_registration.append(('generator', self.generator))
 
-        # Initialize specialized managers
+        # Initialize additional integrated managers
         await self._initialize_specialized_managers()
 
     async def _initialize_specialized_managers(self):
@@ -183,10 +200,12 @@ class LoreSystem:
         for manager_name, manager in managers:
             logger.info(f"[LoreSystem] Ensuring: {manager_name}")
             
+            # Pass governor if the manager supports it
             if hasattr(manager, 'set_governor'):
                 manager.set_governor(self.governor)
             
             try:
+                # Add timeout to catch hanging initializations
                 await asyncio.wait_for(
                     manager.ensure_initialized(),
                     timeout=15.0
@@ -195,7 +214,9 @@ class LoreSystem:
                 logger.info(f"[LoreSystem] {manager_name} initialized successfully")
                 
             except asyncio.TimeoutError:
-                logger.error(f"[LoreSystem] {manager_name} init timed-out")
+                logger.error(f"[LoreSystem] {manager_name} init timed-out - dumping tasks...")
+                for task in asyncio.all_tasks():
+                    logger.error(f"↳ {task} - {task.get_stack(limit=5)}")
                 raise RuntimeError(f"{manager_name} initialization timed out")
             except Exception as e:
                 logger.error(f"[LoreSystem] Error initializing {manager_name}: {e}")
@@ -205,15 +226,16 @@ class LoreSystem:
         """Register all components with governance after they're initialized."""
         logger.info("[LoreSystem] Registering all components with Nyx governance")
         
-        # Register the LoreSystem itself
+        # First register the LoreSystem itself
         await self.register_with_governance()
         
-        # Register all managers
+        # Then register all managers that need it
         for manager_id, manager in self._managers_needing_registration:
             try:
                 if hasattr(manager, 'register_with_governance_deferred'):
                     await manager.register_with_governance_deferred()
                 elif hasattr(manager, '_get_agent_type') and hasattr(manager, '_get_agent_id'):
+                    # Use the base pattern
                     await self.governor.register_agent(
                         agent_type=manager._get_agent_type(),
                         agent_id=manager._get_agent_id(),
@@ -222,6 +244,7 @@ class LoreSystem:
                     logger.info(f"[LoreSystem] Registered {manager_id} with governance")
             except Exception as e:
                 logger.warning(f"[LoreSystem] Failed to register {manager_id} with governance: {e}")
+                # Continue with other registrations even if one fails
 
     async def register_with_governance(self):
         """Register the lore system with Nyx governance."""
@@ -229,12 +252,14 @@ class LoreSystem:
             logger.warning("[LoreSystem] Cannot register with governance - no governor set")
             return
 
+        # Register this system with governance
         await self.governor.register_agent(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_system",
             agent_instance=self
         )
 
+        # Issue standard directives
         await self._issue_standard_directives()
 
     async def _issue_standard_directives(self):
@@ -242,8 +267,7 @@ class LoreSystem:
         if not self.governor:
             return
 
-        from nyx.nyx_governance import DirectiveType, DirectivePriority
-
+        # Example directive for lore generation
         await self.governor.issue_directive(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_generator",
@@ -253,9 +277,10 @@ class LoreSystem:
                 "scope": "narrative"
             },
             priority=DirectivePriority.MEDIUM,
-            duration_minutes=24 * 60
+            duration_minutes=24 * 60  # 24 hours
         )
 
+        # Example directive for NPC lore integration
         await self.governor.issue_directive(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="npc_lore_integration",
@@ -276,308 +301,10 @@ class LoreSystem:
         """Check if the LoreSystem has been initialized."""
         return self.initialized
 
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="propose_and_enact_change",
-        action_description="Proposing change to {entity_type} based on: {reason}",
-        id_from_context=lambda ctx: "lore_system"
-    )
-    async def propose_and_enact_change(
-        self,
-        ctx,
-        entity_type: str,
-        entity_identifier: Dict[str, Any],
-        updates: Dict[str, Any],
-        reason: str
-    ) -> Dict[str, Any]:
-        """
-        The universal method for making a canonical change to the world state.
-        """
-        # Ensure we have a proper context object
-        if isinstance(ctx, str) or not hasattr(ctx, 'context'):
-            ctx = RunContextWrapper(context={
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
-            })
-            logger.warning(f"Invalid context passed to propose_and_enact_change, created fallback context")
-        
-        logger.info(f"Proposing change to {entity_type} ({entity_identifier}) because: {reason}")
-    
-        try:
-            async with get_db_connection_context() as conn:
-                async with conn.transaction():
-                    # Step 1: Find the current state of the entity
-                    where_clauses = [f"{key} = ${i+1}" for i, key in enumerate(entity_identifier.keys())]
-                    where_sql = " AND ".join(where_clauses)
-                    select_query = f"SELECT * FROM {entity_type} WHERE {where_sql}"
-                    
-                    existing_entity = await conn.fetchrow(select_query, *entity_identifier.values())
-    
-                    if not existing_entity:
-                        return {"status": "error", "message": f"Entity not found: {entity_type} with {entity_identifier}"}
-    
-                    # Step 2: Validate for conflicts (with improved JSON handling)
-                    conflicts = []
-                    for field, new_value in updates.items():
-                        if field in existing_entity:
-                            current_value = existing_entity[field]
-                            
-                            # Identify JSON fields based on common patterns
-                            json_fields = [
-                                'relationships', 'personality_traits', 'hobbies', 'likes', 
-                                'dislikes', 'affiliations', 'schedule', 'archetypes', 
-                                'memory', 'personality_patterns', 'trauma_triggers', 
-                                'flashback_triggers', 'revelation_plan', 'group_data',
-                                'mask_slippage_events', 'evolution_events', 'current_state',
-                                'last_decision', 'item_properties', 'perk_properties',
-                                'reward_properties', 'entry_metadata', 'tags', 'goal',
-                                'leverage_used', 'metadata', 'network_data', 'timeline',
-                                'primary_actors', 'diplomatic_events', 'military_events',
-                                'civilian_impact', 'resolution_scenarios', 'most_likely_outcome',
-                                'public_opinion', 'relations', 'power_centers', 'resolution_attempts',
-                                'link_history', 'dynamics', 'experienced_crossroads',
-                                'experienced_rituals', 'evolution_history', 'alliances',
-                                'rivalries', 'requirements', 'stakeholders_involved',
-                                'key_challenges', 'involved_npcs', 'serialized_state',
-                                'event_payload', 'current_goals', 'predicted_futures',
-                                'message', 'directive', 'message_content', 'response_content',
-                                'governance_policy', 'theme_directives', 'pacing_directives',
-                                'character_directives', 'payload', 'kink_profile',
-                                'decision_meta', 'capabilities', 'state_data', 'metrics',
-                                'error_log', 'learned_patterns', 'npc_names', 'trigger_context',
-                                'context_data', 'changes'
-                            ]
-                            
-                            if field in json_fields:
-                                try:
-                                    # Parse current value
-                                    if isinstance(current_value, str):
-                                        current_obj = json.loads(current_value) if current_value else {}
-                                    else:
-                                        current_obj = current_value if current_value is not None else {}
-                                    
-                                    # Parse new value
-                                    if isinstance(new_value, str):
-                                        new_obj = json.loads(new_value) if new_value else {}
-                                    else:
-                                        new_obj = new_value if new_value is not None else {}
-                                    
-                                    # Special handling for arrays
-                                    if isinstance(current_obj, list) and isinstance(new_obj, list):
-                                        # Don't conflict when adding to empty array
-                                        if len(current_obj) == 0 and len(new_obj) > 0:
-                                            continue
-                                        # Don't conflict if new array contains all items from current
-                                        if all(item in new_obj for item in current_obj):
-                                            continue
-                                    
-                                    # Special handling for dicts
-                                    if isinstance(current_obj, dict) and isinstance(new_obj, dict):
-                                        # Don't conflict when adding to empty dict
-                                        if len(current_obj) == 0 and len(new_obj) > 0:
-                                            continue
-                                        # Don't conflict if new dict is a superset
-                                        if all(k in new_obj and new_obj[k] == v for k, v in current_obj.items()):
-                                            continue
-                                    
-                                    # Compare as objects
-                                    if current_obj != new_obj:
-                                        conflict_detail = (
-                                            f"Conflict on field '{field}'. "
-                                            f"Current value: '{json.dumps(current_obj)}'. "
-                                            f"Proposed value: '{json.dumps(new_obj)}'."
-                                        )
-                                        conflicts.append(conflict_detail)
-                                        logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
-                                except Exception as e:
-                                    logger.debug(f"Error comparing JSON field {field}: {e}")
-                                    if current_value != new_value:
-                                        conflict_detail = (
-                                            f"Conflict on field '{field}'. "
-                                            f"Current value: '{current_value}'. "
-                                            f"Proposed value: '{new_value}'."
-                                        )
-                                        conflicts.append(conflict_detail)
-                            else:
-                                # Regular field comparison
-                                if current_value is not None and current_value != new_value:
-                                    conflict_detail = (
-                                        f"Conflict on field '{field}'. "
-                                        f"Current value: '{existing_entity[field]}'. "
-                                        f"Proposed value: '{new_value}'."
-                                    )
-                                    conflicts.append(conflict_detail)
-                                    logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
-    
-                    if conflicts:
-                        # Handle conflict by generating a new narrative event
-                        dynamics = await self.registry.get_lore_dynamics()
-                        conflict_description = f"A conflict arose: {reason}. Details: {', '.join(conflicts)}"
-                        
-                        if hasattr(dynamics, 'evolve_lore_with_event'):
-                            await dynamics.evolve_lore_with_event(ctx, conflict_description)
-                        else:
-                            await dynamics(ctx, conflict_description)
-                            
-                        return {"status": "conflict_generated", "details": conflicts}
-    
-                    # Step 3: No conflict, commit the change
-                    # Add type conversion for known boolean columns
-                    boolean_columns = ['introduced', 'is_active', 'is_consolidated', 'is_archived']
-                    
-                    # Build SET clauses with proper casting
-                    set_clauses = []
-                    update_values = []
-                    
-                    for i, (key, value) in enumerate(updates.items()):
-                        if key in boolean_columns:
-                            bool_value = bool(value) if not isinstance(value, bool) else value
-                            set_clauses.append(f"{key} = ${i+1}::boolean")
-                            update_values.append(bool_value)
-                        else:
-                            set_clauses.append(f"{key} = ${i+1}")
-                            update_values.append(value)
-                    
-                    set_sql = ", ".join(set_clauses)
-                    
-                    # Build WHERE clause
-                    where_clauses_update = []
-                    num_updates = len(updates)
-                    for i, key in enumerate(entity_identifier.keys()):
-                        placeholder_num = num_updates + i + 1
-                        where_clauses_update.append(f"{key} = ${placeholder_num}")
-                    where_sql_update = " AND ".join(where_clauses_update)
-                    
-                    update_values.extend(list(entity_identifier.values()))
-                    
-                    update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql_update}"
-                    await conn.execute(update_query, *update_values)
-    
-                    # Step 4: Log the change
-                    event_text = f"The {entity_type} identified by {entity_identifier} was updated. Reason: {reason}. Changes: {updates}"
-                    await canon.log_canonical_event(ctx, conn, event_text, tags=[entity_type.lower(), 'state_change'], significance=8)
-            
-            # Step 5: Propagate consequences
-            event_description = self._create_detailed_event_description(
-                entity_type, entity_identifier, updates, reason
-            )
-            
-            if event_description:
-                dynamics = await self.registry.get_lore_dynamics()
-                
-                if hasattr(dynamics, 'evolve_lore_with_event'):
-                    await dynamics.evolve_lore_with_event(ctx, event_description)
-                else:
-                    await dynamics(ctx, event_description)
-            
-            return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
-    
-        except Exception as e:
-            logger.exception(f"Failed to enact change for {entity_type} ({entity_identifier}): {e}")
-            return {"status": "error", "message": str(e)}
+    # ---------------------------------------------------------------------
+    # NPC Lore Methods
+    # ---------------------------------------------------------------------
 
-    def _create_detailed_event_description(
-        self, 
-        entity_type: str, 
-        entity_identifier: Dict[str, Any], 
-        updates: Dict[str, Any], 
-        reason: str
-    ) -> Optional[str]:
-        """
-        Create a detailed event description that will pass validation.
-        """
-        significant_fields = {
-            'NPCStats': ['power_level', 'status', 'loyalty'],
-            'Factions': ['leader_npc_id', 'power_level', 'territory', 'allies', 'rivals'],
-            'Nations': ['leader_npc_id', 'government_type', 'stability'],
-            'Locations': ['controlling_faction', 'strategic_value'],
-            'NPCs': ['status', 'faction_affiliation', 'current_location']
-        }
-        
-        if entity_type in significant_fields:
-            updated_significant_fields = [
-                field for field in significant_fields[entity_type] 
-                if field in updates
-            ]
-            if not updated_significant_fields:
-                return None
-        
-        event_parts = []
-        
-        if entity_type == "NPCStats" and "power_level" in updates:
-            event_parts.append(f"A significant shift in power has occurred - someone's influence has changed dramatically")
-        elif entity_type == "Factions" and "leader_npc_id" in updates:
-            event_parts.append(f"Leadership has changed within a major faction")
-        elif entity_type == "Nations" and "leader_npc_id" in updates:
-            event_parts.append(f"A nation has experienced a change in leadership")
-        elif entity_type == "Locations" and "controlling_faction" in updates:
-            event_parts.append(f"Control of a strategic location has shifted to new hands")
-        else:
-            event_parts.append(f"The {entity_type.lower()} structure has undergone important changes")
-        
-        event_parts.append(f"This occurred because: {reason}")
-        
-        change_details = []
-        for field, value in updates.items():
-            if field in ['power_level', 'status', 'loyalty', 'stability']:
-                change_details.append(f"{field.replace('_', ' ')} has shifted")
-            elif field in ['leader_npc_id', 'controlling_faction']:
-                change_details.append(f"new leadership has been established")
-            elif field in ['territory', 'allies', 'rivals']:
-                change_details.append(f"{field} relationships have changed")
-        
-        if change_details:
-            event_parts.append(f"Specifically: {', '.join(change_details)}")
-        
-        if entity_type in ["Nations", "Factions"]:
-            event_parts.append("This shift in power will ripple through the political landscape")
-        elif entity_type == "Locations":
-            event_parts.append("This territorial change may spark new conflicts or opportunities")
-        elif entity_type == "NPCStats":
-            event_parts.append("This personal transformation will influence their relationships")
-        
-        return ". ".join(event_parts)
-
-    # --- Convenience Wrappers ---
-    
-    async def execute_coup(self, ctx, nation_id: int, new_leader_id: int, reason: str):
-        """A high-level wrapper for a coup event."""
-        if isinstance(ctx, str) or not hasattr(ctx, 'context'):
-            ctx = RunContextWrapper(context={
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
-            })
-        
-        return await self.propose_and_enact_change(
-            ctx=ctx,
-            entity_type="Nations",
-            entity_identifier={"id": nation_id},
-            updates={"leader_npc_id": new_leader_id},
-            reason=reason
-        )
-
-    async def assign_faction_territory(self, ctx, faction_id: int, location_name: str, reason: str):
-        """A high-level wrapper for a faction taking over territory."""
-        if isinstance(ctx, str) or not hasattr(ctx, 'context'):
-            ctx = RunContextWrapper(context={
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
-            })
-        
-        location_id = None
-        async with get_db_connection_context() as conn:
-            location_id = await canon.find_or_create_location(ctx, conn, location_name)
-
-        return await self.propose_and_enact_change(
-            ctx=ctx,
-            entity_type="Factions",
-            entity_identifier={"id": faction_id},
-            updates={"territory": location_name},
-            reason=reason
-        )
-
-    # --- NPC Lore Methods ---
-    
     async def get_npc_lore_knowledge(self, npc_id: int) -> List[Dict[str, Any]]:
         """Get all lore known by an NPC."""
         return await self.lore_knowledge.get_entity_knowledge("npc", npc_id)
@@ -606,8 +333,10 @@ class LoreSystem:
         """Handle a lore interaction between the player and an NPC."""
         return await self.npc_integration.process_npc_lore_interaction(ctx, npc_id, player_input)
 
-    # --- Location Lore Methods ---
-    
+    # ---------------------------------------------------------------------
+    # Location Lore Methods
+    # ---------------------------------------------------------------------
+
     async def get_location_lore(self, location_id: int) -> Dict[str, Any]:
         """Get lore specific to a location."""
         return await self.location_data.get_location_with_lore(location_id)
@@ -619,7 +348,7 @@ class LoreSystem:
         id_from_context=lambda ctx: "lore_system"
     )
     async def get_comprehensive_location_context(self, ctx, location_name: str) -> Dict[str, Any]:
-        """Get a full lore context for a location."""
+        """Get a full lore context for a location, including culture/politics environment."""
         location = await self.location_data.get_location_by_name(location_name)
         if not location:
             return {}
@@ -648,34 +377,53 @@ class LoreSystem:
         """Generate a scene description enhanced with relevant lore."""
         return await self.context_enhancer.generate_scene_description(location)
 
-    # --- Education / Religion / Local Lore Accessors ---
-    
+    # ---------------------------------------------------------------------
+    # Education / Religion / Local Lore Accessors
+    # ---------------------------------------------------------------------
+
     async def generate_educational_systems(self) -> List[Dict[str, Any]]:
-        """Generate educational systems."""
+        """
+        High-level call to produce educational systems (or retrieve them)
+        by delegating to the EducationalSystemManager.
+        """
+        # For example:
         return await self.education_manager.generate_educational_systems(None)
 
     async def generate_knowledge_traditions(self) -> List[Dict[str, Any]]:
-        """Generate knowledge traditions."""
+        """
+        Similarly, a high-level call to produce knowledge traditions
+        from the EducationalSystemManager.
+        """
         return await self.education_manager.generate_knowledge_traditions(None)
 
     async def generate_religion(self) -> Dict[str, Any]:
-        """Generate a complete faith system."""
+        """
+        High-level call to produce a complete faith system
+        from the ReligionManager.
+        """
         return await self.religion_manager.generate_complete_faith_system(None)
 
     async def distribute_religions_across_nations(self) -> List[Dict[str, Any]]:
-        """Distribute religions across world nations."""
+        """
+        Use ReligionManager to distribute religions across world nations.
+        """
         return await self.religion_manager.distribute_religions(None)
 
     async def generate_local_lore_for_location(self, location_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate local myths/histories/landmarks."""
+        """
+        High-level call to produce local myths/histories/landmarks
+        from the LocalLoreManager.
+        """
         ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id
         })
         return await self.local_lore_manager._generate_location_lore_impl(ctx, location_data)
 
-    # --- Lore Generation & Evolution ---
-    
+    # ---------------------------------------------------------------------
+    # Lore Generation & Evolution
+    # ---------------------------------------------------------------------
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_complete_lore",
@@ -683,7 +431,7 @@ class LoreSystem:
         id_from_context=lambda ctx: "lore_system"
     )
     async def generate_complete_lore(self, ctx, environment_desc: str) -> Dict[str, Any]:
-        """Generate a complete set of lore for a game world."""
+        """Generate a complete set of lore for a game world via the generator."""
         return await self.generator.generate_complete_lore(environment_desc)
 
     @with_governance(
@@ -696,19 +444,634 @@ class LoreSystem:
         """Update world lore based on a significant narrative event."""
         return await self.generator.evolve_lore_with_event(event_description)
 
+    # Additionally, you could unify dynamic-lore updates with the LoreDynamicsSystem:
     async def mature_world_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
-        """Call the LoreDynamicsSystem to mature lore over time."""
+        """Example: call the LoreDynamicsSystem to mature lore over time."""
         ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id
         })
         return await self.lore_dynamics_system.mature_lore_over_time.fn(ctx, days_passed)
-
-    # --- Cleanup ---
     
-    async def cleanup(self):
-        """Clean up resources used by the LoreSystem."""
+    # ---------------------------------------------------------------------
+    # Canon Methods - This is critical for the system to work
+    # ---------------------------------------------------------------------
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="propose_and_enact_change",
+        action_description="Proposing change to {entity_type} based on: {reason}",
+        id_from_context=lambda ctx: "lore_system"
+    )
+    async def propose_and_enact_change(
+        self,
+        ctx,
+        entity_type: str,
+        entity_identifier: Dict[str, Any],
+        updates: Dict[str, Any],
+        reason: str
+    ) -> Dict[str, Any]:
+        """
+        The universal method for making a canonical change to the world state.
+        This is the method that NyxUnifiedGovernor calls.
+    
+        Args:
+            entity_type (str): The type of entity (e.g., 'Nations', 'Factions').
+            entity_identifier (Dict): A dict to find the entity (e.g., {'id': 123}).
+            updates (Dict): A dict of columns and their new values (e.g., {'leader_npc_id': 456}).
+            reason (str): The narrative reason for the change.
+        """
+        # Import canon module
+        from lore.core import canon
+        from db.connection import get_db_connection_context
+        
+        # Comprehensive mapping of entity types to their JSON/JSONB fields and array fields
+        json_fields = {
+            # Core tables
+            "StateUpdates": ["update_payload"],
+            "Settings": ["enhanced_features", "stat_modifiers", "activity_examples"],
+            "Locations": ["open_hours"],  # Arrays handled separately
+            
+            # NPC-related tables
+            "NPCStats": ["relationships", "personality_traits", "hobbies", "likes", 
+                         "dislikes", "affiliations", "schedule", "archetypes", 
+                         "physical_description", "memory", "personality_patterns",
+                         "trauma_triggers", "flashback_triggers", "revelation_plan"],
+            "NPCGroups": ["group_data"],
+            "NPCEvolution": ["mask_slippage_events", "evolution_events"],
+            "NPCAgentState": ["current_state", "last_decision"],
+            "NPCVisualAttributes": ["outfit_variations", "accessories", "expressions", "poses"],
+            "NPCVisualEvolution": ["previous_state", "current_state"],
+            "NPCMemories": ["associated_entities"],
+            "NPCMasks": ["mask_data"],
+            
+            # Player-related tables
+            "PlayerInventory": ["item_properties"],
+            "PlayerPerks": ["perk_properties"],
+            "PlayerSpecialRewards": ["reward_properties"],
+            "PlayerJournal": ["entry_metadata", "tags"],
+            "PlayerManipulationAttempts": ["goal", "leverage_used"],
+            "PlayerConflictInvolvement": ["actions_taken", "manipulated_by"],
+            
+            # Memory system tables
+            "unified_memories": ["metadata"],
+            "MemoryMaintenanceSchedule": ["maintenance_schedule"],
+            "memory_telemetry": ["metadata"],
+            "SemanticNetworks": ["network_data"],
+            
+            # Game mechanics tables
+            "Archetypes": ["baseline_stats", "progression_rules", "setting_examples", "unique_traits"],
+            "Activities": ["purpose", "stat_integration", "intensity_tiers", "setting_variants"],
+            "ActivityEffects": ["effects", "flags"],
+            "IntensityTiers": ["key_features", "activity_examples", "permanent_effects"],
+            "Interactions": ["detailed_rules", "task_examples", "agency_overrides"],
+            "PlotTriggers": ["key_features", "stat_dynamics", "examples", "triggers"],
+            
+            # Faction/political tables
+            "Factions": ["leadership_structure"],
+            
+            # World lore tables
+            "NationalConflicts": ["public_opinion"],
+            "JointMemories": ["tags", "metadata"],
+            "PoliticalEntities": ["relations", "power_centers"],
+            "ConflictSimulations": ["primary_actors", "timeline", "diplomatic_events", 
+                                    "military_events", "civilian_impact", "resolution_scenarios", 
+                                    "most_likely_outcome"],
+            "BorderDisputes": ["resolution_attempts"],
+            
+            # Social/relationship tables
+            "SocialLinks": ["link_history", "dynamics", "experienced_crossroads", 
+                            "experienced_rituals"],
+            "RelationshipEvolution": ["evolution_history"],
+            "interaction_history": ["emotional_impact", "relationship_changes"],
+            
+            # Conflict system tables
+            "ConflictStakeholders": ["alliances", "rivalries"],
+            "ResolutionPaths": ["requirements", "stakeholders_involved", "key_challenges"],
+            "PathStoryBeats": ["involved_npcs"],
+            
+            # Nyx system tables
+            "nyx_brain_checkpoints": ["serialized_state"],
+            "nyx_brain_events": ["event_payload"],
+            "NyxAgentState": ["current_goals", "predicted_futures"],
+            "nyx_dm_messages": ["message"],
+            "NyxNPCDirectives": ["directive"],
+            "JointMemoryGraph": ["tags", "metadata"],
+            "NyxAgentDirectives": ["directive"],
+            "NyxActionTracking": ["action_data", "result_data"],
+            "NyxAgentCommunication": ["message_content", "response_content"],
+            "NyxJointMemoryGraph": ["tags", "metadata"],
+            "NyxNarrativeGovernance": ["governance_policy", "theme_directives", 
+                                       "pacing_directives", "character_directives"],
+            "nyx1_strategy_injections": ["payload"],
+            "nyx1_strategy_logs": ["kink_profile", "decision_meta"],
+            "NyxAgentRegistry": ["capabilities"],
+            
+            # Other system tables
+            "scenario_states": ["state_data"],
+            "performance_metrics": ["metrics", "error_log"],
+            "learning_metrics": ["metrics", "learned_patterns"],
+            "ImageFeedback": ["npc_names"],
+            "UserKinkProfile": ["trigger_context"],
+            "ContextEvolution": ["context_data", "changes"],
+        }
+        
+        # Array fields (TEXT[], INTEGER[], etc) - these need special handling
+        array_fields = {
+            "Locations": ["notable_features", "hidden_aspects", "access_restrictions", "local_customs"],
+            "Factions": ["values", "goals", "membership_requirements", "rivals", "allies", 
+                         "secret_activities", "recruitment_methods"],
+            "Nations": ["major_resources", "major_cities", "cultural_traits", "neighboring_nations"],
+            "NationalConflicts": ["involved_nations", "recent_developments"],
+            "CulturalElements": ["practiced_by"],
+            "CulinaryTraditions": ["ingredients", "adopted_by"],
+            "SocialCustoms": ["adopted_by"],
+            "GeographicRegions": ["natural_resources", "notable_features", "major_settlements", 
+                                  "cultural_traits", "dangers", "terrain_features"],
+            "PoliticalEntities": ["internal_conflicts"],
+            "BorderDisputes": ["female_leaders_involved"],
+            "UrbanMyths": ["regions_known", "themes", "matriarchal_elements"],
+            "LocalHistories": ["notable_figures", "connected_myths", "related_landmarks"],
+            "Landmarks": ["legends", "connected_histories"],
+            "HistoricalEvents": ["involved_entities", "consequences", "disputed_facts", 
+                                 "commemorations", "primary_sources"],
+            "NotableFigures": ["faction_affiliations", "achievements", "failures", 
+                               "personality_traits", "hidden_aspects", "influence_areas", 
+                               "controversial_actions", "relationships"],
+            "CanonicalEvents": ["tags"],
+            "nyx_brain_checkpoints": ["merged_from"],
+            "nyx1_scene_templates": ["tags"],
+            "unified_memories": ["tags"],
+        }
+        
+        # Convert Python objects to JSON strings for comparison and storage
+        processed_updates = {}
+        entity_json_fields = json_fields.get(entity_type, [])
+        entity_array_fields = array_fields.get(entity_type, [])
+        
+        for field, value in updates.items():
+            if field in entity_json_fields and value is not None and not isinstance(value, str):
+                # Convert lists and dicts to JSON strings
+                processed_updates[field] = json.dumps(value)
+            elif field in entity_array_fields and value is not None:
+                # Array fields - ensure they're lists
+                if isinstance(value, str):
+                    # If it's a JSON string, parse it
+                    try:
+                        value = json.loads(value)
+                    except:
+                        # If not JSON, treat as single-element array
+                        value = [value]
+                if not isinstance(value, list):
+                    value = [value]
+                processed_updates[field] = value
+            else:
+                processed_updates[field] = value
+        
+        logger.info(f"Proposing change to {entity_type} ({entity_identifier}) because: {reason}")
+    
         try:
+            async with get_db_connection_context() as conn:
+                async with conn.transaction():
+                    # Step 1: Find the current state of the entity
+                    where_clauses = [f"{key} = ${i+1}" for i, key in enumerate(entity_identifier.keys())]
+                    where_sql = " AND ".join(where_clauses)
+                    select_query = f"SELECT * FROM {entity_type} WHERE {where_sql}"
+                    
+                    existing_entity = await conn.fetchrow(select_query, *entity_identifier.values())
+    
+                    if not existing_entity:
+                        return {"status": "error", "message": f"Entity not found: {entity_type} with {entity_identifier}"}
+    
+                    # Step 2: Validate for conflicts (with special handling for JSON and array fields)
+                    conflicts = []
+                    for field, new_value in processed_updates.items():
+                        if field in existing_entity:
+                            current_value = existing_entity[field]
+                            
+                            # Special handling for JSON fields - compare as JSON objects
+                            if field in entity_json_fields:
+                                try:
+                                    # Parse current value if it's a string
+                                    if isinstance(current_value, str):
+                                        current_obj = json.loads(current_value) if current_value else {}
+                                    else:
+                                        current_obj = current_value if current_value is not None else {}
+                                    
+                                    # Parse new value if it's a string
+                                    if isinstance(new_value, str):
+                                        new_obj = json.loads(new_value) if new_value else {}
+                                    else:
+                                        new_obj = new_value if new_value is not None else {}
+                                    
+                                    # Special case: Don't conflict when adding to empty array
+                                    if isinstance(current_obj, list) and isinstance(new_obj, list):
+                                        # Don't conflict when adding to empty array
+                                        if len(current_obj) == 0 and len(new_obj) > 0:
+                                            continue
+                                        # Don't conflict if new array contains all items from current
+                                        if all(item in new_obj for item in current_obj):
+                                            continue
+                                    
+                                    # Special case: Don't conflict when adding to empty dict
+                                    if isinstance(current_obj, dict) and isinstance(new_obj, dict):
+                                        # Don't conflict when adding to empty dict
+                                        if len(current_obj) == 0 and len(new_obj) > 0:
+                                            continue
+                                        # Don't conflict if new dict is a superset
+                                        if all(k in new_obj and new_obj[k] == v for k, v in current_obj.items()):
+                                            continue
+                                    
+                                    # Compare as objects, not strings
+                                    if current_obj != new_obj:
+                                        conflict_detail = (
+                                            f"Conflict on field '{field}'. "
+                                            f"Current value: '{json.dumps(current_obj)}'. "
+                                            f"Proposed value: '{json.dumps(new_obj)}'."
+                                        )
+                                        conflicts.append(conflict_detail)
+                                        logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
+                                except json.JSONDecodeError as e:
+                                    # Fall back to string comparison if JSON parsing fails
+                                    if current_value != new_value:
+                                        conflict_detail = (
+                                            f"Conflict on field '{field}' (JSON parse error). "
+                                            f"Current value: '{current_value}'. "
+                                            f"Proposed value: '{new_value}'."
+                                        )
+                                        conflicts.append(conflict_detail)
+                                        logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
+                            # Special handling for array fields
+                            elif field in entity_array_fields:
+                                # Compare arrays element by element
+                                if current_value is not None:
+                                    current_set = set(current_value or [])
+                                    new_set = set(new_value or [])
+                                    # Allow adding to empty arrays
+                                    if not current_value and new_value:
+                                        continue
+                                    # Allow if new array contains all elements from current
+                                    if current_set.issubset(new_set):
+                                        continue
+                                    # Otherwise it's a conflict
+                                    if current_set != new_set:
+                                        conflict_detail = (
+                                            f"Conflict on array field '{field}'. "
+                                            f"Current value: {current_value}. "
+                                            f"Proposed value: {new_value}."
+                                        )
+                                        conflicts.append(conflict_detail)
+                                        logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
+                            else:
+                                # Regular field comparison
+                                if current_value is not None and current_value != new_value:
+                                    conflict_detail = (
+                                        f"Conflict on field '{field}'. "
+                                        f"Current value: '{current_value}'. "
+                                        f"Proposed value: '{new_value}'."
+                                    )
+                                    conflicts.append(conflict_detail)
+                                    logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
+    
+                    if conflicts:
+                        # Step 3a: Handle conflict by generating a new narrative event
+                        dynamics = await self.registry.get_lore_dynamics()
+                        conflict_event = self._create_conflict_event_description(
+                            entity_type, entity_identifier, existing_entity, updates, conflicts, reason
+                        )
+                        
+                        # Call the method directly without .fn
+                        if hasattr(dynamics, 'evolve_lore_with_event'):
+                            # It's a manager instance, call the method
+                            await dynamics.evolve_lore_with_event(ctx, conflict_event)
+                        else:
+                            # It might be the method directly
+                            await dynamics(ctx, conflict_event)
+                            
+                        return {"status": "conflict_generated", "details": conflicts}
+    
+                    # Step 3b: No conflict, commit the change
+                    # Add type conversion for known boolean columns
+                    boolean_columns = ['introduced', 'is_active', 'is_consolidated', 'is_archived',
+                                       'fantasy_flag', 'consolidated', 'has_triggered_consequence',
+                                       'is_revealed', 'is_public', 'is_completed', 'public_knowledge',
+                                       'success', 'willing_to_betray_faction', 'equipped', 'used',
+                                       'marked_for_review', 'dismissed', 'active']
+                    
+                    # Build SET clauses with proper casting for boolean and array columns
+                    set_clauses = []
+                    update_values = []
+                    
+                    for i, (key, value) in enumerate(processed_updates.items()):
+                        if key in boolean_columns:
+                            # Ensure it's a boolean and use explicit cast
+                            bool_value = bool(value) if not isinstance(value, bool) else value
+                            set_clauses.append(f"{key} = ${i+1}::boolean")
+                            update_values.append(bool_value)
+                        elif key in entity_array_fields:
+                            # Handle array fields with proper casting
+                            array_type = self._get_array_type(entity_type, key)
+                            set_clauses.append(f"{key} = ${i+1}::{array_type}")
+                            update_values.append(value)
+                        else:
+                            set_clauses.append(f"{key} = ${i+1}")
+                            update_values.append(value)
+                    
+                    set_sql = ", ".join(set_clauses)
+                    
+                    # Build WHERE clause with proper placeholder numbering
+                    # Start numbering after the SET clause placeholders
+                    where_clauses_update = []
+                    num_updates = len(processed_updates)
+                    for i, key in enumerate(entity_identifier.keys()):
+                        placeholder_num = num_updates + i + 1
+                        where_clauses_update.append(f"{key} = ${placeholder_num}")
+                    where_sql_update = " AND ".join(where_clauses_update)
+                    
+                    # Add the entity identifier values
+                    update_values.extend(list(entity_identifier.values()))
+                    
+                    update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql_update}"
+                    await conn.execute(update_query, *update_values)
+    
+                    # Step 4: Log the change as a canonical event in unified memory
+                    event_text = f"The {entity_type} identified by {entity_identifier} was updated. Reason: {reason}. Changes: {updates}"
+                    await canon.log_canonical_event(ctx, conn, event_text, tags=[entity_type.lower(), 'state_change'], significance=8)
+            
+            # Step 5: Propagate consequences to other systems (outside the transaction)
+            # Create a more specific event description that will pass validation
+            event_description = self._create_detailed_event_description(
+                entity_type, entity_identifier, updates, reason
+            )
+            
+            # Only propagate if the event is significant enough
+            if event_description:
+                dynamics = await self.registry.get_lore_dynamics()
+                
+                # Call the method directly without .fn
+                if hasattr(dynamics, 'evolve_lore_with_event'):
+                    # It's a manager instance, call the method
+                    await dynamics.evolve_lore_with_event(ctx, event_description)
+                else:
+                    # It might be the method directly
+                    await dynamics(ctx, event_description)
+            
+            return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
+    
+        except Exception as e:
+            logger.exception(f"Failed to enact change for {entity_type} ({entity_identifier}): {e}")
+            return {"status": "error", "message": str(e)}
+    
+    def _get_array_type(self, entity_type: str, field: str) -> str:
+        """Determine the PostgreSQL array type for a given field."""
+        # Map of fields to their array types
+        text_array_fields = {
+            "values", "goals", "membership_requirements", "secret_activities", 
+            "recruitment_methods", "major_resources", "major_cities", "cultural_traits",
+            "neighboring_nations", "recent_developments", "practiced_by", "ingredients",
+            "adopted_by", "resources", "notable_features", "major_settlements", 
+            "dangers", "terrain_features", "internal_conflicts", "female_leaders_involved",
+            "regions_known", "themes", "matriarchal_elements", "notable_figures",
+            "connected_myths", "related_landmarks", "legends", "connected_histories",
+            "involved_entities", "consequences", "disputed_facts", "commemorations",
+            "primary_sources", "faction_affiliations", "achievements", "failures",
+            "personality_traits", "hidden_aspects", "influence_areas", "controversial_actions",
+            "relationships", "tags", "merged_from", "hidden_aspects", "access_restrictions",
+            "local_customs", "natural_resources"
+        }
+        
+        integer_array_fields = {
+            "rivals", "allies", "involved_nations", "adopted_by"
+        }
+        
+        if field in text_array_fields:
+            return "TEXT[]"
+        elif field in integer_array_fields:
+            return "INTEGER[]"
+        else:
+            # Default to TEXT[] if unknown
+            return "TEXT[]"
+
+    def _create_detailed_event_description(
+        self, 
+        entity_type: str, 
+        entity_identifier: Dict[str, Any], 
+        updates: Dict[str, Any], 
+        reason: str
+    ) -> Optional[str]:
+        """
+        Create a detailed event description that will pass validation.
+        Returns None if the change is too minor to warrant lore evolution.
+        """
+        # Determine if this change is significant enough
+        significant_fields = {
+            'NPCStats': ['power_level', 'status', 'loyalty'],
+            'Factions': ['leader_npc_id', 'power_level', 'territory', 'allies', 'rivals'],
+            'Nations': ['leader_npc_id', 'government_type', 'stability'],
+            'Locations': ['controlling_faction', 'strategic_value'],
+            'NPCs': ['status', 'faction_affiliation', 'current_location']
+        }
+        
+        # Check if any significant fields were updated
+        if entity_type in significant_fields:
+            updated_significant_fields = [
+                field for field in significant_fields[entity_type] 
+                if field in updates
+            ]
+            if not updated_significant_fields:
+                # Not significant enough for lore evolution
+                return None
+        
+        # Build a detailed event description based on the entity type and changes
+        event_parts = []
+        
+        if entity_type == "NPCStats" and "power_level" in updates:
+            event_parts.append(f"A significant shift in power has occurred - someone's influence has changed dramatically")
+        elif entity_type == "Factions" and "leader_npc_id" in updates:
+            event_parts.append(f"Leadership has changed within a major faction")
+        elif entity_type == "Nations" and "leader_npc_id" in updates:
+            event_parts.append(f"A nation has experienced a change in leadership")
+        elif entity_type == "Locations" and "controlling_faction" in updates:
+            event_parts.append(f"Control of a strategic location has shifted to new hands")
+        else:
+            # Generic but still specific
+            event_parts.append(f"The {entity_type.lower()} structure has undergone important changes")
+        
+        # Add the reason
+        event_parts.append(f"This occurred because: {reason}")
+        
+        # Add specific change details for context
+        change_details = []
+        for field, value in updates.items():
+            if field in ['power_level', 'status', 'loyalty', 'stability']:
+                change_details.append(f"{field.replace('_', ' ')} has shifted")
+            elif field in ['leader_npc_id', 'controlling_faction']:
+                change_details.append(f"new leadership has been established")
+            elif field in ['territory', 'allies', 'rivals']:
+                change_details.append(f"{field} relationships have changed")
+        
+        if change_details:
+            event_parts.append(f"Specifically: {', '.join(change_details)}")
+        
+        # Add context about the broader implications
+        if entity_type in ["Nations", "Factions"]:
+            event_parts.append("This shift in power will ripple through the political landscape, affecting alliances and rivalries")
+        elif entity_type == "Locations":
+            event_parts.append("This territorial change may spark new conflicts or opportunities in the region")
+        elif entity_type == "NPCStats":
+            event_parts.append("This personal transformation will influence their relationships and standing in society")
+        
+        return ". ".join(event_parts)
+    
+    def _create_specific_event_description(self, entity_type: str, entity_identifier: Dict[str, Any], 
+                                          existing_entity: Any, updates: Dict[str, Any], reason: str) -> str:
+        """Create a specific event description for lore evolution based on entity type."""
+        
+        # Try to get the entity name from various common fields
+        entity_name = None
+        for name_field in ['name', 'location_name', 'quest_name', 'title']:
+            if name_field in existing_entity:
+                entity_name = existing_entity[name_field]
+                break
+        
+        if not entity_name:
+            entity_name = f"{entity_type} #{entity_identifier.get('id', 'unknown')}"
+        
+        # Create type-specific descriptions
+        if entity_type == "Nations":
+            change_details = []
+            if 'government_type' in updates:
+                change_details.append(f"its government shifted from {existing_entity.get('government_type', 'unknown')} to {updates['government_type']}")
+            if 'leader_npc_id' in updates:
+                change_details.append("new leadership took power")
+            if 'capital_id' in updates:
+                change_details.append("the capital was relocated")
+            
+            changes_text = ", ".join(change_details) if change_details else "significant internal changes occurred"
+            return f"The nation of {entity_name} underwent a major transformation: {reason}. As a result, {changes_text}. This political shift sends ripples through neighboring regions and allied factions."
+        
+        elif entity_type == "Factions":
+            change_details = []
+            if 'type' in updates:
+                change_details.append(f"transformed from a {existing_entity.get('type', 'unknown')} faction to a {updates['type']} faction")
+            if 'headquarters' in updates:
+                change_details.append(f"relocated their headquarters to {updates['headquarters']}")
+            if 'allies' in updates or 'rivals' in updates:
+                change_details.append("shifted their diplomatic alignments")
+            
+            changes_text = ", ".join(change_details) if change_details else "underwent significant restructuring"
+            return f"The {entity_name} faction experienced a pivotal moment: {reason}. The faction {changes_text}, marking a new chapter in their influence and operations. Their members and affiliates must now adapt to this new reality."
+        
+        elif entity_type == "CulturalElements":
+            element_type = existing_entity.get('type', 'tradition')
+            return f"The cultural {element_type} known as '{entity_name}' evolved significantly: {reason}. This transformation affects how it is practiced and perceived, potentially influencing related customs and beliefs throughout the regions where it holds sway."
+        
+        elif entity_type == "HistoricalEvents":
+            return f"New revelations about the historical event '{entity_name}' have come to light: {reason}. These discoveries force scholars and lorekeepers to reconsider its true impact and meaning, potentially rewriting portions of accepted history."
+        
+        elif entity_type == "GeographicRegions":
+            change_details = []
+            if 'governing_faction' in updates:
+                change_details.append(f"control shifted to {updates['governing_faction']}")
+            if 'climate' in updates:
+                change_details.append("experienced dramatic environmental changes")
+            
+            changes_text = ", ".join(change_details) if change_details else "underwent significant changes"
+            return f"The region of {entity_name} experienced momentous change: {reason}. The region {changes_text}, affecting all who dwell within its borders and potentially altering trade routes and strategic considerations."
+        
+        elif entity_type == "Locations":
+            return f"The location known as {entity_name} was dramatically altered: {reason}. These changes affect its significance, accessibility, or nature, potentially impacting nearby settlements and those who depend on or fear this place."
+        
+        elif entity_type == "QuestHooks":
+            return f"The quest '{entity_name}' has evolved unexpectedly: {reason}. New complications, opportunities, or revelations have emerged, changing the stakes for any who might pursue this adventure."
+        
+        else:
+            # Generic but still more detailed than before
+            field_changes = []
+            for field, new_value in updates.items():
+                if field in existing_entity:
+                    old_value = existing_entity[field]
+                    if old_value != new_value:
+                        field_changes.append(f"{field} changed from '{old_value}' to '{new_value}'")
+            
+            changes_summary = "; ".join(field_changes[:3])  # Limit to first 3 changes
+            if len(field_changes) > 3:
+                changes_summary += f"; and {len(field_changes) - 3} other changes"
+            
+            return f"A significant transformation occurred in the world's {entity_type}: {reason}. Specifically, {changes_summary}. These changes ripple through connected systems and relationships."
+    
+    def _create_conflict_event_description(self, entity_type: str, entity_identifier: Dict[str, Any],
+                                         existing_entity: Any, updates: Dict[str, Any], 
+                                         conflicts: List[str], reason: str) -> str:
+        """Create an event description for when a conflict is detected during updates."""
+        
+        # Try to get the entity name
+        entity_name = None
+        for name_field in ['name', 'location_name', 'quest_name', 'title']:
+            if name_field in existing_entity:
+                entity_name = existing_entity[name_field]
+                break
+        
+        if not entity_name:
+            entity_name = f"{entity_type} #{entity_identifier.get('id', 'unknown')}"
+        
+        # Create a narrative around the conflict
+        conflict_summary = conflicts[0] if conflicts else "Multiple conflicting changes were attempted"
+        
+        return (f"A conflict arose when attempting to change {entity_name} ({entity_type}): {reason}. "
+                f"The attempted changes were blocked due to: {conflict_summary}. "
+                f"This conflict represents competing forces or contradictory influences trying to shape "
+                f"the same aspect of the world, creating tension and potential for future developments.")
+
+    # --- Convenience Wrappers (Optional but Recommended) ---
+    # These methods provide a clean, high-level API but all use the generic method internally.
+
+    async def execute_coup(self, ctx, nation_id: int, new_leader_id: int, reason: str):
+        """A high-level wrapper for a coup event."""
+        # Ensure proper context
+        if isinstance(ctx, str) or not hasattr(ctx, 'context'):
+            ctx = RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+        
+        return await self.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="Nations",
+            entity_identifier={"id": nation_id},
+            updates={"leader_npc_id": new_leader_id},
+            reason=reason
+        )
+
+    async def assign_faction_territory(self, ctx, faction_id: int, location_name: str, reason: str):
+        """A high-level wrapper for a faction taking over territory."""
+        # Ensure proper context
+        if isinstance(ctx, str) or not hasattr(ctx, 'context'):
+            ctx = RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+        
+        location_id = None
+        # First, ensure the location exists canonically
+        async with get_db_connection_context() as conn:
+            location_id = await canon.find_or_create_location(ctx, conn, location_name)
+
+        return await self.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="Factions",
+            entity_identifier={"id": faction_id},
+            updates={"territory": location_name}, # Assuming territory is a text field
+            reason=reason
+        )
+
+    # ---------------------------------------------------------------------
+    # Cleanup
+    # ---------------------------------------------------------------------
+    async def cleanup(self):
+        """Clean up resources used by the LoreSystem (and managers)."""
+        try:
+            # Collect all cleanup tasks in parallel
             cleanup_tasks = [
                 self.npc_data.cleanup(),
                 self.location_data.cleanup(),
@@ -720,6 +1083,7 @@ class LoreSystem:
                 self.generator.cleanup()
             ]
     
+            # Example approach: if each manager implements a 'cleanup' method, call it
             for manager in [
                 self.education_manager,
                 self.religion_manager,
@@ -732,8 +1096,10 @@ class LoreSystem:
                 if hasattr(manager, "cleanup") and callable(manager.cleanup):
                     cleanup_tasks.append(manager.cleanup())
     
+            # Execute all cleanup tasks concurrently
             await asyncio.gather(*cleanup_tasks)
     
+            # Remove this instance from the global cache
             key = f"{self.user_id}:{self.conversation_id}"
             if key in self._instances:
                 del self._instances[key]
