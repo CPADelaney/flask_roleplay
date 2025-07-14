@@ -21,6 +21,7 @@ from .lore_context_manager import LoreContextManager
 from db.connection import get_db_connection_context  # Updated import
 from lore.core import canon
 from lore.lore_system import LoreSystem
+from agents import RunContextWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -581,10 +582,11 @@ class NPCAgentSystem:
                     return results
                 
                 # Create context for governance
-                ctx = type('obj', (object,), {
+                ctx = RunContextWrapper(context={
                     'user_id': self.user_id,
                     'conversation_id': self.conversation_id
                 })
+
                 
                 # Use LoreSystem to update each NPC's location
                 for npc_id in npc_ids:
@@ -1422,7 +1424,7 @@ class NPCAgentSystem:
                 stat_changes = result.get("stat_changes", {})
                 if stat_changes:
                     # Use LoreSystem to update stats
-                    ctx = type('obj', (object,), {
+                    ctx = RunContextWrapper(context={
                         'user_id': self.user_id,
                         'conversation_id': self.conversation_id
                     })
@@ -1495,7 +1497,7 @@ class NPCAgentSystem:
             
             if changes:
                 # Use LoreSystem to update the relationship
-                ctx = type('obj', (object,), {
+                ctx = RunContextWrapper(context={
                     'user_id': self.user_id,
                     'conversation_id': self.conversation_id
                 })
@@ -1786,7 +1788,7 @@ class NPCAgentSystem:
         """Update conflict data - NOW USES LORE SYSTEM."""
         try:
             lore_system = await self._get_lore_system()
-            ctx = type('obj', (object,), {
+            ctx = RunContextWrapper(context={
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id
             })
