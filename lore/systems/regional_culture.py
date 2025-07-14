@@ -191,7 +191,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "You create realistic languages for a fantasy world with matriarchal power. "
                     "Reflect how language encodes status, formality, and gender hierarchy."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": model_settings
             },
             "norm": {
@@ -201,7 +201,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "You create cultural norms for fantasy nations. Norms must reflect matriarchal structures. "
                     "Consider differences by gender, status, and context. Provide taboos, consequences, variations."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": model_settings
             },
             "etiquette": {
@@ -212,7 +212,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Include greetings, body language, titles, gift-giving, and display of power. "
                     "Be explicit about how men must defer to female authority."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": model_settings
             },
             "distribution": {
@@ -223,7 +223,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Consider geography, politics, and cultural influence. "
                     "Some languages might be major (used by multiple large nations), others minor."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": ModelSettings(temperature=0.8)
             },
             "category": {
@@ -233,7 +233,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "(e.g. greeting, dining, authority, gift_giving, personal_space, gender_relations, etc.), "
                     "and how many norms total. Consider the nation's specific characteristics."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": ModelSettings(temperature=0.8)
             },
             "context": {
@@ -243,7 +243,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Example contexts might be 'court', 'noble', 'public', 'private', 'religious', 'business'. "
                     "Consider the nation's government type and cultural traits."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": ModelSettings(temperature=0.8)
             },
             "summary": {
@@ -253,7 +253,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Highlight the most distinctive norms, how matriarchal authority is expressed, "
                     "and any notable linguistic or etiquette features."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": ModelSettings(temperature=0.8)
             },
             "conflict": {
@@ -263,7 +263,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Focus on greeting norms, etiquette, taboos, religious differences, etc. "
                     "Provide specific conflicts, severity assessment, and diplomatic recommendations."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": ModelSettings(temperature=0.8)
             },
             "diffusion": {
@@ -274,7 +274,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "flow between societies based on proximity, relations, and power dynamics. "
                     "Maintain matriarchal power structures as the dominant framework."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": model_settings
             },
             "dialect": {
@@ -285,7 +285,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "and social contexts. Pay special attention to how language reflects "
                     "matriarchal power structures and feminine-dominated society."
                 ),
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "settings": model_settings
             }
         }
@@ -1758,7 +1758,7 @@ class RegionalCultureSystem(BaseLoreManager):
             name="PhonologyAdaptationAgent",
             instructions="""You adapt foreign words to fit a target language's sound system.
             Consider the language's phonological constraints and typical sound patterns.""",
-            model="gpt-4o-mini"
+            model="gpt-4.1-nano"
         )
         
         prompt = f"""
@@ -1788,7 +1788,7 @@ class RegionalCultureSystem(BaseLoreManager):
             name="IdiomLocalizationAgent",
             instructions="""You adapt idioms to fit different cultural contexts while preserving meaning.
             Consider local culture, values, and matriarchal themes.""",
-            model="gpt-4o-mini"
+            model="gpt-4.1-nano"
         )
         
         prompt = f"""
@@ -1867,7 +1867,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     name="FashionAdaptationAgent",
                     instructions="""You adapt fashion and clothing styles between cultures.
                     Consider climate, materials, cultural values, and matriarchal power display.""",
-                    model="gpt-4o-mini"
+                    model="gpt-4.1-nano"
                 )
                 
                 for element in fashion_elements:
@@ -2113,7 +2113,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     instructions="""You adapt culinary traditions between cultures.
                     Consider local ingredients, dietary restrictions, cultural significance,
                     and how food reflects matriarchal social structures.""",
-                    model="gpt-4o-mini"
+                    model="gpt-4.1-nano"
                 )
                 
                 # Process cuisine elements
@@ -2400,7 +2400,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     instructions="""You adapt social customs and etiquette between cultures.
                     Consider power dynamics, gender roles, formality levels, and how customs
                     reinforce matriarchal social structures.""",
-                    model="gpt-4o-mini"
+                    model="gpt-4.1-nano"
                 )
                 
                 # Process social customs
@@ -2998,7 +2998,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 comparison_agent = Agent(
                     name="EtiquetteComparisonAgent",
                     instructions="Compare etiquette systems and highlight key differences and potential misunderstandings.",
-                    model="gpt-4o-mini"
+                    model="gpt-4.1-nano"
                 )
                 
                 prompt = f"""
@@ -3057,7 +3057,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Consider cultural sensitivities, power dynamics, and matriarchal structures. "
                     "Provide specific guidance for successful diplomatic engagement."
                 ),
-                model="gpt-4o-mini"
+                model="gpt-4.1-nano"
             )
             
             prompt = f"""
