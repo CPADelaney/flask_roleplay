@@ -3302,7 +3302,7 @@ class NyxUnifiedGovernor:
             logger.error(f"Error checking pacing impact: {e}")
             return False
 
-python# Updated methods for NyxUnifiedGovernor class
+# Updated methods for NyxUnifiedGovernor class
 
 async def _get_faction_id_by_name(self, faction_name: str) -> Optional[int]:
     """
