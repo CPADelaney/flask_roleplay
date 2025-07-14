@@ -15,7 +15,7 @@ from quart import Blueprint, request, jsonify, session, current_app
 from logic.addiction_system_sdk import check_addiction_status
 from logic.chatgpt_integration import get_openai_client, safe_json_loads
 from dotenv import load_dotenv
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 from lore.core import canon
 
 # Load environment variables
