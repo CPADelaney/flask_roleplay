@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from pydantic import BaseModel, Field
+from db.connection import get_db_connection_context
 
 # Add canon import
 import lore.core.canon as canon
@@ -443,6 +444,61 @@ class LoreDynamicsSystem(BaseLoreManager):
     #===========================================================================
     # CORE LORE EVOLUTION
     #===========================================================================
+
+    @property
+    def trace_group_id(self) -> str:
+        """Get trace group ID for this system."""
+        return f"lore_dynamics_{self.user_id}_{self.conversation_id}"
+    
+    @property
+    def trace_metadata(self) -> Dict[str, Any]:
+        """Get trace metadata for this system."""
+        return {
+            "user_id": str(self.user_id),
+            "conversation_id": str(self.conversation_id),
+            "system": "lore_dynamics"
+        }
+    
+    async def get_connection_pool(self):
+        """Get database connection pool."""
+        # Use the connection context manager from the db module
+        return get_db_connection_context()
+    
+    def create_run_context(self, ctx) -> RunContextWrapper:
+        """Create a run context wrapper for agent execution."""
+        if hasattr(ctx, 'context'):
+            # If ctx is already a RunContextWrapper or similar
+            return ctx
+        elif isinstance(ctx, dict):
+            # If ctx is a dict, wrap it
+            return RunContextWrapper(context=ctx)
+        else:
+            # Create new context with user/conversation info
+            return RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+    
+    async def report_action(
+        self,
+        agent_type: str,
+        agent_id: str,
+        action: Dict[str, Any],
+        result: Dict[str, Any]
+    ) -> None:
+        """Report action to governance system."""
+        if self.governor:
+            try:
+                await self.governor.process_agent_action_report(
+                    agent_type=agent_type,
+                    agent_id=agent_id,
+                    action=action,
+                    result=result
+                )
+            except Exception as e:
+                logger.warning(f"Failed to report action to governance: {e}")
+        else:
+            logger.debug(f"No governor available for action reporting: {action['type']}")
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -2420,8 +2476,7 @@ class MultiStepPlanner:
             return {"error": "Failed to parse step outcome", "raw_output": result.final_output}
     
     async def _store_plan(self, plan: NarrativePlan, prompt: str) -> str:
-        """Store a narrative plan."""
-        # Implementation would depend on database structure
+        """Store a narrative plan in the database."""
         plan_id = f"plan_{uuid.uuid4()}"
         plan_dict = plan.dict()
         plan_dict["id"] = plan_id
@@ -2434,15 +2489,41 @@ class MultiStepPlanner:
             step["status"] = "pending"
             step["outcome"] = None
         
-        # TODO: Store in database
+        async with get_db_connection_context() as conn:
+            # Create a plans table if it doesn't exist
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS NarrativePlans (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    prompt TEXT NOT NULL,
+                    plan_data JSONB NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'created',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Insert the plan
+            await conn.execute("""
+                INSERT INTO NarrativePlans (id, user_id, conversation_id, prompt, plan_data, status)
+                VALUES ($1, $2, $3, $4, $5, $6)
+            """, plan_id, self.user_id, self.conversation_id, prompt, 
+                json.dumps(plan_dict), "created")
         
         return plan_id
     
     async def _get_plan(self, plan_id: str) -> Optional[Dict[str, Any]]:
-        """Get a stored narrative plan."""
-        # Implementation would depend on database structure
-        # This is a placeholder
-        return None
+        """Get a stored narrative plan from the database."""
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT plan_data FROM NarrativePlans
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """, plan_id, self.user_id, self.conversation_id)
+            
+            if row:
+                return json.loads(row['plan_data'])
+            return None
     
     def _check_dependencies(self, plan: Dict[str, Any], step_index: int) -> bool:
         """Check if dependencies for a step have been completed."""
@@ -2535,18 +2616,164 @@ class MultiStepPlanner:
     
     async def _update_plan_step(self, plan_id: str, step_index: int, outcome: Dict[str, Any]) -> None:
         """Update a plan step with its outcome."""
-        # Implementation would depend on database structure
-        pass
+        plan = await self._get_plan(plan_id)
+        if not plan:
+            return
+            
+        steps = plan.get("steps", [])
+        if step_index < len(steps):
+            steps[step_index]["status"] = "completed"
+            steps[step_index]["outcome"] = outcome
+            
+            # Update the plan in database
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE NarrativePlans 
+                    SET plan_data = $1, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $2 AND user_id = $3 AND conversation_id = $4
+                """, json.dumps(plan), plan_id, self.user_id, self.conversation_id)
     
     async def _apply_cultural_changes(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Apply cultural changes to the world."""
-        # Placeholder implementation
-        return {"status": "applied", "count": len(changes)}
+        applied_count = 0
+        
+        async with get_db_connection_context() as conn:
+            for change in changes:
+                try:
+                    if change.get("type") == "new_element":
+                        # Create new cultural element
+                        await conn.execute("""
+                            INSERT INTO CulturalElements (
+                                user_id, conversation_id, name, element_type,
+                                description, practiced_by, significance, 
+                                historical_origin, embedding
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        """, 
+                            self.user_id, self.conversation_id,
+                            change.get("name"), change.get("element_type", "tradition"),
+                            change.get("description"), change.get("practiced_by", []),
+                            change.get("significance", 5), change.get("origin", ""),
+                            await generate_embedding(f"{change.get('name')} {change.get('description')}")
+                        )
+                        applied_count += 1
+                        
+                    elif change.get("type") == "modify_element":
+                        # Modify existing cultural element
+                        element_id = change.get("element_id")
+                        if element_id:
+                            update_fields = []
+                            values = []
+                            param_num = 1
+                            
+                            if "description" in change:
+                                update_fields.append(f"description = ${param_num}")
+                                values.append(change["description"])
+                                param_num += 1
+                                
+                            if "significance" in change:
+                                update_fields.append(f"significance = ${param_num}")
+                                values.append(change["significance"])
+                                param_num += 1
+                            
+                            if update_fields:
+                                # Add embedding update
+                                name = change.get("name", "")
+                                description = change.get("description", "")
+                                embedding = await generate_embedding(f"{name} {description}")
+                                update_fields.append(f"embedding = ${param_num}")
+                                values.append(embedding)
+                                param_num += 1
+                                
+                                # Add where clause parameters
+                                values.extend([element_id, self.user_id, self.conversation_id])
+                                
+                                query = f"""
+                                    UPDATE CulturalElements 
+                                    SET {', '.join(update_fields)}
+                                    WHERE id = ${param_num-3} AND user_id = ${param_num-2} AND conversation_id = ${param_num-1}
+                                """
+                                await conn.execute(query, *values)
+                                applied_count += 1
+                                
+                except Exception as e:
+                    logger.error(f"Error applying cultural change: {e}")
+        
+        return {"status": "applied", "count": applied_count}
     
     async def _apply_political_changes(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Apply political changes to the world."""
-        # Placeholder implementation
-        return {"status": "applied", "count": len(changes)}
+        applied_count = 0
+        
+        async with get_db_connection_context() as conn:
+            for change in changes:
+                try:
+                    if change.get("type") == "faction_change":
+                        faction_id = change.get("faction_id")
+                        if faction_id:
+                            update_fields = []
+                            values = []
+                            param_num = 1
+                            
+                            if "description" in change:
+                                update_fields.append(f"description = ${param_num}")
+                                values.append(change["description"])
+                                param_num += 1
+                                
+                            if "power_level" in change:
+                                update_fields.append(f"power_level = ${param_num}")
+                                values.append(change["power_level"])
+                                param_num += 1
+                                
+                            if "allies" in change:
+                                update_fields.append(f"allies = ${param_num}")
+                                values.append(change["allies"])
+                                param_num += 1
+                                
+                            if "rivals" in change:
+                                update_fields.append(f"rivals = ${param_num}")
+                                values.append(change["rivals"])
+                                param_num += 1
+                            
+                            if update_fields:
+                                # Add embedding update
+                                name = change.get("name", "")
+                                description = change.get("description", "")
+                                embedding = await generate_embedding(f"{name} {description}")
+                                update_fields.append(f"embedding = ${param_num}")
+                                values.append(embedding)
+                                param_num += 1
+                                
+                                # Add where clause parameters
+                                values.extend([faction_id, self.user_id, self.conversation_id])
+                                
+                                query = f"""
+                                    UPDATE Factions 
+                                    SET {', '.join(update_fields)}
+                                    WHERE id = ${param_num-3} AND user_id = ${param_num-2} AND conversation_id = ${param_num-1}
+                                """
+                                await conn.execute(query, *values)
+                                applied_count += 1
+                                
+                    elif change.get("type") == "new_faction":
+                        # Create new faction
+                        await conn.execute("""
+                            INSERT INTO Factions (
+                                user_id, conversation_id, name, type, description,
+                                values, goals, power_level, embedding
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        """,
+                            self.user_id, self.conversation_id,
+                            change.get("name"), change.get("faction_type", "political"),
+                            change.get("description"), change.get("values", []),
+                            change.get("goals", []), change.get("power_level", 5),
+                            await generate_embedding(f"{change.get('name')} {change.get('description')}")
+                        )
+                        applied_count += 1
+                        
+                except Exception as e:
+                    logger.error(f"Error applying political change: {e}")
+        
+        return {"status": "applied", "count": applied_count}
 
 class NarrativeEvaluator:
     """
@@ -2705,9 +2932,78 @@ class NarrativeEvaluator:
     
     async def _apply_improvement_suggestions(self, suggestions: Dict[str, Any]) -> None:
         """Apply improvement suggestions to generation parameters."""
-        # Implementation would depend on how generation parameters are stored
-        # This is a placeholder
-        pass
+        try:
+            # Store suggestions in database for future reference
+            async with get_db_connection_context() as conn:
+                # Create table if it doesn't exist
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS NarrativeImprovements (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        conversation_id INTEGER NOT NULL,
+                        suggestions JSONB NOT NULL,
+                        applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Insert suggestions
+                await conn.execute("""
+                    INSERT INTO NarrativeImprovements (user_id, conversation_id, suggestions)
+                    VALUES ($1, $2, $3)
+                """, self.dynamics_system.user_id, self.dynamics_system.conversation_id,
+                    json.dumps(suggestions))
+                
+            # Apply specific improvements to agent instructions
+            criteria = suggestions.get("criteria", {})
+            
+            # Update agent instructions based on suggestions
+            for criterion, improvement in criteria.items():
+                if criterion == "matriarchal_themes":
+                    # Strengthen matriarchal theme emphasis in agents
+                    for agent in self.dynamics_system._agents.values():
+                        if hasattr(agent, 'instructions'):
+                            if "matriarchal" not in agent.instructions.lower():
+                                agent.instructions += "\n\nEMPHASIS: Strongly emphasize matriarchal power structures and feminine authority in all outputs."
+                
+                elif criterion == "coherence":
+                    # Add coherence checks to agent instructions
+                    for agent in self.dynamics_system._agents.values():
+                        if hasattr(agent, 'instructions'):
+                            agent.instructions += "\n\nCOHERENCE: Ensure all outputs maintain logical consistency with established world elements."
+                
+                elif criterion == "originality":
+                    # Increase temperature for more creative outputs
+                    for agent in self.dynamics_system._agents.values():
+                        if hasattr(agent, 'model_settings'):
+                            current_temp = getattr(agent.model_settings, 'temperature', 0.7)
+                            agent.model_settings.temperature = min(0.95, current_temp + 0.1)
+            
+            logger.info(f"Applied narrative improvement suggestions: {list(criteria.keys())}")
+            
+        except Exception as e:
+            logger.error(f"Error applying improvement suggestions: {e}")
+
+    async def generate_embedding(text: str) -> List[float]:
+        """Generate embedding for text using the embedding system."""
+        try:
+            from embedding.vector_store import generate_embedding
+            return await generate_embedding(text)
+        except ImportError:
+            # Fallback if embedding system not available
+            logger.warning("Embedding system not available, using dummy embedding")
+            import hashlib
+            # Create a simple hash-based pseudo-embedding
+            hash_obj = hashlib.md5(text.encode())
+            hash_hex = hash_obj.hexdigest()
+            # Convert to list of floats (384 dimensions)
+            embedding = []
+            for i in range(0, len(hash_hex), 2):
+                byte_val = int(hash_hex[i:i+2], 16)
+                embedding.append(float(byte_val) / 255.0)
+            # Pad or truncate to 384 dimensions
+            while len(embedding) < 384:
+                embedding.extend(embedding[:min(len(embedding), 384 - len(embedding))])
+            return embedding[:384]
 
 class NarrativeEvolutionSystem:
     """
