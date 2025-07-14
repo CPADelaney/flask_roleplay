@@ -743,7 +743,10 @@ class NewGameAgent:
         # Store everything in database
         from lore.core import canon
         async with get_db_connection_context() as conn, conn.transaction():
-            cctx = type("Ctx", (), {"user_id": user_id, "conversation_id": conversation_id})
+            cctx = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })
             
             await canon.create_game_setting(
                 cctx, conn,
@@ -818,10 +821,11 @@ class NewGameAgent:
             return
 
         # --- store a canonical copy for later systems ----------------------
-        canon_ctx = type(
-            "Ctx", (),
-            {"user_id": user_id, "conversation_id": conversation_id}
-        )()
+        canon_ctx = RunContextWrapper(context={
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        })
+
 
         async with get_db_connection_context() as conn:
             await canon.update_current_roleplay(
@@ -1127,11 +1131,11 @@ class NewGameAgent:
         
         # Store the opening narrative canonically
         async with get_db_connection_context() as conn:
-            canon_ctx = type('obj', (object,), {
-                'user_id': user_id, 
+            canon_ctx = RunContextWrapper(context={
+                'user_id': user_id,
                 'conversation_id': conversation_id
             })
-            
+
             await canon.create_opening_message(
                 canon_ctx, conn,
                 "Nyx",
@@ -1189,10 +1193,11 @@ class NewGameAgent:
         
         # Get the environment description for lore generation
         async with get_db_connection_context() as conn:
-            canon_ctx = type('obj', (object,), {
-                'user_id': user_id, 
+            canon_ctx = RunContextWrapper(context={
+                'user_id': user_id,
                 'conversation_id': conversation_id
             })
+
             
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
