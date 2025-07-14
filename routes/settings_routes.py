@@ -10,7 +10,7 @@ from quart import Blueprint, request, jsonify, session
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 from logic.stat_utils import extract_numeric_modifiers
 
 settings_bp = Blueprint('settings_bp', __name__)
