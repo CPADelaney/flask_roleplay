@@ -15,6 +15,8 @@ import asyncio
 import random
 from typing import Dict, List, Any, Optional
 import json
+from agents import RunContextWrapper
+
 
 # Update the import to use the new async connection context
 from db.connection import get_db_connection_context
