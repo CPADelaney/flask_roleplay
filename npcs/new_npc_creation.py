@@ -2981,12 +2981,18 @@ class NPCCreationHandler:
                 old_arche_summary = rel.get("target_archetype_summary", "")
                 
                 # Create forward link (no conn needed for this function)
-                await create_social_link(
-                    user_id, conversation_id,
-                    entity1_type="npc", entity1_id=npc_id,
-                    entity2_type="npc", entity2_id=old_npc_id,
-                    link_type=rel["relationship_label"]
-                )
+                async with get_db_connection_context() as conn:
+                    await canon.find_or_create_social_link(
+                        ctx, conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity1_type="npc",
+                        entity1_id=npc_id,
+                        entity2_type="npc",
+                        entity2_id=old_npc_id,
+                        link_type=rel["relationship_label"],
+                        link_level=10
+                    )
                 
                 # Update source NPC's relationships with new connection
                 async with get_db_connection_context() as conn:
