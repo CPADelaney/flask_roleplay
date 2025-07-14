@@ -34,7 +34,7 @@ from db.connection import get_db_connection_context
 # --- MERGE: Import the new LoreSystem ---
 # Use TYPE_CHECKING to avoid circular import
 if TYPE_CHECKING:
-    from lore.lore_system import LoreSystem
+    from lore.core.lore_system import LoreSystem
 
 from nyx.constants import DirectiveType, DirectivePriority, AgentType
 
@@ -165,7 +165,7 @@ class NyxUnifiedGovernor:
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
         # Import LoreSystem locally to avoid circular import
-        from lore.lore_system import LoreSystem
+        from lore.core.lore_system import LoreSystem
         
         # Get an instance of the LoreSystem
         self.lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
