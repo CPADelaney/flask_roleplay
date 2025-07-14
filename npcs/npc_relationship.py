@@ -257,7 +257,7 @@ class NPCRelationshipManager:
             lore_system = await self._get_lore_system()
             
             # Create context for governance
-            ctx = type('obj', (object,), {
+            ctx = RunContextWrapper(context={
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id,
                 'npc_id': self.npc_id
@@ -518,7 +518,7 @@ class NPCRelationshipManager:
             lore_system = await self._get_lore_system()
             
             # Create context for governance
-            ctx = type('obj', (object,), {
+            ctx = RunContextWrapper(context={
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id,
                 'npc_id': self.npc_id
@@ -1088,7 +1088,7 @@ class NPCRelationshipManager:
             lore_system = await self._get_lore_system()
             
             # Create context for governance
-            ctx = type('obj', (object,), {
+            ctx = RunContextWrapper(context={
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id
             })
