@@ -36,7 +36,7 @@ import asyncpg
 
 # Import canon and lore system
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 # Nyx governance integration
 from nyx.nyx_governance import (
