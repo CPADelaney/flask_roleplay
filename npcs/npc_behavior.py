@@ -348,12 +348,12 @@ class BehaviorEvolution:
             lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
             
             # Create context for governance
-            ctx = type('obj', (object,), {
+            ctx = RunContextWrapper(context={
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id,
                 'npc_id': npc_id
             })
-            
+                        
             # Prepare updates
             updates = {}
             
