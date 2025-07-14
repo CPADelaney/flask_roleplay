@@ -319,52 +319,135 @@ class ConflictGovernanceMixin:
         return analysis
 
     async def _make_conflict_decision(self, conflict_analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Make a decision on how to resolve an agent conflict.
-        
-        Returns:
-            Decision including directives and potential world changes
-        """
+        """Make a decision on how to resolve an agent conflict."""
         decision = {
             "resolution_type": "mediate",
             "reasoning": "",
             "requires_world_change": False,
             "world_changes": [],
             "agent1_directive": None,
-            "agent2_directive": None
+            "agent2_directive": None,
+            "coordination_required": []
         }
-
-        # High narrative impact - favor story consistency
-        if conflict_analysis["narrative_impact"] > 0.7:
+        
+        # Analyze conflict type and severity
+        conflict_type = conflict_analysis.get("conflict_type", "unknown")
+        severity = conflict_analysis.get("severity", 5)
+        
+        # Get agent priorities from their types
+        agent1 = conflict_analysis["agents"][0]
+        agent2 = conflict_analysis["agents"][1]
+        
+        agent_priorities = {
+            AgentType.STORY_DIRECTOR: 10,
+            AgentType.UNIVERSAL_UPDATER: 9,
+            AgentType.CONFLICT_ANALYST: 8,
+            AgentType.SCENE_MANAGER: 7,
+            AgentType.NARRATIVE_CRAFTER: 6,
+            AgentType.RELATIONSHIP_MANAGER: 5,
+            AgentType.NPC: 4
+        }
+        
+        priority1 = agent_priorities.get(agent1["type"], 1)
+        priority2 = agent_priorities.get(agent2["type"], 1)
+        
+        # Decisions based on conflict analysis
+        if conflict_analysis["narrative_impact"] > 0.8:
+            # High narrative impact - prioritize story consistency
+            if priority1 > priority2:
+                winning_agent = agent1
+                losing_agent = agent2
+            else:
+                winning_agent = agent2
+                losing_agent = agent1
+                
             decision["resolution_type"] = "narrative_priority"
-            decision["reasoning"] = "Prioritizing narrative consistency and story flow"
+            decision["reasoning"] = f"Prioritizing {winning_agent['type']} for narrative consistency"
             decision["agent1_directive"] = {
-                "action": "defer",
-                "instruction": "Defer to narrative requirements"
+                "action": "proceed" if winning_agent == agent1 else "defer",
+                "instruction": "Proceed with narrative-aligned action" if winning_agent == agent1 else "Defer to narrative requirements",
+                "coordination_with": losing_agent["id"] if winning_agent == agent1 else None
             }
             decision["agent2_directive"] = {
-                "action": "proceed",
-                "instruction": "Proceed with narrative-aligned action"
+                "action": "proceed" if winning_agent == agent2 else "defer",
+                "instruction": "Proceed with narrative-aligned action" if winning_agent == agent2 else "Defer to narrative requirements",
+                "coordination_with": losing_agent["id"] if winning_agent == agent2 else None
             }
-
-        # High world consistency impact - enforce rules
-        elif conflict_analysis["world_consistency_impact"] > 0.7:
+            
+        elif conflict_analysis["world_consistency_impact"] > 0.8:
+            # High world consistency impact - enforce canon rules
             decision["resolution_type"] = "consistency_enforcement"
-            decision["reasoning"] = "Enforcing world consistency rules"
+            decision["reasoning"] = "Enforcing world consistency through LoreSystem"
             decision["requires_world_change"] = True
-            # Will be filled based on specific conflict
-
-        # Moderate impacts - find compromise
-        else:
-            decision["resolution_type"] = "compromise"
-            decision["reasoning"] = "Finding balanced solution between competing goals"
+            
+            # Determine what world changes are needed
+            if conflict_type == "resource_competition":
+                decision["world_changes"] = [{
+                    "entity_type": "Resources",
+                    "action": "redistribute",
+                    "details": "Redistribute resources to resolve competition"
+                }]
+            elif conflict_type == "narrative_contradiction":
+                decision["world_changes"] = [{
+                    "entity_type": "CanonicalEvents",
+                    "action": "reconcile",
+                    "details": "Reconcile contradictory narrative elements"
+                }]
+                
+            # Both agents need to coordinate with LoreSystem
+            decision["coordination_required"] = [AgentType.UNIVERSAL_UPDATER]
+            
+        elif severity >= 8:
+            # High severity - requires multi-agent coordination
+            decision["resolution_type"] = "coordinated_resolution"
+            decision["reasoning"] = "High severity conflict requires coordinated response"
+            
+            # Bring in specialized agents
+            if conflict_type == "resource_competition":
+                decision["coordination_required"].append(AgentType.RESOURCE_OPTIMIZER)
+            if conflict_type == "goal_conflict":
+                decision["coordination_required"].append(AgentType.NARRATIVE_CRAFTER)
+                
+            # Set up coordination plan
             decision["agent1_directive"] = {
-                "action": "modify",
-                "instruction": "Modify approach to accommodate other agent"
+                "action": "coordinate",
+                "instruction": "Participate in coordinated resolution",
+                "wait_for": decision["coordination_required"]
             }
             decision["agent2_directive"] = {
-                "action": "modify",
-                "instruction": "Modify approach to accommodate other agent"
+                "action": "coordinate",
+                "instruction": "Participate in coordinated resolution",
+                "wait_for": decision["coordination_required"]
             }
-
+            
+        else:
+            # Moderate conflicts - find compromise
+            decision["resolution_type"] = "compromise"
+            decision["reasoning"] = "Finding balanced solution through agent negotiation"
+            
+            # Analyze specific compromise based on conflict type
+            if conflict_type == "timing_conflict":
+                decision["agent1_directive"] = {
+                    "action": "sequence",
+                    "instruction": "Execute action first, then coordinate",
+                    "notify_on_complete": agent2["id"]
+                }
+                decision["agent2_directive"] = {
+                    "action": "wait",
+                    "instruction": "Wait for agent1 completion, then proceed",
+                    "wait_for": agent1["id"]
+                }
+            else:
+                # General compromise
+                decision["agent1_directive"] = {
+                    "action": "modify",
+                    "instruction": "Adjust approach to accommodate other agent",
+                    "constraints": ["respect_agent2_goals"]
+                }
+                decision["agent2_directive"] = {
+                    "action": "modify", 
+                    "instruction": "Adjust approach to accommodate other agent",
+                    "constraints": ["respect_agent1_goals"]
+                }
+        
         return decision
