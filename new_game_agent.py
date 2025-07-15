@@ -193,7 +193,7 @@ class CreateNPCsAndSchedulesParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 class NPCScheduleData(BaseModel):
-    npc_ids: List[str] = Field(default_factory=list)
+    npc_ids: List[int] = Field(default_factory=list)  # Changed from List[str] to List[int]
     chase_schedule_json: str = "{}"  # Store schedule as JSON string
     model_config = ConfigDict(extra="forbid")
     
