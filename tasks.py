@@ -597,53 +597,53 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
 def nyx_memory_maintenance_task():
     """Celery task for Nyx memory maintenance using asyncpg."""
     with trace(workflow_name="nyx_memory_maintenance_celery"):
-    logger.info("Starting Nyx memory maintenance task (via governance)")
-
-    async def process_all_conversations():
-        processed_count = 0
-        async with get_db_connection_context() as conn:
-            rows = await conn.fetch("""
-                SELECT DISTINCT user_id, conversation_id
-                FROM NyxMemories
-                WHERE is_archived = FALSE
-                AND timestamp > NOW() - INTERVAL '30 days'
-            """)
-
-            if not rows:
-                logger.info("No conversations found with recent Nyx memories to maintain")
-                return {"status": "success", "conversations_processed": 0}
-
-            for row in rows:
-                user_id = row["user_id"]
-                conversation_id = row["conversation_id"]
-
-                try:
-                    await run_maintenance_through_nyx(
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        entity_type="nyx",
-                        entity_id=0
-                    )
-                    processed_count += 1
-                    logger.info(f"Completed governed memory maintenance for user={user_id}, conv={conversation_id}")
-                except Exception as e:
-                    logger.error(f"Governed maintenance error user={user_id}, conv={conversation_id}: {e}", exc_info=True)
-
-                await asyncio.sleep(0.1) # Small delay to prevent hammering
-
-            return {
-                "status": "success",
-                "conversations_processed": processed_count
-            }
-
-    try:
-        # Run the async logic
-        result = asyncio.run(process_all_conversations())
-        logger.info(f"Nyx memory maintenance task completed: {result}")
-        return result
-    except Exception as e:
-        logger.exception("Critical error in nyx_memory_maintenance_task")
-        return {"status": "error", "error": str(e)}
+        logger.info("Starting Nyx memory maintenance task (via governance)")
+    
+        async def process_all_conversations():
+            processed_count = 0
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT DISTINCT user_id, conversation_id
+                    FROM NyxMemories
+                    WHERE is_archived = FALSE
+                    AND timestamp > NOW() - INTERVAL '30 days'
+                """)
+    
+                if not rows:
+                    logger.info("No conversations found with recent Nyx memories to maintain")
+                    return {"status": "success", "conversations_processed": 0}
+    
+                for row in rows:
+                    user_id = row["user_id"]
+                    conversation_id = row["conversation_id"]
+    
+                    try:
+                        await run_maintenance_through_nyx(
+                            user_id=user_id,
+                            conversation_id=conversation_id,
+                            entity_type="nyx",
+                            entity_id=0
+                        )
+                        processed_count += 1
+                        logger.info(f"Completed governed memory maintenance for user={user_id}, conv={conversation_id}")
+                    except Exception as e:
+                        logger.error(f"Governed maintenance error user={user_id}, conv={conversation_id}: {e}", exc_info=True)
+    
+                    await asyncio.sleep(0.1) # Small delay to prevent hammering
+    
+                return {
+                    "status": "success",
+                    "conversations_processed": processed_count
+                }
+    
+        try:
+            # Run the async logic
+            result = asyncio.run(process_all_conversations())
+            logger.info(f"Nyx memory maintenance task completed: {result}")
+            return result
+        except Exception as e:
+            logger.exception("Critical error in nyx_memory_maintenance_task")
+            return {"status": "error", "error": str(e)}
 
 @celery_app.task
 @async_task
