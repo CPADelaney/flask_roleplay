@@ -1,33 +1,46 @@
 # story_agent/tools.py
 """
-Refactored tools for the Story Director agent with strict schema validation.
+Refactored tools for the Story Director agent with NPC-specific narrative progression
+and generative agent integration for dynamic content generation.
 """
 
+# Standard library imports
 import logging
 import json
 import asyncio
 import random
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union, Tuple, Literal, Any
+from typing import Dict, List, Any, Optional, Union, Tuple, Literal
+
+# Third-party imports
 from pydantic import BaseModel, Field, ConfigDict
 
+# Agent SDK imports
+from agents import Agent, function_tool, RunContextWrapper, Runner
 
-
-# Original imports remain the same
-from agents import function_tool, RunContextWrapper
-from logic.conflict_system.conflict_tools import _internal_add_conflict_to_narrative_logic
-
-from context.context_config import get_config
+# Database imports
 from db.connection import get_db_connection_context
+
+# Local application imports - NPC narrative progression
+from logic.npc_narrative_progression import (
+    get_npc_narrative_stage,
+    progress_npc_narrative_stage,
+    check_for_npc_revelation,
+    NPC_NARRATIVE_STAGES,
+    NPCNarrativeStage
+)
+
+# Local application imports - Legacy narrative progression
 from logic.narrative_progression import (
-    get_current_narrative_stage,
+    get_current_narrative_stage,  # Deprecated but kept
     check_for_personal_revelations,
     check_for_narrative_moments,
-    check_for_npc_revelations,
     add_dream_sequence,
     add_moment_of_clarity,
-    NARRATIVE_STAGES
+    get_relationship_overview
 )
+
+# Local application imports - Social links
 from logic.social_links import (
     get_social_link_tool,
     get_relationship_summary_tool,
@@ -37,24 +50,133 @@ from logic.social_links import (
 )
 
 # Context system imports
-from context.context_service import get_context_service, get_comprehensive_context
+from context.context_service import get_context_service
 from context.memory_manager import get_memory_manager, search_memories_tool, MemorySearchRequest
 from context.vector_service import get_vector_service
 from context.context_manager import get_context_manager, ContextDiff
 from context.context_performance import PerformanceMonitor, track_performance
 from context.unified_cache import context_cache
 
+# Canon imports (was missing)
+from lore.core import canon
+
+# Config imports (was missing - adjust path as needed)
+from config import get_config
+
+# Initialize logger
 logger = logging.getLogger(__name__)
 
-# Define the context type alias for easier use
-ContextType = Any  # Or StoryDirectorContext
+# Type alias for context
+ContextType = Any
 
-# TODO: Consider injecting random seed for deterministic testing
-# TODO: Expose public wrapper for _get_available_npcs() or document private usage
+# Simple context class for canon operations
+class SimpleContext:
+    """Simple context for operations that need user_id and conversation_id."""
+    def __init__(self, user_id: str, conversation_id: str):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
 
-# ===== REFACTORED CONTEXT TOOLS =====
+# ============= GENERATIVE AGENTS =============
 
-# ===== Relationship Models =====
+# Agent for generating dynamic personal revelations
+revelation_generator = Agent(
+    name="RevelationGenerator",
+    instructions="""
+    You generate psychologically realistic personal revelations for a player character
+    in a femdom-themed narrative game. The revelations should reflect the player's
+    growing awareness of their changing relationship dynamics with specific NPCs.
+    
+    Consider:
+    - The NPC's current narrative stage (how open they are about control)
+    - The type of revelation (dependency, obedience, corruption, etc.)
+    - The player's history with this NPC
+    - The psychological realism of the realization
+    
+    Generate revelations that are:
+    - Internally focused (the player's thoughts)
+    - Subtly disturbing or thought-provoking
+    - Appropriate to the relationship's current stage
+    - Written in first person
+    """,
+    model="gpt-4.1-nano",
+    temperature=0.8
+)
+
+# Agent for creating dynamic dream sequences
+dream_weaver = Agent(
+    name="DreamWeaver",
+    instructions="""
+    You create symbolic, psychologically meaningful dream sequences for a player
+    in a femdom-themed narrative game. Dreams should reflect the player's
+    subconscious processing of their relationships with multiple NPCs.
+    
+    Consider:
+    - Each NPC's narrative stage and role in the player's life
+    - Symbolic representations of control, dependency, and transformation
+    - The surreal logic of dreams
+    - Psychological horror elements without being gratuitous
+    
+    Create dreams that are:
+    - Rich in symbolism
+    - Unsettling but not explicitly frightening
+    - Reflective of multiple relationship dynamics
+    - Open to interpretation
+    """,
+    model="gpt-4.1-nano",
+    temperature=0.9
+)
+
+# Agent for suggesting contextual activities
+activity_suggester = Agent(
+    name="ActivitySuggester",
+    instructions="""
+    You suggest activities for NPCs to engage the player in, based on their
+    personality, narrative stage, and current context. Activities should
+    subtly reinforce power dynamics appropriate to each NPC's progression.
+    
+    Consider:
+    - NPC's archetype and personality traits
+    - Current narrative stage (how overt their control is)
+    - Setting and time constraints
+    - Resource implications of activities
+    
+    Suggest activities that:
+    - Feel natural for the character and setting
+    - Subtly advance the power dynamic
+    - Vary in intensity based on narrative stage
+    - Create memorable interactions
+    """,
+    model="gpt-4.1-nano",
+    temperature=0.7
+)
+
+# Agent for analyzing manipulation opportunities
+manipulation_analyst = Agent(
+    name="ManipulationAnalyst",
+    instructions="""
+    You analyze situations to identify how NPCs might manipulate the player
+    within ongoing conflicts. Consider each NPC's personality, narrative stage,
+    and the specific conflict context.
+    
+    Analyze:
+    - NPC's manipulation style based on personality
+    - How their narrative stage affects their approach
+    - Conflict stakes and NPC's goals
+    - Player's current vulnerabilities
+    
+    Provide analysis that:
+    - Respects each NPC's established character
+    - Scales manipulation overtness with narrative stage
+    - Identifies specific leverage points
+    - Suggests believable manipulation tactics
+    """,
+    model="gpt-4.1-nano",
+    temperature=0.6
+)
+
+# ===== PYDANTIC MODELS =====
+
+# Relationship Models
 class DimensionChanges(BaseModel):
     """Changes to relationship dimensions."""
     money: Optional[int] = Field(None, ge=-100, le=100)
@@ -66,17 +188,13 @@ class DimensionChanges(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
-# ===== Conflict Models =====
-
-# Helper models for ConflictAnalysis
+# Conflict Models
 class FactionAffiliation(BaseModel):
     """NPC faction affiliation details."""
     faction_id: int
     faction_name: str
     
     model_config = ConfigDict(extra="forbid")
-
 
 class MentionedNPCTyped(BaseModel):
     """Fully typed NPC mentioned in conflict analysis."""
@@ -87,14 +205,12 @@ class MentionedNPCTyped(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class MentionedFaction(BaseModel):
     """Faction mentioned in conflict analysis."""
     faction_id: int
     faction_name: str
     
     model_config = ConfigDict(extra="forbid")
-
 
 class NPCRelationship(BaseModel):
     """Relationship between NPCs in conflict analysis."""
@@ -107,7 +223,6 @@ class NPCRelationship(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class InternalFactionConflict(BaseModel):
     """Internal faction conflict details."""
     faction_id: int
@@ -117,7 +232,6 @@ class InternalFactionConflict(BaseModel):
     approach: str
     
     model_config = ConfigDict(extra="forbid")
-
 
 class ConflictAnalysis(BaseModel):
     """Analysis results from conflict potential detection."""
@@ -132,7 +246,6 @@ class ConflictAnalysis(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class ManipulationGoal(BaseModel):
     """Goal for NPC manipulation attempts."""
     faction: Literal["a", "b", "neutral"]
@@ -144,7 +257,6 @@ class ManipulationGoal(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class ManipulationPotential(BaseModel):
     """Analysis of NPC manipulation potential."""
     overall_potential: int = Field(ge=0, le=100)
@@ -152,7 +264,6 @@ class ManipulationPotential(BaseModel):
     femdom_compatible: bool
     
     model_config = ConfigDict(extra="forbid")
-
 
 class ManipulationOpportunity(BaseModel):
     """Suggested manipulation opportunity."""
@@ -166,8 +277,7 @@ class ManipulationOpportunity(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
-# ===== Context/Memory Models =====
+# Context/Memory Models
 class MemorySearchParams(BaseModel):
     """Parameters for memory search operations."""
     query_text: str
@@ -177,7 +287,6 @@ class MemorySearchParams(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class ContextQueryParams(BaseModel):
     """Parameters for context retrieval."""
     query_text: str = ""
@@ -185,7 +294,6 @@ class ContextQueryParams(BaseModel):
     max_tokens: Optional[int] = Field(None, ge=100, le=10000)
     
     model_config = ConfigDict(extra="forbid")
-
 
 class StoreMemoryParams(BaseModel):
     """Parameters for storing narrative memories."""
@@ -195,7 +303,6 @@ class StoreMemoryParams(BaseModel):
     tags: List[str] = Field(default_factory=lambda: ["story_director"])
     
     model_config = ConfigDict(extra="forbid")
-
 
 class VectorSearchParams(BaseModel):
     """Parameters for vector search operations."""
@@ -207,8 +314,7 @@ class VectorSearchParams(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
-# ===== Resource Models =====
+# Resource Models
 class ResourceCheck(BaseModel):
     """Resource requirements to check."""
     money: int = Field(0, ge=0)
@@ -216,7 +322,6 @@ class ResourceCheck(BaseModel):
     influence: int = Field(0, ge=0)
     
     model_config = ConfigDict(extra="forbid")
-
 
 class ResourceCommitment(BaseModel):
     """Resources to commit to a conflict."""
@@ -227,8 +332,7 @@ class ResourceCommitment(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
-# ===== Activity Models =====
+# Activity Models
 class ActivityAnalysisParams(BaseModel):
     """Parameters for activity analysis."""
     activity_text: str
@@ -236,7 +340,6 @@ class ActivityAnalysisParams(BaseModel):
     apply_effects: bool = False
     
     model_config = ConfigDict(extra="forbid")
-
 
 class ActivityFilterParams(BaseModel):
     """Parameters for filtering activities."""
@@ -246,7 +349,6 @@ class ActivityFilterParams(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class ActivitySuggestionParams(BaseModel):
     """Parameters for activity suggestions."""
     npc_name: str
@@ -255,8 +357,7 @@ class ActivitySuggestionParams(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
-# ===== Player Involvement Models =====
+# Player Involvement Models
 class PlayerInvolvementParams(BaseModel):
     """Parameters for setting player involvement in conflicts."""
     conflict_id: int
@@ -269,19 +370,17 @@ class PlayerInvolvementParams(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class PlayerInvolvementData(BaseModel):
     """Current player involvement in a conflict."""
     involvement_level: Literal["none", "observing", "participating", "leading"]
     faction: Literal["a", "b", "neutral"]
     is_manipulated: bool = False
-    manipulated_by: Optional[Dict[str, Any]] = None  # Could be further typed
+    manipulated_by: Optional[Dict[str, Any]] = None
     resources_committed: Optional[Dict[str, int]] = None
     
     model_config = ConfigDict(extra="forbid")
 
-
-# ===== Story Beat Models =====
+# Story Beat Models
 class StoryBeatParams(BaseModel):
     """Parameters for tracking conflict story beats."""
     conflict_id: int
@@ -300,14 +399,12 @@ class ChoiceOption(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-
 class Requirement(BaseModel):
     """A single prerequisite for a ritual."""
     name: str
-    value: Any                # widen only the *value*, not the object keys
+    value: Any
 
     model_config = ConfigDict(extra="forbid")
-
 
 class Reward(BaseModel):
     """A single reward granted by a ritual."""
@@ -316,9 +413,7 @@ class Reward(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-
-# ==========  Story-Director models ==========
-
+# Story Director Models
 class NPCInfo(BaseModel):
     """Basic information about an NPC."""
     npc_id: int
@@ -329,7 +424,6 @@ class NPCInfo(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-
 class RelationshipCrossroads(BaseModel):
     """A decisive relationship fork with an NPC."""
     link_id: int
@@ -337,13 +431,12 @@ class RelationshipCrossroads(BaseModel):
     crossroads_name: str
     description: str
     choices: List[ChoiceOption] = Field(default_factory=list)
-    triggered_at: Optional[str] = None     # ISO timestamp
+    triggered_at: Optional[str] = None
 
     model_config = ConfigDict(extra="forbid")
 
-
 class RelationshipRitual(BaseModel):
-    """A repeatable ritual that strengthens / alters a relationship."""
+    """A repeatable ritual that strengthens/alters a relationship."""
     link_id: int
     npc_name: str
     ritual_name: str
@@ -353,19 +446,17 @@ class RelationshipRitual(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-
 class TriggerEventData(BaseModel):
-    """Payload passed to `trigger_conflict_event`."""
+    """Payload passed to trigger_conflict_event."""
     description: str
     involved_npcs: List[int] = Field(default_factory=list)
-    faction_impacts: Optional[List[Requirement]] = None   # reuse simple KV model
+    faction_impacts: Optional[List[Requirement]] = None
     severity: int = Field(5, ge=1, le=10)
 
     model_config = ConfigDict(extra="forbid")
 
-
 class ConflictEvolutionData(BaseModel):
-    """Payload passed to `evolve_conflict`."""
+    """Payload passed to evolve_conflict."""
     description: str
     involved_npcs: List[int] = Field(default_factory=list)
     progress_change: float = Field(0.1, ge=0.0, le=1.0)
@@ -373,9 +464,7 @@ class ConflictEvolutionData(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-
-# ----------  Narrative-event content ----------
-
+# Narrative Event Content Models
 class NarrativeEventContent(BaseModel):
     """Abstract base for event-content payloads."""
     title: str
@@ -383,14 +472,12 @@ class NarrativeEventContent(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-
 class NarrativeMomentContent(NarrativeEventContent):
     moment_type: Literal["tension", "revelation", "transition", "climax"]
     scene_text: str
     player_realization: Optional[str] = None
 
     model_config = ConfigDict(extra="forbid")
-
 
 class PersonalRevelationContent(NarrativeEventContent):
     revelation_type: Literal[
@@ -401,13 +488,11 @@ class PersonalRevelationContent(NarrativeEventContent):
 
     model_config = ConfigDict(extra="forbid")
 
-
 class DreamSequenceContent(NarrativeEventContent):
     dream_text: str
     symbols: List[str] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")
-
 
 class NPCRevelationContent(NarrativeEventContent):
     npc_id: int
@@ -417,6 +502,201 @@ class NPCRevelationContent(NarrativeEventContent):
     changes_relationship: bool = False
 
     model_config = ConfigDict(extra="forbid")
+
+# ===== HELPER FUNCTIONS =====
+
+def _get_stage_manipulation_modifier(stage_name: str) -> float:
+    """Get manipulation effectiveness modifier based on stage."""
+    modifiers = {
+        "Innocent Beginning": 0.6,
+        "First Doubts": 0.8,
+        "Creeping Realization": 1.0,
+        "Veil Thinning": 1.3,
+        "Full Revelation": 1.5
+    }
+    return modifiers.get(stage_name, 1.0)
+
+def _get_stage_appropriate_approach(stage_name: str) -> str:
+    """Get appropriate manipulation approach for stage."""
+    approaches = {
+        "Innocent Beginning": "subtle_suggestion",
+        "First Doubts": "gentle_guidance",
+        "Creeping Realization": "confident_direction",
+        "Veil Thinning": "open_manipulation",
+        "Full Revelation": "direct_control"
+    }
+    return approaches.get(stage_name, "adaptive")
+
+# ===== BASE NPC FUNCTIONS (needed by other functions) =====
+
+@function_tool
+@track_performance("get_available_npcs")
+async def get_available_npcs(
+    ctx: RunContextWrapper[ContextType],
+    include_unintroduced: bool = False,
+    min_dominance: Optional[int] = None,
+    gender_filter: Optional[str] = None,
+    min_stage: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get available NPCs with narrative stage information.
+    
+    Args:
+        include_unintroduced: Include unintroduced NPCs
+        min_dominance: Minimum dominance filter
+        gender_filter: Gender filter
+        min_stage: Minimum narrative stage filter
+        
+    Returns:
+        List of NPCs with stage information
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        # Get base NPC list
+        async with get_db_connection_context() as conn:
+            query = """
+                SELECT 
+                    n.npc_id, n.npc_name, n.dominance, n.cruelty, 
+                    n.closeness, n.trust, n.respect, n.intensity, 
+                    n.sex, n.faction_affiliations, n.archetype,
+                    n.introduced, n.personality_traits
+                FROM NPCStats n
+                WHERE n.user_id = $1 AND n.conversation_id = $2
+            """
+            params = [user_id, conversation_id]
+            
+            conditions = []
+            if not include_unintroduced:
+                conditions.append("n.introduced = TRUE")
+            if min_dominance is not None:
+                conditions.append(f"n.dominance >= ${len(params) + 1}")
+                params.append(min_dominance)
+            if gender_filter:
+                conditions.append(f"n.sex = ${len(params) + 1}")
+                params.append(gender_filter)
+            
+            if conditions:
+                query += " AND " + " AND ".join(conditions)
+            
+            query += " ORDER BY n.dominance DESC, n.introduced DESC"
+            
+            rows = await conn.fetch(query, *params)
+            
+        npcs = []
+        for row in rows:
+            npc = dict(row)
+            npc_id = npc['npc_id']
+            
+            # Get narrative stage
+            stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+            npc['narrative_stage'] = stage.name
+            npc['stage_description'] = stage.description
+            
+            # Apply stage filter if specified
+            if min_stage:
+                stage_order = {s.name: i for i, s in enumerate(NPC_NARRATIVE_STAGES)}
+                if stage_order.get(stage.name, 0) < stage_order.get(min_stage, 0):
+                    continue
+            
+            # Parse JSON fields
+            if isinstance(npc['faction_affiliations'], str):
+                try:
+                    npc['faction_affiliations'] = json.loads(npc['faction_affiliations'])
+                except:
+                    npc['faction_affiliations'] = []
+            
+            if isinstance(npc['archetype'], str):
+                try:
+                    archetype_data = json.loads(npc['archetype'])
+                    npc['archetype_list'] = (
+                        archetype_data if isinstance(archetype_data, list) 
+                        else [archetype_data]
+                    )
+                except:
+                    npc['archetype_list'] = [npc['archetype']]
+            else:
+                npc['archetype_list'] = []
+            
+            if isinstance(npc['personality_traits'], str):
+                try:
+                    npc['personality_traits'] = json.loads(npc['personality_traits'])
+                except:
+                    npc['personality_traits'] = []
+            
+            npcs.append(npc)
+        
+        return npcs
+        
+    except Exception as e:
+        logger.error(f"Error getting available NPCs: {str(e)}", exc_info=True)
+        return []
+
+@function_tool
+async def get_npc_details(
+    ctx: RunContextWrapper[ContextType],
+    npc_id: int
+) -> Optional[Dict[str, Any]]:
+    """
+    Get detailed information about an NPC including their narrative stage.
+    
+    Args:
+        npc_id: ID of the NPC
+        
+    Returns:
+        NPC details with stage information or None if not found
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        # Get base NPC data
+        npcs = await get_available_npcs(ctx, include_unintroduced=True)
+        npc_data = next((npc for npc in npcs if npc['npc_id'] == npc_id), None)
+        
+        if not npc_data:
+            return None
+        
+        # Get narrative progression details
+        async with get_db_connection_context() as conn:
+            progression = await conn.fetchrow("""
+                SELECT corruption, dependency, realization_level, 
+                       stage_entered_at, stage_history
+                FROM NPCNarrativeProgression
+                WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+            """, user_id, conversation_id, npc_id)
+        
+        if progression:
+            npc_data['progression'] = dict(progression)
+        
+        # Get relationship with player
+        from logic.fully_integrated_npc_system import IntegratedNPCSystem
+        npc_system = IntegratedNPCSystem(user_id, conversation_id)
+        await npc_system.initialize()
+        npc_data['relationship_with_player'] = await npc_system.get_relationship_with_player(npc_id)
+        
+        # Get active conflicts
+        async with get_db_connection_context() as conn:
+            conflicts = await conn.fetch("""
+                SELECT c.conflict_id, c.conflict_name, cs.faction_name, cs.involvement_level
+                FROM ConflictStakeholders cs
+                JOIN Conflicts c ON cs.conflict_id = c.conflict_id
+                WHERE cs.npc_id = $1 AND c.is_active = TRUE
+                    AND c.user_id = $2 AND c.conversation_id = $3
+            """, npc_id, user_id, conversation_id)
+            
+        npc_data['active_conflicts'] = [dict(c) for c in conflicts]
+        
+        return npc_data
+        
+    except Exception as e:
+        logger.error(f"Error getting NPC details: {str(e)}", exc_info=True)
+        return None
+
+# ===== CONTEXT MANAGEMENT TOOLS =====
 
 @function_tool
 async def get_optimized_context(
@@ -432,7 +712,6 @@ async def get_optimized_context(
     Returns:
         Dictionary with comprehensive context information.
     """
-    # Handle defaults
     if params is None:
         params = ContextQueryParams()
     
@@ -476,12 +755,12 @@ async def get_optimized_context(
     except Exception as e:
         logger.error(f"Error getting optimized context: {str(e)}", exc_info=True)
         return {
+            "success": False,
             "error": str(e),
             "user_id": user_id,
             "conversation_id": conversation_id,
             "context_data": None
         }
-
 
 @function_tool
 async def retrieve_relevant_memories(
@@ -527,7 +806,6 @@ async def retrieve_relevant_memories(
         logger.error(f"Error retrieving relevant memories: {str(e)}", exc_info=True)
         return []
 
-
 @function_tool
 async def store_narrative_memory(
     ctx: RunContextWrapper[ContextType],
@@ -559,7 +837,10 @@ async def store_narrative_memory(
             memory_type=params.memory_type,
             importance=params.importance,
             tags=tags,
-            metadata={"source": "story_director_tool", "timestamp": datetime.now().isoformat()}
+            metadata={
+                "source": "story_director_tool", 
+                "timestamp": datetime.now().isoformat()
+            }
         )
 
         # Safely check for narrative_manager
@@ -582,8 +863,7 @@ async def store_narrative_memory(
         }
     except Exception as e:
         logger.error(f"Error storing narrative memory: {str(e)}", exc_info=True)
-        return {"error": str(e), "success": False}
-
+        return {"success": False, "error": str(e)}
 
 @function_tool
 async def search_by_vector(
@@ -606,7 +886,7 @@ async def search_by_vector(
     try:
         vector_service = await get_vector_service(user_id, conversation_id)
         if not vector_service or not vector_service.enabled:
-            logger.info("Vector service is not enabled or available. Skipping vector search.")
+            logger.info("Vector service is not enabled or available.")
             return []
 
         results = await vector_service.search_entities(
@@ -619,7 +899,6 @@ async def search_by_vector(
     except Exception as e:
         logger.error(f"Error in vector search: {str(e)}", exc_info=True)
         return []
-
 
 @function_tool
 async def get_summarized_narrative_context(
@@ -671,19 +950,41 @@ async def get_summarized_narrative_context(
                     if hasattr(context, '__dict__') or isinstance(context, object):
                         context.narrative_manager = narrative_manager
                     else:
-                        logger.warning("Context object does not support attribute assignment for narrative_manager.")
+                        logger.warning(
+                            "Context object does not support attribute assignment."
+                        )
                 except Exception as assign_err:
-                    logger.warning(f"Could not store narrative_manager on context: {assign_err}")
+                    logger.warning(
+                        f"Could not store narrative_manager on context: {assign_err}"
+                    )
 
             except ImportError:
                 logger.error("Module 'story_agent.progressive_summarization' not found.")
-                return {"error": "Narrative manager component not available.", "memories": [], "arcs": []}
+                return {
+                    "success": False,
+                    "error": "Narrative manager component not available.", 
+                    "memories": [], 
+                    "arcs": []
+                }
             except Exception as init_error:
-                logger.error(f"Error initializing narrative manager: {init_error}", exc_info=True)
-                return {"error": "Narrative manager initialization failed.", "memories": [], "arcs": []}
+                logger.error(
+                    f"Error initializing narrative manager: {init_error}", 
+                    exc_info=True
+                )
+                return {
+                    "success": False,
+                    "error": "Narrative manager initialization failed.", 
+                    "memories": [], 
+                    "arcs": []
+                }
 
         if not narrative_manager:
-            return {"error": "Narrative manager could not be initialized.", "memories": [], "arcs": []}
+            return {
+                "success": False,
+                "error": "Narrative manager could not be initialized.", 
+                "memories": [], 
+                "arcs": []
+            }
 
         context_data = await narrative_manager.get_current_narrative_context(
             query,
@@ -691,11 +992,549 @@ async def get_summarized_narrative_context(
         )
         return context_data
     except Exception as e:
-        logger.error(f"Error getting summarized narrative context: {str(e)}", exc_info=True)
-        return {"error": str(e), "memories": [], "arcs": []}
+        logger.error(
+            f"Error getting summarized narrative context: {str(e)}", 
+            exc_info=True
+        )
+        return {"success": False, "error": str(e), "memories": [], "arcs": []}
 
+# ===== NPC NARRATIVE TOOLS =====
 
-# ===== REFACTORED ACTIVITY TOOLS =====
+@function_tool
+async def get_npc_narrative_overview(
+    ctx: RunContextWrapper[ContextType]
+) -> Dict[str, Any]:
+    """
+    Get a comprehensive overview of all NPC narrative progressions.
+    
+    Returns:
+        Overview of narrative stages across all NPCs
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        overview = await get_relationship_overview(user_id, conversation_id)
+        
+        # Enhance with narrative-specific analysis
+        stage_analysis = {
+            "most_advanced_stage": None,
+            "average_progression": 0,
+            "npcs_by_stage": {},
+            "ready_for_revelation": [],
+            "manipulation_candidates": []
+        }
+        
+        # Analyze NPC distributions
+        for stage_name in [
+            "Innocent Beginning", 
+            "First Doubts", 
+            "Creeping Realization", 
+            "Veil Thinning", 
+            "Full Revelation"
+        ]:
+            npcs_in_stage = overview['by_stage'].get(stage_name, [])
+            stage_analysis['npcs_by_stage'][stage_name] = len(npcs_in_stage)
+            
+            if npcs_in_stage and not stage_analysis['most_advanced_stage']:
+                stage_analysis['most_advanced_stage'] = stage_name
+        
+        # Calculate average progression
+        total_progression = 0
+        npc_count = 0
+        
+        for npc in overview.get('relationships', []):
+            stage_index = 0
+            for i, stage in enumerate(NPC_NARRATIVE_STAGES):
+                if stage.name == npc['stage']:
+                    stage_index = i
+                    break
+            total_progression += (stage_index / (len(NPC_NARRATIVE_STAGES) - 1)) * 100
+            npc_count += 1
+            
+            # Check for revelation readiness
+            if stage_index > 0:  # Not in Innocent Beginning
+                stage_analysis['ready_for_revelation'].append({
+                    'npc_id': npc['npc_id'],
+                    'npc_name': npc['npc_name'],
+                    'stage': npc['stage']
+                })
+            
+            # Check for manipulation candidates
+            if stage_index >= 2:  # Creeping Realization or later
+                stage_analysis['manipulation_candidates'].append({
+                    'npc_id': npc['npc_id'],
+                    'npc_name': npc['npc_name'],
+                    'stage': npc['stage']
+                })
+        
+        if npc_count > 0:
+            stage_analysis['average_progression'] = total_progression / npc_count
+        
+        overview['narrative_analysis'] = stage_analysis
+        
+        return overview
+        
+    except Exception as e:
+        logger.error(f"Error getting NPC narrative overview: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e), "relationships": [], "narrative_analysis": {}}
+
+@function_tool
+async def check_all_npc_revelations(
+    ctx: RunContextWrapper[ContextType]
+) -> List[Dict[str, Any]]:
+    """
+    Check for potential revelations across all NPCs.
+    
+    Returns:
+        List of potential NPC-specific revelations
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        npcs = await get_available_npcs(ctx, include_unintroduced=False)
+        revelations = []
+        
+        for npc in npcs:
+            npc_id = npc['npc_id']
+            
+            # Check narrative stage first
+            stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+            
+            # Only check for revelations if past Innocent Beginning
+            if stage.name != "Innocent Beginning":
+                revelation = await check_for_npc_revelation(user_id, conversation_id, npc_id)
+                if revelation:
+                    revelation['current_stage'] = stage.name
+                    revelations.append(revelation)
+        
+        return revelations
+        
+    except Exception as e:
+        logger.error(f"Error checking all NPC revelations: {str(e)}", exc_info=True)
+        return []
+
+@function_tool
+async def generate_dynamic_personal_revelation(
+    ctx: RunContextWrapper[ContextType],
+    npc_id: int,
+    revelation_type: str
+) -> Dict[str, Any]:
+    """
+    Generate a dynamic personal revelation using AI based on NPC relationship context.
+    
+    Args:
+        npc_id: ID of the NPC
+        revelation_type: Type of revelation
+        
+    Returns:
+        Generated revelation
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        # Get NPC details
+        npc_details = await get_npc_details(ctx, npc_id)
+        if not npc_details:
+            return {"success": False, "error": "NPC not found"}
+        
+        # Get narrative stage
+        stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+        
+        # Get recent memories with this NPC
+        memory_manager = await get_memory_manager(user_id, conversation_id)
+        npc_memories = await memory_manager.search_memories(
+            query_text=f"{npc_details['npc_name']} interaction",
+            tags=[f"npc_{npc_id}"],
+            limit=5,
+            use_vector=True
+        )
+        
+        # Format memories for context
+        memory_context = "\n".join([
+            f"- {mem.content}" for mem in npc_memories[:3]
+        ]) if npc_memories else "No specific memories"
+        
+        # Create prompt for revelation generator
+        prompt = f"""
+        Generate a personal revelation for the player about their relationship with {npc_details['npc_name']}.
+        
+        NPC Details:
+        - Name: {npc_details['npc_name']}
+        - Personality: {npc_details.get('personality_traits', [])}
+        - Dominance: {npc_details.get('dominance', 50)}/100
+        - Current Narrative Stage: {stage.name} ({stage.description})
+        
+        Revelation Type: {revelation_type}
+        
+        Recent Interactions:
+        {memory_context}
+        
+        The revelation should be a first-person internal monologue that shows the player
+        becoming aware of how their relationship with {npc_details['npc_name']} has changed.
+        It should be appropriate to the current narrative stage and the specific revelation type.
+        """
+        
+        # Generate using the agent
+        result = await Runner.run(
+            revelation_generator,
+            prompt
+        )
+        
+        inner_monologue = result.final_output
+        
+        # Create journal entry
+        async with get_db_connection_context() as conn:
+            canon_ctx = SimpleContext(user_id, conversation_id)
+            
+            journal_id = await canon.create_journal_entry(
+                ctx=canon_ctx,
+                conn=conn,
+                entry_type='personal_revelation',
+                entry_text=inner_monologue,
+                revelation_types=revelation_type,
+                narrative_moment=None,
+                fantasy_flag=False,
+                intensity_level=0,
+                importance=0.8,
+                tags=[
+                    revelation_type, 
+                    "revelation", 
+                    f"npc_{npc_id}", 
+                    stage.name.lower().replace(" ", "_")
+                ]
+            )
+        
+        return {
+            "type": "personal_revelation",
+            "npc_id": npc_id,
+            "npc_name": npc_details['npc_name'],
+            "narrative_stage": stage.name,
+            "revelation_type": revelation_type,
+            "inner_monologue": inner_monologue,
+            "journal_id": journal_id,
+            "success": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating dynamic revelation: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+@function_tool
+async def generate_multi_npc_dream(
+    ctx: RunContextWrapper[ContextType],
+    primary_npc_ids: List[int],
+    dream_theme: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Generate a dream sequence involving multiple NPCs at different narrative stages.
+    
+    Args:
+        primary_npc_ids: List of NPC IDs to feature
+        dream_theme: Optional theme for the dream
+        
+    Returns:
+        Generated dream sequence
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        # Get details for each NPC
+        npc_contexts = []
+        for npc_id in primary_npc_ids[:3]:  # Limit to 3 for coherence
+            npc_details = await get_npc_details(ctx, npc_id)
+            if npc_details:
+                stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+                npc_contexts.append({
+                    'name': npc_details['npc_name'],
+                    'stage': stage.name,
+                    'dominance': npc_details.get('dominance', 50),
+                    'archetype': npc_details.get('archetype_list', [])
+                })
+        
+        if not npc_contexts:
+            return {"success": False, "error": "No valid NPCs found"}
+        
+        # Build context for dream generation
+        npc_descriptions = "\n".join([
+            f"- {npc['name']}: Stage '{npc['stage']}', Dominance {npc['dominance']}"
+            for npc in npc_contexts
+        ])
+        
+        prompt = f"""
+        Create a symbolic dream sequence featuring these NPCs:
+        {npc_descriptions}
+        
+        Dream Theme: {dream_theme or 'Control and transformation'}
+        
+        The dream should:
+        - Feature all NPCs but reflect their different stages of control
+        - Use surreal dream logic and symbolism
+        - Show NPCs at different stages interacting in impossible ways
+        - Include symbolic representations of the player's loss of autonomy
+        - Be unsettling but not explicitly frightening
+        
+        Write the dream in second person, present tense.
+        """
+        
+        # Generate dream
+        result = await Runner.run(
+            dream_weaver,
+            prompt
+        )
+        
+        dream_text = result.final_output
+        
+        # Extract symbols from the dream
+        symbols = []
+        for npc in npc_contexts:
+            symbols.append(npc['name'])
+        symbols.extend(['control', 'transformation', 'identity'])
+        
+        # Create journal entry
+        async with get_db_connection_context() as conn:
+            canon_ctx = SimpleContext(user_id, conversation_id)
+            
+            journal_id = await canon.create_journal_entry(
+                ctx=canon_ctx,
+                conn=conn,
+                entry_type='dream_sequence',
+                entry_text=dream_text,
+                revelation_types=None,
+                narrative_moment=True,
+                fantasy_flag=True,
+                intensity_level=0,
+                importance=0.7,
+                tags=["dream", "multi_npc"] + [f"npc_{npc_id}" for npc_id in primary_npc_ids]
+            )
+        
+        return {
+            "type": "dream_sequence",
+            "text": dream_text,
+            "symbols": symbols,
+            "featured_npcs": npc_contexts,
+            "journal_id": journal_id,
+            "success": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating multi-NPC dream: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+# ===== ACTIVITY TOOLS =====
+
+@function_tool
+async def suggest_stage_appropriate_activity(
+    ctx: RunContextWrapper[ContextType],
+    npc_id: int,
+    setting: Optional[str] = None,
+    intensity_override: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Suggest an activity appropriate to the NPC's current narrative stage.
+    
+    Args:
+        npc_id: ID of the NPC
+        setting: Current location/setting
+        intensity_override: Optional intensity override
+        
+    Returns:
+        Activity suggestion
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        # Get NPC details and stage
+        npc_details = await get_npc_details(ctx, npc_id)
+        if not npc_details:
+            return {"success": False, "error": "NPC not found"}
+            
+        stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+        
+        # Map stage to intensity if not overridden
+        if intensity_override is None:
+            stage_intensity_map = {
+                "Innocent Beginning": 1,
+                "First Doubts": 2,
+                "Creeping Realization": 3,
+                "Veil Thinning": 4,
+                "Full Revelation": 5
+            }
+            intensity = stage_intensity_map.get(stage.name, 2)
+        else:
+            intensity = intensity_override
+        
+        # Get current setting if not provided
+        if not setting:
+            comprehensive_context = await get_optimized_context(ctx)
+            setting = comprehensive_context.get("current_location", "Default")
+        
+        # Build prompt for activity suggester
+        prompt = f"""
+        Suggest an activity for {npc_details['npc_name']} to engage the player in.
+        
+        NPC Profile:
+        - Personality: {npc_details.get('personality_traits', [])}
+        - Archetypes: {npc_details.get('archetype_list', [])}
+        - Dominance: {npc_details.get('dominance', 50)}/100
+        - Narrative Stage: {stage.name} - {stage.description}
+        
+        Context:
+        - Setting: {setting}
+        - Intensity Level: {intensity}/5
+        - Stage Consideration: Activities should match the openness of control for this stage
+        
+        Provide:
+        1. Activity name
+        2. Brief description
+        3. How it subtly reinforces the power dynamic
+        4. Expected player response options
+        """
+        
+        # Generate activity
+        result = await Runner.run(
+            activity_suggester,
+            prompt
+        )
+        
+        # Parse the generated content
+        activity_text = result.final_output
+        
+        # Extract structured data (simplified - could use structured output)
+        lines = activity_text.strip().split('\n')
+        activity_data = {
+            "npc_id": npc_id,
+            "npc_name": npc_details['npc_name'],
+            "narrative_stage": stage.name,
+            "activity_name": lines[0] if lines else "Conversation",
+            "description": activity_text,
+            "intensity": intensity,
+            "setting": setting,
+            "stage_appropriate": True,
+            "success": True
+        }
+        
+        return activity_data
+        
+    except Exception as e:
+        logger.error(f"Error suggesting stage-appropriate activity: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+@function_tool
+async def analyze_manipulation_opportunities(
+    ctx: RunContextWrapper[ContextType],
+    conflict_id: int,
+    narrative_text: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Analyze manipulation opportunities for all NPCs in a conflict based on their stages.
+    
+    Args:
+        conflict_id: ID of the conflict
+        narrative_text: Optional narrative context
+        
+    Returns:
+        Analysis of manipulation opportunities
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+        
+        # Get conflict details
+        conflict = await conflict_integration.get_conflict_details(conflict_id)
+        if not conflict:
+            return {"success": False, "error": "Conflict not found", "opportunities": []}
+        
+        # Get all stakeholders
+        stakeholders = conflict.get('stakeholders', [])
+        opportunities = []
+        
+        for stakeholder in stakeholders:
+            if stakeholder.get('entity_type') == 'npc':
+                npc_id = stakeholder.get('npc_id')
+                if not npc_id:
+                    continue
+                    
+                # Get NPC stage
+                stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+                
+                # Skip NPCs in Innocent Beginning unless they have very high dominance
+                npc_details = await get_npc_details(ctx, npc_id)
+                if stage.name == "Innocent Beginning" and npc_details.get('dominance', 0) < 80:
+                    continue
+                
+                # Build context for analysis
+                analysis_prompt = f"""
+                Analyze manipulation opportunity for {stakeholder.get('npc_name')} in conflict: {conflict['conflict_name']}
+                
+                NPC Profile:
+                - Narrative Stage: {stage.name}
+                - Faction: {stakeholder.get('faction_name')}
+                - Public Motivation: {stakeholder.get('public_motivation')}
+                - Hidden Motivation: {stakeholder.get('hidden_motivation')}
+                
+                Conflict Context:
+                - Phase: {conflict.get('phase')}
+                - Player Involvement: {conflict.get('player_involvement', {}).get('involvement_level', 'none')}
+                
+                Determine:
+                1. Best manipulation approach for this stage
+                2. Specific leverage points
+                3. Likelihood of success
+                4. Recommended tactics
+                """
+                
+                # Analyze with agent
+                result = await Runner.run(
+                    manipulation_analyst,
+                    analysis_prompt
+                )
+                
+                # Create opportunity entry
+                opportunity = {
+                    'npc_id': npc_id,
+                    'npc_name': stakeholder.get('npc_name'),
+                    'narrative_stage': stage.name,
+                    'analysis': result.final_output,
+                    'stage_modifier': _get_stage_manipulation_modifier(stage.name),
+                    'recommended_approach': _get_stage_appropriate_approach(stage.name)
+                }
+                
+                opportunities.append(opportunity)
+        
+        # Sort by stage progression (more advanced stages first)
+        stage_order = {stage.name: i for i, stage in enumerate(NPC_NARRATIVE_STAGES)}
+        opportunities.sort(
+            key=lambda x: stage_order.get(x['narrative_stage'], 0), 
+            reverse=True
+        )
+        
+        return {
+            'conflict_id': conflict_id,
+            'conflict_name': conflict['conflict_name'],
+            'opportunities': opportunities,
+            'total_opportunities': len(opportunities),
+            'success': True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing manipulation opportunities: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e), "opportunities": []}
+
+# ===== REMAINING TOOLS (Activity, Relationship, Conflict, Resource, Narrative) =====
 
 @function_tool
 @track_performance("analyze_activity")
@@ -730,10 +1569,20 @@ async def analyze_activity(
             for resource_type, value in result.get("effects", {}).items():
                 if value:
                     direction = "increased" if value > 0 else "decreased"
-                    effects_description.append(f"{resource_type} {direction} by {abs(value)}")
-            effects_text = ", ".join(effects_description) if effects_description else "no significant effects"
-            memory_content = f"Analyzed activity: {params.activity_text[:100]}... with effects: {effects_text}"
-            await context.add_narrative_memory(memory_content, "activity_analysis", 0.5)
+                    effects_description.append(
+                        f"{resource_type} {direction} by {abs(value)}"
+                    )
+            effects_text = (
+                ", ".join(effects_description) if effects_description 
+                else "no significant effects"
+            )
+            memory_content = (
+                f"Analyzed activity: {params.activity_text[:100]}... "
+                f"with effects: {effects_text}"
+            )
+            await context.add_narrative_memory(
+                memory_content, "activity_analysis", 0.5
+            )
 
         return result
     except Exception as e:
@@ -743,9 +1592,9 @@ async def analyze_activity(
             "activity_details": "", 
             "effects": {}, 
             "description": f"Error analyzing activity: {str(e)}", 
+            "success": False,
             "error": str(e)
         }
-
 
 @function_tool
 @track_performance("get_filtered_activities")
@@ -767,7 +1616,10 @@ async def get_filtered_activities(
     
     context = ctx.context
     try:
-        from logic.activities_logic import filter_activities_for_npc, build_short_summary
+        from logic.activities_logic import (
+            filter_activities_for_npc, 
+            build_short_summary
+        )
 
         user_stats = None
         if hasattr(context, 'resource_manager'):
@@ -791,7 +1643,6 @@ async def get_filtered_activities(
     except Exception as e:
         logger.error(f"Error getting filtered activities: {str(e)}", exc_info=True)
         return []
-
 
 @function_tool
 @track_performance("generate_activity_suggestion")
@@ -818,15 +1669,21 @@ async def generate_activity_suggestion(
             try:
                 async with get_db_connection_context() as conn:
                     row = await conn.fetchrow(
-                        "SELECT archetype FROM NPCStats WHERE npc_name=$1 AND user_id=$2 AND conversation_id=$3", 
+                        """SELECT archetype FROM NPCStats 
+                        WHERE npc_name=$1 AND user_id=$2 AND conversation_id=$3""", 
                         params.npc_name, user_id, conversation_id
                     )
                     if row and row['archetype']:
                         if isinstance(row['archetype'], str):
                             try: 
                                 archetype_data = json.loads(row['archetype'])
-                                archetypes = archetype_data if isinstance(archetype_data, list) else (
-                                    archetype_data.get("types") if isinstance(archetype_data, dict) else [row['archetype']]
+                                archetypes = (
+                                    archetype_data if isinstance(archetype_data, list) 
+                                    else (
+                                        archetype_data.get("types") 
+                                        if isinstance(archetype_data, dict) 
+                                        else [row['archetype']]
+                                    )
                                 )
                             except: 
                                 archetypes = [row['archetype']]
@@ -849,7 +1706,11 @@ async def generate_activity_suggestion(
             except Exception as context_error: 
                 logger.warning(f"Error getting location from context: {context_error}")
 
-        from logic.activities_logic import filter_activities_for_npc, build_short_summary, get_all_activities as get_activities
+        from logic.activities_logic import (
+            filter_activities_for_npc, 
+            build_short_summary, 
+            get_all_activities as get_activities
+        )
         activities = await filter_activities_for_npc(
             npc_archetypes=archetypes, 
             meltdown_level=max(0, params.intensity_level-1), 
@@ -861,7 +1722,11 @@ async def generate_activity_suggestion(
 
         selected_activity = random.choice(activities) if activities else None
         if not selected_activity: 
-            return {"npc_name": params.npc_name, "success": False, "error": "No suitable activities found"}
+            return {
+                "npc_name": params.npc_name, 
+                "success": False, 
+                "error": "No suitable activities found"
+            }
 
         intensity_tiers = selected_activity.get("intensity_tiers", [])
         tier_text = ""
@@ -873,7 +1738,10 @@ async def generate_activity_suggestion(
         suggestion = {
             "npc_name": params.npc_name, 
             "activity_name": selected_activity.get("name", ""), 
-            "purpose": selected_activity.get("purpose", [])[0] if selected_activity.get("purpose") else "", 
+            "purpose": (
+                selected_activity.get("purpose", [])[0] 
+                if selected_activity.get("purpose") else ""
+            ), 
             "intensity_tier": tier_text, 
             "intensity_level": params.intensity_level, 
             "short_summary": build_short_summary(selected_activity), 
@@ -883,16 +1751,24 @@ async def generate_activity_suggestion(
         }
 
         if hasattr(context, 'add_narrative_memory'):
-            memory_content = f"Generated activity suggestion for {params.npc_name}: {suggestion['activity_name']} (Intensity: {params.intensity_level})"
-            await context.add_narrative_memory(memory_content, "activity_suggestion", 0.5)
+            memory_content = (
+                f"Generated activity suggestion for {params.npc_name}: "
+                f"{suggestion['activity_name']} (Intensity: {params.intensity_level})"
+            )
+            await context.add_narrative_memory(
+                memory_content, "activity_suggestion", 0.5
+            )
 
         return suggestion
     except Exception as e:
         logger.error(f"Error generating activity suggestion: {str(e)}", exc_info=True)
-        return {"npc_name": params.npc_name, "success": False, "error": str(e)}
+        return {
+            "npc_name": params.npc_name, 
+            "success": False, 
+            "error": str(e)
+        }
 
-
-# ===== REFACTORED RELATIONSHIP TOOLS =====
+# ===== RELATIONSHIP TOOLS =====
 
 @function_tool
 @track_performance("update_relationship_dimensions")
@@ -930,1028 +1806,203 @@ async def update_relationship_dimensions(
             memory_content = f"Updated relationship dimensions for link {link_id}: {changes_dict}"
             if reason: 
                 memory_content += f" Reason: {reason}"
-            await context.add_narrative_memory(memory_content, "relationship_update", 0.5)
+            await context.add_narrative_memory(
+                memory_content, "relationship_update", 0.5
+            )
 
         return result
     except Exception as e:
         logger.error(f"Error updating relationship dimensions: {str(e)}", exc_info=True)
-        return {"error": str(e), "link_id": link_id}
+        return {"success": False, "error": str(e), "link_id": link_id}
 
-
-# ===== REFACTORED CONFLICT TOOLS =====
-
-@function_tool
-async def generate_conflict_from_analysis(
-    ctx: RunContextWrapper[ContextType],
-    analysis: ConflictAnalysis
-) -> Dict[str, Any]:
-    """Generate a conflict based on analysis provided by analyze_conflict_potential."""
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    try:
-        # Move import here
-        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-        
-        if not analysis.has_conflict_potential:
-            return {
-                "generated": False, 
-                "reason": "Insufficient conflict potential", 
-                "analysis": analysis.model_dump()
-            }
-
-        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
-
-        conflict = await conflict_integration.generate_new_conflict(
-            analysis.recommended_conflict_type
-        )
-
-        internal_faction_conflict = None
-        if analysis.potential_internal_faction_conflict and conflict and conflict.get("conflict_id"):
-            internal_data = analysis.potential_internal_faction_conflict
-            try:
-                internal_faction_conflict = await conflict_integration.initiate_faction_power_struggle(
-                    conflict["conflict_id"],
-                    internal_data.faction_id,
-                    internal_data.challenger_npc_id,
-                    internal_data.target_npc_id,
-                    internal_data.prize,
-                    internal_data.approach,
-                    False
-                )
-            except Exception as e:
-                logger.error(f"Error generating internal faction conflict: {e}")
-
-        return {
-            "generated": True,
-            "conflict": conflict,
-            "internal_faction_conflict": internal_faction_conflict
-        }
-    except Exception as e:
-        logger.error(f"Error generating conflict from analysis: {e}", exc_info=True)
-        return {
-            "generated": False, 
-            "reason": f"Error: {str(e)}", 
-            "analysis": analysis.model_dump()
-        }
-
+# ===== RELATIONSHIP MILESTONE TOOLS =====
 
 @function_tool
-async def generate_manipulation_attempt(
+async def check_relationship_milestones(
     ctx: RunContextWrapper[ContextType],
-    conflict_id: int,
-    npc_id: int,
-    manipulation_type: str,
-    goal: ManipulationGoal
-) -> Dict[str, Any]:
-    """Generate a manipulation attempt by an NPC in a conflict."""
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    try:
-        # Move import here
-        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-        
-        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
-
-        # Convert model to dict
-        goal_dict = goal.model_dump()
-
-        suggestion = await conflict_integration.suggest_manipulation_content(
-            npc_id, conflict_id, manipulation_type, goal_dict
-        )
-        attempt = await conflict_integration.create_manipulation_attempt(
-            conflict_id,
-            npc_id,
-            manipulation_type,
-            suggestion["content"],
-            goal_dict,
-            suggestion["leverage_used"],
-            suggestion["intimacy_level"]
-        )
-
-        npc_name = suggestion.get("npc_name", "Unknown NPC")
-        content = suggestion.get("content", "No content generated.")
-
-        return {
-            "generated": True,
-            "attempt": attempt,
-            "npc_id": npc_id,
-            "npc_name": npc_name,
-            "manipulation_type": manipulation_type,
-            "content": content
-        }
-    except Exception as e:
-        logger.error(f"Error generating manipulation attempt: {e}", exc_info=True)
-        return {
-            "generated": False,
-            "reason": f"Error: {str(e)}",
-            "npc_id": npc_id,
-            "manipulation_type": manipulation_type
-        }
-
-
-@function_tool
-async def set_player_involvement(
-    ctx: RunContextWrapper[ContextType],
-    params: PlayerInvolvementParams
+    npc_id: int
 ) -> Dict[str, Any]:
     """
-    Set the player's involvement in a conflict.
-
-    Args:
-        params: Player involvement parameters
-
-    Returns:
-        Updated conflict information or error dictionary.
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
+    Check for relationship milestones based on NPC's narrative stage.
     
-    # Use the conflict integration directly instead of expecting it on context
-    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-    from logic.conflict_system.conflict_tools import (
-        get_conflict_details, update_player_involvement as update_involvement
-    )
-    
-    try:
-        # Check if we have a resource manager
-        if not hasattr(context, 'resource_manager'):
-            logger.error("Context missing resource_manager")
-            return {"conflict_id": params.conflict_id, "error": "Internal context setup error", "success": False}
-            
-        resource_manager = context.resource_manager
-
-        # Check resources
-        resource_check = await resource_manager.check_resources(
-            params.money_committed, params.supplies_committed, params.influence_committed
-        )
-        if not resource_check.get('has_resources', False):
-            resource_check['success'] = False
-            resource_check['error'] = "Insufficient resources to commit"
-            return resource_check
-
-        # Get conflict info using the tools
-        conflict_info = await get_conflict_details(ctx, params.conflict_id)
-        
-        # Update player involvement using the tools
-        involvement_data = {
-            "involvement_level": params.involvement_level,
-            "faction": params.faction,
-            "resources_committed": {
-                "money": params.money_committed,
-                "supplies": params.supplies_committed,
-                "influence": params.influence_committed
-            },
-            "actions_taken": [params.action] if params.action else []
-        }
-        
-        result = await update_involvement(ctx, params.conflict_id, involvement_data)
-
-        if hasattr(context, 'add_narrative_memory'):
-            resources_text = []
-            if params.money_committed > 0: 
-                resources_text.append(f"{params.money_committed} money")
-            if params.supplies_committed > 0: 
-                resources_text.append(f"{params.supplies_committed} supplies")
-            if params.influence_committed > 0: 
-                resources_text.append(f"{params.influence_committed} influence")
-            resources_committed = ", ".join(resources_text) if resources_text else "no resources"
-
-            conflict_name = conflict_info.get('conflict_name', f'ID: {params.conflict_id}') if conflict_info else f'ID: {params.conflict_id}'
-            memory_content = (
-                f"Player set involvement in conflict {conflict_name} "
-                f"to {params.involvement_level}, supporting {params.faction} faction "
-                f"with {resources_committed}."
-            )
-            if params.action: 
-                memory_content += f" Action taken: {params.action}"
-            await context.add_narrative_memory(memory_content, "conflict_involvement", 0.7)
-
-        if isinstance(result, dict):
-            result["success"] = True
-        else:
-            result = {
-                "conflict_id": params.conflict_id,
-                "involvement_level": params.involvement_level,
-                "faction": params.faction,
-                "resources_committed": {
-                    "money": params.money_committed,
-                    "supplies": params.supplies_committed,
-                    "influence": params.influence_committed
-                },
-                "action": params.action,
-                "success": True,
-                "raw_result": result
-            }
-
-        return result
-    except Exception as e:
-        logger.error(f"Error setting involvement: {str(e)}", exc_info=True)
-        return {"conflict_id": params.conflict_id, "error": str(e), "success": False}
-
-
-@function_tool
-async def track_conflict_story_beat(
-    ctx: RunContextWrapper[ContextType],
-    params: StoryBeatParams
-) -> Dict[str, Any]:
-    """Track a story beat for a resolution path, advancing progress."""
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    try:
-        # Move import here
-        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-        
-        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
-
-        result = await conflict_integration.track_story_beat(
-            params.conflict_id,
-            params.path_id,
-            params.beat_description,
-            params.involved_npcs,
-            params.progress_value
-        )
-
-        if isinstance(result, dict):
-            return {"tracked": True, "result": result}
-        else:
-            return {"tracked": True, "result": {"raw_output": result}}
-
-    except Exception as e:
-        logger.error(f"Error tracking story beat: {e}", exc_info=True)
-        return {"tracked": False, "reason": f"Error: {str(e)}"}
-
-
-# ===== REFACTORED RESOURCE TOOLS =====
-
-@function_tool
-@track_performance("check_resources")
-async def check_resources(
-    ctx: RunContextWrapper[ContextType],
-    params: Optional[ResourceCheck] = None
-) -> Dict[str, Any]:
-    """
-    Check if player has sufficient resources.
-
-    Args:
-        params: Resource check parameters
-
-    Returns:
-        Dictionary with resource check results.
-    """
-    if params is None:
-        params = ResourceCheck()
-    
-    context = ctx.context
-    if not hasattr(context, 'resource_manager'):
-        logger.error("Context missing resource_manager")
-        return {"has_resources": False, "error": "Internal context setup error", "current": {}}
-    
-    resource_manager = context.resource_manager
-
-    try:
-        result = await resource_manager.check_resources(
-            params.money, params.supplies, params.influence
-        )
-
-        current_res = result.get('current', {})
-        if current_res.get('money') is not None:
-            try:
-                formatted_money = await resource_manager.get_formatted_money(current_res['money'])
-                current_res['formatted_money'] = formatted_money
-                result['current'] = current_res
-            except Exception as format_err:
-                logger.warning(f"Could not format money: {format_err}")
-
-        if 'has_resources' not in result:
-            result['has_resources'] = False
-        if 'current' not in result:
-            result['current'] = {}
-
-        return result
-    except Exception as e:
-        logger.error(f"Error checking resources: {str(e)}", exc_info=True)
-        return {"has_resources": False, "error": str(e), "current": {}}
-
-
-@function_tool
-@track_performance("commit_resources_to_conflict")
-async def commit_resources_to_conflict(
-    ctx: RunContextWrapper[ContextType],
-    params: ResourceCommitment
-) -> Dict[str, Any]:
-    """
-    Commit player resources to a conflict.
-
-    Args:
-        params: Resource commitment parameters
-
-    Returns:
-        Result of committing resources or error dictionary.
-    """
-    context = ctx.context
-    if not hasattr(context, 'resource_manager'):
-        logger.error("Context missing resource_manager")
-        return {"success": False, "error": "Internal context setup error"}
-    
-    resource_manager = context.resource_manager
-
-    try:
-        conflict_info = None
-        if hasattr(context, 'conflict_manager') and context.conflict_manager:
-            try:
-                conflict_info = await context.conflict_manager.get_conflict(params.conflict_id)
-            except Exception as conflict_error:
-                logger.warning(f"Could not get conflict info: {conflict_error}")
-        else:
-            logger.warning("Context missing conflict_manager")
-
-        result = await resource_manager.commit_resources_to_conflict(
-            params.conflict_id, params.money, params.supplies, params.influence
-        )
-
-        if params.money > 0 and result.get('success', False) and result.get('money_result'):
-            money_result = result['money_result']
-            if 'old_value' in money_result and 'new_value' in money_result:
-                try:
-                    old_formatted = await resource_manager.get_formatted_money(money_result['old_value'])
-                    new_formatted = await resource_manager.get_formatted_money(money_result['new_value'])
-                    change_val = money_result.get('change')
-                    formatted_change = await resource_manager.get_formatted_money(change_val) if change_val is not None else None
-
-                    money_result['formatted_old_value'] = old_formatted
-                    money_result['formatted_new_value'] = new_formatted
-                    if formatted_change is not None:
-                        money_result['formatted_change'] = formatted_change
-                    result['money_result'] = money_result
-                except Exception as format_err:
-                    logger.warning(f"Could not format money: {format_err}")
-
-        if hasattr(context, 'add_narrative_memory'):
-            resources_text = []
-            if params.money > 0: 
-                resources_text.append(f"{params.money} money")
-            if params.supplies > 0: 
-                resources_text.append(f"{params.supplies} supplies")
-            if params.influence > 0: 
-                resources_text.append(f"{params.influence} influence")
-            resources_committed = ", ".join(resources_text) if resources_text else "No resources"
-
-            conflict_name = conflict_info.get('conflict_name', f"ID: {params.conflict_id}") if conflict_info else f"ID: {params.conflict_id}"
-            memory_content = f"Committed {resources_committed} to conflict {conflict_name}"
-            await context.add_narrative_memory(memory_content, "resource_commitment", 0.6)
-
-        if 'success' not in result:
-            result['success'] = True
-
-        return result
-    except Exception as e:
-        logger.error(f"Error committing resources: {str(e)}", exc_info=True)
-        return {"success": False, "error": str(e)}
-
-@function_tool
-@track_performance("get_player_resources")
-async def get_player_resources(ctx: RunContextWrapper[ContextType]) -> Dict[str, Any]:
-    """
-    Get the current player resources and vitals.
-
-    Returns:
-        Current resource status
-    """
-    context = ctx.context
-    resource_manager = context.resource_manager
-
-    try:
-        resources = await resource_manager.get_resources()
-        vitals = await resource_manager.get_vitals()
-        formatted_money = await resource_manager.get_formatted_money()
-        updated_at = resources.get('updated_at', datetime.now())
-        updated_at_iso = updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at)
-
-        return {"money": resources.get('money', 0), "supplies": resources.get('supplies', 0), "influence": resources.get('influence', 0), "energy": vitals.get('energy', 0), "hunger": vitals.get('hunger', 0), "formatted_money": formatted_money, "updated_at": updated_at_iso}
-    except Exception as e:
-        logger.error(f"Error getting player resources: {str(e)}", exc_info=True)
-        return {"error": str(e), "money": 0, "supplies": 0, "influence": 0, "energy": 0, "hunger": 0, "formatted_money": "0"}
-
-@function_tool
-@track_performance("apply_activity_effects")
-async def apply_activity_effects(ctx: RunContextWrapper[ContextType], activity_text: str) -> Dict[str, Any]:
-    """
-    Analyze and apply the effects of an activity to player resources.
-
-    Args:
-        activity_text: Description of the activity
-
-    Returns:
-        Results of applying activity effects
-    """
-    context = ctx.context
-    activity_analyzer = context.activity_analyzer
-
-    try:
-        result = await activity_analyzer.analyze_activity(activity_text, apply_effects=True) # Analyze AND apply
-
-        if 'effects' in result and 'money' in result['effects']:
-            resource_manager = context.resource_manager
-            resources = await resource_manager.get_resources()
-            result['formatted_money'] = await resource_manager.get_formatted_money(resources.get('money', 0))
-
-        if hasattr(context, 'add_narrative_memory'):
-            effects = result.get('effects', {})
-            effects_description = [f"{res} {('increased' if val > 0 else 'decreased')} by {abs(val)}" for res, val in effects.items() if val]
-            effects_text = ", ".join(effects_description) if effects_description else "no significant effects"
-            memory_content = f"Applied activity effects for: {activity_text[:100]}... with {effects_text}"
-            await context.add_narrative_memory(memory_content, "activity_application", 0.5)
-
-        return result
-    except Exception as e:
-        logger.error(f"Error applying activity effects: {str(e)}", exc_info=True)
-        return {"error": str(e), "activity_type": "unknown", "activity_details": "", "effects": {}}
-
-@function_tool
-@track_performance("get_resource_history")
-async def get_resource_history(
-    ctx: RunContextWrapper[ContextType],
-    resource_type: Optional[str] = None,
-    limit: Optional[int] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get the history of resource changes.
-
-    Args:
-        resource_type: Optional filter for specific resource type (money, supplies, influence, energy, hunger).
-        limit: Maximum number of history entries to return. Defaults to 10 if not provided.
-
-    Returns:
-        List of resource change history entries.
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    resource_manager = getattr(context, 'resource_manager', None)
-
-    # Handle the default value inside the function
-    actual_limit = limit if limit is not None else 10
-
-    async with get_db_connection_context() as conn:
-        try:
-            base_query = "SELECT resource_type, old_value, new_value, amount_changed, source, description, timestamp FROM ResourceHistoryLog WHERE user_id=$1 AND conversation_id=$2"
-            params = [user_id, conversation_id]
-
-            if resource_type:
-                base_query += " AND resource_type=$3 ORDER BY timestamp DESC LIMIT $4"
-                params.extend([resource_type, actual_limit])
-            else:
-                base_query += " ORDER BY timestamp DESC LIMIT $3"
-                params.append(actual_limit)
-
-            rows = await conn.fetch(base_query, *params)
-            history = []
-
-            for row in rows:
-                formatted_old, formatted_new, formatted_change = None, None, None
-                # Only format money if resource_manager is available
-                if row['resource_type'] == "money" and resource_manager:
-                    try:
-                        formatted_old = await resource_manager.get_formatted_money(row['old_value'])
-                        formatted_new = await resource_manager.get_formatted_money(row['new_value'])
-                        formatted_change = await resource_manager.get_formatted_money(row['amount_changed'])
-                    except Exception as format_err:
-                         logger.warning(f"Could not format money in get_resource_history: {format_err}")
-
-                timestamp = row['timestamp']
-                timestamp_iso = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
-
-                history.append({
-                    "resource_type": row['resource_type'],
-                    "old_value": row['old_value'],
-                    "new_value": row['new_value'],
-                    "amount_changed": row['amount_changed'],
-                    "formatted_old_value": formatted_old,
-                    "formatted_new_value": formatted_new,
-                    "formatted_change": formatted_change,
-                    "source": row['source'],
-                    "description": row['description'],
-                    "timestamp": timestamp_iso
-                })
-            return history
-        except Exception as e:
-            logger.error(f"Error getting resource history: {str(e)}", exc_info=True)
-            return []
-
-# ----- Narrative Tools -----
-
-@function_tool
-@track_performance("generate_personal_revelation")
-async def generate_personal_revelation(ctx: RunContextWrapper[ContextType], npc_name: str, revelation_type: str) -> Dict[str, Any]:
-    """
-    Generate a personal revelation for the player about their relationship with an NPC.
-
-    Args:
-        npc_name: Name of the NPC involved in the revelation
-        revelation_type: Type of revelation (dependency, obedience, corruption, willpower, confidence)
-
-    Returns:
-        A personal revelation
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-    
-    # Define revelation templates based on type
-    templates = {
-        "dependency": [
-            f"I've been checking my phone constantly to see if {npc_name} has messaged me. When did I start needing her approval so much?",
-            f"I realized today that I haven't made a significant decision without consulting {npc_name} in weeks. Is that normal?",
-            f"The thought of spending a day without talking to {npc_name} makes me anxious. I should be concerned about that, shouldn't I?"
-        ],
-        "obedience": [
-            f"I caught myself automatically rearranging my schedule when {npc_name} hinted she wanted to see me. I didn't even think twice about it.",
-            f"Today I changed my opinion the moment I realized it differed from {npc_name}'s. That's... not like me. Or is it becoming like me?",
-            f"{npc_name} gave me that look, and I immediately stopped what I was saying. When did her disapproval start carrying so much weight?"
-        ],
-        "corruption": [
-            f"I found myself enjoying the feeling of following {npc_name}'s instructions perfectly. The pride I felt at her approval was... intense.",
-            f"Last year, I would have been offended if someone treated me the way {npc_name} did today. Now I'm grateful for her attention.",
-            f"Sometimes I catch glimpses of my old self, like a stranger I used to know. When did I change so fundamentally?"
-        ],
-        "willpower": [
-            f"I had every intention of saying no to {npc_name} today. The 'yes' came out before I even realized I was speaking.",
-            f"I've been trying to remember what it felt like to disagree with {npc_name}. The memory feels distant, like it belongs to someone else.",
-            f"I made a list of boundaries I wouldn't cross. Looking at it now, I've broken every single one at {npc_name}'s suggestion."
-        ],
-        "confidence": [
-            f"I opened my mouth to speak in the meeting, then saw {npc_name} watching me. I suddenly couldn't remember what I was going to say.",
-            f"I used to trust my judgment. Now I find myself second-guessing every thought that {npc_name} hasn't explicitly approved.",
-            f"When did I start feeling this small? This uncertain? I can barely remember how it felt to be sure of myself."
-        ]
-    }
-
-    try:
-        revelation_templates = templates.get(revelation_type.lower(), templates["dependency"])
-        inner_monologue = random.choice(revelation_templates)
-
-        # Create a context object for canon
-        class RevealContext:
-            def __init__(self, user_id, conversation_id):
-                self.user_id = user_id
-                self.conversation_id = conversation_id
-        
-        canon_ctx = RevealContext(user_id, conversation_id)
-        
-        async with get_db_connection_context() as conn:
-            try:
-                # Use canon to create journal entry
-                journal_id = await canon.create_journal_entry(
-                    ctx=canon_ctx,
-                    conn=conn,
-                    entry_type='personal_revelation',
-                    entry_text=inner_monologue,
-                    revelation_types=revelation_type,
-                    narrative_moment=None,
-                    fantasy_flag=False,
-                    intensity_level=0,
-                    importance=0.8,
-                    tags=[revelation_type, "revelation", npc_name.lower().replace(" ", "_")]
-                )
-
-                if hasattr(context, 'add_narrative_memory'):
-                    await context.add_narrative_memory(
-                        f"Personal revelation about {npc_name}: {inner_monologue}", 
-                        "personal_revelation", 
-                        0.8, 
-                        tags=[revelation_type, "revelation", npc_name.lower().replace(" ", "_")]
-                    )
-                    
-                if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                    await context.narrative_manager.add_revelation(
-                        content=inner_monologue, 
-                        revelation_type=revelation_type, 
-                        importance=0.8, 
-                        tags=[revelation_type, "revelation"]
-                    )
-
-                return {
-                    "type": "personal_revelation", 
-                    "name": f"{revelation_type.capitalize()} Awareness", 
-                    "inner_monologue": inner_monologue, 
-                    "journal_id": journal_id, 
-                    "success": True
-                }
-            except Exception as db_error:
-                logger.error(f"Database error recording personal revelation: {db_error}")
-                raise
-    except Exception as e:
-        logger.error(f"Error generating personal revelation: {str(e)}", exc_info=True)
-        return {
-            "type": "personal_revelation", 
-            "name": f"{revelation_type.capitalize()} Awareness", 
-            "inner_monologue": f"Error generating revelation: {str(e)}", 
-            "success": False
-        }
-
-
-@function_tool
-@track_performance("generate_dream_sequence")
-async def generate_dream_sequence(ctx: RunContextWrapper[ContextType], npc_names: List[str]) -> Dict[str, Any]:
-    """
-    Generate a symbolic dream sequence based on player's current state.
-
-    Args:
-        npc_names: List of NPC names to include in the dream
-
-    Returns:
-        A dream sequence
-    """
-    while len(npc_names) < 3: 
-        npc_names.append(f"Unknown Figure {len(npc_names) + 1}")
-    npc1, npc2, npc3 = npc_names[:3]
-    
-    # Dream templates
-    dream_templates = [
-        f"You're sitting in a chair as {npc1} circles you slowly. \"Show me your hands,\" she says. You extend them, surprised to find intricate strings wrapped around each finger, extending upward. \"Do you see who's holding them?\" she asks. You look up, but the ceiling is mirrored, showing only your own face looking back down at you, smiling with an expression that isn't yours.",
-        f"You're searching your home frantically, calling {npc1}'s name. The rooms shift and expand, doorways leading to impossible spaces. Your phone rings. It's {npc1}. \"Where are you?\" you ask desperately. \"I'm right here,\" she says, her voice coming both from the phone and from behind you. \"I've always been right here. You're the one who's lost.\"",
-        f"You're trying to walk away from {npc1}, but your feet sink deeper into the floor with each step. \"I don't understand why you're struggling,\" she says, not moving yet somehow keeping pace beside you. \"You stopped walking on your own long ago.\" You look down to find your legs have merged with the floor entirely, indistinguishable from the material beneath.",
-        f"You're giving a presentation to a room full of people, but every time you speak, your voice comes out as {npc1}'s voice, saying words you didn't intend. The audience nods approvingly. \"Much better,\" whispers {npc2} from beside you. \"Your ideas were never as good as hers anyway.\"",
-        f"You're walking through an unfamiliar house, opening doors that should lead outside but only reveal more rooms. In each room, {npc1} is engaged in a different activity, wearing a different expression. In the final room, all versions of her turn to look at you simultaneously. \"Which one is real?\" they ask in unison. \"The one you needed, or the one who needed you?\"",
-        f"You're swimming in deep water. Below you, {npc1} and {npc2} walk along the bottom, looking up at you and conversing, their voices perfectly clear despite the water. \"They still think they're above it all,\" says {npc1}, and they both laugh. You realize you can't remember how to reach the surface."
-    ]
-
-    try:
-        dream_text = random.choice(dream_templates)
-        context = ctx.context
-        user_id = context.user_id
-        conversation_id = context.conversation_id
-
-        # Create a context object for canon
-        class DreamContext:
-            def __init__(self, user_id, conversation_id):
-                self.user_id = user_id
-                self.conversation_id = conversation_id
-        
-        canon_ctx = DreamContext(user_id, conversation_id)
-
-        async with get_db_connection_context() as conn:
-            try:
-                # Use canon to create journal entry
-                journal_id = await canon.create_journal_entry(
-                    ctx=canon_ctx,
-                    conn=conn,
-                    entry_type='dream_sequence',
-                    entry_text=dream_text,
-                    revelation_types=None,
-                    narrative_moment=True,
-                    fantasy_flag=True,
-                    intensity_level=0,
-                    importance=0.7,
-                    tags=["dream", "symbolic"] + [npc.lower().replace(" ", "_") for npc in npc_names[:3]]
-                )
-
-                if hasattr(context, 'add_narrative_memory'):
-                    await context.add_narrative_memory(
-                        f"Dream sequence: {dream_text}", 
-                        "dream_sequence", 
-                        0.7, 
-                        tags=["dream", "symbolic"] + [npc.lower().replace(" ", "_") for npc in npc_names[:3]]
-                    )
-                    
-                if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                    await context.narrative_manager.add_dream_sequence(
-                        content=dream_text, 
-                        symbols=[npc1, npc2, npc3, "control", "manipulation"], 
-                        importance=0.7, 
-                        tags=["dream", "symbolic"]
-                    )
-
-                return {
-                    "type": "dream_sequence", 
-                    "text": dream_text, 
-                    "journal_id": journal_id, 
-                    "success": True
-                }
-            except Exception as db_error:
-                logger.error(f"Database error recording dream sequence: {db_error}")
-                raise
-    except Exception as e:
-        logger.error(f"Error generating dream sequence: {str(e)}", exc_info=True)
-        return {
-            "type": "dream_sequence", 
-            "text": f"Error generating dream: {str(e)}", 
-            "success": False
-        }
-
-@function_tool
-@track_performance("check_relationship_events")
-async def check_relationship_events(ctx: RunContextWrapper[ContextType]) -> Dict[str, Any]:
-    """
-    Check for relationship events like crossroads or rituals.
-
-    Returns:
-        Dictionary with any triggered relationship events
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    try:
-        crossroads = await check_for_crossroads_tool(user_id, conversation_id)
-        ritual = await check_for_ritual_tool(user_id, conversation_id)
-
-        if (crossroads or ritual) and hasattr(context, 'add_narrative_memory'):
-            event_type = "crossroads" if crossroads else "ritual"; npc_name = "Unknown"
-            if crossroads: npc_name = crossroads.get("npc_name", "Unknown")
-            elif ritual: npc_name = ritual.get("npc_name", "Unknown")
-            memory_content = f"Relationship {event_type} detected with {npc_name}"
-            await context.add_narrative_memory(memory_content, f"relationship_{event_type}", 0.8, tags=[event_type, "relationship", npc_name.lower().replace(" ", "_")])
-
-        return {"crossroads": crossroads, "ritual": ritual, "has_events": crossroads is not None or ritual is not None}
-    except Exception as e:
-        logger.error(f"Error checking relationship events: {str(e)}", exc_info=True)
-        return {"error": str(e), "crossroads": None, "ritual": None, "has_events": False}
-
-@function_tool
-@track_performance("apply_crossroads_choice")
-async def apply_crossroads_choice(
-    ctx: RunContextWrapper[ContextType],
-    link_id: int,
-    crossroads_name: str,
-    choice_index: int
-) -> Dict[str, Any]:
-    """
-    Apply a chosen effect from a triggered relationship crossroads.
-
-    Args:
-        link_id: ID of the social link
-        crossroads_name: Name of the crossroads event
-        choice_index: Index of the chosen option
-
-    Returns:
-        Result of applying the choice
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    try:
-        result = await apply_crossroads_choice_tool(user_id, conversation_id, link_id, crossroads_name, choice_index)
-
-        if hasattr(context, 'add_narrative_memory'):
-            npc_name = "Unknown"
-            try:
-                async with get_db_connection_context() as conn:
-                    row = await conn.fetchrow("SELECT entity2_id FROM SocialLinks WHERE link_id = $1 AND entity2_type = 'npc'", link_id)
-                    if row: npc_id = row['entity2_id']; npc_row = await conn.fetchrow("SELECT npc_name FROM NPCStats WHERE npc_id = $1", npc_id); npc_name = npc_row['npc_name'] if npc_row else npc_name
-            except Exception as db_error: logger.warning(f"Could not get NPC name for memory: {db_error}")
-
-            memory_content = f"Applied crossroads choice {choice_index} for '{crossroads_name}' with {npc_name}"
-            await context.add_narrative_memory(memory_content, "crossroads_choice", 0.8, tags=["crossroads", "relationship", npc_name.lower().replace(" ", "_")])
-            if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                await context.narrative_manager.add_interaction(content=memory_content, npc_name=npc_name, importance=0.8, tags=["crossroads", "relationship_choice"])
-
-        return result
-    except Exception as e:
-        logger.error(f"Error applying crossroads choice: {str(e)}", exc_info=True)
-        return {"link_id": link_id, "crossroads_name": crossroads_name, "choice_index": choice_index, "success": False, "error": str(e)}
-
-@function_tool
-@track_performance("check_npc_relationship")
-async def check_npc_relationship(ctx: RunContextWrapper[ContextType], npc_id: int) -> Dict[str, Any]:
-    """
-    Get the relationship between the player and an NPC.
-
     Args:
         npc_id: ID of the NPC
-
-    Returns:
-        Relationship summary
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    try:
-        relationship = await get_relationship_summary_tool(user_id, conversation_id, "player", user_id, "npc", npc_id)
-        if not relationship:
-            try:
-                from logic.social_links_agentic import create_social_link
-                link_id = await create_social_link(user_id, conversation_id, "player", user_id, "npc", npc_id)
-                relationship = await get_relationship_summary_tool(user_id, conversation_id, "player", user_id, "npc", npc_id) # Fetch again
-            except Exception as link_error:
-                logger.error(f"Error creating social link: {link_error}")
-                return {"error": f"Failed to create relationship: {str(link_error)}", "npc_id": npc_id}
-
-        return relationship or {"error": "Could not get or create relationship", "npc_id": npc_id}
-    except Exception as e:
-        logger.error(f"Error checking NPC relationship: {str(e)}", exc_info=True)
-        return {"error": str(e), "npc_id": npc_id}
-
-@function_tool
-@track_performance("add_moment_of_clarity")
-async def add_moment_of_clarity(ctx: RunContextWrapper[ContextType], realization_text: str) -> Dict[str, Any]:
-    """
-    Add a moment of clarity where the player briefly becomes aware of their situation.
-
-    Args:
-        realization_text: The specific realization the player has
-
-    Returns:
-        The created moment of clarity
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    try:
-        from logic.narrative_progression import add_moment_of_clarity as add_clarity
-        result = await add_clarity(user_id, conversation_id, realization_text)
-
-        if hasattr(context, 'add_narrative_memory'):
-            await context.add_narrative_memory(f"Moment of clarity: {realization_text}", "moment_of_clarity", 0.9, tags=["clarity", "realization", "awareness"])
-        if hasattr(context, 'narrative_manager') and context.narrative_manager:
-            await context.narrative_manager.add_revelation(content=realization_text, revelation_type="clarity", importance=0.9, tags=["clarity", "realization"])
-
-        return {"type": "moment_of_clarity", "content": result, "success": True}
-    except Exception as e:
-        logger.error(f"Error adding moment of clarity: {str(e)}", exc_info=True)
-        return {"type": "moment_of_clarity", "content": None, "success": False, "error": str(e)}
-
-@function_tool
-@track_performance("get_player_journal_entries")
-async def get_player_journal_entries(
-    ctx: RunContextWrapper[ContextType],
-    entry_type: Optional[str] = None,
-    limit: Optional[int] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get entries from the player's journal.
-
-    Args:
-        entry_type: Optional filter for entry type (personal_revelation, dream_sequence, moment_of_clarity, etc.).
-        limit: Maximum number of entries to return. Defaults to 10 if not provided.
-
-    Returns:
-        List of journal entries.
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
-    # Handle the default value inside the function
-    actual_limit = limit if limit is not None else 10
-
-    async with get_db_connection_context() as conn:
-        try:
-            base_query = "SELECT id, entry_type, entry_text, revelation_types, narrative_moment, fantasy_flag, intensity_level, timestamp FROM PlayerJournal WHERE user_id=$1 AND conversation_id=$2"
-            params = [user_id, conversation_id]
-
-            if entry_type:
-                base_query += " AND entry_type=$3 ORDER BY timestamp DESC LIMIT $4"
-                params.extend([entry_type, actual_limit])
-            else:
-                base_query += " ORDER BY timestamp DESC LIMIT $3"
-                params.append(actual_limit)
-
-            rows = await conn.fetch(base_query, *params)
-            entries = []
-            for row in rows:
-                 timestamp = row['timestamp']
-                 timestamp_iso = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
-                 entries.append({
-                     "id": row.get('id'),
-                     "entry_type": row.get('entry_type'),
-                     "entry_text": row.get('entry_text'),
-                     "revelation_types": row.get('revelation_types'),
-                     "narrative_moment": row.get('narrative_moment'),
-                     "fantasy_flag": row.get('fantasy_flag'),
-                     "intensity_level": row.get('intensity_level'),
-                     "timestamp": timestamp_iso
-                 })
-            return entries
-        except Exception as e:
-            logger.error(f"Error getting player journal entries: {str(e)}", exc_info=True)
-            return []
-
-# Add this function near the other tool functions (around line 1250, before analyze_conflict_potential)
-
-@function_tool
-@track_performance("get_available_npcs")
-async def get_available_npcs(
-    ctx: RunContextWrapper[ContextType],
-    include_unintroduced: bool = False,
-    min_dominance: Optional[int] = None,
-    gender_filter: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get available NPCs that can be involved in conflicts or other interactions.
-    
-    Args:
-        include_unintroduced: Whether to include NPCs that haven't been introduced yet
-        min_dominance: Minimum dominance level filter
-        gender_filter: Filter by gender ("male", "female", or None for all)
-    
-    Returns:
-        List of available NPCs with their details
-    """
-    context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-    
-    try:
-        # Use the integrated NPC system
-        from logic.fully_integrated_npc_system import IntegratedNPCSystem
-        npc_system = IntegratedNPCSystem(user_id, conversation_id)
-        await npc_system.initialize()
         
-        # Get NPCs based on criteria
+    Returns:
+        Milestone information
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        # Get current stage
+        stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+        
+        # Get progression stats
         async with get_db_connection_context() as conn:
-            query = """
-                SELECT 
-                    n.npc_id, n.npc_name, n.dominance, n.cruelty, 
-                    n.closeness, n.trust, n.respect, n.intensity, 
-                    n.sex, n.faction_affiliations, n.archetype,
-                    n.introduced
-                FROM NPCStats n
-                WHERE n.user_id = $1 AND n.conversation_id = $2
-            """
-            params = [user_id, conversation_id]
+            progression = await conn.fetchrow("""
+                SELECT corruption, dependency, realization_level, stage_entered_at
+                FROM NPCNarrativeProgression
+                WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+            """, user_id, conversation_id, npc_id)
+        
+        if not progression:
+            return {"success": False, "error": "No progression found", "npc_id": npc_id}
+        
+        # Check proximity to next stage
+        current_stage_index = next(
+            (i for i, s in enumerate(NPC_NARRATIVE_STAGES) if s.name == stage.name), 
+            0
+        )
+        next_stage = (
+            NPC_NARRATIVE_STAGES[current_stage_index + 1] 
+            if current_stage_index < len(NPC_NARRATIVE_STAGES) - 1 
+            else None
+        )
+        
+        milestones = {
+            "current_stage": stage.name,
+            "days_in_stage": (
+                (datetime.now() - progression['stage_entered_at']).days 
+                if progression['stage_entered_at'] else 0
+            ),
+            "progression_stats": {
+                "corruption": progression['corruption'],
+                "dependency": progression['dependency'],
+                "realization": progression['realization_level']
+            },
+            "next_stage": next_stage.name if next_stage else None,
+            "progress_to_next": None,
+            "ready_for_advancement": False,
+            "suggested_events": []
+        }
+        
+        if next_stage:
+            # Calculate progress to next stage
+            progress_factors = []
+            if next_stage.required_corruption > 0:
+                progress_factors.append(
+                    progression['corruption'] / next_stage.required_corruption
+                )
+            if next_stage.required_dependency > 0:
+                progress_factors.append(
+                    progression['dependency'] / next_stage.required_dependency
+                )
+            if next_stage.required_realization > 0:
+                progress_factors.append(
+                    progression['realization_level'] / next_stage.required_realization
+                )
             
-            # Add filters
-            conditions = []
-            if not include_unintroduced:
-                conditions.append("n.introduced = TRUE")
+            milestones['progress_to_next'] = min(progress_factors) if progress_factors else 0
+            milestones['ready_for_advancement'] = milestones['progress_to_next'] >= 0.9
             
-            if min_dominance is not None:
-                conditions.append(f"n.dominance >= ${len(params) + 1}")
-                params.append(min_dominance)
-            
-            if gender_filter:
-                conditions.append(f"n.sex = ${len(params) + 1}")
-                params.append(gender_filter)
-            
-            if conditions:
-                query += " AND " + " AND ".join(conditions)
-            
-            query += " ORDER BY n.dominance DESC, n.introduced DESC"
-            
-            rows = await conn.fetch(query, *params)
-            
-            npcs = []
-            for row in rows:
-                npc = dict(row)
-                
-                # Parse faction affiliations if stored as JSON string
-                if isinstance(npc['faction_affiliations'], str):
-                    try:
-                        npc['faction_affiliations'] = json.loads(npc['faction_affiliations'])
-                    except:
-                        npc['faction_affiliations'] = []
-                elif npc['faction_affiliations'] is None:
-                    npc['faction_affiliations'] = []
-                
-                # Parse archetype if stored as JSON
-                if isinstance(npc['archetype'], str):
-                    try:
-                        archetype_data = json.loads(npc['archetype'])
-                        if isinstance(archetype_data, list):
-                            npc['archetype_list'] = archetype_data
-                        elif isinstance(archetype_data, dict) and 'types' in archetype_data:
-                            npc['archetype_list'] = archetype_data['types']
-                        else:
-                            npc['archetype_list'] = [npc['archetype']]
-                    except:
-                        npc['archetype_list'] = [npc['archetype']]
-                else:
-                    npc['archetype_list'] = []
-                
-                # Get relationship with player
-                try:
-                    relationship = await npc_system.get_relationship_with_player(npc['npc_id'])
-                    npc['relationship_with_player'] = relationship
-                except:
-                    npc['relationship_with_player'] = {
-                        'closeness': npc.get('closeness', 0),
-                        'trust': npc.get('trust', 0),
-                        'respect': npc.get('respect', 0),
-                        'intensity': npc.get('intensity', 0)
-                    }
-                
-                npcs.append(npc)
-            
-            return npcs
-            
+            # Suggest events based on what's needed
+            if progression['corruption'] < next_stage.required_corruption:
+                milestones['suggested_events'].append("Activities that increase corruption")
+            if progression['dependency'] < next_stage.required_dependency:
+                milestones['suggested_events'].append("Interactions that build dependency")
+            if progression['realization_level'] < next_stage.required_realization:
+                milestones['suggested_events'].append("Moments of clarity or revelation")
+        
+        return milestones
+        
     except Exception as e:
-        logger.error(f"Error getting available NPCs: {str(e)}", exc_info=True)
-        return []
-            
+        logger.error(f"Error checking relationship milestones: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e), "npc_id": npc_id}
+
+# ===== NARRATIVE MOMENT TOOLS =====
+
 @function_tool
-async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrative_text: str) -> Dict[str, Any]:
+async def generate_stage_contrast_moment(
+    ctx: RunContextWrapper[ContextType],
+    npc_ids: List[int]
+) -> Dict[str, Any]:
+    """
+    Generate a narrative moment highlighting the contrast between NPCs at different stages.
+    
+    Args:
+        npc_ids: List of NPC IDs to contrast
+        
+    Returns:
+        Generated narrative moment
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        # Get stages for each NPC
+        npc_stages = []
+        for npc_id in npc_ids[:3]:  # Limit to 3
+            npc_details = await get_npc_details(ctx, npc_id)
+            if npc_details:
+                stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+                npc_stages.append({
+                    'npc_id': npc_id,
+                    'npc_name': npc_details['npc_name'],
+                    'stage': stage.name,
+                    'stage_index': next(
+                        (i for i, s in enumerate(NPC_NARRATIVE_STAGES) if s.name == stage.name), 
+                        0
+                    )
+                })
+        
+        if len(npc_stages) < 2:
+            return {"success": False, "error": "Need at least 2 NPCs for contrast"}
+        
+        # Sort by stage progression
+        npc_stages.sort(key=lambda x: x['stage_index'])
+        
+        # Generate contrast narrative
+        most_advanced = npc_stages[-1]
+        least_advanced = npc_stages[0]
+        
+        if most_advanced['stage_index'] - least_advanced['stage_index'] < 2:
+            return {
+                "success": False, 
+                "error": "NPCs too similar in progression for meaningful contrast"
+            }
+        
+        scene_text = f"""
+        You notice {most_advanced['npc_name']} and {least_advanced['npc_name']} exchanging glances across the room. 
+        
+        {least_advanced['npc_name']}'s expression is warm, friendly, seemingly innocent - the same gentle demeanor 
+        you've always known. But {most_advanced['npc_name']}'s smile carries a different weight entirely. There's 
+        knowledge in it, a satisfaction that makes you shift uncomfortably.
+        
+        "{least_advanced['npc_name']} is lovely, isn't she?" {most_advanced['npc_name']} murmurs, close enough 
+        that only you can hear. "So... genuine. So careful about maintaining appearances. I remember being like that."
+        
+        The implication hangs in the air between you. Your eyes dart between them, seeing the trajectory laid bare - 
+        what {least_advanced['npc_name']} is, what {most_advanced['npc_name']} has become, and what that means 
+        for you.
+        """
+        
+        return {
+            "type": "narrative_moment",
+            "subtype": "stage_contrast",
+            "scene_text": scene_text,
+            "featured_npcs": npc_stages,
+            "contrast_level": most_advanced['stage_index'] - least_advanced['stage_index'],
+            "player_realization": (
+                "The pattern is clear - they're all on the same path, "
+                "just at different points."
+            ),
+            "success": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating stage contrast moment: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+# ===== CONFLICT TOOLS =====
+
+@function_tool
+async def analyze_conflict_potential(
+    ctx: RunContextWrapper[ContextType], 
+    narrative_text: str
+) -> Dict[str, Any]:
     """Analyze narrative text for conflict potential."""
     context = ctx.context
     user_id = context.user_id
@@ -2030,16 +2081,100 @@ async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrat
                         })
         
         # Determine appropriate conflict type based on analysis
-        conflict_type = "major" if conflict_intensity >= 8 else ("standard" if conflict_intensity >= 5 else "minor")
+        conflict_type = (
+            "major" if conflict_intensity >= 8 
+            else ("standard" if conflict_intensity >= 5 else "minor")
+        )
         internal_faction_conflict = None
 
-        return {"conflict_intensity": conflict_intensity, "matched_keywords": matched_keywords, "mentioned_npcs": mentioned_npcs, "mentioned_factions": mentioned_factions, "npc_relationships": npc_relationships, "recommended_conflict_type": conflict_type, "potential_internal_faction_conflict": internal_faction_conflict, "has_conflict_potential": conflict_intensity >= 4}
+        return {
+            "conflict_intensity": conflict_intensity, 
+            "matched_keywords": matched_keywords, 
+            "mentioned_npcs": mentioned_npcs, 
+            "mentioned_factions": mentioned_factions, 
+            "npc_relationships": npc_relationships, 
+            "recommended_conflict_type": conflict_type, 
+            "potential_internal_faction_conflict": internal_faction_conflict, 
+            "has_conflict_potential": conflict_intensity >= 4
+        }
     except Exception as e:
         logger.error(f"Error analyzing conflict potential: {e}")
-        return {"conflict_intensity": 0, "matched_keywords": [], "mentioned_npcs": [], "mentioned_factions": [], "npc_relationships": [], "recommended_conflict_type": "minor", "potential_internal_faction_conflict": None, "has_conflict_potential": False, "error": str(e)}
+        return {
+            "conflict_intensity": 0, 
+            "matched_keywords": [], 
+            "mentioned_npcs": [], 
+            "mentioned_factions": [], 
+            "npc_relationships": [], 
+            "recommended_conflict_type": "minor", 
+            "potential_internal_faction_conflict": None, 
+            "has_conflict_potential": False, 
+            "success": False,
+            "error": str(e)
+        }
 
 @function_tool
-async def analyze_npc_manipulation_potential(ctx: RunContextWrapper[ContextType], conflict_id: int, npc_id: int) -> Dict[str, Any]:
+async def generate_conflict_from_analysis(
+    ctx: RunContextWrapper[ContextType],
+    analysis: ConflictAnalysis
+) -> Dict[str, Any]:
+    """Generate a conflict based on analysis provided by analyze_conflict_potential."""
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        
+        if not analysis.has_conflict_potential:
+            return {
+                "generated": False, 
+                "reason": "Insufficient conflict potential", 
+                "analysis": analysis.model_dump()
+            }
+
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+
+        conflict = await conflict_integration.generate_new_conflict(
+            analysis.recommended_conflict_type
+        )
+
+        internal_faction_conflict = None
+        if (analysis.potential_internal_faction_conflict and conflict 
+            and conflict.get("conflict_id")):
+            internal_data = analysis.potential_internal_faction_conflict
+            try:
+                internal_faction_conflict = await conflict_integration.initiate_faction_power_struggle(
+                    conflict["conflict_id"],
+                    internal_data.faction_id,
+                    internal_data.challenger_npc_id,
+                    internal_data.target_npc_id,
+                    internal_data.prize,
+                    internal_data.approach,
+                    False
+                )
+            except Exception as e:
+                logger.error(f"Error generating internal faction conflict: {e}")
+
+        return {
+            "generated": True,
+            "conflict": conflict,
+            "internal_faction_conflict": internal_faction_conflict
+        }
+    except Exception as e:
+        logger.error(f"Error generating conflict from analysis: {e}", exc_info=True)
+        return {
+            "generated": False, 
+            "reason": f"Error: {str(e)}", 
+            "analysis": analysis.model_dump()
+        }
+
+@function_tool
+async def analyze_npc_manipulation_potential(
+    ctx: RunContextWrapper[ContextType], 
+    conflict_id: int, 
+    npc_id: int
+) -> Dict[str, Any]:
     """Analyze an NPC's potential to manipulate the player within a conflict."""
     context = ctx.context
     user_id = context.user_id
@@ -2054,69 +2189,250 @@ async def analyze_npc_manipulation_potential(ctx: RunContextWrapper[ContextType]
         conflict = await conflict_integration.get_conflict_details(conflict_id)
         involvement = conflict.get("player_involvement") if conflict else None
 
-        makes_sense = True; reason = "NPC could manipulate player"
-        if involvement and involvement.get("involvement_level") != "none" and involvement.get("is_manipulated"):
+        makes_sense = True
+        reason = "NPC could manipulate player"
+        if (involvement and involvement.get("involvement_level") != "none" 
+            and involvement.get("is_manipulated")):
             manipulator_id = involvement.get("manipulated_by", {}).get("npc_id")
-            if manipulator_id == npc_id: makes_sense = False; reason = "NPC is already manipulating player"
+            if manipulator_id == npc_id: 
+                makes_sense = False
+                reason = "NPC is already manipulating player"
 
         goal = {"faction": "neutral", "involvement_level": "observing"}
-        if potential.get("femdom_compatible"): goal["involvement_level"] = "participating"
+        if potential.get("femdom_compatible"): 
+            goal["involvement_level"] = "participating"
 
-        return {"npc_id": npc_id, "conflict_id": conflict_id, "manipulation_potential": potential, "makes_sense": makes_sense, "reason": reason, "recommended_goal": goal, "current_involvement": involvement}
+        return {
+            "npc_id": npc_id, 
+            "conflict_id": conflict_id, 
+            "manipulation_potential": potential, 
+            "makes_sense": makes_sense, 
+            "reason": reason, 
+            "recommended_goal": goal, 
+            "current_involvement": involvement
+        }
     except Exception as e:
         logger.error(f"Error analyzing manipulation potential: {e}")
-        return {"npc_id": npc_id, "conflict_id": conflict_id, "manipulation_potential": {}, "makes_sense": False, "reason": f"Error: {str(e)}", "recommended_goal": {}, "current_involvement": None}
+        return {
+            "npc_id": npc_id, 
+            "conflict_id": conflict_id, 
+            "manipulation_potential": {}, 
+            "makes_sense": False, 
+            "reason": f"Error: {str(e)}", 
+            "recommended_goal": {}, 
+            "current_involvement": None
+        }
 
 @function_tool
-async def get_npc_details(
+async def generate_manipulation_attempt(
     ctx: RunContextWrapper[ContextType],
-    npc_id: int
-) -> Optional[Dict[str, Any]]:
-    """
-    Get detailed information about a specific NPC.
-    
-    Args:
-        npc_id: ID of the NPC
+    conflict_id: int,
+    npc_id: int,
+    manipulation_type: str,
+    goal: ManipulationGoal
+) -> Dict[str, Any]:
+    """Generate a manipulation attempt by an NPC in a conflict."""
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
         
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+
+        # Convert model to dict
+        goal_dict = goal.model_dump()
+
+        suggestion = await conflict_integration.suggest_manipulation_content(
+            npc_id, conflict_id, manipulation_type, goal_dict
+        )
+        attempt = await conflict_integration.create_manipulation_attempt(
+            conflict_id,
+            npc_id,
+            manipulation_type,
+            suggestion["content"],
+            goal_dict,
+            suggestion["leverage_used"],
+            suggestion["intimacy_level"]
+        )
+
+        npc_name = suggestion.get("npc_name", "Unknown NPC")
+        content = suggestion.get("content", "No content generated.")
+
+        return {
+            "generated": True,
+            "attempt": attempt,
+            "npc_id": npc_id,
+            "npc_name": npc_name,
+            "manipulation_type": manipulation_type,
+            "content": content
+        }
+    except Exception as e:
+        logger.error(f"Error generating manipulation attempt: {e}", exc_info=True)
+        return {
+            "generated": False,
+            "reason": f"Error: {str(e)}",
+            "npc_id": npc_id,
+            "manipulation_type": manipulation_type
+        }
+
+@function_tool
+async def set_player_involvement(
+    ctx: RunContextWrapper[ContextType],
+    params: PlayerInvolvementParams
+) -> Dict[str, Any]:
+    """
+    Set the player's involvement in a conflict.
+
+    Args:
+        params: Player involvement parameters
+
     Returns:
-        NPC details or None if not found
+        Updated conflict information or error dictionary.
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
     
+    # Use the conflict integration directly instead of expecting it on context
+    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+    from logic.conflict_system.conflict_tools import (
+        get_conflict_details, update_player_involvement as update_involvement
+    )
+    
     try:
-        from logic.fully_integrated_npc_system import IntegratedNPCSystem
-        npc_system = IntegratedNPCSystem(user_id, conversation_id)
-        await npc_system.initialize()
+        # Check if we have a resource manager
+        if not hasattr(context, 'resource_manager'):
+            logger.error("Context missing resource_manager")
+            return {
+                "conflict_id": params.conflict_id, 
+                "success": False,
+                "error": "Internal context setup error"
+            }
+            
+        resource_manager = context.resource_manager
+
+        # Check resources
+        resource_check = await resource_manager.check_resources(
+            params.money_committed, 
+            params.supplies_committed, 
+            params.influence_committed
+        )
+        if not resource_check.get('has_resources', False):
+            resource_check['success'] = False
+            resource_check['error'] = "Insufficient resources to commit"
+            return resource_check
+
+        # Get conflict info using the tools
+        conflict_info = await get_conflict_details(ctx, params.conflict_id)
         
-        # Get NPC details
-        npc_data = await npc_system.get_npc(npc_id)
+        # Update player involvement using the tools
+        involvement_data = {
+            "involvement_level": params.involvement_level,
+            "faction": params.faction,
+            "resources_committed": {
+                "money": params.money_committed,
+                "supplies": params.supplies_committed,
+                "influence": params.influence_committed
+            },
+            "actions_taken": [params.action] if params.action else []
+        }
         
-        if npc_data:
-            # Enhance with additional information
-            npc_data['relationship_with_player'] = await npc_system.get_relationship_with_player(npc_id)
-            
-            # Get conflict involvement
-            async with get_db_connection_context() as conn:
-                conflicts = await conn.fetch("""
-                    SELECT c.conflict_id, c.conflict_name, cs.faction_name, cs.involvement_level
-                    FROM ConflictStakeholders cs
-                    JOIN Conflicts c ON cs.conflict_id = c.conflict_id
-                    WHERE cs.npc_id = $1 AND c.is_active = TRUE
-                        AND c.user_id = $2 AND c.conversation_id = $3
-                """, npc_id, user_id, conversation_id)
-                
-                npc_data['active_conflicts'] = [dict(c) for c in conflicts]
-            
-            return npc_data
-            
+        result = await update_involvement(ctx, params.conflict_id, involvement_data)
+
+        if hasattr(context, 'add_narrative_memory'):
+            resources_text = []
+            if params.money_committed > 0: 
+                resources_text.append(f"{params.money_committed} money")
+            if params.supplies_committed > 0: 
+                resources_text.append(f"{params.supplies_committed} supplies")
+            if params.influence_committed > 0: 
+                resources_text.append(f"{params.influence_committed} influence")
+            resources_committed = (
+                ", ".join(resources_text) if resources_text else "no resources"
+            )
+
+            conflict_name = (
+                conflict_info.get('conflict_name', f'ID: {params.conflict_id}') 
+                if conflict_info else f'ID: {params.conflict_id}'
+            )
+            memory_content = (
+                f"Player set involvement in conflict {conflict_name} "
+                f"to {params.involvement_level}, supporting {params.faction} faction "
+                f"with {resources_committed}."
+            )
+            if params.action: 
+                memory_content += f" Action taken: {params.action}"
+            await context.add_narrative_memory(
+                memory_content, "conflict_involvement", 0.7
+            )
+
+        if isinstance(result, dict):
+            result["success"] = True
+        else:
+            result = {
+                "conflict_id": params.conflict_id,
+                "involvement_level": params.involvement_level,
+                "faction": params.faction,
+                "resources_committed": {
+                    "money": params.money_committed,
+                    "supplies": params.supplies_committed,
+                    "influence": params.influence_committed
+                },
+                "action": params.action,
+                "success": True,
+                "raw_result": result
+            }
+
+        return result
     except Exception as e:
-        logger.error(f"Error getting NPC details: {str(e)}", exc_info=True)
-        return None
+        logger.error(f"Error setting involvement: {str(e)}", exc_info=True)
+        return {
+            "conflict_id": params.conflict_id, 
+            "success": False,
+            "error": str(e)
+        }
 
 @function_tool
-async def suggest_potential_manipulation(ctx: RunContextWrapper[ContextType], narrative_text: str) -> Dict[str, Any]:
+async def track_conflict_story_beat(
+    ctx: RunContextWrapper[ContextType],
+    params: StoryBeatParams
+) -> Dict[str, Any]:
+    """Track a story beat for a resolution path, advancing progress."""
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+
+        result = await conflict_integration.track_story_beat(
+            params.conflict_id,
+            params.path_id,
+            params.beat_description,
+            params.involved_npcs,
+            params.progress_value
+        )
+
+        if isinstance(result, dict):
+            return {"tracked": True, "result": result}
+        else:
+            return {"tracked": True, "result": {"raw_output": result}}
+
+    except Exception as e:
+        logger.error(f"Error tracking story beat: {e}", exc_info=True)
+        return {"tracked": False, "reason": f"Error: {str(e)}"}
+
+@function_tool
+async def suggest_potential_manipulation(
+    ctx: RunContextWrapper[ContextType], 
+    narrative_text: str
+) -> Dict[str, Any]:
     """Analyze narrative text and suggest potential NPC manipulation opportunities."""
     context = ctx.context
     user_id = context.user_id
@@ -2128,30 +2444,938 @@ async def suggest_potential_manipulation(ctx: RunContextWrapper[ContextType], na
         
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
         active_conflicts = await conflict_integration.get_active_conflicts()
-        if not active_conflicts: return {"opportunities": [], "reason": "No active conflicts"}
+        if not active_conflicts: 
+            return {"opportunities": [], "reason": "No active conflicts"}
 
         # Only get introduced female NPCs with high dominance for manipulation
-        npcs = await get_available_npcs(ctx, include_unintroduced=False, min_dominance=60, gender_filter="female")
-        mentioned_npcs = [npc for npc in npcs if npc["npc_name"] in narrative_text]
-        if not mentioned_npcs: return {"opportunities": [], "reason": "No NPCs mentioned in narrative"}
+        npcs = await get_available_npcs(
+            ctx, 
+            include_unintroduced=False, 
+            min_dominance=60, 
+            gender_filter="female"
+        )
+        mentioned_npcs = [
+            npc for npc in npcs if npc["npc_name"] in narrative_text
+        ]
+        if not mentioned_npcs: 
+            return {"opportunities": [], "reason": "No NPCs mentioned in narrative"}
 
         opportunities = []
         for conflict in active_conflicts:
             conflict_id = conflict["conflict_id"]
             for npc in mentioned_npcs:
                 if npc.get("sex", "female") == "female" and npc.get("dominance", 0) > 60:
-                    is_stakeholder = any(s["npc_id"] == npc["npc_id"] for s in conflict.get("stakeholders", []))
+                    is_stakeholder = any(
+                        s["npc_id"] == npc["npc_id"] 
+                        for s in conflict.get("stakeholders", [])
+                    )
                     if is_stakeholder:
-                        potential = await conflict_integration.analyze_manipulation_potential(npc["npc_id"])
+                        potential = await conflict_integration.analyze_manipulation_potential(
+                            npc["npc_id"]
+                        )
                         if potential.get("overall_potential", 0) > 60:
-                            opportunities.append({"conflict_id": conflict_id, "conflict_name": conflict["conflict_name"], "npc_id": npc["npc_id"], "npc_name": npc["npc_name"], "dominance": npc["dominance"], "manipulation_type": potential.get("most_effective_type"), "potential": potential.get("overall_potential")})
+                            opportunities.append({
+                                "conflict_id": conflict_id, 
+                                "conflict_name": conflict["conflict_name"], 
+                                "npc_id": npc["npc_id"], 
+                                "npc_name": npc["npc_name"], 
+                                "dominance": npc["dominance"], 
+                                "manipulation_type": potential.get("most_effective_type"), 
+                                "potential": potential.get("overall_potential")
+                            })
 
         return {"opportunities": opportunities, "total_opportunities": len(opportunities)}
     except Exception as e:
         logger.error(f"Error suggesting potential manipulation: {e}")
         return {"opportunities": [], "reason": f"Error: {str(e)}"}
 
-# Tool lists - cleaned up to only include defined functions
+# ===== RESOURCE MANAGEMENT TOOLS =====
+
+@function_tool
+@track_performance("check_resources")
+async def check_resources(
+    ctx: RunContextWrapper[ContextType],
+    params: Optional[ResourceCheck] = None
+) -> Dict[str, Any]:
+    """
+    Check if player has sufficient resources.
+
+    Args:
+        params: Resource check parameters
+
+    Returns:
+        Dictionary with resource check results.
+    """
+    if params is None:
+        params = ResourceCheck()
+    
+    context = ctx.context
+    if not hasattr(context, 'resource_manager'):
+        logger.error("Context missing resource_manager")
+        return {
+            "has_resources": False, 
+            "success": False,
+            "error": "Internal context setup error", 
+            "current": {}
+        }
+    
+    resource_manager = context.resource_manager
+
+    try:
+        result = await resource_manager.check_resources(
+            params.money, params.supplies, params.influence
+        )
+
+        current_res = result.get('current', {})
+        if current_res.get('money') is not None:
+            try:
+                formatted_money = await resource_manager.get_formatted_money(
+                    current_res['money']
+                )
+                current_res['formatted_money'] = formatted_money
+                result['current'] = current_res
+            except Exception as format_err:
+                logger.warning(f"Could not format money: {format_err}")
+
+        if 'has_resources' not in result:
+            result['has_resources'] = False
+        if 'current' not in result:
+            result['current'] = {}
+
+        return result
+    except Exception as e:
+        logger.error(f"Error checking resources: {str(e)}", exc_info=True)
+        return {
+            "has_resources": False, 
+            "success": False,
+            "error": str(e), 
+            "current": {}
+        }
+
+@function_tool
+@track_performance("commit_resources_to_conflict")
+async def commit_resources_to_conflict(
+    ctx: RunContextWrapper[ContextType],
+    params: ResourceCommitment
+) -> Dict[str, Any]:
+    """
+    Commit player resources to a conflict.
+
+    Args:
+        params: Resource commitment parameters
+
+    Returns:
+        Result of committing resources or error dictionary.
+    """
+    context = ctx.context
+    if not hasattr(context, 'resource_manager'):
+        logger.error("Context missing resource_manager")
+        return {"success": False, "error": "Internal context setup error"}
+    
+    resource_manager = context.resource_manager
+
+    try:
+        conflict_info = None
+        if hasattr(context, 'conflict_manager') and context.conflict_manager:
+            try:
+                conflict_info = await context.conflict_manager.get_conflict(
+                    params.conflict_id
+                )
+            except Exception as conflict_error:
+                logger.warning(f"Could not get conflict info: {conflict_error}")
+        else:
+            logger.warning("Context missing conflict_manager")
+
+        result = await resource_manager.commit_resources_to_conflict(
+            params.conflict_id, params.money, params.supplies, params.influence
+        )
+
+        if params.money > 0 and result.get('success', False) and result.get('money_result'):
+            money_result = result['money_result']
+            if 'old_value' in money_result and 'new_value' in money_result:
+                try:
+                    old_formatted = await resource_manager.get_formatted_money(
+                        money_result['old_value']
+                    )
+                    new_formatted = await resource_manager.get_formatted_money(
+                        money_result['new_value']
+                    )
+                    change_val = money_result.get('change')
+                    formatted_change = (
+                        await resource_manager.get_formatted_money(change_val) 
+                        if change_val is not None else None
+                    )
+
+                    money_result['formatted_old_value'] = old_formatted
+                    money_result['formatted_new_value'] = new_formatted
+                    if formatted_change is not None:
+                        money_result['formatted_change'] = formatted_change
+                    result['money_result'] = money_result
+                except Exception as format_err:
+                    logger.warning(f"Could not format money: {format_err}")
+
+        if hasattr(context, 'add_narrative_memory'):
+            resources_text = []
+            if params.money > 0: 
+                resources_text.append(f"{params.money} money")
+            if params.supplies > 0: 
+                resources_text.append(f"{params.supplies} supplies")
+            if params.influence > 0: 
+                resources_text.append(f"{params.influence} influence")
+            resources_committed = (
+                ", ".join(resources_text) if resources_text else "No resources"
+            )
+
+            conflict_name = (
+                conflict_info.get('conflict_name', f"ID: {params.conflict_id}") 
+                if conflict_info else f"ID: {params.conflict_id}"
+            )
+            memory_content = f"Committed {resources_committed} to conflict {conflict_name}"
+            await context.add_narrative_memory(
+                memory_content, "resource_commitment", 0.6
+            )
+
+        if 'success' not in result:
+            result['success'] = True
+
+        return result
+    except Exception as e:
+        logger.error(f"Error committing resources: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+@function_tool
+@track_performance("get_player_resources")
+async def get_player_resources(
+    ctx: RunContextWrapper[ContextType]
+) -> Dict[str, Any]:
+    """
+    Get the current player resources and vitals.
+
+    Returns:
+        Current resource status
+    """
+    context = ctx.context
+    resource_manager = context.resource_manager
+
+    try:
+        resources = await resource_manager.get_resources()
+        vitals = await resource_manager.get_vitals()
+        formatted_money = await resource_manager.get_formatted_money()
+        updated_at = resources.get('updated_at', datetime.now())
+        updated_at_iso = (
+            updated_at.isoformat() if isinstance(updated_at, datetime) 
+            else str(updated_at)
+        )
+
+        return {
+            "money": resources.get('money', 0), 
+            "supplies": resources.get('supplies', 0), 
+            "influence": resources.get('influence', 0), 
+            "energy": vitals.get('energy', 0), 
+            "hunger": vitals.get('hunger', 0), 
+            "formatted_money": formatted_money, 
+            "updated_at": updated_at_iso
+        }
+    except Exception as e:
+        logger.error(f"Error getting player resources: {str(e)}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e), 
+            "money": 0, 
+            "supplies": 0, 
+            "influence": 0, 
+            "energy": 0, 
+            "hunger": 0, 
+            "formatted_money": "0"
+        }
+
+@function_tool
+@track_performance("apply_activity_effects")
+async def apply_activity_effects(
+    ctx: RunContextWrapper[ContextType], 
+    activity_text: str
+) -> Dict[str, Any]:
+    """
+    Analyze and apply the effects of an activity to player resources.
+
+    Args:
+        activity_text: Description of the activity
+
+    Returns:
+        Results of applying activity effects
+    """
+    context = ctx.context
+    activity_analyzer = context.activity_analyzer
+
+    try:
+        result = await activity_analyzer.analyze_activity(
+            activity_text, apply_effects=True
+        )
+
+        if 'effects' in result and 'money' in result['effects']:
+            resource_manager = context.resource_manager
+            resources = await resource_manager.get_resources()
+            result['formatted_money'] = await resource_manager.get_formatted_money(
+                resources.get('money', 0)
+            )
+
+        if hasattr(context, 'add_narrative_memory'):
+            effects = result.get('effects', {})
+            effects_description = [
+                f"{res} {('increased' if val > 0 else 'decreased')} by {abs(val)}" 
+                for res, val in effects.items() if val
+            ]
+            effects_text = (
+                ", ".join(effects_description) if effects_description 
+                else "no significant effects"
+            )
+            memory_content = (
+                f"Applied activity effects for: {activity_text[:100]}... "
+                f"with {effects_text}"
+            )
+            await context.add_narrative_memory(
+                memory_content, "activity_application", 0.5
+            )
+
+        return result
+    except Exception as e:
+        logger.error(f"Error applying activity effects: {str(e)}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e), 
+            "activity_type": "unknown", 
+            "activity_details": "", 
+            "effects": {}
+        }
+
+@function_tool
+@track_performance("get_resource_history")
+async def get_resource_history(
+    ctx: RunContextWrapper[ContextType],
+    resource_type: Optional[str] = None,
+    limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get the history of resource changes.
+
+    Args:
+        resource_type: Optional filter for specific resource type.
+        limit: Maximum number of history entries to return. Defaults to 10.
+
+    Returns:
+        List of resource change history entries.
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    resource_manager = getattr(context, 'resource_manager', None)
+
+    # Handle the default value inside the function
+    actual_limit = limit if limit is not None else 10
+
+    async with get_db_connection_context() as conn:
+        try:
+            base_query = """
+                SELECT resource_type, old_value, new_value, amount_changed, 
+                       source, description, timestamp 
+                FROM ResourceHistoryLog 
+                WHERE user_id=$1 AND conversation_id=$2
+            """
+            params = [user_id, conversation_id]
+
+            if resource_type:
+                base_query += " AND resource_type=$3 ORDER BY timestamp DESC LIMIT $4"
+                params.extend([resource_type, actual_limit])
+            else:
+                base_query += " ORDER BY timestamp DESC LIMIT $3"
+                params.append(actual_limit)
+
+            rows = await conn.fetch(base_query, *params)
+            history = []
+
+            for row in rows:
+                formatted_old, formatted_new, formatted_change = None, None, None
+                # Only format money if resource_manager is available
+                if row['resource_type'] == "money" and resource_manager:
+                    try:
+                        formatted_old = await resource_manager.get_formatted_money(
+                            row['old_value']
+                        )
+                        formatted_new = await resource_manager.get_formatted_money(
+                            row['new_value']
+                        )
+                        formatted_change = await resource_manager.get_formatted_money(
+                            row['amount_changed']
+                        )
+                    except Exception as format_err:
+                        logger.warning(
+                            f"Could not format money in get_resource_history: {format_err}"
+                        )
+
+                timestamp = row['timestamp']
+                timestamp_iso = (
+                    timestamp.isoformat() if isinstance(timestamp, datetime) 
+                    else str(timestamp)
+                )
+
+                history.append({
+                    "resource_type": row['resource_type'],
+                    "old_value": row['old_value'],
+                    "new_value": row['new_value'],
+                    "amount_changed": row['amount_changed'],
+                    "formatted_old_value": formatted_old,
+                    "formatted_new_value": formatted_new,
+                    "formatted_change": formatted_change,
+                    "source": row['source'],
+                    "description": row['description'],
+                    "timestamp": timestamp_iso
+                })
+            return history
+        except Exception as e:
+            logger.error(f"Error getting resource history: {str(e)}", exc_info=True)
+            return []
+
+# ===== NARRATIVE ELEMENT TOOLS =====
+
+@function_tool
+@track_performance("generate_personal_revelation")
+async def generate_personal_revelation(
+    ctx: RunContextWrapper[ContextType], 
+    npc_name: str, 
+    revelation_type: str
+) -> Dict[str, Any]:
+    """
+    Generate a personal revelation for the player about their relationship with an NPC.
+
+    Args:
+        npc_name: Name of the NPC involved in the revelation
+        revelation_type: Type of revelation
+
+    Returns:
+        A personal revelation
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    # Define revelation templates based on type
+    templates = {
+        "dependency": [
+            f"I've been checking my phone constantly to see if {npc_name} has messaged me. When did I start needing her approval so much?",
+            f"I realized today that I haven't made a significant decision without consulting {npc_name} in weeks. Is that normal?",
+            f"The thought of spending a day without talking to {npc_name} makes me anxious. I should be concerned about that, shouldn't I?"
+        ],
+        "obedience": [
+            f"I caught myself automatically rearranging my schedule when {npc_name} hinted she wanted to see me. I didn't even think twice about it.",
+            f"Today I changed my opinion the moment I realized it differed from {npc_name}'s. That's... not like me. Or is it becoming like me?",
+            f"{npc_name} gave me that look, and I immediately stopped what I was saying. When did her disapproval start carrying so much weight?"
+        ],
+        "corruption": [
+            f"I found myself enjoying the feeling of following {npc_name}'s instructions perfectly. The pride I felt at her approval was... intense.",
+            f"Last year, I would have been offended if someone treated me the way {npc_name} did today. Now I'm grateful for her attention.",
+            f"Sometimes I catch glimpses of my old self, like a stranger I used to know. When did I change so fundamentally?"
+        ],
+        "willpower": [
+            f"I had every intention of saying no to {npc_name} today. The 'yes' came out before I even realized I was speaking.",
+            f"I've been trying to remember what it felt like to disagree with {npc_name}. The memory feels distant, like it belongs to someone else.",
+            f"I made a list of boundaries I wouldn't cross. Looking at it now, I've broken every single one at {npc_name}'s suggestion."
+        ],
+        "confidence": [
+            f"I opened my mouth to speak in the meeting, then saw {npc_name} watching me. I suddenly couldn't remember what I was going to say.",
+            f"I used to trust my judgment. Now I find myself second-guessing every thought that {npc_name} hasn't explicitly approved.",
+            f"When did I start feeling this small? This uncertain? I can barely remember how it felt to be sure of myself."
+        ]
+    }
+
+    try:
+        revelation_templates = templates.get(
+            revelation_type.lower(), 
+            templates["dependency"]
+        )
+        inner_monologue = random.choice(revelation_templates)
+
+        canon_ctx = SimpleContext(user_id, conversation_id)
+        
+        async with get_db_connection_context() as conn:
+            try:
+                # Use canon to create journal entry
+                journal_id = await canon.create_journal_entry(
+                    ctx=canon_ctx,
+                    conn=conn,
+                    entry_type='personal_revelation',
+                    entry_text=inner_monologue,
+                    revelation_types=revelation_type,
+                    narrative_moment=None,
+                    fantasy_flag=False,
+                    intensity_level=0,
+                    importance=0.8,
+                    tags=[
+                        revelation_type, 
+                        "revelation", 
+                        npc_name.lower().replace(" ", "_")
+                    ]
+                )
+
+                if hasattr(context, 'add_narrative_memory'):
+                    await context.add_narrative_memory(
+                        f"Personal revelation about {npc_name}: {inner_monologue}", 
+                        "personal_revelation", 
+                        0.8, 
+                        tags=[
+                            revelation_type, 
+                            "revelation", 
+                            npc_name.lower().replace(" ", "_")
+                        ]
+                    )
+                    
+                if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                    await context.narrative_manager.add_revelation(
+                        content=inner_monologue, 
+                        revelation_type=revelation_type, 
+                        importance=0.8, 
+                        tags=[revelation_type, "revelation"]
+                    )
+
+                return {
+                    "type": "personal_revelation", 
+                    "name": f"{revelation_type.capitalize()} Awareness", 
+                    "inner_monologue": inner_monologue, 
+                    "journal_id": journal_id, 
+                    "success": True
+                }
+            except Exception as db_error:
+                logger.error(f"Database error recording personal revelation: {db_error}")
+                raise
+    except Exception as e:
+        logger.error(f"Error generating personal revelation: {str(e)}", exc_info=True)
+        return {
+            "type": "personal_revelation", 
+            "name": f"{revelation_type.capitalize()} Awareness", 
+            "inner_monologue": f"Error generating revelation: {str(e)}", 
+            "success": False
+        }
+
+@function_tool
+@track_performance("generate_dream_sequence")
+async def generate_dream_sequence(
+    ctx: RunContextWrapper[ContextType], 
+    npc_names: List[str]
+) -> Dict[str, Any]:
+    """
+    Generate a symbolic dream sequence based on player's current state.
+
+    Args:
+        npc_names: List of NPC names to include in the dream
+
+    Returns:
+        A dream sequence
+    """
+    while len(npc_names) < 3: 
+        npc_names.append(f"Unknown Figure {len(npc_names) + 1}")
+    npc1, npc2, npc3 = npc_names[:3]
+    
+    # Dream templates
+    dream_templates = [
+        f"""You're sitting in a chair as {npc1} circles you slowly. "Show me your hands," she says. You extend them, surprised to find intricate strings wrapped around each finger, extending upward. "Do you see who's holding them?" she asks. You look up, but the ceiling is mirrored, showing only your own face looking back down at you, smiling with an expression that isn't yours.""",
+        
+        f"""You're searching your home frantically, calling {npc1}'s name. The rooms shift and expand, doorways leading to impossible spaces. Your phone rings. It's {npc1}. "Where are you?" you ask desperately. "I'm right here," she says, her voice coming both from the phone and from behind you. "I've always been right here. You're the one who's lost." """,
+        
+        f"""You're trying to walk away from {npc1}, but your feet sink deeper into the floor with each step. "I don't understand why you're struggling," she says, not moving yet somehow keeping pace beside you. "You stopped walking on your own long ago." You look down to find your legs have merged with the floor entirely, indistinguishable from the material beneath.""",
+        
+        f"""You're giving a presentation to a room full of people, but every time you speak, your voice comes out as {npc1}'s voice, saying words you didn't intend. The audience nods approvingly. "Much better," whispers {npc2} from beside you. "Your ideas were never as good as hers anyway." """,
+        
+        f"""You're walking through an unfamiliar house, opening doors that should lead outside but only reveal more rooms. In each room, {npc1} is engaged in a different activity, wearing a different expression. In the final room, all versions of her turn to look at you simultaneously. "Which one is real?" they ask in unison. "The one you needed, or the one who needed you?" """,
+        
+        f"""You're swimming in deep water. Below you, {npc1} and {npc2} walk along the bottom, looking up at you and conversing, their voices perfectly clear despite the water. "They still think they're above it all," says {npc1}, and they both laugh. You realize you can't remember how to reach the surface."""
+    ]
+
+    try:
+        dream_text = random.choice(dream_templates)
+        context = ctx.context
+        user_id = context.user_id
+        conversation_id = context.conversation_id
+
+        canon_ctx = SimpleContext(user_id, conversation_id)
+
+        async with get_db_connection_context() as conn:
+            try:
+                # Use canon to create journal entry
+                journal_id = await canon.create_journal_entry(
+                    ctx=canon_ctx,
+                    conn=conn,
+                    entry_type='dream_sequence',
+                    entry_text=dream_text,
+                    revelation_types=None,
+                    narrative_moment=True,
+                    fantasy_flag=True,
+                    intensity_level=0,
+                    importance=0.7,
+                    tags=["dream", "symbolic"] + [
+                        npc.lower().replace(" ", "_") for npc in npc_names[:3]
+                    ]
+                )
+
+                if hasattr(context, 'add_narrative_memory'):
+                    await context.add_narrative_memory(
+                        f"Dream sequence: {dream_text}", 
+                        "dream_sequence", 
+                        0.7, 
+                        tags=["dream", "symbolic"] + [
+                            npc.lower().replace(" ", "_") for npc in npc_names[:3]
+                        ]
+                    )
+                    
+                if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                    await context.narrative_manager.add_dream_sequence(
+                        content=dream_text, 
+                        symbols=[npc1, npc2, npc3, "control", "manipulation"], 
+                        importance=0.7, 
+                        tags=["dream", "symbolic"]
+                    )
+
+                return {
+                    "type": "dream_sequence", 
+                    "text": dream_text, 
+                    "journal_id": journal_id, 
+                    "success": True
+                }
+            except Exception as db_error:
+                logger.error(f"Database error recording dream sequence: {db_error}")
+                raise
+    except Exception as e:
+        logger.error(f"Error generating dream sequence: {str(e)}", exc_info=True)
+        return {
+            "type": "dream_sequence", 
+            "text": f"Error generating dream: {str(e)}", 
+            "success": False
+        }
+
+@function_tool
+@track_performance("check_relationship_events")
+async def check_relationship_events(
+    ctx: RunContextWrapper[ContextType]
+) -> Dict[str, Any]:
+    """
+    Check for relationship events like crossroads or rituals.
+
+    Returns:
+        Dictionary with any triggered relationship events
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    try:
+        crossroads = await check_for_crossroads_tool(user_id, conversation_id)
+        ritual = await check_for_ritual_tool(user_id, conversation_id)
+
+        if (crossroads or ritual) and hasattr(context, 'add_narrative_memory'):
+            event_type = "crossroads" if crossroads else "ritual"
+            npc_name = "Unknown"
+            if crossroads: 
+                npc_name = crossroads.get("npc_name", "Unknown")
+            elif ritual: 
+                npc_name = ritual.get("npc_name", "Unknown")
+            memory_content = f"Relationship {event_type} detected with {npc_name}"
+            await context.add_narrative_memory(
+                memory_content, 
+                f"relationship_{event_type}", 
+                0.8, 
+                tags=[event_type, "relationship", npc_name.lower().replace(" ", "_")]
+            )
+
+        return {
+            "crossroads": crossroads, 
+            "ritual": ritual, 
+            "has_events": crossroads is not None or ritual is not None
+        }
+    except Exception as e:
+        logger.error(f"Error checking relationship events: {str(e)}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e), 
+            "crossroads": None, 
+            "ritual": None, 
+            "has_events": False
+        }
+
+@function_tool
+async def get_npc_stage(
+    ctx: RunContextWrapper[ContextType],
+    npc_id: int
+) -> Dict[str, Any]:
+    """
+    Get the narrative stage for a specific NPC relationship.
+    
+    Args:
+        npc_id: ID of the NPC
+        
+    Returns:
+        Dictionary with stage information
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+        
+        return {
+            "npc_id": npc_id,
+            "stage_name": stage.name,
+            "stage_description": stage.description,
+            "required_corruption": stage.required_corruption,
+            "required_dependency": stage.required_dependency,
+            "required_realization": stage.required_realization
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting NPC stage: {str(e)}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "npc_id": npc_id
+        }
+
+@function_tool
+@track_performance("apply_crossroads_choice")
+async def apply_crossroads_choice(
+    ctx: RunContextWrapper[ContextType],
+    link_id: int,
+    crossroads_name: str,
+    choice_index: int
+) -> Dict[str, Any]:
+    """
+    Apply a chosen effect from a triggered relationship crossroads.
+
+    Args:
+        link_id: ID of the social link
+        crossroads_name: Name of the crossroads event
+        choice_index: Index of the chosen option
+
+    Returns:
+        Result of applying the choice
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    try:
+        result = await apply_crossroads_choice_tool(
+            user_id, conversation_id, link_id, crossroads_name, choice_index
+        )
+
+        if hasattr(context, 'add_narrative_memory'):
+            npc_name = "Unknown"
+            try:
+                async with get_db_connection_context() as conn:
+                    row = await conn.fetchrow(
+                        """SELECT entity2_id FROM SocialLinks 
+                        WHERE link_id = $1 AND entity2_type = 'npc'""", 
+                        link_id
+                    )
+                    if row: 
+                        npc_id = row['entity2_id']
+                        npc_row = await conn.fetchrow(
+                            "SELECT npc_name FROM NPCStats WHERE npc_id = $1", 
+                            npc_id
+                        )
+                        npc_name = npc_row['npc_name'] if npc_row else npc_name
+            except Exception as db_error: 
+                logger.warning(f"Could not get NPC name for memory: {db_error}")
+
+            memory_content = (
+                f"Applied crossroads choice {choice_index} for '{crossroads_name}' "
+                f"with {npc_name}"
+            )
+            await context.add_narrative_memory(
+                memory_content, 
+                "crossroads_choice", 
+                0.8, 
+                tags=["crossroads", "relationship", npc_name.lower().replace(" ", "_")]
+            )
+            if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                await context.narrative_manager.add_interaction(
+                    content=memory_content, 
+                    npc_name=npc_name, 
+                    importance=0.8, 
+                    tags=["crossroads", "relationship_choice"]
+                )
+
+        return result
+    except Exception as e:
+        logger.error(f"Error applying crossroads choice: {str(e)}", exc_info=True)
+        return {
+            "link_id": link_id, 
+            "crossroads_name": crossroads_name, 
+            "choice_index": choice_index, 
+            "success": False, 
+            "error": str(e)
+        }
+
+@function_tool
+@track_performance("check_npc_relationship")
+async def check_npc_relationship(
+    ctx: RunContextWrapper[ContextType], 
+    npc_id: int
+) -> Dict[str, Any]:
+    """
+    Get the relationship between the player and an NPC.
+
+    Args:
+        npc_id: ID of the NPC
+
+    Returns:
+        Relationship summary
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    try:
+        relationship = await get_relationship_summary_tool(
+            user_id, conversation_id, "player", user_id, "npc", npc_id
+        )
+        if not relationship:
+            try:
+                from logic.social_links_agentic import create_social_link
+                link_id = await create_social_link(
+                    user_id, conversation_id, "player", user_id, "npc", npc_id
+                )
+                relationship = await get_relationship_summary_tool(
+                    user_id, conversation_id, "player", user_id, "npc", npc_id
+                )
+            except Exception as link_error:
+                logger.error(f"Error creating social link: {link_error}")
+                return {
+                    "success": False,
+                    "error": f"Failed to create relationship: {str(link_error)}", 
+                    "npc_id": npc_id
+                }
+
+        return relationship or {
+            "success": False,
+            "error": "Could not get or create relationship", 
+            "npc_id": npc_id
+        }
+    except Exception as e:
+        logger.error(f"Error checking NPC relationship: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e), "npc_id": npc_id}
+
+@function_tool
+@track_performance("add_moment_of_clarity")
+async def add_moment_of_clarity(
+    ctx: RunContextWrapper[ContextType], 
+    realization_text: str
+) -> Dict[str, Any]:
+    """
+    Add a moment of clarity where the player briefly becomes aware of their situation.
+
+    Args:
+        realization_text: The specific realization the player has
+
+    Returns:
+        The created moment of clarity
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    try:
+        from logic.narrative_progression import add_moment_of_clarity as add_clarity
+        result = await add_clarity(user_id, conversation_id, realization_text)
+
+        if hasattr(context, 'add_narrative_memory'):
+            await context.add_narrative_memory(
+                f"Moment of clarity: {realization_text}", 
+                "moment_of_clarity", 
+                0.9, 
+                tags=["clarity", "realization", "awareness"]
+            )
+        if hasattr(context, 'narrative_manager') and context.narrative_manager:
+            await context.narrative_manager.add_revelation(
+                content=realization_text, 
+                revelation_type="clarity", 
+                importance=0.9, 
+                tags=["clarity", "realization"]
+            )
+
+        return {"type": "moment_of_clarity", "content": result, "success": True}
+    except Exception as e:
+        logger.error(f"Error adding moment of clarity: {str(e)}", exc_info=True)
+        return {
+            "type": "moment_of_clarity", 
+            "content": None, 
+            "success": False, 
+            "error": str(e)
+        }
+
+@function_tool
+@track_performance("get_player_journal_entries")
+async def get_player_journal_entries(
+    ctx: RunContextWrapper[ContextType],
+    entry_type: Optional[str] = None,
+    limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get entries from the player's journal.
+
+    Args:
+        entry_type: Optional filter for entry type.
+        limit: Maximum number of entries to return. Defaults to 10.
+
+    Returns:
+        List of journal entries.
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+
+    # Handle the default value inside the function
+    actual_limit = limit if limit is not None else 10
+
+    async with get_db_connection_context() as conn:
+        try:
+            base_query = """
+                SELECT id, entry_type, entry_text, revelation_types, 
+                       narrative_moment, fantasy_flag, intensity_level, timestamp 
+                FROM PlayerJournal 
+                WHERE user_id=$1 AND conversation_id=$2
+            """
+            params = [user_id, conversation_id]
+
+            if entry_type:
+                base_query += " AND entry_type=$3 ORDER BY timestamp DESC LIMIT $4"
+                params.extend([entry_type, actual_limit])
+            else:
+                base_query += " ORDER BY timestamp DESC LIMIT $3"
+                params.append(actual_limit)
+
+            rows = await conn.fetch(base_query, *params)
+            entries = []
+            for row in rows:
+                timestamp = row['timestamp']
+                timestamp_iso = (
+                    timestamp.isoformat() if isinstance(timestamp, datetime) 
+                    else str(timestamp)
+                )
+                entries.append({
+                    "id": row.get('id'),
+                    "entry_type": row.get('entry_type'),
+                    "entry_text": row.get('entry_text'),
+                    "revelation_types": row.get('revelation_types'),
+                    "narrative_moment": row.get('narrative_moment'),
+                    "fantasy_flag": row.get('fantasy_flag'),
+                    "intensity_level": row.get('intensity_level'),
+                    "timestamp": timestamp_iso
+                })
+            return entries
+        except Exception as e:
+            logger.error(f"Error getting player journal entries: {str(e)}", exc_info=True)
+            return []
+
+# ===== TOOL LISTS FOR EXPORT =====
 
 # Context management tools
 context_tools = [
@@ -2160,15 +3384,27 @@ context_tools = [
     store_narrative_memory,
     search_by_vector,
     get_summarized_narrative_context,
-    get_available_npcs,  # Add this
-    get_npc_details      # Add this
+    get_available_npcs,
+    get_npc_details
+]
+
+# NPC narrative tools
+npc_narrative_tools = [
+    get_npc_narrative_overview,
+    check_all_npc_revelations,
+    generate_dynamic_personal_revelation,
+    generate_multi_npc_dream,
+    check_relationship_milestones,
+    generate_stage_contrast_moment,
+    get_npc_stage
 ]
 
 # Activity tools
 activity_tools = [
     analyze_activity,
     get_filtered_activities,
-    generate_activity_suggestion
+    generate_activity_suggestion,
+    suggest_stage_appropriate_activity
 ]
 
 # Relationship tools
@@ -2187,7 +3423,8 @@ conflict_tools = [
     generate_manipulation_attempt,
     set_player_involvement,
     track_conflict_story_beat,
-    suggest_potential_manipulation
+    suggest_potential_manipulation,
+    analyze_manipulation_opportunities
 ]
 
 # Resource management tools
@@ -2201,9 +3438,31 @@ resource_tools = [
 
 # Narrative element tools
 narrative_tools = [
-    generate_personal_revelation,
-    generate_dream_sequence,
+    generate_personal_revelation,  # Keep legacy version
+    generate_dream_sequence,       # Keep legacy version
     check_relationship_events,
     add_moment_of_clarity,
     get_player_journal_entries
+] + npc_narrative_tools  # Add all the new NPC-specific tools
+
+# All tools combined
+all_tools = (
+    context_tools +
+    activity_tools +
+    relationship_tools +
+    conflict_tools +
+    resource_tools +
+    narrative_tools
+)
+
+# Export for easy access
+__all__ = [
+    'context_tools',
+    'activity_tools', 
+    'relationship_tools',
+    'conflict_tools',
+    'resource_tools',
+    'narrative_tools',
+    'npc_narrative_tools',
+    'all_tools'
 ]
