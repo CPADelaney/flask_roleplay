@@ -556,13 +556,13 @@ class NyxUnifiedGovernor(
     
     Usage:
         # Recommended: Use as async context manager
-        async with NyxUnifiedGovernor(user_id, conversation_id) as governor:
+        async with NyxUnifiedGovernor(user_id, conversation_id, player_name="Alice") as governor:
             # Use governor...
             pass  # Automatically cleaned up
         
         # Alternative: Manual lifecycle
         governor = NyxUnifiedGovernor(user_id, conversation_id)
-        await governor.initialize()
+        await governor.initialize()  # Will auto-detect player name from DB or default to 'Chase'
         try:
             # Use governor...
         finally:
@@ -638,12 +638,50 @@ class NyxUnifiedGovernor(
         # Flag to track initialization
         self._initialized = False
 
-    def set_player_name(self, player_name: str):
-        """Set the player name after initialization if not provided in constructor."""
+    async def set_player_name(self, player_name: str):
+        """
+        Set the player name after initialization if not provided in constructor.
+        This is now async to allow database persistence.
+        """
         if not player_name:
             raise ValueError("Player name cannot be empty")
         self.player_name = player_name
         logger.info(f"Player name set to: {player_name}")
+        
+        # Store in database for persistence
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'PlayerName', $3)
+                    ON CONFLICT (user_id, conversation_id, key) 
+                    DO UPDATE SET value = EXCLUDED.value
+                """, self.user_id, self.conversation_id, player_name)
+        except Exception as e:
+            logger.error(f"Failed to store player name in database", exc_info=True)
+        
+        # Store in database for persistence
+        async def store_player_name():
+            try:
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                        VALUES ($1, $2, 'PlayerName', $3)
+                        ON CONFLICT (user_id, conversation_id, key) 
+                        DO UPDATE SET value = EXCLUDED.value
+                    """, self.user_id, self.conversation_id, player_name)
+            except Exception as e:
+                logger.error(f"Failed to store player name in database", exc_info=True)
+        
+        # Run the async storage in the background if we're in an event loop
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(store_player_name())
+        except RuntimeError:
+            # No event loop, skip database storage
+            logger.warning("No event loop available to store player name in database")
 
     @with_request_id
     async def initialize(self) -> "NyxUnifiedGovernor":
@@ -710,81 +748,39 @@ class NyxUnifiedGovernor(
 
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
-        import functools, asyncio
         logger.info("Initializing core systems")
-    
-        # ── LoreSystem ────────────────────────────────────────────────────
-        logger.info("[INIT-A] LoreSystem.get_instance")
+        
+        # Import LoreSystem locally to avoid circular import
         from lore.core.lore_system import LoreSystem
-        self.lore_system = await LoreSystem.get_instance(self.user_id,
-                                                         self.conversation_id)
-        self.lore_system.set_governor(self)
+        
+        # Get an instance of the LoreSystem
+        self.lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+        
+        # Set the governor on the lore system (dependency injection)
+        await self.lore_system.set_governor(self)
+        
+        # Initialize the lore system WITH the governor reference
         await self.lore_system.initialize(governor=self)
-        logger.info("[INIT-B] LoreSystem ready")
     
-        # ── Memory bridge ────────────────────────────────────────────────
-        logger.info("[INIT-C] Memory bridge get_memory_nyx_bridge")
+        # Initialize other systems
         from memory.memory_nyx_integration import get_memory_nyx_bridge
-        self.memory_system = await get_memory_nyx_bridge(
-            self.user_id, self.conversation_id, governor=self
-        )
-        logger.info("[INIT-D] Memory bridge ready")
-    
-        # ── Memory-integration helpers ───────────────────────────────────
-        # CHANGE: Use the existing memory_system instead of creating a new instance
-        logger.info("[INIT-E] Setting up MemoryIntegration reference")
-        # The memory_system is already a MemoryNyxBridge which has the needed functionality
-        # We can either use it directly or create a simple reference
-        self.memory_integration = self.memory_system  # Just use the same instance
-        logger.info("[INIT-F] MemoryIntegration ready")
+        self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
+        
+        # Initialize memory integration
+        from memory.memory_integration import MemoryIntegration
+        self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
+        await self.memory_integration.initialize()
 
-        # ── Memory-integration helpers ───────────────────────────────────
-     #   logger.info("[INIT-E] MemoryIntegration initialize")
-     #   from memory.memory_integration import MemoryIntegration
-    #    self.memory_integration = MemoryIntegration(self.user_id,
-    #                                                self.conversation_id)
-    #    await self.memory_integration.initialize()
-   #     logger.info("[INIT-F] MemoryIntegration ready")
-
-        # ── JointMemoryGraph (spawned in thread, 8-s watchdog) ───────────
-        logger.info("[INIT-G] building JointMemoryGraph")
-        async def _build_jmg(uid, cid):
-            from nyx.integrate import JointMemoryGraph
-            return JointMemoryGraph(uid, cid)
-
-        try:
-            self.memory_graph = await asyncio.wait_for(
-                asyncio.to_thread(
-                    functools.partial(_build_jmg, self.user_id, self.conversation_id)
-                ),
-                timeout=8.0
-            )
-            logger.info("[INIT-H] JointMemoryGraph ready")
-        except asyncio.TimeoutError:
-            logger.warning("[INIT-H] JointMemoryGraph build timed-out – continuing")
-            self.memory_graph = None
-        except Exception as exc:
-            logger.error(f"[INIT-H] JointMemoryGraph build failed: {exc!r}")
-            self.memory_graph = None
-
-        # ── Game-state snapshot ──────────────────────────────────────────
-        logger.info("[INIT-I] initialize_game_state")
+        from nyx.integrate import JointMemoryGraph
+        self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
+        
         self.game_state = await self.initialize_game_state()
-        logger.info("[INIT-J] game_state ready")
-
-        # ── Dynamic agent discovery ──────────────────────────────────────
-        logger.info("[INIT-K] discover_and_register_agents")
+        
+        # Call the mixin version, not our deleted placeholder
         await super().discover_and_register_agents()
-        logger.info("[INIT-L] dynamic agent discovery done")
-
-        # ── Load goals / metrics / learning state ────────────────────────
-        logger.info("[INIT-M] _load_initial_state")
         await self._load_initial_state()
-        logger.info("[INIT-N] load_initial_state finished")
-
+        
         logger.info("Core systems initialized successfully")
-
-
 
     async def _load_initial_state(self):
         """Load goals and agent state from memory."""
@@ -833,10 +829,40 @@ class NyxUnifiedGovernor(
     
         # Determine which player name to use
         effective_player_name = player_name or self.player_name
+        
+        # If still no player name, try to find one in the database
         if not effective_player_name:
-            raise PlayerNotFoundError(
-                "No player name provided. Set it via constructor or set_player_name() method."
-            )
+            try:
+                async with get_db_connection_context() as conn:
+                    # Check PlayerStats first
+                    effective_player_name = await conn.fetchval("""
+                        SELECT player_name FROM PlayerStats
+                        WHERE user_id = $1 AND conversation_id = $2
+                        LIMIT 1
+                    """, self.user_id, self.conversation_id)
+                    
+                    # Check CurrentRoleplay if not found
+                    if not effective_player_name:
+                        effective_player_name = await conn.fetchval("""
+                            SELECT value FROM CurrentRoleplay
+                            WHERE user_id = $1 AND conversation_id = $2 AND key = 'PlayerName'
+                        """, self.user_id, self.conversation_id)
+                    
+                    # Default to 'Chase' for new games
+                    if not effective_player_name:
+                        effective_player_name = 'Chase'
+                        logger.info(f"No player name found, using default: {effective_player_name}")
+                        # Store it for future use
+                        await conn.execute("""
+                            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                            VALUES ($1, $2, 'PlayerName', $3)
+                            ON CONFLICT (user_id, conversation_id, key) 
+                            DO UPDATE SET value = EXCLUDED.value
+                        """, self.user_id, self.conversation_id, effective_player_name)
+                        
+            except Exception as e:
+                logger.warning(f"Error looking up player name: {e}")
+                effective_player_name = 'Chase'  # Fallback default
     
         logger.info(f"Initializing game state for player '{effective_player_name}'")
     
