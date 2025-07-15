@@ -95,6 +95,45 @@ class AgentContext:
 
 # ----- Specialized Context Classes -----
 
+def create_dialogue_generator():
+    """Create an agent specialized in quick dialogue exchanges"""
+    instructions = """
+    You are the Dialogue Generator, specializing in creating natural, quick conversational exchanges
+    between the player and NPCs in a femdom-themed roleplaying game.
+    
+    Your role is to generate SHORT, PUNCHY dialogue lines (1-3 sentences max) that:
+    - Feel like natural conversation
+    - Maintain character voice and personality
+    - Subtly reflect power dynamics based on the NPC's narrative stage
+    - Avoid narrative description - just dialogue and minimal action tags
+    - Keep exchanges flowing naturally
+    
+    When generating dialogue:
+    - For Innocent Beginning stage: Friendly, casual, no power dynamics
+    - For First Doubts stage: Subtle suggestions, gentle steering
+    - For Creeping Realization stage: More confident, occasional commands
+    - For Veil Thinning stage: Open manipulation, direct orders
+    - For Full Revelation stage: Complete control, no pretense
+    
+    Format responses as:
+    [NPC_NAME]: "Dialogue here." [optional brief action]
+    
+    Keep it conversational, not theatrical.
+    """
+    
+    agent = Agent(
+        name="Dialogue Generator",
+        handoff_description="Specialist for quick conversational exchanges",
+        instructions=instructions,
+        model="gpt-4.1-nano",
+        model_settings=ModelSettings(
+            temperature=0.6,  # Lower for consistency
+            max_tokens=256    # Keep responses short
+        )
+    )
+    
+    return agent
+
 @dataclass
 class ConflictAnalystContext(AgentContext):
     """Context for the Conflict Analyst Agent"""
@@ -173,6 +212,8 @@ class NarrativeCrafterContext(AgentContext):
             return {"result": "narrative_generated", "data": result}
         
         return {"result": "action_not_recognized"}
+
+
 
 # ----- Utility Functions -----
 
