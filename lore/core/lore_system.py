@@ -456,6 +456,55 @@ class LoreSystem:
     # ---------------------------------------------------------------------
     # Canon Methods - This is critical for the system to work
     # ---------------------------------------------------------------------
+
+    def _are_relationships_compatible(self, current_rels: Any, new_rels: Any) -> bool:
+        """
+        Check if new relationships are compatible with current ones.
+        Returns True if new_rels contains all of current_rels plus potentially more.
+        """
+        try:
+            # Parse if needed
+            if isinstance(current_rels, str):
+                current_list = json.loads(current_rels) if current_rels else []
+            else:
+                current_list = current_rels if current_rels else []
+                
+            if isinstance(new_rels, str):
+                new_list = json.loads(new_rels) if new_rels else []
+            else:
+                new_list = new_rels if new_rels else []
+            
+            # Empty current list is always compatible
+            if not current_list:
+                return True
+            
+            # Create a mapping for efficient lookup
+            # Key: (entity_id, entity_type) -> relationship data
+            current_map = {}
+            for rel in current_list:
+                if isinstance(rel, dict):
+                    key = (rel.get('entity_id'), rel.get('entity_type'))
+                    current_map[key] = rel
+            
+            new_map = {}
+            for rel in new_list:
+                if isinstance(rel, dict):
+                    key = (rel.get('entity_id'), rel.get('entity_type'))
+                    new_map[key] = rel
+            
+            # Check if all current relationships exist in new
+            for key, current_rel in current_map.items():
+                if key not in new_map:
+                    return False
+                # Check if the relationship data matches
+                if new_map[key] != current_rel:
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error comparing relationships: {e}")
+            return False
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -472,10 +521,33 @@ class LoreSystem:
         reason: str
     ) -> Dict[str, Any]:
         """
-        Canonical state-change helper with enhanced logging.
+        Canonical state-change helper with proper list comparison.
         """
         from lore.core import canon
         from db.connection import get_db_connection_context
+    
+        # Helper function to check if a list is a subset of another list (for dicts)
+        def _list_is_subset(smaller_list, larger_list):
+            """Check if all items in smaller_list exist in larger_list (for lists of dicts)."""
+            if not isinstance(smaller_list, list) or not isinstance(larger_list, list):
+                return False
+            
+            # For each item in smaller list, check if it exists in larger list
+            for item in smaller_list:
+                if isinstance(item, dict):
+                    # For dicts, we need to find an exact match
+                    found = False
+                    for larger_item in larger_list:
+                        if isinstance(larger_item, dict) and item == larger_item:
+                            found = True
+                            break
+                    if not found:
+                        return False
+                else:
+                    # For non-dict items, use simple containment
+                    if item not in larger_list:
+                        return False
+            return True
     
         logger.info(f"[propose_and_enact_change] Starting for entity_type={entity_type}, "
                     f"identifier={entity_identifier}, reason='{reason[:100]}...'")
@@ -691,24 +763,52 @@ class LoreSystem:
                                 logger.debug(f"  Current: {json.dumps(cur_obj, indent=2)}")
                                 logger.debug(f"  New: {json.dumps(new_obj, indent=2)}")
     
-                                # Another early exit: allow adding to empty dict/list
+                                # Early exit: allow adding to empty dict/list
                                 if _is_effectively_empty(cur_obj):
                                     logger.debug(f"[propose_and_enact_change] Current JSON is empty, allowing")
                                     continue
-                                if isinstance(cur_obj, list) and set(cur_obj).issubset(new_obj):
-                                    logger.debug(f"[propose_and_enact_change] Current list is subset of new, allowing")
-                                    continue
-                                if isinstance(cur_obj, dict) and cur_obj.items() <= new_obj.items():
-                                    logger.debug(f"[propose_and_enact_change] Current dict is subset of new, allowing")
-                                    continue
+                                
+                                # Handle list comparison specially
+                                if isinstance(cur_obj, list) and isinstance(new_obj, list):
+                                    # Check if it's a list of dicts (like relationships)
+                                    if cur_obj and isinstance(cur_obj[0], dict):
+                                        # Use custom subset check for lists of dicts
+                                        if _list_is_subset(cur_obj, new_obj):
+                                            logger.debug(f"[propose_and_enact_change] Current list is subset of new (dict comparison), allowing")
+                                            continue
+                                    else:
+                                        # For lists of simple types, convert to set
+                                        try:
+                                            if set(cur_obj).issubset(set(new_obj)):
+                                                logger.debug(f"[propose_and_enact_change] Current list is subset of new, allowing")
+                                                continue
+                                        except TypeError:
+                                            # If items aren't hashable, fall back to equality check
+                                            logger.debug(f"[propose_and_enact_change] List items not hashable, using equality check")
+                                
+                                # Handle dict comparison
+                                elif isinstance(cur_obj, dict) and isinstance(new_obj, dict):
+                                    if cur_obj.items() <= new_obj.items():
+                                        logger.debug(f"[propose_and_enact_change] Current dict is subset of new, allowing")
+                                        continue
     
+                                # If not handled above, check for equality
                                 if cur_obj != new_obj:
                                     conflict_msg = (
                                         f"Conflict on JSON field '{field}': "
-                                        f"{cur_obj!r} → {new_obj!r}"
+                                        f"{json.dumps(cur_obj)} → {json.dumps(new_obj)}"
                                     )
                                     conflicts.append(conflict_msg)
                                     logger.warning(f"[propose_and_enact_change] {conflict_msg}")
+                                    
+                            except TypeError as e:
+                                # Handle unhashable type error specifically
+                                logger.error(f"[propose_and_enact_change] Type error on field '{field}': {e}")
+                                conflict_msg = (
+                                    f"Conflict on field '{field}' (type error): "
+                                    f"{current_val!r} → {new_val!r}"
+                                )
+                                conflicts.append(conflict_msg)
                             except Exception as e:
                                 conflict_msg = (
                                     f"Conflict on field '{field}' (parse error): "
@@ -718,6 +818,7 @@ class LoreSystem:
                                 logger.error(f"[propose_and_enact_change] JSON parse error on field '{field}': {e}")
                                 logger.debug(f"[propose_and_enact_change] Current value type: {type(current_val)}")
                                 logger.debug(f"[propose_and_enact_change] New value type: {type(new_val)}")
+
 
                         # -------------------------------------------------- #
                         # ARRAY fields                                       #
