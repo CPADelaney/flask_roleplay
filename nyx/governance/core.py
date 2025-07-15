@@ -769,20 +769,31 @@ class NyxUnifiedGovernor(
             # Initialize other systems
             from memory.memory_nyx_integration import get_memory_nyx_bridge
             self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id, governor=self)
+            logger.info("Memory bridge initialized")
             
             # Initialize memory integration
             from memory.memory_integration import MemoryIntegration
             self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
+            logger.info("About to initialize MemoryIntegration")
             await self.memory_integration.initialize()
+            logger.info("MemoryIntegration initialized")
             
             from nyx.integrate import JointMemoryGraph
             self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
+            logger.info("JointMemoryGraph created")
             
+            logger.info("About to initialize game state")
             self.game_state = await self.initialize_game_state()
+            logger.info("Game state initialized")
             
             # Call the mixin version, not our deleted placeholder
+            logger.info("About to discover and register agents")
             await super().discover_and_register_agents()
+            logger.info("Agents discovered and registered")
+            
+            logger.info("About to load initial state")
             await self._load_initial_state()
+            logger.info("Initial state loaded")
             
             logger.info("Core systems initialized successfully")
         finally:
