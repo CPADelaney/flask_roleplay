@@ -17,6 +17,7 @@ from memory.wrapper import MemorySystem
 from lore.core import canon
 from agents import RunContextWrapper
 from lore.core.lore_system import LoreSystem
+from logic.npc_narrative_progression import NPCNarrativeStage
 
 logger = logging.getLogger(__name__)
 
