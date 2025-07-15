@@ -86,38 +86,57 @@ async def get_central_governance(user_id: int, conversation_id: int, player_name
     Returns:
         Initialized NyxUnifiedGovernor instance
     """
-    # Try to determine player name if not provided
-    if not player_name:
-        # Check if there's an existing player in the database
-        async with get_db_connection_context() as conn:
-            existing_player = await conn.fetchval("""
-                SELECT player_name FROM PlayerStats
-                WHERE user_id = $1 AND conversation_id = $2
-                LIMIT 1
-            """, user_id, conversation_id)
-            
-            if existing_player:
-                player_name = existing_player
-            else:
-                # For new games, check if there's a player name in CurrentRoleplay
-                stored_name = await conn.fetchval("""
-                    SELECT value FROM CurrentRoleplay
-                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'PlayerName'
+    cache_key = (user_id, conversation_id)
+    
+    # Check cache first
+    if cache_key in _GOVERNANCE_CACHE:
+        return _GOVERNANCE_CACHE[cache_key]
+    
+    # Get or create lock for this cache key
+    if cache_key not in _GOVERNANCE_INIT_LOCKS:
+        _GOVERNANCE_INIT_LOCKS[cache_key] = asyncio.Lock()
+    
+    # Use lock to prevent concurrent initialization
+    async with _GOVERNANCE_INIT_LOCKS[cache_key]:
+        # Double-check cache in case another coroutine initialized it
+        if cache_key in _GOVERNANCE_CACHE:
+            return _GOVERNANCE_CACHE[cache_key]
+        
+        # Try to determine player name if not provided
+        if not player_name:
+            # Check if there's an existing player in the database
+            async with get_db_connection_context() as conn:
+                existing_player = await conn.fetchval("""
+                    SELECT player_name FROM PlayerStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                    LIMIT 1
                 """, user_id, conversation_id)
                 
-                player_name = stored_name or 'Chase'  # Default to 'Chase' for new games
-    
-    # Create governor with player name
-    governor = NyxUnifiedGovernor(
-        user_id=user_id,
-        conversation_id=conversation_id,
-        player_name=player_name
-    )
-    
-    # Initialize the governor
-    await governor.initialize()
-    
-    return governor
+                if existing_player:
+                    player_name = existing_player
+                else:
+                    # For new games, check if there's a player name in CurrentRoleplay
+                    stored_name = await conn.fetchval("""
+                        SELECT value FROM CurrentRoleplay
+                        WHERE user_id = $1 AND conversation_id = $2 AND key = 'PlayerName'
+                    """, user_id, conversation_id)
+                    
+                    player_name = stored_name or 'Chase'  # Default to 'Chase' for new games
+        
+        # Create governor with player name
+        governor = NyxUnifiedGovernor(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            player_name=player_name
+        )
+        
+        # Initialize the governor
+        await governor.initialize()
+        
+        # Cache the initialized governor
+        _GOVERNANCE_CACHE[cache_key] = governor
+        
+        return governor
 
 def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optional[int] = None):
     """
