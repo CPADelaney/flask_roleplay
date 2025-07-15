@@ -1054,6 +1054,21 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
             logger.warning(f"Could not check for relationship events: {e}")
             crossroads, ritual = None, None
 
+        # Get NPC-specific narrative stages
+        npc_stages = {}
+        for npc_info in key_npcs:
+            npc_id = npc_info.npc_id
+            from logic.npc_narrative_progression import get_npc_narrative_stage
+            stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+            npc_stages[npc_id] = {
+                'npc_name': npc_info.name,
+                'stage': stage.name,
+                'description': stage.description
+            }
+        
+        # Add to state data
+        state_data.npc_narrative_stages = npc_stages
+
         # Generate key observations
         key_observations = []
         current_stage_name = stage_info.name if stage_info else "Unknown"
