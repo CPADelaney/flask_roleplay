@@ -9,6 +9,7 @@ import logging
 import json
 import random
 import asyncio
+import time
 import asyncpg
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
@@ -33,6 +34,121 @@ class MemoryIntegration:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.npc_system = IntegratedNPCSystem(user_id, conversation_id)
+
+    async def initialize(self) -> "MemoryIntegration":
+        """
+        Initialise the bridge with deep, timestamped tracing **and**
+        defensive timeouts so any step that stalls becomes an explicit
+        `asyncio.TimeoutError` in the logs.
+
+        Returns:
+            self (so you can `return await bridge.initialize()` in callers)
+        """
+        # ------------------------------------------------------------
+        # ❶  One-time setup / sanity checks
+        # ------------------------------------------------------------
+        import time, asyncio, logging                         # local import keeps globals tidy
+        from nyx.nyx_governance import (
+            AgentType,
+            DirectiveType,
+            DirectivePriority,
+        )
+        from memory.core.memory_system import MemorySystem    # ← adjust if your path differs
+        from memory.memory_agent import (
+            MemoryAgentWrapper,
+            create_memory_agent,
+            MemoryContext,            # class that holds shared state
+        )
+
+        if not hasattr(self, "logger"):
+            # guarantee a logger even if outer scope changed
+            self.logger = logging.getLogger(__name__)
+
+        # Initialise a MemoryContext if parent didn’t do it
+        if not hasattr(self, "memory_context") or self.memory_context is None:
+            self.memory_context = MemoryContext()
+
+        # Call parent initialisation if the base-class needs it
+        # (safe even if MemoryIntegration doesn’t ultimately subclass anything).
+        try:
+            base_init = super().initialize          # may raise AttributeError
+        except AttributeError:
+            pass
+        else:
+            await base_init()                       # no timeout here – base class should be cheap
+
+        # ------------------------------------------------------------
+        # ❷  Timed / traced steps
+        # ------------------------------------------------------------
+        t0 = time.perf_counter()
+        log = lambda step: self.logger.debug(
+            "[MI-init +%.3fs] %s", time.perf_counter() - t0, step
+        )
+
+        try:
+            # 1) Create underlying OpenAI-agent-based memory agent
+            log("1) create_memory_agent()")
+            base_agent = create_memory_agent(self.user_id, self.conversation_id)
+
+            # 2) Wrap in the compatibility layer
+            log("2) MemoryAgentWrapper()")
+            self.memory_agent = MemoryAgentWrapper(base_agent, self.memory_context)
+
+            # 3) Fetch / build MemorySystem instance   (10-second watchdog)
+            log("3) MemorySystem.get_instance()")
+            self.memory_system = await asyncio.wait_for(
+                MemorySystem.get_instance(self.user_id, self.conversation_id),
+                timeout=10.0,
+            )
+            self.memory_context.memory_system = self.memory_system
+
+            # 4) Register with Nyx governance         (10-second watchdog)
+            log("4) governor.register_agent()")
+            await asyncio.wait_for(
+                self.governor.register_agent(
+                    agent_type=AgentType.MEMORY_MANAGER,
+                    agent_id=f"memory_manager:{self.conversation_id}",
+                    agent_instance=self.memory_agent,
+                ),
+                timeout=10.0,
+            )
+
+            # 5) Issue default memory-maintenance directive (10-second watchdog)
+            log("5) governor.issue_directive()")
+            await asyncio.wait_for(
+                self.governor.issue_directive(
+                    agent_type=AgentType.MEMORY_MANAGER,
+                    agent_id=f"memory_manager:{self.conversation_id}",
+                    directive_type=DirectiveType.ACTION,
+                    directive_data={
+                        "instruction": (
+                            "Maintain entity memories and ensure proper consolidation."
+                        ),
+                        "scope": "global",
+                    },
+                    priority=DirectivePriority.MEDIUM,
+                    duration_minutes=24 * 60,
+                ),
+                timeout=10.0,
+            )
+
+            # ----- Success -------------------------------------------------
+            log("✅ initialise() finished successfully")
+            self._track_state_change("initialization", {"status": "success"})
+            return self
+
+        # ------------------------------------------------------------
+        # ❸  Error handling & telemetry
+        # ------------------------------------------------------------
+        except asyncio.TimeoutError as te:
+            log(f"⏰ TIMEOUT → {te}")
+            self._track_error("initialization", "timeout")
+            raise
+
+        except Exception as exc:
+            log(f"❌ FAILED → {exc}")
+            self._track_error("initialization", str(exc))
+            raise
     
     async def add_memory(self, npc_id: int, memory_text: str, 
                        memory_type: str = "interaction",
