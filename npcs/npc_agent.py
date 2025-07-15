@@ -871,6 +871,58 @@ class NPCAgent:
         # Enhance role with lore context
         role.update(lore_context)
         return role
+
+    async def get_narrative_stage_with_player(self) -> str:
+        """Get this NPC's narrative stage with the player."""
+        from logic.npc_narrative_progression import get_npc_narrative_stage
+        stage = await get_npc_narrative_stage(
+            self.user_id,
+            self.conversation_id,
+            self.npc_id
+        )
+        return stage.name
+    
+    async def make_decision(self, context: Dict[str, Any]) -> NPCAction:
+        """
+        Make a decision based on narrative stage with player.
+        """
+        # Get narrative stage
+        narrative_stage = await self.get_narrative_stage_with_player()
+        
+        # Adjust behavior based on stage
+        behavior_modifiers = {
+            "Innocent Beginning": {
+                "mask_integrity": 1.0,  # Full mask
+                "control_subtlety": 1.0,  # Very subtle
+                "manipulation_level": 0.2  # Light manipulation
+            },
+            "First Doubts": {
+                "mask_integrity": 0.8,
+                "control_subtlety": 0.7,
+                "manipulation_level": 0.4
+            },
+            "Creeping Realization": {
+                "mask_integrity": 0.5,
+                "control_subtlety": 0.5,
+                "manipulation_level": 0.6
+            },
+            "Veil Thinning": {
+                "mask_integrity": 0.2,
+                "control_subtlety": 0.2,
+                "manipulation_level": 0.8
+            },
+            "Full Revelation": {
+                "mask_integrity": 0.0,  # No mask
+                "control_subtlety": 0.0,  # Completely overt
+                "manipulation_level": 1.0  # Full manipulation
+            }
+        }
+        
+        modifiers = behavior_modifiers.get(narrative_stage, behavior_modifiers["Innocent Beginning"])
+        
+        # Apply modifiers to decision-making
+        context["narrative_stage"] = narrative_stage
+        context["behavior_modifiers"] = modifiers
         
     async def _process_lore_change(self, lore_change: Dict[str, Any]) -> Dict[str, Any]:
         """Process a lore change and update NPC state."""
