@@ -174,6 +174,36 @@ manipulation_analyst = Agent(
     temperature=0.6
 )
 
+conflict_beat_writer = Agent(
+    name="ConflictBeatWriter",
+    instructions="""
+    You generate story beats for ongoing conflicts in a femdom-themed narrative game.
+    Story beats should advance the conflict narrative while reflecting the game's themes
+    of subtle control and shifting power dynamics.
+    
+    Given conflict context, generate:
+    1. A compelling narrative beat that advances the conflict
+    2. An appropriate progress value (0-100) based on:
+       - Current phase: brewing (0-25), active (25-50), climax (50-75), resolution (75-100)
+       - Narrative significance of the beat
+       - Impact on player and stakeholders
+    
+    Consider:
+    - The conflict's current phase and progress
+    - Stakeholder motivations and hidden agendas
+    - Recent player actions and their consequences
+    - How NPCs might use the conflict to manipulate the player
+    - The overall theme of gradual loss of autonomy
+    
+    Format your response as:
+    BEAT: [narrative description]
+    PROGRESS: [numeric value 0-100]
+    IMPACT: [brief description of consequences]
+    """,
+    model="gpt-4.1-nano",
+    temperature=0.7
+)
+
 # ===== PYDANTIC MODELS =====
 
 # Relationship Models
@@ -503,6 +533,25 @@ class NPCRevelationContent(NarrativeEventContent):
 
     model_config = ConfigDict(extra="forbid")
 
+class ConflictBeatGenerationParams(BaseModel):
+    """Parameters for generating a conflict story beat."""
+    conflict_id: int
+    recent_action: Optional[str] = None
+    player_choice: Optional[str] = None
+    involved_npcs: List[int] = Field(default_factory=list)
+    
+    model_config = ConfigDict(extra="forbid")
+
+class GeneratedConflictBeat(BaseModel):
+    """A generated conflict story beat."""
+    beat_description: str
+    progress_value: float = Field(ge=0.0, le=100.0)
+    impact_summary: str
+    path_id: str
+    involved_npcs: List[int]
+    
+    model_config = ConfigDict(extra="forbid")
+
 # ===== HELPER FUNCTIONS =====
 
 def _get_stage_manipulation_modifier(stage_name: str) -> float:
@@ -697,6 +746,171 @@ async def get_npc_details(
         return None
 
 # ===== CONTEXT MANAGEMENT TOOLS =====
+
+@function_tool
+async def generate_conflict_beat(
+    ctx: RunContextWrapper[ContextType],
+    params: ConflictBeatGenerationParams
+) -> Dict[str, Any]:
+    """
+    Generate a conflict story beat using AI based on current conflict state.
+    
+    Args:
+        params: Conflict beat generation parameters
+        
+    Returns:
+        Generated beat with progress value
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+        
+        # Get conflict details
+        conflict = await conflict_integration.get_conflict_details(params.conflict_id)
+        if not conflict:
+            return {"success": False, "error": "Conflict not found"}
+        
+        # Get stakeholder information
+        stakeholders = conflict.get('stakeholders', [])
+        relevant_stakeholders = []
+        
+        for stakeholder in stakeholders:
+            if stakeholder.get('entity_type') == 'npc':
+                npc_id = stakeholder.get('npc_id')
+                if npc_id in params.involved_npcs or not params.involved_npcs:
+                    # Get NPC narrative stage for context
+                    stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
+                    stakeholder['narrative_stage'] = stage.name
+                    relevant_stakeholders.append(stakeholder)
+        
+        # Get player involvement
+        player_involvement = conflict.get('player_involvement', {})
+        
+        # Get resolution paths
+        resolution_paths = conflict.get('resolution_paths', [])
+        active_path = next(
+            (p for p in resolution_paths if p.get('is_active')), 
+            resolution_paths[0] if resolution_paths else None
+        )
+        
+        # Build context for beat generation
+        context_prompt = f"""
+        Generate a story beat for this conflict:
+        
+        Conflict: {conflict['conflict_name']}
+        Type: {conflict['conflict_type']}
+        Current Phase: {conflict['phase']}
+        Current Progress: {conflict['progress']}%
+        Description: {conflict['description']}
+        
+        Active Resolution Path: {active_path['path_name'] if active_path else 'None'}
+        Path Description: {active_path['description'] if active_path else 'N/A'}
+        
+        Player Involvement:
+        - Level: {player_involvement.get('involvement_level', 'none')}
+        - Faction: {player_involvement.get('faction', 'neutral')}
+        - Is Manipulated: {player_involvement.get('is_manipulated', False)}
+        
+        Key Stakeholders:
+        """
+        
+        for stakeholder in relevant_stakeholders[:3]:  # Limit to top 3
+            context_prompt += f"""
+        - {stakeholder['npc_name']} ({stakeholder['faction_name']}):
+          Narrative Stage: {stakeholder.get('narrative_stage', 'Unknown')}
+          Public Goal: {stakeholder.get('public_motivation')}
+          Hidden Goal: {stakeholder.get('hidden_motivation')}
+        """
+        
+        if params.recent_action:
+            context_prompt += f"\n\nRecent Action: {params.recent_action}"
+        
+        if params.player_choice:
+            context_prompt += f"\nPlayer Choice: {params.player_choice}"
+        
+        context_prompt += """
+        
+        Generate an appropriate story beat that:
+        1. Advances the conflict naturally
+        2. Reflects stakeholder agendas
+        3. Subtly reinforces power dynamics
+        4. Creates opportunities for manipulation
+        """
+        
+        # Generate beat with agent
+        result = await Runner.run(
+            conflict_beat_writer,
+            context_prompt
+        )
+        
+        # Parse the response
+        response_text = result.final_output
+        lines = response_text.strip().split('\n')
+        
+        beat_description = ""
+        progress_value = conflict['progress'] + 5.0  # Default increment
+        impact_summary = ""
+        
+        for line in lines:
+            if line.startswith("BEAT:"):
+                beat_description = line.replace("BEAT:", "").strip()
+            elif line.startswith("PROGRESS:"):
+                try:
+                    progress_value = float(line.replace("PROGRESS:", "").strip())
+                except:
+                    pass
+            elif line.startswith("IMPACT:"):
+                impact_summary = line.replace("IMPACT:", "").strip()
+        
+        # Ensure progress makes sense
+        progress_increment = progress_value - conflict['progress']
+        if progress_increment < 0 or progress_increment > 25:
+            # Limit progress jumps
+            progress_value = min(conflict['progress'] + 10, 100)
+        
+        # Create the beat data
+        generated_beat = GeneratedConflictBeat(
+            beat_description=beat_description or "The conflict continues to develop...",
+            progress_value=progress_value,
+            impact_summary=impact_summary or "Tensions shift subtly.",
+            path_id=active_path['path_id'] if active_path else "default",
+            involved_npcs=params.involved_npcs
+        )
+        
+        # Now track the beat using the existing system
+        track_result = await conflict_integration.track_story_beat(
+            params.conflict_id,
+            generated_beat.path_id,
+            generated_beat.beat_description,
+            generated_beat.involved_npcs,
+            generated_beat.progress_value
+        )
+        
+        # Create memory of the beat
+        if hasattr(context, 'add_narrative_memory'):
+            await context.add_narrative_memory(
+                f"Conflict beat for '{conflict['conflict_name']}': {beat_description[:100]}...",
+                "conflict_beat",
+                0.7
+            )
+        
+        return {
+            "success": True,
+            "conflict_id": params.conflict_id,
+            "conflict_name": conflict['conflict_name'],
+            "generated_beat": generated_beat.model_dump(),
+            "track_result": track_result,
+            "old_progress": conflict['progress'],
+            "new_progress": progress_value
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating conflict beat: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 @function_tool
 async def get_optimized_context(
@@ -3424,7 +3638,8 @@ conflict_tools = [
     set_player_involvement,
     track_conflict_story_beat,
     suggest_potential_manipulation,
-    analyze_manipulation_opportunities
+    analyze_manipulation_opportunities,
+    generate_conflict_beat  # Add this
 ]
 
 # Resource management tools
