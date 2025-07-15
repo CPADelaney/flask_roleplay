@@ -720,7 +720,7 @@ class ReligionManager(BaseLoreManager):
             "pantheon_id": params.pantheon_id
         }
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 from lore.core import canon
                 practice_id = await canon.find_or_create_religious_practice(
@@ -760,7 +760,7 @@ class ReligionManager(BaseLoreManager):
             "architectural_features": params.architectural_features
         }
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 from lore.core import canon
                 site_id = await canon.find_or_create_holy_site(
@@ -797,7 +797,7 @@ class ReligionManager(BaseLoreManager):
             "age_description": params.age_description
         }
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 from lore.core import canon
                 text_id = await canon.create_religious_text(
@@ -837,7 +837,7 @@ class ReligionManager(BaseLoreManager):
             "notable_members": params.notable_members
         }
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 from lore.core import canon
                 order_id = await canon.find_or_create_religious_order(
@@ -875,7 +875,7 @@ class ReligionManager(BaseLoreManager):
             "historical_impact": params.historical_impact
         }
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 from lore.core import canon
                 conflict_id = await canon.log_religious_conflict(
@@ -901,7 +901,7 @@ class ReligionManager(BaseLoreManager):
         await self.ensure_initialized()
         
         # Gather context
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 foundation_lore = await conn.fetch("""
                     SELECT category, description FROM WorldLore
@@ -995,7 +995,7 @@ class ReligionManager(BaseLoreManager):
         await self.ensure_initialized()
         
         # Get pantheon context
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT * FROM Pantheons WHERE id = $1
@@ -1090,7 +1090,7 @@ class ReligionManager(BaseLoreManager):
     # Helper generation methods
     async def _generate_holy_sites(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
         """Generate holy sites for a pantheon."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT name, description FROM Pantheons WHERE id = $1
@@ -1150,7 +1150,7 @@ class ReligionManager(BaseLoreManager):
 
     async def _generate_religious_texts(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
         """Generate religious texts for a pantheon."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT name, description, creation_myth
@@ -1207,7 +1207,7 @@ class ReligionManager(BaseLoreManager):
 
     async def _generate_religious_orders(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
         """Generate religious orders with full canon integration."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT * FROM Pantheons WHERE id = $1
@@ -1284,7 +1284,7 @@ class ReligionManager(BaseLoreManager):
         orders = result.final_output_as(List[ReligiousOrderParams])
         created_orders = []
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 for order in orders:
                     # Check for duplicates
@@ -1371,7 +1371,7 @@ class ReligionManager(BaseLoreManager):
 
     async def _generate_religious_conflicts(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
         """Generate religious conflicts with sophisticated duplicate checking."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT * FROM Pantheons WHERE id = $1
@@ -1447,7 +1447,7 @@ class ReligionManager(BaseLoreManager):
         conflicts = result.final_output_as(List[ReligiousConflictParams])
         created_conflicts = []
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 for conflict in conflicts:
                     # Check for similar existing conflicts
@@ -1553,7 +1553,7 @@ class ReligionManager(BaseLoreManager):
         """Distribute religions across nations with canon checks."""
         nations = await self.geopolitical_manager.get_all_nations(ctx)
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheons = await conn.fetch("""
                     SELECT id, name, description, matriarchal_elements
@@ -1622,7 +1622,7 @@ class ReligionManager(BaseLoreManager):
                     'religious_minorities': dist_data.religious_minorities
                 }
                 
-                async with self.get_connection_pool() as pool:
+                async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         distribution_id = await find_or_create_entity(
                             ctx=ctx,
@@ -1664,7 +1664,7 @@ class ReligionManager(BaseLoreManager):
         formality_level: int = 5
     ) -> Dict[str, Any]:
         """Generate a detailed religious ritual."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT * FROM Pantheons WHERE id = $1
@@ -1743,7 +1743,7 @@ class ReligionManager(BaseLoreManager):
         dispute_topic: str
     ) -> Dict[str, Any]:
         """Simulate a theological dispute between religious factions."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT * FROM Pantheons WHERE id = $1
@@ -1830,7 +1830,7 @@ class ReligionManager(BaseLoreManager):
         years: int = 50
     ) -> Dict[str, Any]:
         """Evolve a religion based on cultural interaction over time."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT * FROM Pantheons WHERE id = $1
@@ -1905,7 +1905,7 @@ class ReligionManager(BaseLoreManager):
         trigger_event: str
     ) -> Dict[str, Any]:
         """Generate a sectarian split within a religion."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
                     SELECT * FROM Pantheons WHERE id = $1
@@ -2020,7 +2020,7 @@ class ReligionManager(BaseLoreManager):
         if cached:
             return cached
 
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation = await conn.fetchrow("""
                     SELECT id, name, government_type, matriarchy_level
@@ -2103,7 +2103,7 @@ class ReligionManager(BaseLoreManager):
         if not primary_pantheon_id:
             return
 
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 practices = await conn.fetch("""
                     SELECT id, name, practice_type, description, purpose
@@ -2145,7 +2145,7 @@ class ReligionManager(BaseLoreManager):
                 embed_text = f"practice {dict(practice)['name']} {var_data.regional_variation}"
                 embedding = await generate_embedding(embed_text)
                 
-                async with self.get_connection_pool() as pool:
+                async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         await conn.execute("""
                             INSERT INTO RegionalReligiousPractice (
@@ -2273,7 +2273,7 @@ class ReligionManager(BaseLoreManager):
         
         # Update nation's religious data to reflect evolution
         if "religious_changes" in evolution_data:
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     await conn.execute("""
                         UPDATE NationReligion 
@@ -2331,7 +2331,7 @@ class ReligionManager(BaseLoreManager):
         
         # Note: We need ctx here but don't have it in this helper
         # In practice, you'd pass ctx to this method
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 embed_text = f"ritual {ritual.name} {ritual.purpose}"
                 embedding = await generate_embedding(embed_text)
