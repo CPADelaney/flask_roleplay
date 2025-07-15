@@ -710,9 +710,9 @@ class NyxUnifiedGovernor(
 
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
-        import functools, asyncio                       # ← keep both
+        import functools, asyncio
         logger.info("Initializing core systems")
-
+    
         # ── LoreSystem ────────────────────────────────────────────────────
         logger.info("[INIT-A] LoreSystem.get_instance")
         from lore.core.lore_system import LoreSystem
@@ -721,7 +721,7 @@ class NyxUnifiedGovernor(
         self.lore_system.set_governor(self)
         await self.lore_system.initialize(governor=self)
         logger.info("[INIT-B] LoreSystem ready")
-
+    
         # ── Memory bridge ────────────────────────────────────────────────
         logger.info("[INIT-C] Memory bridge get_memory_nyx_bridge")
         from memory.memory_nyx_integration import get_memory_nyx_bridge
@@ -729,14 +729,22 @@ class NyxUnifiedGovernor(
             self.user_id, self.conversation_id, governor=self
         )
         logger.info("[INIT-D] Memory bridge ready")
+    
+        # ── Memory-integration helpers ───────────────────────────────────
+        # CHANGE: Use the existing memory_system instead of creating a new instance
+        logger.info("[INIT-E] Setting up MemoryIntegration reference")
+        # The memory_system is already a MemoryNyxBridge which has the needed functionality
+        # We can either use it directly or create a simple reference
+        self.memory_integration = self.memory_system  # Just use the same instance
+        logger.info("[INIT-F] MemoryIntegration ready")
 
         # ── Memory-integration helpers ───────────────────────────────────
-        logger.info("[INIT-E] MemoryIntegration initialize")
-        from memory.memory_integration import MemoryIntegration
-        self.memory_integration = MemoryIntegration(self.user_id,
-                                                    self.conversation_id)
-        await self.memory_integration.initialize()
-        logger.info("[INIT-F] MemoryIntegration ready")
+     #   logger.info("[INIT-E] MemoryIntegration initialize")
+     #   from memory.memory_integration import MemoryIntegration
+    #    self.memory_integration = MemoryIntegration(self.user_id,
+    #                                                self.conversation_id)
+    #    await self.memory_integration.initialize()
+   #     logger.info("[INIT-F] MemoryIntegration ready")
 
         # ── JointMemoryGraph (spawned in thread, 8-s watchdog) ───────────
         logger.info("[INIT-G] building JointMemoryGraph")
