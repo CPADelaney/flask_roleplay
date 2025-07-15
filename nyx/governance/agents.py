@@ -245,7 +245,7 @@ class AgentGovernanceMixin:
         # ------------------------------------------------------------
         # 4) NPC-agents – run in background to avoid blocking init
         # ------------------------------------------------------------
-        asyncio.create_task(_discover_npc_agents(self))
+        asyncio.create_task(self._discover_npc_agents())
     
         logger.info(f"[discover] completed – {registered} static agents queued")
         return registered > 0
