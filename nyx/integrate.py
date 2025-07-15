@@ -72,62 +72,52 @@ logger = logging.getLogger(__name__)
 _GOVERNANCE_CACHE: Dict[Tuple[int, int], NyxUnifiedGovernor] = {}
 _GOVERNANCE_INIT_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 
-async def get_central_governance(user_id: int, conversation_id: int) -> NyxUnifiedGovernor:
+async def get_central_governance(user_id: int, conversation_id: int, player_name: Optional[str] = None) -> NyxUnifiedGovernor:
     """
     Get or create the central governance instance for a user/conversation.
-    
-    This function ensures that:
-    1. Only one governance instance exists per user/conversation pair
-    2. The governance system is properly initialized
-    3. All subsystems (including LoreSystem) are initialized in the correct order
-    4. Concurrent calls don't create duplicate instances
     
     Args:
         user_id: The user ID
         conversation_id: The conversation ID
-        
+        player_name: Optional player name. If not provided:
+                    - Will check database for existing player
+                    - Falls back to 'Chase' for new games
+    
     Returns:
-        The initialized NyxUnifiedGovernor instance
+        Initialized NyxUnifiedGovernor instance
     """
-    cache_key = (user_id, conversation_id)
-    
-    # Get or create a lock for this cache key to prevent concurrent initialization
-    if cache_key not in _GOVERNANCE_INIT_LOCKS:
-        _GOVERNANCE_INIT_LOCKS[cache_key] = asyncio.Lock()
-    
-    async with _GOVERNANCE_INIT_LOCKS[cache_key]:
-        # Check cache first (inside the lock to ensure thread safety)
-        if cache_key in _GOVERNANCE_CACHE:
-            governor = _GOVERNANCE_CACHE[cache_key]
-            # Ensure it's initialized
-            if hasattr(governor, '_initialized') and governor._initialized:
-                logger.debug(f"Returning cached initialized governor for {cache_key}")
-                return governor
+    # Try to determine player name if not provided
+    if not player_name:
+        # Check if there's an existing player in the database
+        async with get_db_connection_context() as conn:
+            existing_player = await conn.fetchval("""
+                SELECT player_name FROM PlayerStats
+                WHERE user_id = $1 AND conversation_id = $2
+                LIMIT 1
+            """, user_id, conversation_id)
+            
+            if existing_player:
+                player_name = existing_player
             else:
-                # Continue to initialization below
-                logger.info(f"Found uninitialized governor in cache for {cache_key}, initializing now")
-        else:
-            # Create new governor
-            governor = NyxUnifiedGovernor(user_id, conversation_id)
-            _GOVERNANCE_CACHE[cache_key] = governor
-            logger.info(f"Created new governor for user {user_id}, conversation {conversation_id}")
-        
-        # Check again if it was initialized while we were waiting for the lock
-        if hasattr(governor, '_initialized') and governor._initialized:
-            logger.debug(f"Governor was initialized while waiting for lock for {cache_key}")
-            return governor
-        
-        # Initialize the governor
-        # This will:
-        # 1. Create and initialize the LoreSystem (with proper dependency injection)
-        # 2. Initialize the memory system
-        # 3. Initialize the game state
-        # 4. Discover and register agents
-        logger.info(f"Initializing governor for user {user_id}, conversation {conversation_id}")
-        await governor.initialize()
-        
-        logger.info(f"Governor fully initialized for user {user_id}, conversation {conversation_id}")
-        return governor
+                # For new games, check if there's a player name in CurrentRoleplay
+                stored_name = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'PlayerName'
+                """, user_id, conversation_id)
+                
+                player_name = stored_name or 'Chase'  # Default to 'Chase' for new games
+    
+    # Create governor with player name
+    governor = NyxUnifiedGovernor(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        player_name=player_name
+    )
+    
+    # Initialize the governor
+    await governor.initialize()
+    
+    return governor
 
 def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optional[int] = None):
     """
