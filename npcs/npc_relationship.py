@@ -352,6 +352,59 @@ class NPCRelationshipManager:
             logger.error(f"Error applying relationship decay: {e}")
             return results
 
+    async def update_narrative_progression(
+        self,
+        entity_id: int,
+        interaction_type: str,
+        interaction_intensity: float = 1.0
+    ) -> Dict[str, Any]:
+        """
+        Update narrative progression based on interaction.
+        """
+        if entity_id != self.user_id:  # Only track progression with player
+            return {'success': False, 'reason': 'Not player interaction'}
+        
+        # Calculate progression changes based on interaction
+        corruption_change = 0
+        dependency_change = 0
+        realization_change = 0
+        
+        # Map interaction types to progression changes
+        if interaction_type in ['obey', 'submit', 'accept_control']:
+            corruption_change = int(5 * interaction_intensity)
+            dependency_change = int(3 * interaction_intensity)
+        elif interaction_type in ['resist', 'refuse', 'assert_independence']:
+            corruption_change = int(-2 * interaction_intensity)
+            dependency_change = int(-1 * interaction_intensity)
+            realization_change = int(5 * interaction_intensity)  # Resistance increases awareness
+        elif interaction_type in ['question', 'doubt', 'suspicious']:
+            realization_change = int(8 * interaction_intensity)
+        elif interaction_type in ['intimate', 'vulnerable', 'trust']:
+            dependency_change = int(5 * interaction_intensity)
+            corruption_change = int(2 * interaction_intensity)
+        
+        # Progress the narrative stage
+        from logic.npc_narrative_progression import progress_npc_narrative_stage
+        result = await progress_npc_narrative_stage(
+            self.user_id,
+            self.conversation_id,
+            self.npc_id,
+            corruption_change=corruption_change,
+            dependency_change=dependency_change,
+            realization_change=realization_change
+        )
+        
+        return result
+    
+    async def get_narrative_stage(self) -> NPCNarrativeStage:
+        """Get the current narrative stage with this NPC."""
+        from logic.npc_narrative_progression import get_npc_narrative_stage
+        return await get_npc_narrative_stage(
+            self.user_id,
+            self.conversation_id,
+            self.npc_id
+        )
+
     async def update_relationship_from_interaction(
         self,
         entity_type: str,
