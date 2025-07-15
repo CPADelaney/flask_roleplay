@@ -1417,7 +1417,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             run_ctx = self.create_run_context(ctx)
             
             # Fetch entity details
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     entity = await conn.fetchrow("""
                         SELECT * FROM PoliticalEntities WHERE id = $1
@@ -1668,7 +1668,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             
             # Get nation information from DB if available
             nations_data = {}
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     for name in [nation1, nation2]:
                         nation = await conn.fetchrow("""
@@ -1768,7 +1768,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             region_data = {}
             resource_availability = []
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     region = await conn.fetchrow("""
                         SELECT * FROM GeographicRegions WHERE name ILIKE $1
@@ -1858,7 +1858,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             # Get target nation information from DB if available
             nation_data = {}
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     nation = await conn.fetchrow("""
                         SELECT * FROM PoliticalEntities WHERE name ILIKE $1
