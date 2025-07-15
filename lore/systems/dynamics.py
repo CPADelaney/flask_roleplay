@@ -656,7 +656,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             "Landmarks", "NotableFigures"
         ]
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 for lore_type in lore_types:
                     try:
@@ -848,7 +848,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         Apply the agent-generated updates to the database.
         Implementation method - can be called directly.
         """
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 for update in updates:
                     lore_type = update['lore_type']
@@ -969,7 +969,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         description = element.description
         significance = element.significance
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 try:
                     # Create context for canon operations
@@ -1182,7 +1182,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         ):
             run_ctx = self.create_run_context(ctx)
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     factions = await conn.fetch("""
                         SELECT id, name, type, description
@@ -1391,7 +1391,7 @@ class LoreDynamicsSystem(BaseLoreManager):
     #===========================================================================
     async def _fetch_world_state(self) -> Dict[str, Any]:
         """Fetch current WorldState from DB or return defaults."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 world_state = await conn.fetchrow("""
                     SELECT * FROM WorldState 
@@ -1432,7 +1432,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         if not lore_id:
             return []
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 try:
                     table_exists = await conn.fetchval("""
@@ -1490,7 +1490,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         if not lore_id:
             return []
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 try:
                     table_exists = await conn.fetchval("""
@@ -1609,7 +1609,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             "conversation_id": self.conversation_id
         })
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if we have a dedicated urban myths table
                 has_urban_myths_table = await conn.fetchval("""
@@ -1784,7 +1784,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             "conversation_id": self.conversation_id
         })
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if the CulturalElements table exists
                 table_exists = await conn.fetchval("""
@@ -1919,7 +1919,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             "conversation_id": self.conversation_id
         })
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if the Factions table exists
                 factions_exist = await conn.fetchval("""
@@ -2187,7 +2187,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             "conversation_id": self.conversation_id
         })
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 has_notable_figures_table = await conn.fetchval("""
                     SELECT EXISTS (
