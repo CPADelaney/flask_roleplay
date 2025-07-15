@@ -240,7 +240,7 @@ class WorldLoreManager(BaseLoreManager):
         if not handler:
             return {"error": f"Unknown element type: {element_type}"}
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Call the appropriate canon handler
                 element_id = await handler(
@@ -615,7 +615,7 @@ class WorldLoreManager(BaseLoreManager):
         """Execute a database query with error handling and logging"""
         try:
             # Get connection from pool
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Log query for debugging
                     logger.debug(f"Executing query: {query} with args: {args}")
@@ -643,7 +643,7 @@ class WorldLoreManager(BaseLoreManager):
         """Apply language diffusion effects between nations using canon system."""
         from lore.core import canon
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if both nations have languages
                 nation1_langs = await conn.fetch("""
@@ -708,7 +708,7 @@ class WorldLoreManager(BaseLoreManager):
         """Apply artistic and creative diffusion between nations using canon system."""
         from lore.core import canon
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Record artistic exchange in cultural elements
                 if "artistic_elements" in effects:
@@ -740,7 +740,7 @@ class WorldLoreManager(BaseLoreManager):
         """Apply religious practice and belief diffusion between nations using canon system."""
         from lore.core import canon
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Track religious changes in the appropriate tables
                 if "religious_practices" in effects:
@@ -773,7 +773,7 @@ class WorldLoreManager(BaseLoreManager):
         """Apply fashion and clothing diffusion between nations using canon system."""
         from lore.core import canon
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Implement fashion diffusion effects
                 if "fashion_elements" in effects:
@@ -812,7 +812,7 @@ class WorldLoreManager(BaseLoreManager):
         """Apply culinary and food diffusion between nations using canon system."""
         from lore.core import canon
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Implement cuisine diffusion
                 if "cuisine_elements" in effects:
@@ -852,7 +852,7 @@ class WorldLoreManager(BaseLoreManager):
         """Apply social customs and etiquette diffusion between nations using canon system."""
         from lore.core import canon
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Implement social customs diffusion
                 if "social_customs" in effects:
@@ -1039,7 +1039,7 @@ class WorldLoreManager(BaseLoreManager):
         """Validate world consistency and find issues."""
         issues = []
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check for orphaned references
                 orphaned_npcs = await conn.fetch("""
@@ -1108,7 +1108,7 @@ class WorldLoreManager(BaseLoreManager):
 
     async def _update_plan_step(self, plan_id: str, step_index: int, outcome: Dict[str, Any]) -> None:
         """Update a plan step with its outcome."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # First, fetch the current plan
                 plan_data = await conn.fetchrow("""
