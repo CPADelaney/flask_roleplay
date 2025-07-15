@@ -760,7 +760,7 @@ class WorldBuilder(BaseGenerator):
                 tags_json = tags
             
             # Execute query
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     lore_id = await conn.fetchval(
                         query,
@@ -793,7 +793,7 @@ class WorldBuilder(BaseGenerator):
                 LIMIT 1
             """
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     setting_name = await conn.fetchval(
                         query,
@@ -1158,7 +1158,7 @@ class FactionGenerator(BaseGenerator):
     async def _store_faction(self, faction_data: Dict[str, Any]) -> int:
         """Store a faction in the database."""
         try:
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Check if faction already exists
                     existing = await conn.fetchval("""
@@ -1230,7 +1230,7 @@ class FactionGenerator(BaseGenerator):
     async def _store_cultural_element(self, element_data: Dict[str, Any]) -> int:
         """Store a cultural element in the database."""
         try:
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Generate embedding
                     embedding_text = f"{element_data['name']} {element_data['description']}"
@@ -1265,7 +1265,7 @@ class FactionGenerator(BaseGenerator):
     async def _store_historical_event(self, event_data: Dict[str, Any]) -> int:
         """Store a historical event in the database."""
         try:
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Generate embedding
                     embedding_text = f"{event_data['name']} {event_data['description']}"
@@ -1311,7 +1311,7 @@ class FactionGenerator(BaseGenerator):
     async def _store_location(self, location_data: Dict[str, Any]) -> int:
         """Store a location in the database."""
         try:
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Generate embedding
                     embedding_text = f"{location_data['name']} {location_data['description']}"
@@ -1356,7 +1356,7 @@ class FactionGenerator(BaseGenerator):
                                   historical_significance: str) -> int:
         """Store location lore in the database."""
         try:
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Check if we have an existing LocationLore table or use LocalHistories
                     table_exists = await conn.fetchval("""
@@ -1438,7 +1438,7 @@ class FactionGenerator(BaseGenerator):
     async def _connect_faction_to_location(self, location_id: int, faction_name: str) -> bool:
         """Connect a faction to a location in the database."""
         try:
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Find the faction by name
                     faction_id = await conn.fetchval("""
@@ -1486,7 +1486,7 @@ class FactionGenerator(BaseGenerator):
     async def _store_quest(self, quest_data: Dict[str, Any]) -> int:
         """Store a quest in the database."""
         try:
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Generate embedding
                     quest_description = quest_data.get('description', '')
