@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from .constants import DirectiveType, DirectivePriority, AgentType
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 from utils.cache_manager import CacheManager
+from db.connection import get_db_connection_context
 
 import asyncio, importlib, inspect
 from contextlib import suppress
