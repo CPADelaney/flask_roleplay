@@ -16,8 +16,26 @@ from .core import (
     with_transaction
 )
 from .connection import DBConnectionManager, TransactionContext
+from agents import Agent, ModelSettings                 # already imported earlier?
+from agents import Runner
 
 logger = logging.getLogger("memory_managers")
+
+plot_hook_generator = Agent(
+    name="PlotHookGenerator",
+    instructions="""
+    You design concise, provocative plot hooks for a dark-erotic, femdom-themed
+    RPG.  Given game state (player stats & kinks, key NPCs, environment, open
+    locations) and a requested number N, respond with EXACTLY a JSON list of N
+    objects.  For each hook return:
+      - type: one of ["challenge","temptation","revelation","quest","ritual",
+                      "secret","choice"]
+      - description: 1-2 sentences written for the GM to drop into play
+      - details:      any useful keys (npc_id, npc_name, stat, kink, location…)
+    Keep text intriguing but PG-13.  Do not wrap the JSON in markdown fences.
+    """,
+    model="gpt-4.1-nano",
+    model_settings=ModelSettings(temperature=0.8)
 
 class NPCMemoryManager(UnifiedMemoryManager):
     """
@@ -472,136 +490,97 @@ class NyxMemoryManager(UnifiedMemoryManager):
     @with_transaction
     async def generate_plot_hooks(self, count: int = 3, conn=None) -> List[Dict[str, Any]]:
         """
-        Generate potential plot hooks based on current game state.
+        Ask the PlotHookGenerator agent for <count> bespoke hooks that fit the
+        current game state (kinks, NPCs, environment, stats, locations).
         """
-        # Get player kinks to incorporate
-        kink_rows = await conn.fetch("""
-            SELECT kink_type, level
-            FROM UserKinkProfile
-            WHERE user_id = $1 AND level >= 2
-        """, self.user_id)
-        
+        # ---------- Gather state ----------
+        kink_rows = await conn.fetch(
+            "SELECT kink_type, level FROM UserKinkProfile WHERE user_id=$1 AND level>=2",
+            self.user_id
+        )
         kinks = [row["kink_type"] for row in kink_rows]
-        
-        # Get NPC data for potential hooks
-        npc_rows = await conn.fetch("""
+    
+        npc_rows = await conn.fetch(
+            """
             SELECT npc_id, npc_name, dominance, cruelty, introduced
             FROM NPCStats
-            WHERE user_id = $1 AND conversation_id = $2
+            WHERE user_id=$1 AND conversation_id=$2
             ORDER BY CASE WHEN introduced THEN 0 ELSE 1 END, dominance DESC
             LIMIT 5
-        """, self.user_id, self.conversation_id)
-        
-        # Get current environment
-        env_row = await conn.fetchrow("""
-            SELECT value
-            FROM CurrentRoleplay
-            WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
-        """, self.user_id, self.conversation_id)
-        
-        environment = env_row["value"] if env_row else "Default environment"
-        
-        # Generate hooks
-        hooks = []
-        
-        # Basic hook templates
-        templates = [
-            {"type": "challenge", "text": "Challenge from {npc} testing player's {stat}"},
-            {"type": "temptation", "text": "Temptation by {npc} targeting player's {kink}"},
-            {"type": "revelation", "text": "Revelation about {npc}'s true nature"},
-            {"type": "quest", "text": "Quest involving {location} with {npc}"},
-            {"type": "ritual", "text": "Ritual to increase player's {stat} orchestrated by {npc}"},
-            {"type": "secret", "text": "Secret about the environment involving {npc}"},
-            {"type": "choice", "text": "Meaningful choice between {npc1} and {npc2}"}
-        ]
-        
-        # Get player stats
-        player_row = await conn.fetchrow("""
+            """,
+            self.user_id, self.conversation_id
+        )
+    
+        env_row = await conn.fetchrow(
+            """
+            SELECT value FROM CurrentRoleplay
+            WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
+            """,
+            self.user_id, self.conversation_id
+        )
+        environment = env_row["value"] if env_row else "a neutral setting"
+    
+        player_row = await conn.fetchrow(
+            """
             SELECT corruption, obedience, dependency, willpower
             FROM PlayerStats
-            WHERE user_id = $1 AND conversation_id = $2
+            WHERE user_id=$1 AND conversation_id=$2
             LIMIT 1
-        """, self.user_id, self.conversation_id)
-        
-        if not player_row:
-            player_stats = ["corruption", "obedience", "dependency", "willpower"]
-        else:
-            # Find stats that are most interesting to develop
-            player_stats = []
-            for stat, value in player_row.items():
-                # Focus on stats in the middle range
-                if 30 <= value <= 70:
-                    player_stats.append(stat)
-                    
-            if not player_stats:
-                player_stats = ["corruption", "obedience", "dependency", "willpower"]
-        
-        # Get locations
-        location_rows = await conn.fetch("""
-            SELECT location_name 
+            """,
+            self.user_id, self.conversation_id
+        )
+        player_stats = dict(player_row) if player_row else {}
+    
+        location_rows = await conn.fetch(
+            """
+            SELECT location_name
             FROM Locations
-            WHERE user_id = $1 AND conversation_id = $2
-            ORDER BY RANDOM()
-            LIMIT 3
-        """, self.user_id, self.conversation_id)
-        
+            WHERE user_id=$1 AND conversation_id=$2
+            ORDER BY RANDOM() LIMIT 5
+            """,
+            self.user_id, self.conversation_id
+        )
         locations = [row["location_name"] for row in location_rows]
-        if not locations:
-            locations = ["mysterious location", "hidden room", "secret area"]
-        
-        # Generate hooks
-        for i in range(min(count, len(templates))):
-            template = random.choice(templates)
-            templates.remove(template)  # Ensure variety
-            
-            hook = {
-                "type": template["type"],
-                "description": template["text"],
-                "details": {}
-            }
-            
-            # Fill in template
-            if "{npc}" in hook["description"]:
-                if npc_rows:
-                    npc = random.choice(npc_rows)
-                    hook["description"] = hook["description"].replace("{npc}", npc["npc_name"])
-                    hook["details"]["npc_id"] = npc["npc_id"]
-                    hook["details"]["npc_name"] = npc["npc_name"]
-                else:
-                    hook["description"] = hook["description"].replace("{npc}", "a mysterious character")
-            
-            if "{npc1}" in hook["description"] and "{npc2}" in hook["description"]:
-                if len(npc_rows) >= 2:
-                    npc1, npc2 = random.sample(npc_rows, 2)
-                    hook["description"] = hook["description"].replace("{npc1}", npc1["npc_name"])
-                    hook["description"] = hook["description"].replace("{npc2}", npc2["npc_name"])
-                    hook["details"]["npc1_id"] = npc1["npc_id"]
-                    hook["details"]["npc2_id"] = npc2["npc_id"]
-                else:
-                    hook["description"] = hook["description"].replace("{npc1}", "one character")
-                    hook["description"] = hook["description"].replace("{npc2}", "another character")
-            
-            if "{stat}" in hook["description"]:
-                stat = random.choice(player_stats)
-                hook["description"] = hook["description"].replace("{stat}", stat)
-                hook["details"]["stat"] = stat
-            
-            if "{kink}" in hook["description"]:
-                if kinks:
-                    kink = random.choice(kinks)
-                    hook["description"] = hook["description"].replace("{kink}", kink)
-                    hook["details"]["kink"] = kink
-                else:
-                    hook["description"] = hook["description"].replace("{kink}", "desire")
-            
-            if "{location}" in hook["description"]:
-                location = random.choice(locations)
-                hook["description"] = hook["description"].replace("{location}", location)
-                hook["details"]["location"] = location
-            
-            hooks.append(hook)
-        
-        return hooks
+    
+        # ---------- Build prompt ----------
+        prompt = json.dumps({
+            "request_count": count,
+            "environment": environment,
+            "player_stats": player_stats,
+            "player_kinks": kinks,
+            "locations": locations,
+            "npcs": [
+                {
+                    "npc_id": r["npc_id"],
+                    "npc_name": r["npc_name"],
+                    "dominance": r["dominance"],
+                    "cruelty": r["cruelty"],
+                    "introduced": r["introduced"],
+                }
+                for r in npc_rows
+            ],
+        }, ensure_ascii=False)
+    
+        # ---------- Call the agent ----------
+        try:
+            result = await Runner.run(plot_hook_generator, prompt)
+            hooks_raw = result.output.strip()
+    
+            # Make sure we’ve got valid JSON
+            hooks: List[Dict[str, Any]] = json.loads(hooks_raw)
+            # guard: truncate / pad to exactly `count`
+            hooks = hooks[:count]
+    
+            return hooks
+    
+        except Exception as e:
+            logger.error(f"Plot-hook generation failed: {e}", exc_info=True)
+            # graceful fallback – keep old deterministic behaviour if desired
+            return [{
+                "type": "error",
+                "description": "Failed to generate plot hooks.",
+                "details": {"reason": str(e)}
+            }]
 
 
 class PlayerMemoryManager(UnifiedMemoryManager):
