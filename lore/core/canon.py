@@ -2841,6 +2841,10 @@ async def create_opening_message(ctx, conn, sender: str, content: str) -> int:
     """
     Create the opening message canonically.
     """
+    # Ensure we have a proper context
+    ctx = ensure_canonical_context(ctx)
+    
+    # Now we can access conversation_id directly
     message_id = await create_message(ctx, conn, ctx.conversation_id, sender, content)
     
     await log_canonical_event(
