@@ -748,40 +748,45 @@ class NyxUnifiedGovernor(
 
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
-        logger.info("Initializing core systems")
+        # Prevent re-entry
+        if hasattr(self, '_systems_initializing') and self._systems_initializing:
+            logger.warning("Already initializing systems, skipping to prevent infinite loop")
+            return
         
-        # Import LoreSystem locally to avoid circular import
-        from lore.core.lore_system import LoreSystem
-        
-        # Get an instance of the LoreSystem
-        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
-        
-        # Set the governor on the lore system (dependency injection)
-        self.lore_system.set_governor(self)
-        
-        # DON'T call initialize on lore_system here - it's already initialized
-        # by get_instance() and we've just set the governor
-        # await self.lore_system.initialize(governor=self)  # REMOVE THIS LINE
-    
-        # Initialize other systems
-        from memory.memory_nyx_integration import get_memory_nyx_bridge
-        self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
-        
-        # Initialize memory integration
-        from memory.memory_integration import MemoryIntegration
-        self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
-        await self.memory_integration.initialize()
-        
-        from nyx.integrate import JointMemoryGraph
-        self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
-        
-        self.game_state = await self.initialize_game_state()
-        
-        # Call the mixin version, not our deleted placeholder
-        await super().discover_and_register_agents()
-        await self._load_initial_state()
-        
-        logger.info("Core systems initialized successfully")
+        self._systems_initializing = True
+        try:
+            logger.info("Initializing core systems")
+            
+            # Import LoreSystem locally to avoid circular import
+            from lore.core.lore_system import LoreSystem
+            
+            # Get an instance of the LoreSystem
+            self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+            
+            # Set the governor on the lore system (dependency injection)
+            self.lore_system.set_governor(self)
+            
+            # Initialize other systems
+            from memory.memory_nyx_integration import get_memory_nyx_bridge
+            self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
+            
+            # Initialize memory integration
+            from memory.memory_integration import MemoryIntegration
+            self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
+            await self.memory_integration.initialize()
+            
+            from nyx.integrate import JointMemoryGraph
+            self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
+            
+            self.game_state = await self.initialize_game_state()
+            
+            # Call the mixin version, not our deleted placeholder
+            await super().discover_and_register_agents()
+            await self._load_initial_state()
+            
+            logger.info("Core systems initialized successfully")
+        finally:
+            self._systems_initializing = False
 
     async def _load_initial_state(self):
         """Load goals and agent state from memory."""
