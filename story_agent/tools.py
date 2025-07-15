@@ -61,7 +61,7 @@ from context.unified_cache import context_cache
 from lore.core import canon
 
 # Config imports (was missing - adjust path as needed)
-from config import get_config
+from context.context_config import ContextConfig
 
 # Initialize logger
 logger = logging.getLogger(__name__)
