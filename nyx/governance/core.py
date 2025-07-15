@@ -754,7 +754,7 @@ class NyxUnifiedGovernor(
         from lore.core.lore_system import LoreSystem
         
         # Get an instance of the LoreSystem
-        self.lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
         
         # Set the governor on the lore system (dependency injection)
         self.lore_system.set_governor(self)
