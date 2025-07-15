@@ -34,7 +34,6 @@ from memory.reconsolidation import ReconsolidationManager
 from logic.chatgpt_integration import get_openai_client, get_chatgpt_response
 from logic.gpt_utils import spaced_gpt_call
 from logic.gpt_helpers import fetch_npc_name
-from logic.social_links import create_social_link
 from logic.calendar import load_calendar_names
 from memory.memory_nyx_integration import remember_through_nyx
 
