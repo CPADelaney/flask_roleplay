@@ -13,7 +13,7 @@ import time
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime
 
-from context.context_config import ContextConfig
+from context.context_config import get_config
 
 from agents import Agent, Runner, trace, handoff
 from agents.exceptions import AgentsException, ModelBehaviorError
@@ -1021,6 +1021,7 @@ async def get_agent_recommendations(user_id: int, conversation_id: int) -> Dict[
             logger.warning(f"Could not initialize narrative manager: {e}")
         
         # Get comprehensive context with vector search
+        config = get_config()
         comprehensive_context = await context_service.get_context(
             input_text="story state recommendations",
             use_vector_search=True,
