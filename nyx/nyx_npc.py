@@ -10,11 +10,29 @@ from pydantic import BaseModel, Field, validator
 import random
 from datetime import datetime
 from enum import Enum
+from agents import Agent, ModelSettings, Runner
 
 # Assuming db.connection provides this context manager
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
+
+nyx_action_content_generator = Agent(
+    name="Nyx Action-Content Generator",
+    instructions="""
+You will receive JSON with:
+  action_type      – one of "dominate","challenge","seduce","tease",
+                      "manipulate","influence","interact".
+  relationship     – brief dict (dominance, bond, familiarity, etc.)
+  scene_context    – dict (scene_type, location, mood hints, etc.)
+
+Return JSON **only** with:
+  content          – a single sentence (≤ 160 chars) describing what Nyx does,
+                     in her trademark sophisticated-dark style (PG-13).
+""",
+    model="gpt-4.1-nano",
+    model_settings=ModelSettings(temperature=0.8)
+)
 
 # --- Enums and Constants ---
 
@@ -2025,7 +2043,7 @@ class InteractionGenerator:
         relationship = self.profile_manager.get_or_create_relationship(target_id) if target_id else None
 
         action_type = self._determine_action_type(scene_context, relationship) # Original helper
-        action_content = self._generate_action_content(action_type, relationship, scene_context) # Original helper
+        action_content = await self._generate_action_content(action_type, relationship, scene_context) # Original helper
         action_style = self._get_action_style() # Original helper (doesn't use relationship in original signature)
 
         psychological_impact = self._calculate_psychological_impact(action_type, scene_context) # Original helper
@@ -2053,28 +2071,30 @@ class InteractionGenerator:
             return ActionType.MANIPULATE if rel.manipulation_success > 0.6 else ActionType.INFLUENCE
         return ActionType.INTERACT
 
-    def _generate_action_content(self, action_type: ActionType, relationship: Optional[RelationshipModel], scene_context: Dict[str, Any]) -> str:
-        """Generate content for the NPC action (Original Logic - Uses internal helpers)"""
-        # Original mapped type to internal generator methods
-        content_generators = {
-            ActionType.DOMINATE: self._generate_domination_content, ActionType.CHALLENGE: self._generate_challenge_content,
-            ActionType.SEDUCE: self._generate_seduction_content, ActionType.TEASE: self._generate_tease_content,
-            ActionType.MANIPULATE: self._generate_manipulation_content, ActionType.INFLUENCE: self._generate_influence_content,
-            ActionType.INTERACT: self._generate_interaction_content
-        }
-        generator = content_generators.get(action_type, self._generate_interaction_content)
-        # Pass relationship and context to the specific generator
-        rel_dict = relationship.dict() if relationship else {} # Convert model to dict if needed by original helpers
-        return generator(rel_dict, scene_context) # Call the specific generator
+    async def _generate_action_content(
+        self,
+        action_type: ActionType,
+        relationship: Optional[RelationshipModel],
+        scene_context: Dict[str, Any]
+    ) -> str:
+        """Generate action prose via LLM instead of hard-coded strings."""
+        try:
+            payload = json.dumps({
+                "action_type": action_type.value,
+                "relationship": (relationship.dict() if relationship else {}),
+                "scene_context": scene_context
+            }, ensure_ascii=False)
 
-    # --- Original Content Generation Helpers ---
-    def _generate_domination_content(self, relationship: Dict[str, Any], scene_context: Dict[str, Any]) -> str: return "A stern, commanding presence fills the room as Nyx asserts her authority."
-    def _generate_challenge_content(self, relationship: Dict[str, Any], scene_context: Dict[str, Any]) -> str: return "Nyx raises an eyebrow, subtly questioning and challenging the situation."
-    def _generate_seduction_content(self, relationship: Dict[str, Any], scene_context: Dict[str, Any]) -> str: return "With graceful movements and a knowing smile, Nyx creates an atmosphere of allure."
-    def _generate_tease_content(self, relationship: Dict[str, Any], scene_context: Dict[str, Any]) -> str: return "Nyx's playful smirk and teasing gestures create an air of intrigue."
-    def _generate_manipulation_content(self, relationship: Dict[str, Any], scene_context: Dict[str, Any]) -> str: return "With subtle psychological insight, Nyx weaves a web of influence."
-    def _generate_influence_content(self, relationship: Dict[str, Any], scene_context: Dict[str, Any]) -> str: return "Nyx's presence subtly shapes the emotional atmosphere of the scene."
-    def _generate_interaction_content(self, relationship: Dict[str, Any], scene_context: Dict[str, Any]) -> str: return "Nyx engages in a measured, purposeful interaction."
+            result = await Runner.run(
+                starting_agent=nyx_action_content_generator,
+                input=payload
+            )
+            return json.loads(result.output.strip())["content"]
+
+        except Exception as e:
+            logger.warning(f"LLM content generation failed: {e}")
+            # Minimal fallback so the game never crashes
+            return f"Nyx performs a {action_type.value.lower()} gesture."
 
 
     def _get_action_style(self) -> Dict[str, Any]:
