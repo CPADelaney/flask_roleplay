@@ -358,59 +358,60 @@ def run_npc_learning_cycle_task():
     """
     Celery task to run the NPC learning cycle periodically for active conversations.
     """
-    logger.info("Starting NPC learning cycle task via Celery Beat.")
+    with trace(workflow_name="npc_learning_cycle_celery"):
+        logger.info("Starting NPC learning cycle task via Celery Beat.")
+        
+        async def run_learning_cycle():
+            processed_conversations = 0
+            try:
+                # Use the async context manager for DB connection
+                async with get_db_connection_context() as conn:
+                    # Find recent conversations
+                    convs = await conn.fetch("""
+                        SELECT id, user_id
+                        FROM conversations
+                        WHERE last_active > NOW() - INTERVAL '1 day'
+                    """)
     
-    async def run_learning_cycle():
-        processed_conversations = 0
-        try:
-            # Use the async context manager for DB connection
-            async with get_db_connection_context() as conn:
-                # Find recent conversations
-                convs = await conn.fetch("""
-                    SELECT id, user_id
-                    FROM conversations
-                    WHERE last_active > NOW() - INTERVAL '1 day'
-                """)
-
-                if not convs:
-                    logger.info("No recent conversations found for NPC learning.")
-                    return {"status": "success", "processed_conversations": 0}
-
-                for conv_row in convs:
-                    conv_id = conv_row['id']
-                    user_id = conv_row['user_id']
-                    try:
-                        # Fetch NPCs for this conversation
-                        npc_rows = await conn.fetch("""
-                            SELECT npc_id FROM NPCStats
-                            WHERE user_id=$1 AND conversation_id=$2
-                        """, user_id, conv_id)
-
-                        npc_ids = [row['npc_id'] for row in npc_rows]
-
-                        if npc_ids:
-                            # Run the learning logic
-                            manager = NPCLearningManager(user_id, conv_id)
-                            await manager.initialize()
-                            await manager.run_regular_adaptation_cycle(npc_ids)
-                            logger.info(f"Learning cycle completed for conversation {conv_id}: {len(npc_ids)} NPCs")
-                            processed_conversations += 1
-                        else:
-                            logger.info(f"No NPCs found for learning cycle in conversation {conv_id}.")
-
-                    except Exception as e_inner:
-                        logger.error(f"Error in NPC learning cycle for conv {conv_id}: {e_inner}", exc_info=True)
-                        # Continue to the next conversation
-
-        except Exception as e_outer:
-            logger.error(f"Critical error in NPC learning scheduler task: {e_outer}", exc_info=True)
-            return {"status": "error", "message": str(e_outer)}
-
-        logger.info(f"NPC learning cycle task finished. Processed {processed_conversations} conversations.")
-        return {"status": "success", "processed_conversations": processed_conversations}
+                    if not convs:
+                        logger.info("No recent conversations found for NPC learning.")
+                        return {"status": "success", "processed_conversations": 0}
     
-    # Run the async function in the sync task
-    return asyncio.run(run_learning_cycle())
+                    for conv_row in convs:
+                        conv_id = conv_row['id']
+                        user_id = conv_row['user_id']
+                        try:
+                            # Fetch NPCs for this conversation
+                            npc_rows = await conn.fetch("""
+                                SELECT npc_id FROM NPCStats
+                                WHERE user_id=$1 AND conversation_id=$2
+                            """, user_id, conv_id)
+    
+                            npc_ids = [row['npc_id'] for row in npc_rows]
+    
+                            if npc_ids:
+                                # Run the learning logic
+                                manager = NPCLearningManager(user_id, conv_id)
+                                await manager.initialize()
+                                await manager.run_regular_adaptation_cycle(npc_ids)
+                                logger.info(f"Learning cycle completed for conversation {conv_id}: {len(npc_ids)} NPCs")
+                                processed_conversations += 1
+                            else:
+                                logger.info(f"No NPCs found for learning cycle in conversation {conv_id}.")
+    
+                        except Exception as e_inner:
+                            logger.error(f"Error in NPC learning cycle for conv {conv_id}: {e_inner}", exc_info=True)
+                            # Continue to the next conversation
+    
+            except Exception as e_outer:
+                logger.error(f"Critical error in NPC learning scheduler task: {e_outer}", exc_info=True)
+                return {"status": "error", "message": str(e_outer)}
+    
+            logger.info(f"NPC learning cycle task finished. Processed {processed_conversations} conversations.")
+            return {"status": "success", "processed_conversations": processed_conversations}
+        
+        # Run the async function in the sync task
+        return asyncio.run(run_learning_cycle())
 
 
 @celery_app.task(expires=3600)
@@ -595,6 +596,7 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
 @celery_app.task
 def nyx_memory_maintenance_task():
     """Celery task for Nyx memory maintenance using asyncpg."""
+    with trace(workflow_name="nyx_memory_maintenance_celery"):
     logger.info("Starting Nyx memory maintenance task (via governance)")
 
     async def process_all_conversations():
