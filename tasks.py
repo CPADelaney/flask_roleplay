@@ -9,6 +9,9 @@ import datetime
 from celery_config import celery_app
 from functools import wraps
 import time # Import time for potential delays
+from agents import trace, custom_span
+from agents.tracing import get_current_trace
+import traceback
 
 # Import your helper functions and task logic
 from npcs.new_npc_creation import NPCCreationHandler
