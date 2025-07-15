@@ -773,7 +773,8 @@ class NyxUnifiedGovernor(
             
             # Initialize memory integration
             from memory.memory_integration import MemoryIntegration
-            self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
+            # Since MemoryIntegration extends MemoryNyxBridge, we need to pass the governor
+            self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id, governor=self)
             logger.info("About to initialize MemoryIntegration")
             await self.memory_integration.initialize()
             logger.info("MemoryIntegration initialized")
