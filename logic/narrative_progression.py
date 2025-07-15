@@ -13,244 +13,171 @@ from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response
 from lore.core import canon
 from lore.core.lore_system import LoreSystem
+from logic.npc_narrative_progression import (
+    get_npc_narrative_stage, 
+    progress_npc_narrative_stage,
+    check_for_npc_revelation,
+    NPC_NARRATIVE_STAGES
+)
 
 logger = logging.getLogger(__name__)
 
+# DEPRECATED: Global narrative stages are no longer used
+# Keeping for backwards compatibility only
 class NarrativeStage(NamedTuple):
-    """Represents a stage in the narrative progression."""
+    """DEPRECATED: Use NPC-specific stages instead."""
     name: str
     description: str
     required_corruption: int
     required_dependency: int
 
-# Define the narrative stages
+# DEPRECATED: Redirect to NPC-specific stages
 NARRATIVE_STAGES = [
-    NarrativeStage(
-        name="Innocent Beginning", 
-        description="The initial stage where the player is unaware of underlying manipulation. NPCs maintain a facade of normality while subtly establishing control patterns.",
-        required_corruption=0,
-        required_dependency=0
-    ),
-    NarrativeStage(
-        name="First Doubts", 
-        description="The player begins to notice inconsistencies in NPC behavior and experiences moments of unease. Controlling behavior becomes slightly more overt.",
-        required_corruption=20,
-        required_dependency=15
-    ),
-    NarrativeStage(
-        name="Creeping Realization", 
-        description="The player has clear moments of awareness about their manipulation, though they may rationalize or dismiss them. NPCs are less concerned with hiding their control.",
-        required_corruption=40,
-        required_dependency=35
-    ),
-    NarrativeStage(
-        name="Veil Thinning", 
-        description="The facade is largely abandoned, with NPCs openly manipulating and controlling the player. The player struggles with their diminishing autonomy.",
-        required_corruption=60,
-        required_dependency=55
-    ),
-    NarrativeStage(
-        name="Full Revelation", 
-        description="The player fully acknowledges their position and the true nature of their relationships. NPCs no longer pretend, and the power dynamic is explicitly enacted.",
-        required_corruption=80,
-        required_dependency=75
-    )
+    NarrativeStage(name=stage.name, description=stage.description, 
+                  required_corruption=stage.required_corruption, 
+                  required_dependency=stage.required_dependency)
+    for stage in NPC_NARRATIVE_STAGES
 ]
 
 async def get_current_narrative_stage(user_id: int, conversation_id: int) -> NarrativeStage:
     """
-    Determine the current narrative stage based on player stats asynchronously.
-
-    Args:
-        user_id: ID of the user
-        conversation_id: ID of the conversation
-
-    Returns:
-        The current narrative stage (defaults to the first stage on error or if no stats found).
+    DEPRECATED: Returns an aggregate narrative stage based on all NPC relationships.
+    For new code, use get_npc_narrative_stage() instead.
+    
+    This now returns the most advanced stage among all NPCs, or a weighted average.
     """
-    query = """
-        SELECT corruption, dependency
-        FROM PlayerStats
-        WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
-        ORDER BY timestamp DESC
-        LIMIT 1
-    """
-    corruption: float = 0.0
-    dependency: float = 0.0
-
+    logger.warning("get_current_narrative_stage is deprecated. Use get_npc_narrative_stage instead.")
+    
     try:
         async with get_db_connection_context() as conn:
-            row: Optional[asyncpg.Record] = await conn.fetchrow(query, user_id, conversation_id)
-
-        if row:
-            corruption = row['corruption'] or 0.0
-            dependency = row['dependency'] or 0.0
-        else:
-            logger.warning(f"No PlayerStats found for user {user_id}, convo {conversation_id}. Assuming stage 0.")
-
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error determining narrative stage for user {user_id}, convo {conversation_id}: {db_err}", exc_info=True)
+            # Get all NPC narrative stages
+            rows = await conn.fetch("""
+                SELECT np.npc_id, np.narrative_stage, np.corruption, np.dependency, 
+                       sl.link_level
+                FROM NPCNarrativeProgression np
+                LEFT JOIN SocialLinks sl ON (
+                    sl.entity1_type = 'npc' AND sl.entity1_id = np.npc_id 
+                    AND sl.entity2_type = 'player' AND sl.user_id = np.user_id 
+                    AND sl.conversation_id = np.conversation_id
+                )
+                WHERE np.user_id = $1 AND np.conversation_id = $2
+            """, user_id, conversation_id)
+            
+            if not rows:
+                return NARRATIVE_STAGES[0]
+            
+            # Calculate weighted average based on relationship strength
+            total_weight = 0
+            weighted_corruption = 0
+            weighted_dependency = 0
+            most_advanced_stage = NARRATIVE_STAGES[0]
+            
+            for row in rows:
+                weight = (row['link_level'] or 50) / 100.0
+                total_weight += weight
+                weighted_corruption += row['corruption'] * weight
+                weighted_dependency += row['dependency'] * weight
+                
+                # Track most advanced stage
+                stage_name = row['narrative_stage']
+                for i, stage in enumerate(NARRATIVE_STAGES):
+                    if stage.name == stage_name and i > NARRATIVE_STAGES.index(most_advanced_stage):
+                        most_advanced_stage = stage
+            
+            # Return the most advanced stage any NPC has reached
+            return most_advanced_stage
+            
     except Exception as e:
-        logger.error(f"Unexpected error determining narrative stage for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
-
-    # Determine the highest stage the player qualifies for
-    current_stage = NARRATIVE_STAGES[0]
-    for stage in NARRATIVE_STAGES:
-        if float(corruption) >= stage.required_corruption and float(dependency) >= stage.required_dependency:
-            current_stage = stage
-        else:
-            break
-
-    return current_stage
+        logger.error(f"Error getting aggregate narrative stage: {e}")
+        return NARRATIVE_STAGES[0]
 
 async def check_for_personal_revelations(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
-    Check if conditions are right for a personal revelation asynchronously.
-
-    Args:
-        user_id: ID of the user
-        conversation_id: ID of the conversation
-
-    Returns:
-        Personal revelation data if one should occur, None otherwise
+    Check if conditions are right for a personal revelation.
+    Now considers revelations across all NPC relationships.
     """
-    query_recent_revelations = """
-        SELECT COUNT(*) FROM PlayerJournal
-        WHERE user_id = $1 AND conversation_id = $2 AND entry_type = 'personal_revelation'
-        AND timestamp > NOW() - INTERVAL '5 days'
-    """
-    query_player_stats = """
-        SELECT corruption, confidence, willpower, obedience, dependency, lust
-        FROM PlayerStats
-        WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
-        ORDER BY timestamp DESC LIMIT 1
-    """
-    query_stat_changes = """
-        SELECT stat_name, new_value - old_value as change
-        FROM StatsHistory
-        WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
-        AND timestamp > NOW() - INTERVAL '7 days'
-        ORDER BY timestamp DESC
-        LIMIT 10
-    """
-    query_npc = """
-        SELECT npc_id, npc_name
-        FROM NPCStats
-        WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
-        ORDER BY dominance DESC
-        LIMIT 1
-    """
-
     try:
         async with get_db_connection_context() as conn:
-            # Check for recent revelations
-            recent_count: int = await conn.fetchval(query_recent_revelations, user_id, conversation_id) or 0
-
+            # Check recent revelations
+            recent_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM PlayerJournal
+                WHERE user_id = $1 AND conversation_id = $2 
+                AND entry_type = 'personal_revelation'
+                AND timestamp > NOW() - INTERVAL '5 days'
+            """, user_id, conversation_id) or 0
+            
             if recent_count > 2:
-                logger.debug(f"Skipping personal revelation for user {user_id}, convo {conversation_id}: too many recent ({recent_count}).")
                 return None
-
-            # Get player stats
-            player_stats_row: Optional[asyncpg.Record] = await conn.fetchrow(query_player_stats, user_id, conversation_id)
-            if not player_stats_row:
-                logger.warning(f"Skipping personal revelation: PlayerStats not found for user {user_id}, convo {conversation_id}.")
+            
+            # Get all NPC relationships with their stages
+            npcs = await conn.fetch("""
+                SELECT np.npc_id, np.narrative_stage, np.corruption, np.dependency, 
+                       np.realization_level, ns.npc_name, ns.dominance
+                FROM NPCNarrativeProgression np
+                JOIN NPCStats ns ON np.npc_id = ns.npc_id
+                WHERE np.user_id = $1 AND np.conversation_id = $2
+                AND np.narrative_stage != 'Innocent Beginning'
+                ORDER BY np.corruption + np.dependency DESC
+                LIMIT 3
+            """, user_id, conversation_id)
+            
+            if not npcs:
                 return None
-
-            corruption = player_stats_row['corruption'] or 0.0
-            confidence = player_stats_row['confidence'] or 50.0
-            willpower = player_stats_row['willpower'] or 50.0
-            obedience = player_stats_row['obedience'] or 0.0
-            dependency = player_stats_row['dependency'] or 0.0
-            lust = player_stats_row['lust'] or 0.0
-
-            # Determine which stat has changed the most recently
-            stat_change_rows: List[asyncpg.Record] = await conn.fetch(query_stat_changes, user_id, conversation_id)
-            stat_changes = {}
-            for row in stat_change_rows:
-                stat_name = row['stat_name']
-                change = row['change'] or 0.0
-                stat_changes[stat_name] = stat_changes.get(stat_name, 0) + float(change)
-
-            # Determine revelation type
-            revelation_type = ""
-            if not stat_changes or all(v == 0 for v in stat_changes.values()):
-                stat_values = {
-                    "dependency": dependency, "obedience": obedience, "corruption": corruption,
-                    "willpower": -willpower, "confidence": -confidence
-                }
-                deviations = {
-                    "dependency": dependency, "obedience": obedience, "corruption": corruption,
-                    "willpower": abs(willpower - 50), "confidence": abs(confidence - 50)
-                }
-                max_dev_stat = max(deviations, key=deviations.get) if deviations else None
-
-                if max_dev_stat:
-                     revelation_type = max_dev_stat
-                else:
-                     revelation_type = random.choice(["dependency", "obedience", "corruption", "willpower", "confidence"])
-            else:
-                max_change_stat = max(stat_changes.items(), key=lambda x: abs(x[1]))
-                stat_name = max_change_stat[0]
-                valid_types = ["dependency", "obedience", "corruption", "willpower", "confidence"]
-                if stat_name in valid_types:
-                    revelation_type = stat_name
-                else:
-                    revelation_type = random.choice(valid_types)
-
-            # Get an NPC to associate with the revelation
-            npc_row: Optional[asyncpg.Record] = await conn.fetchrow(query_npc, user_id, conversation_id)
-            if not npc_row:
-                logger.warning(f"Skipping personal revelation: No suitable NPC found for user {user_id}, convo {conversation_id}.")
-                return None
-
-            npc_id = npc_row['npc_id']
-            npc_name = npc_row['npc_name']
-        
-            # Define revelation templates
+            
+            # Choose the most influential NPC for the revelation
+            primary_npc = npcs[0]
+            npc_id = primary_npc['npc_id']
+            npc_name = primary_npc['npc_name']
+            stage = primary_npc['narrative_stage']
+            
+            # Get recent stat changes across all relationships
+            stat_changes = await conn.fetch("""
+                SELECT 
+                    SUM(CASE WHEN corruption > LAG(corruption) OVER (PARTITION BY npc_id ORDER BY stage_updated_at) 
+                        THEN corruption - LAG(corruption) OVER (PARTITION BY npc_id ORDER BY stage_updated_at) 
+                        ELSE 0 END) as corruption_increase,
+                    SUM(CASE WHEN dependency > LAG(dependency) OVER (PARTITION BY npc_id ORDER BY stage_updated_at) 
+                        THEN dependency - LAG(dependency) OVER (PARTITION BY npc_id ORDER BY stage_updated_at) 
+                        ELSE 0 END) as dependency_increase
+                FROM NPCNarrativeProgression
+                WHERE user_id = $1 AND conversation_id = $2
+                AND stage_updated_at > NOW() - INTERVAL '7 days'
+            """, user_id, conversation_id)
+            
+            # Determine revelation type based on aggregate changes
+            revelation_type = "dependency"  # default
+            if stat_changes and stat_changes[0]:
+                if stat_changes[0]['corruption_increase'] > stat_changes[0]['dependency_increase']:
+                    revelation_type = "corruption"
+            
+            # Generate revelation considering multiple NPCs if applicable
+            other_npcs = [npc['npc_name'] for npc in npcs[1:]]
+            
             templates = {
                 "dependency": [
                     f"I've been checking my phone constantly to see if {npc_name} has messaged me. When did I start needing her approval so much?",
                     f"I realized today that I haven't made a significant decision without consulting {npc_name} in weeks. Is that normal?",
-                    f"The thought of spending a day without talking to {npc_name} makes me anxious. I should be concerned about that, shouldn't I?"
-                ],
-                "obedience": [
-                    f"I caught myself automatically rearranging my schedule when {npc_name} hinted she wanted to see me. I didn't even think twice about it.",
-                    f"Today I changed my opinion the moment I realized it differed from {npc_name}'s. That's... not like me. Or is it becoming like me?",
-                    f"{npc_name} gave me that look, and I immediately stopped what I was saying. When did her disapproval start carrying so much weight?"
-                ],
+                ] + ([f"Between {npc_name} and {', '.join(other_npcs)}, I barely have a moment to myself anymore. When did I become so dependent on them?"] if other_npcs else []),
+                
                 "corruption": [
                     f"I found myself enjoying the feeling of following {npc_name}'s instructions perfectly. The pride I felt at her approval was... intense.",
                     f"Last year, I would have been offended if someone treated me the way {npc_name} did today. Now I'm grateful for her attention.",
-                    f"Sometimes I catch glimpses of my old self, like a stranger I used to know. When did I change so fundamentally?"
-                ],
-                "willpower": [
-                    f"I had every intention of saying no to {npc_name} today. The 'yes' came out before I even realized I was speaking.",
-                    f"I've been trying to remember what it felt like to disagree with {npc_name}. The memory feels distant, like it belongs to someone else.",
-                    f"I made a list of boundaries I wouldn't cross. Looking at it now, I've broken every single one at {npc_name}'s suggestion."
-                ],
-                "confidence": [
-                    f"I opened my mouth to speak in the meeting, then saw {npc_name} watching me. I suddenly couldn't remember what I was going to say.",
-                    f"I used to trust my judgment. Now I find myself second-guessing every thought that {npc_name} hasn't explicitly approved.",
-                    f"When did I start feeling this small? This uncertain? I can barely remember how it felt to be sure of myself."
-                ]
+                ] + ([f"Each of them - {npc_name}, {', '.join(other_npcs)} - has changed me in their own way. I'm not who I was."] if other_npcs else []),
+                
+                "realization": [
+                    f"I see it clearly now - {npc_name} has been guiding me, shaping me, this whole time.",
+                    f"The pattern is obvious once you see it. {npc_name}'s control, how I've changed... it's all connected.",
+                ] + ([f"They're all doing it - {npc_name}, {', '.join(other_npcs)}. Working together or separately, I can't tell, but the result is the same."] if other_npcs else [])
             }
             
-            # Choose a random template for the selected type
-            available_templates = templates.get(revelation_type)
-            if not available_templates:
-                 logger.error(f"Missing templates for revelation type '{revelation_type}'")
-                 available_templates = templates["dependency"]
-
-            inner_monologue = random.choice(available_templates)
-            inner_monologue = inner_monologue.replace("{npc_name}", npc_name)
-
-        # REFACTORED: Use canon to create the journal entry
-        ctx = type('Context', (), {'user_id': user_id, 'conversation_id': conversation_id})()
-        
-        async with get_db_connection_context() as conn:
-            # The canon module doesn't have a specific journal entry creation function,
-            # so we'll still need to do a direct insert here as PlayerJournal is not a "core" table
-            journal_id: Optional[int] = await conn.fetchval(
+            revelation_templates = templates.get(revelation_type, templates["dependency"])
+            inner_monologue = random.choice(revelation_templates)
+            
+            # Create context object for canon
+            ctx = type('Context', (), {'user_id': user_id, 'conversation_id': conversation_id})()
+            
+            # Create journal entry
+            journal_id = await conn.fetchval(
                 """
                 INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, revelation_types, timestamp)
                 VALUES ($1, $2, 'personal_revelation', $3, $4, CURRENT_TIMESTAMP)
@@ -258,206 +185,184 @@ async def check_for_personal_revelations(user_id: int, conversation_id: int) -> 
                 """,
                 user_id, conversation_id, inner_monologue, revelation_type
             )
-
-            if journal_id is None:
-                 logger.error(f"Failed to insert personal revelation for user {user_id}, convo {conversation_id}.")
-                 return None
-
-        logger.info(f"Generated personal revelation (type: {revelation_type}) for user {user_id}, convo {conversation_id}. Journal ID: {journal_id}")
-
-        return {
-            "type": "personal_revelation",
-            "npc_id": npc_id,
-            "npc_name": npc_name,
-            "name": f"{revelation_type.capitalize()} Revelation",
-            "inner_monologue": inner_monologue,
-            "journal_id": journal_id
-        }
-
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error checking for personal revelations for user {user_id}, convo {conversation_id}: {db_err}", exc_info=True)
-        return None
+            
+            return {
+                "type": "personal_revelation",
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "other_npcs": other_npcs,
+                "name": f"{revelation_type.capitalize()} Revelation",
+                "inner_monologue": inner_monologue,
+                "journal_id": journal_id
+            }
+            
     except Exception as e:
-        logger.error(f"Unexpected error checking for personal revelations for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
+        logger.error(f"Error checking for personal revelations: {e}")
         return None
 
 async def check_for_narrative_moments(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
-    Check if conditions are right for a narrative moment asynchronously.
-
-    Args:
-        user_id: ID of the user
-        conversation_id: ID of the conversation
-
-    Returns:
-        Narrative moment data if one should occur, None otherwise
+    Check if conditions are right for a narrative moment.
+    Now considers the mix of different NPC relationship stages.
     """
-    # Get the current narrative stage first
-    current_stage = await get_current_narrative_stage(user_id, conversation_id)
-    stage_name = current_stage.name if current_stage else NARRATIVE_STAGES[0].name
-
-    query_recent_moments = """
-        SELECT COUNT(*) FROM PlayerJournal
-        WHERE user_id = $1 AND conversation_id = $2 AND entry_type = 'narrative_moment'
-        AND timestamp > NOW() - INTERVAL '7 days'
-    """
-    query_npcs = """
-        SELECT npc_id, npc_name
-        FROM NPCStats
-        WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
-        ORDER BY dominance DESC
-        LIMIT 3
-    """
-
     try:
         async with get_db_connection_context() as conn:
-            # Check for recent narrative moments
-            recent_count: int = await conn.fetchval(query_recent_moments, user_id, conversation_id) or 0
-
+            # Check recent moments
+            recent_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM PlayerJournal
+                WHERE user_id = $1 AND conversation_id = $2 
+                AND entry_type = 'narrative_moment'
+                AND timestamp > NOW() - INTERVAL '7 days'
+            """, user_id, conversation_id) or 0
+            
             if recent_count > 2:
-                logger.debug(f"Skipping narrative moment for user {user_id}, convo {conversation_id}: too many recent ({recent_count}).")
                 return None
-
-            # Get NPCs for the narrative moment
-            npc_rows: List[asyncpg.Record] = await conn.fetch(query_npcs, user_id, conversation_id)
-
-            if not npc_rows:
-                logger.warning(f"Skipping narrative moment: No suitable NPCs found for user {user_id}, convo {conversation_id}.")
-                return None
-
-            npcs_data = [(row['npc_id'], row['npc_name']) for row in npc_rows]
-        
-            # Choose an appropriate narrative moment based on stage
-            stage_name = current_stage.name
             
-            # Define narrative moment templates by stage
-            templates = {
-                "Innocent Beginning": [
-                    {
-                        "name": "Subtle Power Play",
-                        "scene_text": f"You notice {npcs_data[0][1] if npcs_data else 'her'} subtly directing the conversation, a hint of authority in her voice that you hadn't detected before. When you start to speak, she touches your arm lightly, and you find yourself deferring to her opinion without thinking.",
-                        "player_realization": "There's something about her presence that makes me naturally step back, almost without noticing."
-                    },
-                    {
-                        "name": "Casual Testing",
-                        "scene_text": f"{npcs_data[0][1] if npcs_data else 'She'} asks you to handle a small errand for her, as if it's nothing important. Yet the request comes with such confidence that refusing doesn't seem to be an option. You complete the task, and her approval feels strangely rewarding.",
-                        "player_realization": "I'm already looking for ways to please her, even when she doesn't explicitly ask."
-                    }
-                ],
-                "First Doubts": [
-                    {
-                        "name": "Conflicting Instructions",
-                        "scene_text": f"{npcs_data[0][1] if npcs_data else 'She'} and {npcs_data[1][1] if len(npcs_data) > 1 else 'another woman'} give you contradicting instructions, watching your reaction carefully. You feel a moment of confusion, then anxiety about disappointing either of them. The choice seems significant in ways you can't quite articulate.",
-                        "player_realization": "Why am I so concerned about their approval? When did their opinions start to matter this much?"
-                    },
-                    {
-                        "name": "Escalating Demands",
-                        "scene_text": f"What started as simple favors for {npcs_data[0][1] if npcs_data else 'her'} have gradually become more demanding. Today's request crosses a boundary you once considered firm. You hesitate, but find yourself agreeing anyway, disturbed by how quickly your resistance crumbled.",
-                        "player_realization": "My boundaries seem to be shifting without my conscious choice. It's happening so gradually I barely notice."
-                    }
-                ],
-                "Creeping Realization": [
-                    {
-                        "name": "Private Conversation Overheard",
-                        "scene_text": f"You overhear {npcs_data[0][1] if npcs_data else 'her'} and {npcs_data[1][1] if len(npcs_data) > 1 else 'another'} discussing you. \"They're coming along nicely,\" {npcs_data[0][1] if npcs_data else 'she'} says. \"Much more pliable than at the beginning.\" When they notice your presence, they smoothly transition to another topic, but the moment lingers in your mind.",
-                        "player_realization": "That sounded like they've been... what, conditioning me? Training me? That can't be right..."
-                    },
-                    {
-                        "name": "Mask Slippage",
-                        "scene_text": f"{npcs_data[0][1] if npcs_data else 'Her'}'s usual warm demeanor briefly vanishes when you show reluctance to follow a suggestion. The cold, calculating look in her eyes is gone in an instant, replaced by her familiar smile, but you can't unsee that moment of revelation.",
-                        "player_realization": "There's something beneath the surface I've been missing - or deliberately not seeing."
-                    }
-                ],
-                "Veil Thinning": [
-                    {
-                        "name": "Open Acknowledgment",
-                        "scene_text": f"\"You know what's happening, don't you?\" {npcs_data[0][1] if npcs_data else 'she'} asks quietly, studying your face. \"You've known for a while.\" There's no pretense now, just a direct acknowledgment of the power dynamic that's been building all along. Your heart races as the unspoken finally becomes spoken.",
-                        "player_realization": "There's a strange relief in finally admitting what I've felt for so long."
-                    },
-                    {
-                        "name": "Group Dynamic Revealed",
-                        "scene_text": f"You enter the room to find {npcs_data[0][1] if npcs_data else 'her'}, {npcs_data[1][1] if len(npcs_data) > 1 else 'another'}, and {npcs_data[2][1] if len(npcs_data) > 2 else 'others'} waiting for you. The atmosphere is different - they're no longer maintaining the fiction of equality. Their expectations are clear in their posture, their gaze. This is what it's always been leading toward.",
-                        "player_realization": "They've been coordinating all along, each playing their part in this transformation."
-                    }
-                ],
-                "Full Revelation": [
-                    {
-                        "name": "Complete Transparency",
-                        "scene_text": f"{npcs_data[0][1] if npcs_data else 'She'} explains exactly how they've been shaping your behavior over time, point by point, with a clinical precision that's both disturbing and fascinating. \"And the most beautiful part,\" she concludes, \"is that even knowing this, you'll continue on the same path.\"",
-                        "player_realization": "She's right. Knowledge doesn't equal freedom. I understand everything and it changes nothing."
-                    },
-                    {
-                        "name": "Ceremonial Acknowledgment",
-                        "scene_text": f"The gathering has an almost ritual quality. Each person present, including {npcs_data[0][1] if npcs_data else 'her'} and {npcs_data[1][1] if len(npcs_data) > 1 else 'another'}, speaks about your journey from independence to your current state. There's pride in their voices - not for breaking you, but for revealing who you truly are. The distinction feels meaningful, even if you're not sure it's real.",
-                        "player_realization": "Is this who I was always meant to be, or who they've made me? Does the difference even matter anymore?"
-                    }
-                ]
-            }
+            # Get NPCs at different stages
+            npcs_by_stage = await conn.fetch("""
+                SELECT np.narrative_stage, 
+                       array_agg(ns.npc_name) as npc_names,
+                       array_agg(np.npc_id) as npc_ids
+                FROM NPCNarrativeProgression np
+                JOIN NPCStats ns ON np.npc_id = ns.npc_id
+                WHERE np.user_id = $1 AND np.conversation_id = $2
+                GROUP BY np.narrative_stage
+            """, user_id, conversation_id)
             
-            # Choose a template for the current stage
-            stage_templates = templates.get(stage_name, templates["Innocent Beginning"])
-            if not stage_templates:
-                logger.error(f"Missing templates for narrative stage '{stage_name}'")
+            if not npcs_by_stage:
                 return None
-
-            chosen_template = random.choice(stage_templates)
-            scene_text = chosen_template["scene_text"]
-
-        # Create journal entry using direct insert (PlayerJournal is not a core table)
-        async with get_db_connection_context() as conn:
-            journal_id: Optional[int] = await conn.fetchval(
+            
+            # Create a stage distribution
+            stage_distribution = {}
+            for row in npcs_by_stage:
+                stage_distribution[row['narrative_stage']] = {
+                    'names': row['npc_names'],
+                    'ids': row['npc_ids']
+                }
+            
+            # Generate moments based on stage diversity
+            if len(stage_distribution) > 1:
+                # Mixed stages create interesting dynamics
+                advanced_npcs = []
+                early_npcs = []
+                
+                for stage_name in ["Full Revelation", "Veil Thinning", "Creeping Realization"]:
+                    if stage_name in stage_distribution:
+                        advanced_npcs.extend(stage_distribution[stage_name]['names'])
+                
+                for stage_name in ["Innocent Beginning", "First Doubts"]:
+                    if stage_name in stage_distribution:
+                        early_npcs.extend(stage_distribution[stage_name]['names'])
+                
+                if advanced_npcs and early_npcs:
+                    # Create a moment highlighting the contrast
+                    advanced_name = random.choice(advanced_npcs)
+                    early_name = random.choice(early_npcs)
+                    
+                    scene_text = f"You notice {advanced_name} and {early_name} exchanging glances. {advanced_name}'s knowing smile contrasts sharply with {early_name}'s seemingly innocent demeanor. Are they working together, or is {early_name} truly unaware of what's happening?"
+                    moment_name = "Contrasting Masks"
+                    player_realization = "Not everyone is at the same stage of revealing their true nature."
+                else:
+                    # Default to a general moment
+                    return await _generate_general_narrative_moment(conn, user_id, conversation_id)
+            else:
+                # All NPCs at similar stage
+                return await _generate_general_narrative_moment(conn, user_id, conversation_id)
+            
+            # Create journal entry
+            journal_id = await conn.fetchval(
                 """
                 INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, narrative_moment, timestamp)
                 VALUES ($1, $2, 'narrative_moment', $3, $4, CURRENT_TIMESTAMP)
                 RETURNING id
                 """,
-                user_id, conversation_id, scene_text, chosen_template["name"]
-            )
-
-            if journal_id is None:
-                logger.error(f"Failed to insert narrative moment for user {user_id}, convo {conversation_id}.")
-                return None
-
-        logger.info(f"Generated narrative moment '{chosen_template['name']}' (stage: {stage_name}) for user {user_id}, convo {conversation_id}. Journal ID: {journal_id}")
-
-        return {
-            "type": "narrative_moment",
-            "name": chosen_template["name"],
-            "scene_text": scene_text,
-            "player_realization": chosen_template["player_realization"],
-            "stage": stage_name,
-            "journal_id": journal_id
-        }
-
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error checking for narrative moments for user {user_id}, convo {conversation_id}: {db_err}", exc_info=True)
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error checking for narrative moments for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
-        return None
-
-async def initialize_player_stats(user_id: int, conversation_id: int):
-    """Ensure player stats exist for the given user/conversation."""
-    try:
-        async with get_db_connection_context() as conn:
-            # First check if the conversation exists
-            conversation_exists = await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1 AND user_id = $2)",
-                conversation_id, user_id
+                user_id, conversation_id, scene_text, moment_name
             )
             
-            if not conversation_exists:
-                logger.warning(f"Cannot initialize player stats: Conversation {conversation_id} doesn't exist for user {user_id}")
-                return False
-                
-            # Check if stats already exist
-            row = await conn.fetchrow(
-                "SELECT * FROM PlayerStats WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'",
+            return {
+                "type": "narrative_moment",
+                "name": moment_name,
+                "scene_text": scene_text,
+                "player_realization": player_realization,
+                "stage_distribution": stage_distribution,
+                "journal_id": journal_id
+            }
+            
+    except Exception as e:
+        logger.error(f"Error checking for narrative moments: {e}")
+        return None
+
+async def _generate_general_narrative_moment(conn, user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
+    """Generate a general narrative moment not tied to specific stage contrasts."""
+    # Get a few NPCs for the moment
+    npcs = await conn.fetch("""
+        SELECT ns.npc_id, ns.npc_name, np.narrative_stage
+        FROM NPCStats ns
+        JOIN NPCNarrativeProgression np ON ns.npc_id = np.npc_id
+        WHERE ns.user_id = $1 AND ns.conversation_id = $2
+        AND np.narrative_stage != 'Innocent Beginning'
+        ORDER BY RANDOM()
+        LIMIT 2
+    """, user_id, conversation_id)
+    
+    if not npcs:
+        return None
+    
+    npc1 = npcs[0]
+    templates = [
+        {
+            "name": "Orchestrated Encounter",
+            "scene_text": f"The 'chance' meeting with {npc1['npc_name']} feels anything but random. The timing, the location, even her words seem carefully planned.",
+            "player_realization": "Nothing happens by accident anymore."
+        },
+        {
+            "name": "Subtle Coordination",
+            "scene_text": f"You catch {npc1['npc_name']} glancing at her phone and smiling. Moments later, your own phone buzzes with a message that seems connected to your earlier conversation.",
+            "player_realization": "They're coordinating, even when they seem to be acting independently."
+        }
+    ]
+    
+    if len(npcs) > 1:
+        npc2 = npcs[1]
+        templates.append({
+            "name": "Shared Knowledge",
+            "scene_text": f"{npc2['npc_name']} mentions something you only told {npc1['npc_name']}. The look they share when you react tells you everything.",
+            "player_realization": "They share information about me. I have no secrets from any of them."
+        })
+    
+    chosen = random.choice(templates)
+    
+    journal_id = await conn.fetchval(
+        """
+        INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, narrative_moment, timestamp)
+        VALUES ($1, $2, 'narrative_moment', $3, $4, CURRENT_TIMESTAMP)
+        RETURNING id
+        """,
+        user_id, conversation_id, chosen["scene_text"], chosen["name"]
+    )
+    
+    return {
+        "type": "narrative_moment",
+        "name": chosen["name"],
+        "scene_text": chosen["scene_text"],
+        "player_realization": chosen["player_realization"],
+        "journal_id": journal_id
+    }
+
+async def initialize_player_stats(user_id: int, conversation_id: int):
+    """
+    Initialize player stats if they don't exist.
+    This remains global as it's about the player, not NPC relationships.
+    """
+    try:
+        async with get_db_connection_context() as conn:
+            # Check if stats exist
+            exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM PlayerStats WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase')",
                 user_id, conversation_id
             )
             
-            if not row:
-                # REFACTORED: Direct insert is okay here as PlayerStats is not a core table
+            if not exists:
                 await conn.execute(
                     """
                     INSERT INTO PlayerStats 
@@ -468,202 +373,53 @@ async def initialize_player_stats(user_id: int, conversation_id: int):
                     user_id, conversation_id
                 )
                 logger.info(f"Initialized default PlayerStats for user {user_id}, convo {conversation_id}")
-                return True
-            return False
+                
     except Exception as e:
         logger.error(f"Error initializing player stats: {e}")
-        return False
-
-async def check_for_npc_revelations(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
-    """
-    Check if an NPC should have a revelation about the player asynchronously.
-
-    Args:
-        user_id: ID of the user
-        conversation_id: ID of the conversation
-
-    Returns:
-        NPC revelation data if one should occur, None otherwise
-    """
-    # Get the current narrative stage first
-    current_stage = await get_current_narrative_stage(user_id, conversation_id)
-    stage_name = current_stage.name if current_stage else NARRATIVE_STAGES[0].name
-
-    # Only show NPC revelations in later stages
-    if stage_name in ["Innocent Beginning", "First Doubts"]:
-        return None
-
-    query_recent_npc_revelations = """
-        SELECT COUNT(*) FROM NPCRevelations
-        WHERE user_id = $1 AND conversation_id = $2
-        AND timestamp > NOW() - INTERVAL '5 days'
-    """
-    query_npc = """
-        SELECT npc_id, npc_name
-        FROM NPCStats
-        WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
-        ORDER BY dominance DESC
-        LIMIT 1
-    """
-
-    try:
-        async with get_db_connection_context() as conn:
-            # Check for recent NPC revelations
-            recent_count: int = await conn.fetchval(query_recent_npc_revelations, user_id, conversation_id) or 0
-
-            if recent_count > 2:
-                logger.debug(f"Skipping NPC revelation for user {user_id}, convo {conversation_id}: too many recent ({recent_count}).")
-                return None
-
-            # Get an NPC with high dominance
-            npc_row: Optional[asyncpg.Record] = await conn.fetchrow(query_npc, user_id, conversation_id)
-            if not npc_row:
-                logger.warning(f"Skipping NPC revelation: No suitable NPC found for user {user_id}, convo {conversation_id}.")
-                return None
-
-            npc_id = npc_row['npc_id']
-            npc_name = npc_row['npc_name']
-        
-            # Define revelation templates by stage
-            templates = {
-                "Creeping Realization": [
-                    f"{npc_name} observes your growing dependency with quiet satisfaction, noting how you've started to anticipate her preferences.",
-                    f"{npc_name} discusses your progress with colleagues, pleased by how predictably you respond to subtle conditioning."
-                ],
-                "Veil Thinning": [
-                    f"{npc_name} no longer bothers to hide her manipulative tactics, knowing you're aware but unable to resist.",
-                    f"{npc_name} openly acknowledges the power dynamic between you, testing how you respond to explicit control."
-                ],
-                "Full Revelation": [
-                    f"{npc_name} explains exactly how she's shaped your behavior over time, knowing that understanding won't lead to change.",
-                    f"{npc_name} treats your transformation as complete, focusing now on deepening rather than establishing control."
-                ]
-            }
-            
-            # Choose a template for the current stage
-            stage_templates = templates.get(stage_name)
-            if not stage_templates:
-                logger.warning(f"No NPC revelation templates defined for stage '{stage_name}'. Skipping.")
-                return None
-
-            revelation_text = random.choice(stage_templates)
-            revelation_text = revelation_text.replace("{npc_name}", npc_name)
-
-            # Insert the NPC revelation (NPCRevelations is not a core table)
-            revelation_id: Optional[int] = await conn.fetchval(
-                """
-                INSERT INTO NPCRevelations
-                (user_id, conversation_id, npc_id, narrative_stage, revelation_text, timestamp)
-                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-                RETURNING id
-                """,
-                user_id, conversation_id, npc_id, stage_name, revelation_text
-            )
-
-            if revelation_id is None:
-                logger.error(f"Failed to insert NPC revelation for user {user_id}, convo {conversation_id}.")
-                return None
-
-        logger.info(f"Generated NPC revelation (NPC: {npc_id}, stage: {stage_name}) for user {user_id}, convo {conversation_id}. Revelation ID: {revelation_id}")
-
-        return {
-            "type": "npc_revelation",
-            "npc_id": npc_id,
-            "npc_name": npc_name,
-            "stage": stage_name,
-            "revelation_text": revelation_text,
-            "revelation_id": revelation_id
-        }
-
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error checking for NPC revelations for user {user_id}, convo {conversation_id}: {db_err}", exc_info=True)
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error checking for NPC revelations for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
-        return None
 
 async def add_dream_sequence(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
-    Generate and add a dream sequence to the player's journal asynchronously.
-
-    Args:
-        user_id: ID of the user
-        conversation_id: ID of the conversation
-
-    Returns:
-        Dream sequence data if successful, None otherwise
+    Generate and add a dream sequence to the player's journal.
+    Dreams now reflect the mix of relationships at different stages.
     """
-    query_npcs = """
-        SELECT npc_id, npc_name
-        FROM NPCStats
-        WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
-        ORDER BY dominance DESC
-        LIMIT 3
-    """
-
     try:
         async with get_db_connection_context() as conn:
-            # Get NPCs for the dream
-            npc_rows: List[asyncpg.Record] = await conn.fetch(query_npcs, user_id, conversation_id)
-            if not npc_rows:
-                logger.warning(f"Skipping dream sequence: No suitable NPCs found for user {user_id}, convo {conversation_id}.")
-                return None
-
-            npcs_data = [(row['npc_id'], row['npc_name']) for row in npc_rows]
-
-        # Get the current narrative stage
-        current_stage = await get_current_narrative_stage(user_id, conversation_id)
-        stage_name = current_stage.name if current_stage else NARRATIVE_STAGES[0].name
-        
-        # Dream templates
-        templates = [
-            "You're sitting in a chair as {npc1} circles you slowly. \"Show me your hands,\" she says. "
-            "You extend them, surprised to find intricate strings wrapped around each finger, extending upward. "
-            "\"Do you see who's holding them?\" she asks. You look up, but the ceiling is mirrored, "
-            "showing only your own face looking back down at you, smiling with an expression that isn't yours.",
-                
-            "You're searching your home frantically, calling {npc1}'s name. The rooms shift and expand, "
-            "doorways leading to impossible spaces. Your phone rings. It's {npc1}. \"Where are you?\" you ask desperately. "
-            "\"I'm right here,\" she says, her voice coming both from the phone and from behind you. "
-            "\"I've always been right here. You're the one who's lost.\"",
-                
-            "You're trying to walk away from {npc1}, but your feet sink deeper into the floor with each step. "
-            "\"I don't understand why you're struggling,\" she says, not moving yet somehow keeping pace beside you. "
-            "\"You stopped walking on your own long ago.\" You look down to find your legs have merged with the floor entirely, "
-            "indistinguishable from the material beneath.",
-                
-            "You're giving a presentation to a room full of people, but every time you speak, your voice comes out as {npc1}'s voice, "
-            "saying words you didn't intend. The audience nods approvingly. \"Much better,\" whispers {npc2} from beside you. "
-            "\"Your ideas were never as good as hers anyway.\"",
-                
-            "You're walking through an unfamiliar house, opening doors that should lead outside but only reveal more rooms. "
-            "In each room, {npc1} is engaged in a different activity, wearing a different expression. In the final room, "
-            "all versions of her turn to look at you simultaneously. \"Which one is real?\" they ask in unison. \"The one you needed, or the one who needed you?\"",
-                
-            "You're swimming in deep water. Below you, {npc1} and {npc2} walk along the bottom, "
-            "looking up at you and conversing, their voices perfectly clear despite the water. "
-            "\"They still think they're above it all,\" says {npc1}, and they both laugh. You realize you can't remember how to reach the surface."
-        ]
+            # Get NPCs at various stages
+            npcs = await conn.fetch("""
+                SELECT ns.npc_id, ns.npc_name, np.narrative_stage,
+                       np.corruption, np.dependency
+                FROM NPCStats ns
+                JOIN NPCNarrativeProgression np ON ns.npc_id = np.npc_id
+                WHERE ns.user_id = $1 AND ns.conversation_id = $2
+                ORDER BY np.corruption + np.dependency DESC
+                LIMIT 3
+            """, user_id, conversation_id)
             
-        # Choose a template
-        dream_template = random.choice(templates)
-
-        # Format with NPC names
-        npc_names = [name for id, name in npcs_data]
-        npc1 = npc_names[0] if len(npc_names) > 0 else "a dominant figure"
-        npc2 = npc_names[1] if len(npc_names) > 1 else "another woman"
-        npc3 = npc_names[2] if len(npc_names) > 2 else "someone else"
-
-        dream_text = dream_template
-        try:
-            dream_text = dream_template.format(npc1=npc1, npc2=npc2, npc3=npc3)
-        except KeyError as fmt_err:
-             logger.warning(f"Key error formatting dream template: {fmt_err}. Using partially formatted text.")
-             pass
-
-        async with get_db_connection_context() as conn:
-            # Insert the dream into the journal (PlayerJournal is not a core table)
-            journal_id: Optional[int] = await conn.fetchval(
+            if not npcs:
+                return None
+            
+            # Categorize NPCs by stage
+            advanced_npcs = [npc for npc in npcs if npc['narrative_stage'] in ['Veil Thinning', 'Full Revelation']]
+            developing_npcs = [npc for npc in npcs if npc['narrative_stage'] in ['First Doubts', 'Creeping Realization']]
+            innocent_npcs = [npc for npc in npcs if npc['narrative_stage'] == 'Innocent Beginning']
+            
+            # Generate dream based on stage mix
+            if advanced_npcs and innocent_npcs:
+                # Contrast dream
+                adv = advanced_npcs[0]
+                inn = innocent_npcs[0]
+                dream_text = f"In your dream, {adv['npc_name']} stands behind {inn['npc_name']}, hands on her shoulders. {inn['npc_name']} smiles at you warmly, but {adv['npc_name']}'s hands seem to be guiding her every movement like a puppeteer. You try to warn {inn['npc_name']}, but no sound comes out. {adv['npc_name']} just smiles and whispers, 'She'll understand soon enough, just like you did.'"
+            elif advanced_npcs:
+                # Full control dream
+                names = [npc['npc_name'] for npc in advanced_npcs]
+                dream_text = f"You're in a room with no doors. {' and '.join(names)} {'are' if len(names) > 1 else 'is'} there, watching you search for an exit that doesn't exist. 'Why are you still looking?' {names[0]} asks. 'You know there's nowhere else you'd rather be.' The worst part is, she's right."
+            else:
+                # Early stage dream - subtle unease
+                npc = npcs[0]
+                dream_text = f"You dream of following {npc['npc_name']} through an endless hallway. Each door you pass clicks locked behind you. You want to ask where you're going, but somehow you already know - wherever she leads."
+            
+            # Create journal entry
+            journal_id = await conn.fetchval(
                 """
                 INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp)
                 VALUES ($1, $2, 'dream_sequence', $3, CURRENT_TIMESTAMP)
@@ -671,80 +427,50 @@ async def add_dream_sequence(user_id: int, conversation_id: int) -> Optional[Dic
                 """,
                 user_id, conversation_id, dream_text
             )
-
-            if journal_id is None:
-                logger.error(f"Failed to insert dream sequence for user {user_id}, convo {conversation_id}.")
-                return None
-
-        logger.info(f"Generated dream sequence (stage: {stage_name}) for user {user_id}, convo {conversation_id}. Journal ID: {journal_id}")
-
-        return {
-            "type": "dream_sequence",
-            "text": dream_text,
-            "stage": stage_name,
-            "npc_names": npc_names,
-            "journal_id": journal_id
-        }
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error creating dream sequence for user {user_id}, convo {conversation_id}: {db_err}", exc_info=True)
-        return None
+            
+            return {
+                "type": "dream_sequence",
+                "text": dream_text,
+                "primary_npcs": [npc['npc_name'] for npc in npcs],
+                "journal_id": journal_id
+            }
+            
     except Exception as e:
-        logger.error(f"Unexpected error creating dream sequence for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
+        logger.error(f"Error creating dream sequence: {e}")
         return None
 
 async def add_moment_of_clarity(user_id: int, conversation_id: int, realization_text: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    Add a moment of clarity to the player's journal asynchronously.
-
-    Args:
-        user_id: ID of the user
-        conversation_id: ID of the conversation
-        realization_text: Optional specific realization text, generated if None
-
-    Returns:
-        Moment of clarity data if successful, None otherwise
+    Add a moment of clarity to the player's journal.
+    Now considers the player's overall situation across all relationships.
     """
-    # Get the current narrative stage first
-    current_stage = await get_current_narrative_stage(user_id, conversation_id)
-    stage_name = current_stage.name if current_stage else NARRATIVE_STAGES[0].name
-    
-    # Generate realization text if not provided
-    if not realization_text:
-        # Define realization templates by stage
-        templates = {
-            "Innocent Beginning": [
-                "There's something odd about how everyone seems to defer to her without question.",
-                "I keep agreeing to things I normally wouldn't. Why am I so eager to please?"
-            ],
-            "First Doubts": [
-                "These relationships feel unbalanced somehow. I'm always the one accommodating, never them.",
-                "When did I start changing my opinions to match hers? Was it gradual or sudden?"
-            ],
-            "Creeping Realization": [
-                "This isn't normal. The way they communicate with each other about me, the constant testing of boundaries.",
-                "I'm being conditioned like one of Pavlov's dogs, and I've been participating willingly."
-            ],
-            "Veil Thinning": [
-                "They don't even try to hide it anymore. The control is explicit, and I keep accepting it.",
-                "I can see the whole pattern now - how each 'choice' was carefully constructed to lead me here."
-            ],
-            "Full Revelation": [
-                "I understand everything now. The question is: do I even want to change it?",
-                "The most disturbing part isn't what they've done - it's how completely I've embraced it."
-            ]
-        }
-        
-        # Choose a template for the current stage
-        stage_templates = templates.get(stage_name, templates["Innocent Beginning"])
-        if not stage_templates:
-            logger.error(f"Missing moment of clarity templates for stage '{stage_name}'")
-            return None
-        realization_text = random.choice(stage_templates)
-
     try:
+        # Get aggregate information about all relationships
         async with get_db_connection_context() as conn:
-            # Insert the moment of clarity into the journal (PlayerJournal is not a core table)
-            journal_id: Optional[int] = await conn.fetchval(
+            # Count NPCs at each stage
+            stage_counts = await conn.fetch("""
+                SELECT narrative_stage, COUNT(*) as count
+                FROM NPCNarrativeProgression
+                WHERE user_id = $1 AND conversation_id = $2
+                GROUP BY narrative_stage
+            """, user_id, conversation_id)
+            
+            stage_dict = {row['narrative_stage']: row['count'] for row in stage_counts}
+            total_npcs = sum(stage_dict.values())
+            
+            if not realization_text:
+                # Generate realization based on overall situation
+                if stage_dict.get('Full Revelation', 0) > 0:
+                    realization_text = "Some of them don't even pretend anymore. The others... are they genuinely different, or just better at hiding it?"
+                elif stage_dict.get('Veil Thinning', 0) >= total_npcs / 2:
+                    realization_text = "I'm surrounded by people who want to control me. How did I let it get this far?"
+                elif stage_dict.get('Creeping Realization', 0) > 0:
+                    realization_text = "The patterns are becoming clear. It's not just one of them - they all have their ways of influencing me."
+                else:
+                    realization_text = "Something feels off about my relationships. I can't quite put my finger on it, but the dynamic isn't what I thought."
+            
+            # Create journal entry
+            journal_id = await conn.fetchval(
                 """
                 INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp)
                 VALUES ($1, $2, 'moment_of_clarity', $3, CURRENT_TIMESTAMP)
@@ -752,141 +478,43 @@ async def add_moment_of_clarity(user_id: int, conversation_id: int, realization_
                 """,
                 user_id, conversation_id, realization_text
             )
-
-            if journal_id is None:
-                logger.error(f"Failed to insert moment of clarity for user {user_id}, convo {conversation_id}.")
-                return None
-
-        logger.info(f"Generated moment of clarity (stage: {stage_name}) for user {user_id}, convo {conversation_id}. Journal ID: {journal_id}")
-
-        return {
-            "type": "moment_of_clarity",
-            "text": realization_text,
-            "stage": stage_name,
-            "journal_id": journal_id
-        }
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error creating moment of clarity for user {user_id}, convo {conversation_id}: {db_err}", exc_info=True)
-        return None
+            
+            return {
+                "type": "moment_of_clarity",
+                "text": realization_text,
+                "stage_distribution": stage_dict,
+                "journal_id": journal_id
+            }
+            
     except Exception as e:
-        logger.error(f"Unexpected error creating moment of clarity for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
+        logger.error(f"Error creating moment of clarity: {e}")
         return None
 
+# DEPRECATED - for backwards compatibility only
 async def progress_narrative_stage(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
-    Check if the player should progress to the next narrative stage asynchronously.
-
-    Args:
-        user_id: ID of the user
-        conversation_id: ID of the conversation
-
-    Returns:
-        Dictionary with stage progression info if the stage changed, None otherwise
+    DEPRECATED: Use progress_npc_narrative_stage for individual NPCs.
+    This function now does nothing and returns None.
     """
-    # Get the current narrative stage first
-    current_stage = await get_current_narrative_stage(user_id, conversation_id)
-    if not current_stage:
-        logger.error(f"Could not determine current stage for user {user_id}, convo {conversation_id}. Aborting progression check.")
-        return None
-
-    # Find current stage index
-    try:
-        current_index = NARRATIVE_STAGES.index(current_stage)
-    except ValueError:
-        logger.error(f"Current stage '{current_stage.name}' not found in NARRATIVE_STAGES list. Aborting progression check.")
-        return None
-
-    if current_index >= len(NARRATIVE_STAGES) - 1:
-        # Already at the last stage
-        return None
-
-    next_stage = NARRATIVE_STAGES[current_index + 1]
-
-    query_player_stats = """
-        SELECT corruption, dependency
-        FROM PlayerStats
-        WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
-        ORDER BY timestamp DESC LIMIT 1
-    """
-
-    try:
-        async with get_db_connection_context() as conn:
-            # Get player stats
-            player_stats_row: Optional[asyncpg.Record] = await conn.fetchrow(query_player_stats, user_id, conversation_id)
-
-            if not player_stats_row:
-                logger.warning(f"Cannot check stage progression: PlayerStats not found for user {user_id}, convo {conversation_id}.")
-                return None
-
-            corruption = player_stats_row['corruption'] or 0.0
-            dependency = player_stats_row['dependency'] or 0.0
-
-            # Check if player qualifies for next stage
-            if float(corruption) >= next_stage.required_corruption and float(dependency) >= next_stage.required_dependency:
-                # Player qualifies!
-                transition_text = f"You've progressed to a new stage in your journey: {next_stage.name}. {next_stage.description}"
-                transition_moment_name = f"Transition to {next_stage.name}"
-
-                # Insert the stage transition event into the journal (PlayerJournal is not a core table)
-                journal_id: Optional[int] = await conn.fetchval(
-                    """
-                    INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, narrative_moment, timestamp)
-                    VALUES ($1, $2, 'stage_transition', $3, $4, CURRENT_TIMESTAMP)
-                    RETURNING id
-                    """,
-                    user_id, conversation_id, transition_text, transition_moment_name
-                )
-
-                if journal_id is None:
-                    logger.error(f"Failed to insert stage transition journal entry for user {user_id}, convo {conversation_id}.")
-                else:
-                     logger.info(f"Narrative stage progressed for user {user_id}, convo {conversation_id}: {current_stage.name} -> {next_stage.name}. Journal ID: {journal_id}")
-
-                return {
-                    "type": "stage_progression",
-                    "previous_stage": current_stage.name,
-                    "new_stage": next_stage.name,
-                    "description": next_stage.description,
-                    "transition_text": transition_text,
-                    "journal_id": journal_id
-                }
-            else:
-                # Does not qualify for next stage
-                return None
-
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error checking for narrative stage progression for user {user_id}, convo {conversation_id}: {db_err}", exc_info=True)
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error checking for narrative stage progression for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
-        return None
+    logger.warning("progress_narrative_stage is deprecated. Use progress_npc_narrative_stage for individual NPCs.")
+    return None
 
 async def analyze_narrative_tone(narrative_text: str) -> Dict[str, Any]:
     """
     Analyze the tone of a narrative text.
-    
-    Args:
-        narrative_text: The text to analyze
-        
-    Returns:
-        Dictionary with tone analysis
+    This remains useful for analyzing any narrative content.
     """
-    # Use AI to analyze the narrative tone
     prompt = f"""
     Analyze the tone and thematic elements of this narrative text from a femdom roleplaying game:
 
     {narrative_text}
 
-    Please provide a detailed analysis covering:
-    1. The tone (authoritative, submissive, questioning, etc.)
-    2. Thematic elements related to control, manipulation, or power dynamics
-    3. What stage of awareness the text suggests (unawareness, questioning, realization, acceptance)
-    4. Any manipulative techniques being employed by characters
-
+    Consider which NPC relationships this might relate to and what stages they might be in.
+    
     Return your analysis in JSON format with these fields:
     - dominant_tone: The primary tone of the text
     - power_dynamics: Analysis of power relationships
-    - awareness_stage: Which narrative stage this suggests
+    - implied_stages: Dict of potential NPC stages based on the text
     - manipulation_techniques: Any manipulation methods identified
     - intensity_level: Rating from 1-5 of how intense the power dynamic is
     """
@@ -900,7 +528,6 @@ async def analyze_narrative_tone(narrative_text: str) -> Dict[str, Any]:
             # Extract JSON from text response
             response_text = response.get("response", "{}")
             import re
-            import json
             
             json_match = re.search(r'{.*}', response_text, re.DOTALL)
             if json_match:
@@ -913,7 +540,7 @@ async def analyze_narrative_tone(narrative_text: str) -> Dict[str, Any]:
         return {
             "dominant_tone": "unknown",
             "power_dynamics": "unclear",
-            "awareness_stage": "unclear",
+            "implied_stages": {},
             "manipulation_techniques": [],
             "intensity_level": 1
         }
@@ -922,8 +549,105 @@ async def analyze_narrative_tone(narrative_text: str) -> Dict[str, Any]:
         return {
             "dominant_tone": "error",
             "power_dynamics": "error",
-            "awareness_stage": "error",
+            "implied_stages": {},
             "manipulation_techniques": [],
             "intensity_level": 0,
             "error": str(e)
+        }
+
+# Add a new function to get an overview of all NPC relationships
+async def get_relationship_overview(user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """
+    Get an overview of all NPC relationship stages and progression.
+    Useful for understanding the player's overall situation.
+    """
+    try:
+        async with get_db_connection_context() as conn:
+            # Get all NPC progressions
+            progressions = await conn.fetch("""
+                SELECT 
+                    np.npc_id,
+                    ns.npc_name,
+                    np.narrative_stage,
+                    np.corruption,
+                    np.dependency,
+                    np.realization_level,
+                    np.stage_entered_at,
+                    sl.link_level,
+                    sl.link_type
+                FROM NPCNarrativeProgression np
+                JOIN NPCStats ns ON np.npc_id = ns.npc_id
+                LEFT JOIN SocialLinks sl ON (
+                    sl.entity1_type = 'npc' AND sl.entity1_id = np.npc_id 
+                    AND sl.entity2_type = 'player' AND sl.user_id = np.user_id 
+                    AND sl.conversation_id = np.conversation_id
+                )
+                WHERE np.user_id = $1 AND np.conversation_id = $2
+                ORDER BY np.corruption + np.dependency DESC
+            """, user_id, conversation_id)
+            
+            # Categorize by stage
+            by_stage = {}
+            for stage in NPC_NARRATIVE_STAGES:
+                by_stage[stage.name] = []
+            
+            # Overall statistics
+            total_corruption = 0
+            total_dependency = 0
+            total_realization = 0
+            
+            relationships = []
+            for prog in progressions:
+                npc_data = {
+                    'npc_id': prog['npc_id'],
+                    'npc_name': prog['npc_name'],
+                    'stage': prog['narrative_stage'],
+                    'corruption': prog['corruption'],
+                    'dependency': prog['dependency'],
+                    'realization': prog['realization_level'],
+                    'link_level': prog['link_level'] or 50,
+                    'link_type': prog['link_type'] or 'neutral',
+                    'days_in_stage': (datetime.now() - prog['stage_entered_at']).days if prog['stage_entered_at'] else 0
+                }
+                
+                relationships.append(npc_data)
+                by_stage[prog['narrative_stage']].append(npc_data)
+                
+                # Weight by relationship strength
+                weight = (prog['link_level'] or 50) / 100.0
+                total_corruption += prog['corruption'] * weight
+                total_dependency += prog['dependency'] * weight
+                total_realization += prog['realization_level'] * weight
+            
+            # Calculate averages
+            num_relationships = len(relationships)
+            if num_relationships > 0:
+                avg_corruption = total_corruption / num_relationships
+                avg_dependency = total_dependency / num_relationships
+                avg_realization = total_realization / num_relationships
+            else:
+                avg_corruption = avg_dependency = avg_realization = 0
+            
+            return {
+                'total_relationships': num_relationships,
+                'by_stage': by_stage,
+                'relationships': relationships,
+                'aggregate_stats': {
+                    'average_corruption': avg_corruption,
+                    'average_dependency': avg_dependency,
+                    'average_realization': avg_realization
+                },
+                'most_advanced_npcs': relationships[:3],  # Top 3
+                'stage_distribution': {
+                    stage: len(npcs) for stage, npcs in by_stage.items()
+                }
+            }
+            
+    except Exception as e:
+        logger.error(f"Error getting relationship overview: {e}")
+        return {
+            'error': str(e),
+            'total_relationships': 0,
+            'by_stage': {},
+            'relationships': []
         }
