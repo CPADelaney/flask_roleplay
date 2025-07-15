@@ -109,112 +109,113 @@ async def background_chat_task_with_memory(conversation_id, user_input, user_id,
     """
     Enhanced background chat task that includes memory retrieval.
     """
-    logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
-    try:
-        # Get aggregator context
-        from logic.aggregator import get_aggregated_roleplay_context
-        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
-
-        context = {
-            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
-            "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
-            "player_name": aggregator_data.get("playerName", "Chase"),
-            "npc_present": aggregator_data.get("npcsPresent", []),
-            "aggregator_data": aggregator_data
-        }
-
-        # Apply universal update if provided
-        if universal_update:
-            logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
-            try:
-                from logic.universal_updater import apply_universal_updates_async
-                async with get_db_connection_context() as conn:
-                    await apply_universal_updates_async(
-                        user_id,
-                        conversation_id,
-                        universal_update,
-                        conn
-                    )
-                logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
-                # Refresh aggregator data post-update
-                aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
-                context["aggregator_data"] = aggregator_data
-            except Exception as update_err:
-                logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                return {"error": "Failed to apply world updates"}
-
-        # Enrich context with relevant memories
+    with trace(workflow_name="background_chat_task_celery"):
+        logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
         try:
-            from memory.memory_integration import enrich_context_with_memories
-            
-            logger.info(f"[BG Task {conversation_id}] Enriching context with memories...")
-            context = await enrich_context_with_memories(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                user_input=user_input,
-                context=context
-            )
-            logger.info(f"[BG Task {conversation_id}] Context enriched with memories.")
-        except Exception as memory_err:
-            logger.error(f"[BG Task {conversation_id}] Error enriching context with memories: {memory_err}", exc_info=True)
-            # Continue without memories if error occurs
-
-        # Process the user_input with OpenAI-enhanced Nyx agent
-        from nyx.nyx_agent_sdk import process_user_input_with_openai
-        logger.info(f"[BG Task {conversation_id}] Processing input with Nyx agent...")
-        response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
-        logger.info(f"[BG Task {conversation_id}] Nyx agent processing complete.")
-
-        if not response or not response.get("success", False):
-            error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
-            logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
-            return {"error": error_msg}
-
-        # Extract the message content
-        message_content = response.get("message", "")
-        if not message_content and "function_args" in response:
-            message_content = response["function_args"].get("narrative", "")
-        
-        # Store the Nyx response in DB
-        try:
-            async with get_db_connection_context() as conn:
-                await conn.execute(
-                    """INSERT INTO messages (conversation_id, sender, content, created_at)
-                       VALUES ($1, $2, $3, NOW())""",
-                    conversation_id, "Nyx", message_content
-                )
-            logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
-            
-            # Add AI response as a memory
+            # Get aggregator context
+            from logic.aggregator import get_aggregated_roleplay_context
+            aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+    
+            context = {
+                "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+                "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
+                "player_name": aggregator_data.get("playerName", "Chase"),
+                "npc_present": aggregator_data.get("npcsPresent", []),
+                "aggregator_data": aggregator_data
+            }
+    
+            # Apply universal update if provided
+            if universal_update:
+                logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
+                try:
+                    from logic.universal_updater import apply_universal_updates_async
+                    async with get_db_connection_context() as conn:
+                        await apply_universal_updates_async(
+                            user_id,
+                            conversation_id,
+                            universal_update,
+                            conn
+                        )
+                    logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
+                    # Refresh aggregator data post-update
+                    aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
+                    context["aggregator_data"] = aggregator_data
+                except Exception as update_err:
+                    logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
+                    return {"error": "Failed to apply world updates"}
+    
+            # Enrich context with relevant memories
             try:
-                from memory.memory_integration import add_memory_from_message
+                from memory.memory_integration import enrich_context_with_memories
                 
-                memory_id = await add_memory_from_message(
+                logger.info(f"[BG Task {conversation_id}] Enriching context with memories...")
+                context = await enrich_context_with_memories(
                     user_id=user_id,
                     conversation_id=conversation_id,
-                    message_text=message_content,
-                    entity_type="memory",
-                    metadata={
-                        "source": "ai_response",
-                        "importance": 0.7  # Higher importance for AI responses
-                    }
+                    user_input=user_input,
+                    context=context
                 )
-                logger.info(f"[BG Task {conversation_id}] Added AI response as memory {memory_id}")
+                logger.info(f"[BG Task {conversation_id}] Context enriched with memories.")
             except Exception as memory_err:
-                logger.error(f"[BG Task {conversation_id}] Error adding memory: {memory_err}", exc_info=True)
+                logger.error(f"[BG Task {conversation_id}] Error enriching context with memories: {memory_err}", exc_info=True)
+                # Continue without memories if error occurs
+    
+            # Process the user_input with OpenAI-enhanced Nyx agent
+            from nyx.nyx_agent_sdk import process_user_input_with_openai
+            logger.info(f"[BG Task {conversation_id}] Processing input with Nyx agent...")
+            response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
+            logger.info(f"[BG Task {conversation_id}] Nyx agent processing complete.")
+    
+            if not response or not response.get("success", False):
+                error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
+                logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
+                return {"error": error_msg}
+    
+            # Extract the message content
+            message_content = response.get("message", "")
+            if not message_content and "function_args" in response:
+                message_content = response["function_args"].get("narrative", "")
+            
+            # Store the Nyx response in DB
+            try:
+                async with get_db_connection_context() as conn:
+                    await conn.execute(
+                        """INSERT INTO messages (conversation_id, sender, content, created_at)
+                           VALUES ($1, $2, $3, NOW())""",
+                        conversation_id, "Nyx", message_content
+                    )
+                logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
                 
-        except Exception as db_err:
-            logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
-
-        return {
-            "success": True,
-            "message": message_content,
-            "conversation_id": conversation_id
-        }
-
-    except Exception as e:
-        logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
-        return {"error": f"Server error processing message: {str(e)}"}
+                # Add AI response as a memory
+                try:
+                    from memory.memory_integration import add_memory_from_message
+                    
+                    memory_id = await add_memory_from_message(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        message_text=message_content,
+                        entity_type="memory",
+                        metadata={
+                            "source": "ai_response",
+                            "importance": 0.7  # Higher importance for AI responses
+                        }
+                    )
+                    logger.info(f"[BG Task {conversation_id}] Added AI response as memory {memory_id}")
+                except Exception as memory_err:
+                    logger.error(f"[BG Task {conversation_id}] Error adding memory: {memory_err}", exc_info=True)
+                    
+            except Exception as db_err:
+                logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
+    
+            return {
+                "success": True,
+                "message": message_content,
+                "conversation_id": conversation_id
+            }
+    
+        except Exception as e:
+            logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
+            return {"error": f"Server error processing message: {str(e)}"}
 
 # Memory System Celery Tasks
 @celery_app.task
@@ -425,53 +426,54 @@ async def process_new_game_task(user_id, conversation_data):
     Returns:
         Dict with game creation results (JSON-serializable)
     """
-    logger.info("CELERY – process_new_game_task called")
-    agent = NewGameAgent()
-    conversation_id = None
+    with trace(workflow_name="process_new_game_celery_task"):
+        logger.info("CELERY – process_new_game_task called")
+        agent = NewGameAgent()
+        conversation_id = None
     
-    try:
-        # Call the agent's process_new_game method
-        from lore.core.context import CanonicalContext  # or create inline
-        ctx = CanonicalContext(user_id, conversation_data.get('conversation_id', 0))
-        result = await agent.process_new_game(ctx, conversation_data)
-        
-        # Convert the Pydantic model result to a JSON-serializable dict
-        serialized_result = serialize_for_celery(result)
-        
-        logger.info(f"Successfully created new game for user_id={user_id}, "
-                   f"conversation_id={serialized_result.get('conversation_id')}")
-        
-        return serialized_result
-        
-    except Exception as e:
-        logger.exception(f"[DEBUG] Critical error in process_new_game_task for user_id={user_id}")
-        
-        # Try to update conversation status to failed
-        conversation_id = conversation_data.get("conversation_id")
-        if conversation_id:
-            try:
-                # Don't use asyncio.run() here - we're already in an async context
-                async with get_db_connection_context() as conn:
-                    await conn.execute("""
-                        UPDATE conversations 
-                        SET status='failed', 
-                            conversation_name='New Game - Task Failed'
-                        WHERE id=$1 AND user_id=$2
-                    """, conversation_id, user_id)
-                    logger.info(f"Updated conversation {conversation_id} status to 'failed'")
-            except Exception as update_error:
-                logger.error(f"[DEBUG] Failed to update conversation status: {update_error}")
-        
-        # Return a serializable error structure
-        error_result = {
-            "status": "failed", 
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "conversation_id": conversation_id
-        }
-        
-        logger.error(f"Returning error result: {error_result}")
-        return error_result
+        try:
+            # Call the agent's process_new_game method
+            from lore.core.context import CanonicalContext  # or create inline
+            ctx = CanonicalContext(user_id, conversation_data.get('conversation_id', 0))
+            result = await agent.process_new_game(ctx, conversation_data)
+            
+            # Convert the Pydantic model result to a JSON-serializable dict
+            serialized_result = serialize_for_celery(result)
+            
+            logger.info(f"Successfully created new game for user_id={user_id}, "
+                       f"conversation_id={serialized_result.get('conversation_id')}")
+            
+            return serialized_result
+            
+        except Exception as e:
+            logger.exception(f"[DEBUG] Critical error in process_new_game_task for user_id={user_id}")
+            
+            # Try to update conversation status to failed
+            conversation_id = conversation_data.get("conversation_id")
+            if conversation_id:
+                try:
+                    # Don't use asyncio.run() here - we're already in an async context
+                    async with get_db_connection_context() as conn:
+                        await conn.execute("""
+                            UPDATE conversations 
+                            SET status='failed', 
+                                conversation_name='New Game - Task Failed'
+                            WHERE id=$1 AND user_id=$2
+                        """, conversation_id, user_id)
+                        logger.info(f"Updated conversation {conversation_id} status to 'failed'")
+                except Exception as update_error:
+                    logger.error(f"[DEBUG] Failed to update conversation status: {update_error}")
+            
+            # Return a serializable error structure
+            error_result = {
+                "status": "failed", 
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "conversation_id": conversation_id
+            }
+            
+            logger.error(f"Returning error result: {error_result}")
+            return error_result
         
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
