@@ -759,8 +759,9 @@ class NyxUnifiedGovernor(
         # Set the governor on the lore system (dependency injection)
         self.lore_system.set_governor(self)
         
-        # Initialize the lore system WITH the governor reference
-        await self.lore_system.initialize(governor=self)
+        # DON'T call initialize on lore_system here - it's already initialized
+        # by get_instance() and we've just set the governor
+        # await self.lore_system.initialize(governor=self)  # REMOVE THIS LINE
     
         # Initialize other systems
         from memory.memory_nyx_integration import get_memory_nyx_bridge
@@ -770,7 +771,7 @@ class NyxUnifiedGovernor(
         from memory.memory_integration import MemoryIntegration
         self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
         await self.memory_integration.initialize()
-
+        
         from nyx.integrate import JointMemoryGraph
         self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
         
