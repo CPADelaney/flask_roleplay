@@ -472,13 +472,14 @@ class LoreSystem:
         reason: str
     ) -> Dict[str, Any]:
         """
-        Canonical state-change helper.
-
-        • Skips “conflicts” when the existing value is effectively blank.
-        • Still triggers lore-conflict logic for real mismatches.
+        Canonical state-change helper with enhanced logging.
         """
         from lore.core import canon
         from db.connection import get_db_connection_context
+    
+        logger.info(f"[propose_and_enact_change] Starting for entity_type={entity_type}, "
+                    f"identifier={entity_identifier}, reason='{reason[:100]}...'")
+        logger.debug(f"[propose_and_enact_change] Full updates: {json.dumps(updates, indent=2)}")
 
         # ------------------------------------------------------------------ #
         # Helpers                                                             #
@@ -646,9 +647,8 @@ class LoreSystem:
         try:
             async with get_db_connection_context() as conn:
                 async with conn.transaction():
-                    # ------------------------------------------------------ #
-                    # 1. Fetch current row                                   #
-                    # ------------------------------------------------------ #
+                    # 1. Fetch current row
+                    logger.debug(f"[propose_and_enact_change] Fetching existing entity...")
                     where_sql = " AND ".join(f"{k} = ${i+1}"
                                              for i, k in enumerate(entity_identifier))
                     existing = await conn.fetchrow(
@@ -656,53 +656,68 @@ class LoreSystem:
                         *entity_identifier.values()
                     )
                     if not existing:
+                        logger.warning(f"[propose_and_enact_change] Entity not found: {entity_type} {entity_identifier}")
                         return {"status": "error",
                                 "message": f"{entity_type} not found with {entity_identifier}"}
-
-                    # ------------------------------------------------------ #
-                    # 2. Conflict detection                                  #
-                    # ------------------------------------------------------ #
+    
+                    logger.debug(f"[propose_and_enact_change] Found existing entity: {existing.get('name', existing.get('npc_name', 'unknown'))}")
+    
+                    # 2. Conflict detection
                     conflicts = []
-
+    
                     for field, new_val in processed_updates.items():
                         if field not in existing:
-                            continue  # column missing – ignore here
-
-                        current_val = existing[field]
-
-                        # SHORT-CIRCUIT: if the current value is “blank”, allow overwrite
-                        if _is_effectively_empty(current_val):
+                            logger.debug(f"[propose_and_enact_change] Field '{field}' not in existing entity, skipping")
                             continue
-
-                        # -------------------------------------------------- #
-                        # JSON fields                                        #
-                        # -------------------------------------------------- #
+    
+                        current_val = existing[field]
+                        logger.debug(f"[propose_and_enact_change] Checking field '{field}': "
+                                   f"current={current_val!r}, new={new_val!r}")
+    
+                        # SHORT-CIRCUIT: if the current value is "blank", allow overwrite
+                        if _is_effectively_empty(current_val):
+                            logger.debug(f"[propose_and_enact_change] Field '{field}' is effectively empty, allowing overwrite")
+                            continue
+    
+                        # JSON fields
                         if field in entity_json_fields:
                             try:
                                 cur_obj = (json.loads(current_val)
                                            if isinstance(current_val, str) else current_val) or {}
                                 new_obj = (json.loads(new_val)
                                            if isinstance(new_val, str) else new_val) or {}
-
+    
+                                logger.debug(f"[propose_and_enact_change] JSON field '{field}' parsed successfully")
+                                logger.debug(f"  Current: {json.dumps(cur_obj, indent=2)}")
+                                logger.debug(f"  New: {json.dumps(new_obj, indent=2)}")
+    
                                 # Another early exit: allow adding to empty dict/list
                                 if _is_effectively_empty(cur_obj):
+                                    logger.debug(f"[propose_and_enact_change] Current JSON is empty, allowing")
                                     continue
                                 if isinstance(cur_obj, list) and set(cur_obj).issubset(new_obj):
+                                    logger.debug(f"[propose_and_enact_change] Current list is subset of new, allowing")
                                     continue
                                 if isinstance(cur_obj, dict) and cur_obj.items() <= new_obj.items():
+                                    logger.debug(f"[propose_and_enact_change] Current dict is subset of new, allowing")
                                     continue
-
+    
                                 if cur_obj != new_obj:
-                                    conflicts.append(
+                                    conflict_msg = (
                                         f"Conflict on JSON field '{field}': "
                                         f"{cur_obj!r} → {new_obj!r}"
                                     )
-                            except Exception:  # JSON decode error – fallback to string compare
-                                if str(current_val) != str(new_val):
-                                    conflicts.append(
-                                        f"Conflict on field '{field}' (parse error): "
-                                        f"{current_val!r} → {new_val!r}"
-                                    )
+                                    conflicts.append(conflict_msg)
+                                    logger.warning(f"[propose_and_enact_change] {conflict_msg}")
+                            except Exception as e:
+                                conflict_msg = (
+                                    f"Conflict on field '{field}' (parse error): "
+                                    f"{current_val!r} → {new_val!r}"
+                                )
+                                conflicts.append(conflict_msg)
+                                logger.error(f"[propose_and_enact_change] JSON parse error on field '{field}': {e}")
+                                logger.debug(f"[propose_and_enact_change] Current value type: {type(current_val)}")
+                                logger.debug(f"[propose_and_enact_change] New value type: {type(new_val)}")
 
                         # -------------------------------------------------- #
                         # ARRAY fields                                       #
@@ -731,18 +746,30 @@ class LoreSystem:
                                     f"{current_val!r} → {new_val!r}"
                                 )
 
-                    # ------------------------------------------------------ #
-                    # 3. Handle conflicts or perform UPDATE                  #
-                    # ------------------------------------------------------ #
+                    # 3. Handle conflicts or perform UPDATE
                     if conflicts:
+                        logger.warning(f"[propose_and_enact_change] {len(conflicts)} conflicts detected")
+                        for i, conflict in enumerate(conflicts):
+                            logger.warning(f"  Conflict {i+1}: {conflict}")
+                        
                         dynamics = await self.registry.get_lore_dynamics()
                         evt = self._create_conflict_event_description(
                             entity_type, entity_identifier, existing, updates, conflicts, reason
                         )
-                        await dynamics.evolve_lore_with_event(ctx, evt)
+                        logger.info(f"[propose_and_enact_change] Generated conflict event: '{evt[:200]}...'")
+                        
+                        try:
+                            await dynamics.evolve_lore_with_event(ctx, evt)
+                            logger.info(f"[propose_and_enact_change] Lore evolution completed for conflict")
+                        except Exception as e:
+                            logger.error(f"[propose_and_enact_change] Lore evolution failed: {e}")
+                            logger.error(f"[propose_and_enact_change] Event description was: {evt}")
+                            raise
+                        
                         return {"status": "conflict_generated", "details": conflicts}
-
+    
                     # Step 3b: No conflict, commit the change
+                    logger.info(f"[propose_and_enact_change] No conflicts, applying {len(processed_updates)} updates")
                     # Add type conversion for known boolean columns
                     boolean_columns = ['introduced', 'is_active', 'is_consolidated', 'is_archived',
                                        'fantasy_flag', 'consolidated', 'has_triggered_consequence',
@@ -764,16 +791,15 @@ class LoreSystem:
                     where_parts = [f"{k} = ${len(vals) + j + 1}"
                                    for j, k in enumerate(entity_identifier)]
                     vals.extend(entity_identifier.values())
-
+    
                     await conn.execute(
                         f"UPDATE {entity_type} SET {', '.join(set_parts)} "
                         f"WHERE {' AND '.join(where_parts)}",
                         *vals
                     )
-
-                    # -------------------------------------------------- #
-                    # 5. Canonical event log                            #
-                    # -------------------------------------------------- #
+                    logger.info(f"[propose_and_enact_change] Database update successful")
+    
+                    # 5. Canonical event log
                     await canon.log_canonical_event(
                         ctx, conn,
                         f"{entity_type} {entity_identifier} updated. Reason: {reason}.",
@@ -781,23 +807,25 @@ class LoreSystem:
                         significance=8
                     )
 
-            # -------------------------------------------------------------- #
-            # 6. Post-commit lore evolution (if significant)                 #
-            # -------------------------------------------------------------- #
+            # 6. Post-commit lore evolution (if significant)
             evt_desc = self._create_detailed_event_description(
                 entity_type, entity_identifier, updates, reason
             )
             if evt_desc:
+                logger.info(f"[propose_and_enact_change] Triggering post-commit lore evolution: '{evt_desc[:200]}...'")
                 dynamics = await self.registry.get_lore_dynamics()
                 await dynamics.evolve_lore_with_event(ctx, evt_desc)
-
+            else:
+                logger.debug(f"[propose_and_enact_change] No significant changes for lore evolution")
+    
+            logger.info(f"[propose_and_enact_change] Successfully committed changes to {entity_type} {entity_identifier}")
             return {"status": "committed",
                     "entity_type": entity_type,
                     "identifier": entity_identifier,
                     "changes": updates}
-
+    
         except Exception as e:
-            logger.exception(f"Failed to enact change for {entity_type} {entity_identifier}: {e}")
+            logger.exception(f"[propose_and_enact_change] Failed to enact change for {entity_type} {entity_identifier}: {e}")
             return {"status": "error", "message": str(e)}
     
     def _get_array_type(self, entity_type: str, field: str) -> str:
@@ -982,24 +1010,56 @@ class LoreSystem:
                                          existing_entity: Any, updates: Dict[str, Any], 
                                          conflicts: List[str], reason: str) -> str:
         """Create an event description for when a conflict is detected during updates."""
+        logger.info(f"[_create_conflict_event_description] Creating description for {entity_type} conflict")
+        logger.debug(f"[_create_conflict_event_description] Entity identifier: {entity_identifier}")
+        logger.debug(f"[_create_conflict_event_description] Conflicts: {conflicts}")
+        logger.debug(f"[_create_conflict_event_description] Reason: {reason}")
         
         # Try to get the entity name
         entity_name = None
-        for name_field in ['name', 'location_name', 'quest_name', 'title']:
+        for name_field in ['name', 'npc_name', 'location_name', 'quest_name', 'title']:
             if name_field in existing_entity:
                 entity_name = existing_entity[name_field]
+                logger.debug(f"[_create_conflict_event_description] Found entity name: {entity_name}")
                 break
         
         if not entity_name:
-            entity_name = f"{entity_type} #{entity_identifier.get('id', 'unknown')}"
+            entity_name = f"{entity_type} #{entity_identifier.get('id', entity_identifier.get('npc_id', 'unknown'))}"
+            logger.debug(f"[_create_conflict_event_description] Using fallback entity name: {entity_name}")
         
-        # Create a narrative around the conflict
-        conflict_summary = conflicts[0] if conflicts else "Multiple conflicting changes were attempted"
+        # Don't pass technical parsing errors to lore evolution
+        technical_conflict = any('parse error' in c or 'JSON' in c for c in conflicts)
+        logger.info(f"[_create_conflict_event_description] Technical conflict detected: {technical_conflict}")
         
-        return (f"A conflict arose when attempting to change {entity_name} ({entity_type}): {reason}. "
-                f"The attempted changes were blocked due to: {conflict_summary}. "
-                f"This conflict represents competing forces or contradictory influences trying to shape "
-                f"the same aspect of the world, creating tension and potential for future developments.")
+        if technical_conflict:
+            # Log the technical details before converting to narrative
+            logger.warning(f"[_create_conflict_event_description] Converting technical conflict to narrative")
+            logger.debug(f"[_create_conflict_event_description] Original conflicts: {json.dumps(conflicts, indent=2)}")
+            
+            if entity_type == "NPCStats" and "relationships" in str(conflicts[0]):
+                description = (f"Complex social dynamics prevented {entity_name} from forming new relationships as intended. "
+                              f"The existing web of connections resisted change, suggesting deeper loyalties or "
+                              f"obligations that must be addressed before new bonds can form. Original intention: {reason}")
+            else:
+                description = (f"Mysterious forces prevented changes to {entity_name}. The very fabric of reality "
+                              f"seemed to resist the transformation, as if protecting some essential truth about "
+                              f"their nature. Original intention: {reason}")
+        else:
+            # For non-technical conflicts, create a proper narrative
+            conflict_summary = conflicts[0] if conflicts else "Multiple conflicting changes were attempted"
+            
+            if "already has value" in conflict_summary:
+                description = (f"A conflict arose when attempting to change {entity_name}: {reason}. "
+                              f"The attempted changes were blocked because the entity already possesses "
+                              f"the qualities being imposed, creating a paradox of transformation.")
+            else:
+                description = (f"A conflict arose when attempting to change {entity_name}: {reason}. "
+                              f"The attempted changes were blocked by competing forces within the world, "
+                              f"creating tension between what was and what might be. This resistance "
+                              f"suggests deeper currents at work in the world's fabric.")
+        
+        logger.info(f"[_create_conflict_event_description] Generated narrative description: '{description[:100]}...'")
+        return description
 
     # --- Convenience Wrappers (Optional but Recommended) ---
     # These methods provide a clean, high-level API but all use the generic method internally.
