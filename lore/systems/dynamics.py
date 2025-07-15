@@ -39,6 +39,8 @@ from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
 from lore.utils.sql_safe import safe_table_name, safe_column_name, unquote_ident
 
+logger = logging.getLogger(__name__)
+
 # ===========================================================================
 # PYDANTIC MODELS FOR STRUCTURED DATA
 # ===========================================================================
