@@ -426,7 +426,7 @@ class RegionalCultureSystem(BaseLoreManager):
     async def _validate_nation_id(self, ctx, agent, input_data: int) -> GuardrailFunctionOutput:
         """Validate that the given nation ID actually exists in the DB."""
         run_ctx = self.create_run_context(ctx)
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation = await conn.fetchrow("""
                     SELECT id FROM Nations WHERE id = $1
@@ -464,7 +464,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 return []
             
             # Get existing languages and analyze patterns
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     existing_languages = await conn.fetch("""
                         SELECT l.*, 
@@ -575,7 +575,7 @@ class RegionalCultureSystem(BaseLoreManager):
             language_agent = self._get_agent("language").clone(output_type=LanguageOutput)
             languages = []
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     for i, dist in enumerate(distribution_plan[:count]):
                         # Get detailed nation info for context
@@ -801,7 +801,7 @@ class RegionalCultureSystem(BaseLoreManager):
     async def _establish_language_relationships(self, new_languages: List[Dict[str, Any]], 
                                               existing_languages: List[Any]) -> None:
         """Establish relationships between languages (borrowings, influences, etc)."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Group languages by family
                 families = {}
@@ -897,7 +897,7 @@ class RegionalCultureSystem(BaseLoreManager):
             input_guardrail = InputGuardrail(guardrail_function=self._validate_nation_id)
             
             # Fetch the nation data
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     nation = await conn.fetchrow("""
                         SELECT id, name, government_type, matriarchy_level, cultural_traits
@@ -982,7 +982,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 norm_data = result.final_output
                 
                 # Insert into DB
-                async with self.get_connection_pool() as pool:
+                async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         norm_id = await conn.fetchval("""
                             INSERT INTO CulturalNorms (
@@ -1037,7 +1037,7 @@ class RegionalCultureSystem(BaseLoreManager):
             input_guardrail = InputGuardrail(guardrail_function=self._validate_nation_id)
             
             # Fetch nation details
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     nation = await conn.fetchrow("""
                         SELECT id, name, government_type, matriarchy_level, cultural_traits
@@ -1108,7 +1108,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 etiquette_data = result.final_output
                 
                 # Insert into DB
-                async with self.get_connection_pool() as pool:
+                async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         etiq_id = await conn.fetchval("""
                             INSERT INTO Etiquette (
@@ -1170,7 +1170,7 @@ class RegionalCultureSystem(BaseLoreManager):
             if cached:
                 return cached
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     nation = await conn.fetchrow("""
                         SELECT id, name, government_type, matriarchy_level, cultural_traits
@@ -1354,7 +1354,7 @@ class RegionalCultureSystem(BaseLoreManager):
             )
             
             # Get geopolitical data about the two nations' relationship
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     relation = await conn.fetchrow("""
                         SELECT * FROM InternationalRelations
@@ -1446,7 +1446,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects or not isinstance(effects, dict):
             return
             
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get languages for both nations
                 nation1_langs = await conn.fetch("""
@@ -1559,7 +1559,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects:
             return
             
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get cultural context for both nations
                 nation1_data = await conn.fetchrow("""
@@ -1670,7 +1670,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects:
             return
             
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get religious data for both nations
                 nation1_religion = await conn.fetchrow("""
@@ -1777,7 +1777,7 @@ class RegionalCultureSystem(BaseLoreManager):
     
     async def _localize_idiom(self, idiom: str, target_language: Dict[str, Any], nation_id: int) -> Dict[str, str]:
         """Localize an idiom to fit the target culture."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation = await conn.fetchrow("""
                     SELECT name, cultural_traits, matriarchy_level
@@ -1835,7 +1835,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects:
             return
             
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get nation data for context
                 nation1 = await conn.fetchrow("""
@@ -2083,7 +2083,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects:
             return
             
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get nation data including existing cuisine
                 nation1 = await conn.fetchrow("""
@@ -2366,7 +2366,7 @@ class RegionalCultureSystem(BaseLoreManager):
         if not effects:
             return
             
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get detailed nation data including existing customs
                 nation1 = await conn.fetchrow("""
@@ -2752,7 +2752,7 @@ class RegionalCultureSystem(BaseLoreManager):
             run_ctx = self.create_run_context(ctx)
             
             # Get language and region data
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     language = await conn.fetchrow("""
                         SELECT * FROM Languages WHERE id = $1
@@ -2831,7 +2831,7 @@ class RegionalCultureSystem(BaseLoreManager):
             dialect_model = result.final_output
             
             # Store the dialect in the database
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Update the language's dialects
                     current_dialects = language_data.get("dialects", {})
@@ -2911,7 +2911,7 @@ class RegionalCultureSystem(BaseLoreManager):
     @function_tool(strict_mode=False)
     async def get_all_languages(self) -> List[Dict[str, Any]]:
         """Get all languages in the world."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 languages = await conn.fetch("""
                     SELECT id, name, language_family, description, 
@@ -2924,7 +2924,7 @@ class RegionalCultureSystem(BaseLoreManager):
     @function_tool(strict_mode=False)
     async def get_language_details(self, language_id: int) -> Dict[str, Any]:
         """Get detailed information about a specific language."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 language = await conn.fetchrow("""
                     SELECT * FROM Languages WHERE id = $1
@@ -2979,7 +2979,7 @@ class RegionalCultureSystem(BaseLoreManager):
     @function_tool(strict_mode=False)
     async def compare_etiquette(self, nation_id1: int, nation_id2: int, context: str) -> Dict[str, Any]:
         """Compare etiquette between two nations for a specific context."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 etiq1 = await conn.fetchrow("""
                     SELECT * FROM Etiquette
