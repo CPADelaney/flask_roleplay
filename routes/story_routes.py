@@ -1803,6 +1803,65 @@ async def next_storybeat():
         )
         tracker.end_phase()
 
+        # 8.5 Process conflict evolution based on player action
+        tracker.start_phase("conflict_evolution")
+        if active_conflicts:
+            # Notify conflict system of player action
+            await on_player_major_action(
+                user_id,
+                conversation_id,
+                "player_input",  # action type
+                {
+                    "description": user_input,
+                    "involved_npcs": [resp.npc_id for resp in npc_responses],
+                    "location": current_location
+                }
+            )
+            
+            # Generate story beats for active conflicts affected by this action
+            from story_agent.tools import generate_conflict_beat, ConflictBeatGenerationParams
+            
+            for conflict in active_conflicts[:2]:  # Process top 2 conflicts to avoid overload
+                # Check if any responding NPCs are stakeholders in this conflict
+                conflict_stakeholder_ids = {
+                    s['npc_id'] for s in conflict.get('stakeholders', []) 
+                    if s.get('entity_type') == 'npc'
+                }
+                
+                involved_npc_ids = [
+                    resp.npc_id for resp in npc_responses 
+                    if resp.npc_id in conflict_stakeholder_ids
+                ]
+                
+                if involved_npc_ids or conflict.get('player_involvement', {}).get('involvement_level') != 'none':
+                    # Generate a story beat for this conflict
+                    beat_params = ConflictBeatGenerationParams(
+                        conflict_id=conflict['conflict_id'],
+                        recent_action=user_input,
+                        involved_npcs=involved_npc_ids
+                    )
+                    
+                    beat_ctx = RunContextWrapper(context={
+                        'user_id': user_id,
+                        'conversation_id': conversation_id
+                    })
+                    
+                    beat_result = await generate_conflict_beat(beat_ctx, beat_params)
+                    
+                    if beat_result.get('success'):
+                        logger.info(f"Generated conflict beat for {conflict['conflict_name']}")
+                        
+                        # Store beat result for potential inclusion in response
+                        if 'conflict_beats' not in response:
+                            response['conflict_beats'] = []
+                            
+                        response['conflict_beats'].append({
+                            'conflict_name': conflict['conflict_name'],
+                            'beat': beat_result['generated_beat']['beat_description'],
+                            'impact': beat_result['generated_beat']['impact_summary']
+                        })
+        tracker.end_phase()
+
         # 9) *** Call your Nyx agent instead of direct GPT. ***
         tracker.start_phase("ai_response")
         # This calls your Agents-based function with aggregator_data in 'context'
