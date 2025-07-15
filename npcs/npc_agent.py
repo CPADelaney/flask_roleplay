@@ -17,13 +17,55 @@ from typing import List, Dict, Any, Optional, Tuple, Union, TypedDict, Set
 from pydantic import BaseModel, Field, validator
 from collections import OrderedDict
 
-from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff
+from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
 from agents.tracing import custom_span, generation_span, function_span
 from db.connection import get_db_connection_context  # Updated import
 from memory.wrapper import MemorySystem
 from .lore_context_manager import LoreContextManager
 
 logger = logging.getLogger(__name__)
+
+# -- Outcome narration -------------------------------------------------
+action_outcome_generator = Agent(
+    name="NPC Action-Outcome Generator",
+    instructions="""
+You turn a structured description of an NPC action into a short, vivid outcome
+sentence plus basic emotional metadata.  
+
+Return *ONLY* valid JSON with keys:
+  outcome            – str   (max ~120 chars)
+  emotional_impact   – int   (-5…+5, negative = bad)
+  target_reactions   – list[dict]   (each needs: entity, reaction, intensity 0-1)
+""",
+    model="gpt-4.1-nano",
+    model_settings=ModelSettings(temperature=0.7)
+)
+
+# -- Interaction detail generator --------------------------------------
+interaction_detail_generator = Agent(
+    name="NPC Interaction-Detail Generator",
+    instructions="""
+Given: interaction_type, actor_name, target_name, relationship_state, location,
+create ONE sentence that fits the tone of a dark-erotic RPG but is PG-13.
+
+Return JSON: { "details": "<sentence>" }
+""",
+    model="gpt-4.1-nano",
+    model_settings=ModelSettings(temperature=0.8)
+)
+
+# -- Activity generator (work / relax) ---------------------------------
+activity_generator = Agent(
+    name="NPC Activity Generator",
+    instructions="""
+Given activity_kind (work or relax), subtype, location, npc_name,
+produce a short `description` for what the NPC is doing.
+
+Return JSON: { "description": "<text>" }
+""",
+    model="gpt-4.1-nano",
+    model_settings=ModelSettings(temperature=0.75)
+)
 
 class ResourcePool:
     """Manages shared resources with limits to prevent overwhelming systems."""
@@ -475,45 +517,30 @@ async def execute_npc_action(
             # Record action
             ctx.context.record_decision(action.model_dump())
             
-            # For now, simulate an action result
-            # In a real implementation, this would interact with game state
-            outcome_templates = {
-                "talk": [
-                    "NPC engages in conversation about {topic}",
-                    "NPC discusses {topic} with {target}",
-                    "NPC shares thoughts on {topic}"
-                ],
-                "observe": [
-                    "NPC quietly observes the situation",
-                    "NPC watches carefully, taking mental notes",
-                    "NPC studies {target} with interest"
-                ],
-                "leave": [
-                    "NPC exits the location",
-                    "NPC walks away from {target}",
-                    "NPC decides to depart"
-                ],
-                "command": [
-                    "NPC firmly orders {target} to {action}",
-                    "NPC commands {target} with authority",
-                    "NPC gives a direct order to {target}"
-                ],
-                "dominate": [
-                    "NPC asserts complete dominance over {target}",
-                    "NPC takes control of the situation forcefully",
-                    "NPC demonstrates overwhelming authority"
-                ],
-                "mock": [
-                    "NPC mocks {target} cruelly",
-                    "NPC makes cutting remarks about {target}",
-                    "NPC belittles {target} with harsh words"
-                ],
-                "emotional_outburst": [
-                    "NPC has an emotional outburst about {topic}",
-                    "NPC expresses powerful emotions",
-                    "NPC loses emotional control momentarily"
-                ]
-            }
+            try:
+                outcome_payload = json.dumps({
+                    "action_type": action.type,
+                    "description": action.description,
+                    "target": action.target,
+                    "context": context
+                }, ensure_ascii=False)
+
+                outcome_result = await Runner.run(
+                    starting_agent=action_outcome_generator,
+                    input=outcome_payload
+                )
+                parsed = json.loads(outcome_result.output.strip())
+
+                outcome = parsed.get("outcome", f"{action.description}.")
+                emotional_impact = int(parsed.get("emotional_impact", 0))
+                target_reactions = parsed.get("target_reactions", [])
+
+            except Exception as gpt_err:
+                # Fallback to a minimal deterministic line
+                logger.warning(f"Fallback outcome generation: {gpt_err}")
+                outcome = f"{action.description.capitalize()} succeeds."
+                emotional_impact = random.randint(-1, 1)
+                target_reactions = []
             
             # Select template for the action type
             action_type = action.type
@@ -1843,18 +1870,27 @@ class NPCAgent:
         relationship: Dict[str, Any],
         context: Dict[str, Any]
     ) -> str:
-        """Generate specific details for the interaction."""
-        templates = {
-            "introduction": "introduces themselves to {target}",
-            "friendly_chat": "has a warm conversation with {target}",
-            "cautious_exchange": "speaks carefully with {target}",
-            "formal_discussion": "engages in formal discourse with {target}",
-            "casual_conversation": "chats casually with {target}"
-        }
-        
-        template = templates.get(interaction_type, "interacts with {target}")
-        return template.format(target=target_npc["npc_name"])
+        """Generate interaction detail via LLM instead of static template."""
+        try:
+            payload = json.dumps({
+                "interaction_type": interaction_type,
+                "actor_name": self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}"),
+                "target_name": target_npc["npc_name"],
+                "relationship_state": relationship or {},
+                "location": context.get("location", "unknown")
+            }, ensure_ascii=False)
 
+            result = await Runner.run(
+                starting_agent=interaction_detail_generator,
+                input=payload
+            )
+            return json.loads(result.output.strip())["details"]
+
+        except Exception as e:
+            logger.error(f"Interaction-detail generation failed: {e}")
+            # Fallback
+            return f"{interaction_type.replace('_',' ')} with {target_npc['npc_name']}"
+            
     def _calculate_relationship_changes(self, interaction: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate how an interaction changes relationship stats."""
         changes = {"trust": 0, "respect": 0, "closeness": 0}
@@ -1921,23 +1957,46 @@ class NPCAgent:
         return self
 
     async def _generate_work_activity(self, work_type: str, location: str) -> Dict[str, Any]:
-        """Generate a work activity based on type and location."""
-        activities = {
-            "merchant": ["organizing inventory", "negotiating deals", "checking accounts"],
-            "guard": ["patrolling the area", "inspecting security", "training"],
-            "scholar": ["studying texts", "writing notes", "teaching"],
-            "general": ["completing tasks", "working diligently", "finishing duties"]
-        }
-        
-        activity_list = activities.get(work_type, activities["general"])
-        chosen_activity = random.choice(activity_list)
-        
+        """LLM-based work activity description."""
+        try:
+            payload = json.dumps({
+                "activity_kind": "work",
+                "subtype": work_type,
+                "location": location,
+                "npc_name": self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}")
+            })
+            res = await Runner.run(activity_generator, payload)
+            desc = json.loads(res.output.strip())["description"]
+        except Exception as e:
+            logger.warning(f"Work activity fallback: {e}")
+            desc = f"working at {location}"
+
         return {
             "type": work_type,
-            "description": f"{chosen_activity} at {location}",
-            "duration": random.randint(30, 120)  # minutes
+            "description": desc,
+            "duration": random.randint(30, 120)
         }
 
+    async def _generate_relaxation_activity(self, relax_type: str, location: str) -> Dict[str, Any]:
+        """LLM-based relaxation activity description."""
+        try:
+            payload = json.dumps({
+                "activity_kind": "relax",
+                "subtype": relax_type,
+                "location": location,
+                "npc_name": self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}")
+            })
+            res = await Runner.run(activity_generator, payload)
+            desc = json.loads(res.output.strip())["description"]
+        except Exception as e:
+            logger.warning(f"Relax activity fallback: {e}")
+            desc = f"relaxing at {location}"
+
+        return {
+            "type": relax_type,
+            "description": desc,
+            "duration": random.randint(15, 60)
+        }
     async def _update_work_stats(self, work_activity: Dict[str, Any]) -> None:
         """Update NPC stats based on work activity."""
         # Work can affect intensity and other stats
@@ -1954,24 +2013,6 @@ class NPCAgent:
                 
         except Exception as e:
             logger.error(f"Error updating work stats: {e}")
-
-    async def _generate_relaxation_activity(self, relax_type: str, location: str) -> Dict[str, Any]:
-        """Generate a relaxation activity."""
-        activities = {
-            "reading": ["reading a book", "browsing texts", "studying literature"],
-            "socializing": ["chatting with friends", "enjoying company", "sharing stories"],
-            "meditation": ["meditating quietly", "reflecting on life", "centering themselves"],
-            "general": ["relaxing peacefully", "taking a break", "unwinding"]
-        }
-        
-        activity_list = activities.get(relax_type, activities["general"])
-        chosen_activity = random.choice(activity_list)
-        
-        return {
-            "type": relax_type,
-            "description": f"{chosen_activity} at {location}",
-            "duration": random.randint(15, 60)  # minutes
-        }
 
     async def _update_relaxation_stats(self, relax_activity: Dict[str, Any]) -> None:
         """Update NPC stats based on relaxation activity."""
