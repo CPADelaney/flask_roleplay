@@ -1166,7 +1166,7 @@ class ConflictIntegration(BaseIntegration):
             params = [conflict_id]
             
             # Add user/conversation filters
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     row = await conn.fetchrow(query, *params)
                     
@@ -1197,7 +1197,7 @@ class ConflictIntegration(BaseIntegration):
             params = [faction_id]
             
             # Add user/conversation filters
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     rows = await conn.fetch(query, *params)
                     
