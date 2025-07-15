@@ -403,20 +403,23 @@ class LoreDynamicsSystem(BaseLoreManager):
     async def _validate_event_description(self, ctx, agent, input_data: str) -> GuardrailFunctionOutput:
         """
         Validate that the event description is appropriate for lore evolution
-        using an LLM-based validation agent that outputs EventValidation.
+        with enhanced logging.
         """
+        logger.info(f"[_validate_event_description] Validating event description length={len(input_data)}")
+        logger.debug(f"[_validate_event_description] Full event: {input_data}")
+        
         validation_agent = Agent(
             name="EventValidationAgent",
             instructions=(
                 "Determine if the event description is appropriate for world lore evolution. "
-                "Return a structured response with is_valid=True/False and reasoning."
+                "Return a structured response with is_valid=True/False and reasoning. "
+                "Accept descriptions of conflicts, tensions, and resistance to change as valid "
+                "narrative elements that can drive lore evolution."
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=EventValidation
         )
-        
-        run_ctx = self.create_run_context(ctx)
         
         prompt = f"""
         Evaluate if this event description is appropriate for evolving world lore:
@@ -427,19 +430,32 @@ class LoreDynamicsSystem(BaseLoreManager):
         1. Is it specific enough to cause meaningful lore changes?
         2. Is it consistent with a matriarchal fantasy setting?
         3. Is it free from inappropriate or out-of-setting content?
+        4. Does it describe a narrative event (even if it involves conflict or resistance)?
+        
+        Note: Descriptions of conflicts, paradoxes, or resistance to change are valid narrative elements.
+        Technical details should be translated into narrative language.
         
         Output JSON with:
         - is_valid
         - reasoning
         """
         
+        logger.debug(f"[_validate_event_description] Sending validation prompt to agent")
         result = await Runner.run(validation_agent, prompt, context=run_ctx.context)
         validation = result.final_output
+        
+        logger.info(f"[_validate_event_description] Validation result: is_valid={validation.is_valid}")
+        logger.info(f"[_validate_event_description] Reasoning: {validation.reasoning}")
+        
+        if not validation.is_valid:
+            logger.warning(f"[_validate_event_description] Event failed validation!")
+            logger.warning(f"[_validate_event_description] Event text: {input_data[:500]}...")
         
         return GuardrailFunctionOutput(
             output_info=validation.dict(),
             tripwire_triggered=not validation.is_valid
         )
+
     
     #===========================================================================
     # CORE LORE EVOLUTION
@@ -522,9 +538,10 @@ class LoreDynamicsSystem(BaseLoreManager):
     )
     async def evolve_lore_with_event(self, ctx, event_description: str) -> Dict[str, Any]:
         """
-        Evolve world lore based on a narrative event, using a specialized LLM-based
-        agent to coordinate steps (identify, generate updates, apply changes, create new lore).
+        Evolve world lore based on a narrative event with enhanced logging.
         """
+        logger.info(f"[evolve_lore_with_event] Starting lore evolution for event: '{event_description[:100]}...'")
+        
         with trace(
             "LoreEvolutionWorkflow", 
             group_id=self.trace_group_id,
@@ -542,8 +559,11 @@ class LoreDynamicsSystem(BaseLoreManager):
                 action_type="evolve_lore_with_event",
                 action_details={"event_description": event_description}
             )
+            
+            logger.debug(f"[evolve_lore_with_event] Permission check result: {permission}")
+            
             if not permission["approved"]:
-                logging.warning(f"Lore evolution not approved: {permission.get('reasoning')}")
+                logger.warning(f"[evolve_lore_with_event] Permission denied: {permission.get('reasoning')}")
                 return {"error": permission.get("reasoning"), "approved": False}
             
             run_ctx = RunContextWrapper(context={
@@ -607,10 +627,42 @@ class LoreDynamicsSystem(BaseLoreManager):
             # just to ensure we have structured data to return. The agent usage above
             # might do partial calls, but let's ensure we finalize them here.
             try:
+                logger.debug(f"[evolve_lore_with_event] Creating evolution agent and running workflow")
+                result = await Runner.run(
+                    evolution_agent,
+                    prompt,
+                    context=run_ctx.context,
+                    run_config=run_config
+                )
+                logger.info(f"[evolve_lore_with_event] Agent workflow completed successfully")
+                
+            except InputGuardrailTripwireTriggered as e:
+                logger.error(f"[evolve_lore_with_event] Guardrail triggered!")
+                logger.error(f"[evolve_lore_with_event] Guardrail info: {e}")
+                logger.error(f"[evolve_lore_with_event] Original event: {event_description}")
+                raise
+            except Exception as e:
+                logger.error(f"[evolve_lore_with_event] Unexpected error: {e}")
+                logger.error(f"[evolve_lore_with_event] Event description: {event_description}")
+                raise
+            
+            # Manual step execution with logging
+            try:
+                logger.debug(f"[evolve_lore_with_event] Identifying affected lore elements")
                 affected_elements = await self._identify_affected_lore_impl(event_description)
+                logger.info(f"[evolve_lore_with_event] Found {len(affected_elements)} affected elements")
+                
+                logger.debug(f"[evolve_lore_with_event] Generating lore updates")
                 updates = await self._generate_lore_updates_impl(affected_elements, event_description)
+                logger.info(f"[evolve_lore_with_event] Generated {len(updates)} updates")
+                
+                logger.debug(f"[evolve_lore_with_event] Applying lore updates")
                 await self._apply_lore_updates_impl(updates)
+                logger.info(f"[evolve_lore_with_event] Applied all updates")
+                
+                logger.debug(f"[evolve_lore_with_event] Generating consequential lore")
                 new_elements = await self._generate_consequential_lore_impl(event_description, affected_elements)
+                logger.info(f"[evolve_lore_with_event] Created {len(new_elements)} new lore elements")
                 
                 await self.report_action(
                     agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -625,6 +677,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     }
                 )
                 
+                logger.info(f"[evolve_lore_with_event] Lore evolution completed successfully")
                 return {
                     "affected_elements": affected_elements,
                     "updates": updates,
@@ -632,11 +685,12 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "summary": result.final_output
                 }
             except Exception as e:
-                logging.error(f"Error in lore evolution process: {e}")
+                logger.error(f"[evolve_lore_with_event] Error in manual lore evolution process: {e}")
+                logger.error(f"[evolve_lore_with_event] Stack trace:", exc_info=True)
                 return {
                     "error": str(e),
                     "event_description": event_description,
-                    "agent_output": result.final_output
+                    "agent_output": result.final_output if 'result' in locals() else None
                 }
                 
     #===========================================================================
