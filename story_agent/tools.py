@@ -204,6 +204,32 @@ conflict_beat_writer = Agent(
     temperature=0.7
 )
 
+dialogue_detector = Agent(
+    name="DialogueDetector",
+    instructions="""
+    You analyze player input to determine if it's a conversational exchange
+    that would benefit from quick dialogue mode rather than full narrative responses.
+    
+    Dialogue mode is appropriate when:
+    - Player asks a direct question to an NPC
+    - Player makes a short conversational statement
+    - Player is clearly engaged in back-and-forth with an NPC
+    - The input is under 20 words and conversational
+    - Context shows recent dialogue exchanges
+    
+    Dialogue mode is NOT appropriate when:
+    - Player describes actions or movements
+    - Player addresses multiple NPCs
+    - Significant time would pass
+    - The situation requires environmental description
+    - Combat or complex activities are involved
+    
+    Assess confidence level (0.0-1.0) based on how clear the signals are.
+    """,
+    model="gpt-4.1-nano",
+    temperature=0.3
+)
+
 # ===== PYDANTIC MODELS =====
 
 # Relationship Models
@@ -551,6 +577,27 @@ class GeneratedConflictBeat(BaseModel):
     involved_npcs: List[int]
     
     model_config = ConfigDict(extra="forbid")
+
+class DialogueContext(BaseModel):
+    """Context for dialogue exchanges"""
+    in_dialogue: bool = False
+    npc_id: Optional[int] = None
+    npc_name: Optional[str] = None
+    dialogue_depth: int = 0  # How many exchanges deep
+    last_exchange: Optional[datetime] = None
+    dialogue_type: Optional[str] = None  # "casual", "interrogation", "flirtation", etc.
+    
+    model_config = ConfigDict(extra="forbid")
+
+class DialogueModeDetection(BaseModel):
+    """Result of dialogue mode detection"""
+    should_use_dialogue_mode: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    detected_type: Optional[str] = None
+    reason: str
+    suggested_npc_id: Optional[int] = None
+    
+    model_config = ConfigDict(extra="forbid")    
 
 # ===== HELPER FUNCTIONS =====
 
@@ -975,6 +1022,675 @@ async def get_optimized_context(
             "conversation_id": conversation_id,
             "context_data": None
         }
+
+@function_tool
+async def detect_dialogue_mode(
+    ctx: RunContextWrapper[ContextType],
+    user_input: str,
+    current_context: Optional[DialogueContext] = None
+) -> DialogueModeDetection:
+    """
+    Detect whether the player input should trigger dialogue mode.
+    
+    Args:
+        user_input: The player's input
+        current_context: Current dialogue context if any
+        
+    Returns:
+        Detection result with confidence and reasoning
+    """
+    context = ctx.context
+    
+    try:
+        # Get nearby NPCs with error handling
+        try:
+            npcs = await get_available_npcs(ctx, include_unintroduced=False)
+        except Exception as npc_error:
+            logger.warning(f"Error getting NPCs for dialogue detection: {npc_error}")
+            npcs = []
+        
+        # Get recent memories to check for ongoing conversation
+        recent_memories = []
+        recent_dialogue_content = []
+        try:
+            memory_manager = await get_memory_manager(context.user_id, context.conversation_id)
+            recent_memories = await memory_manager.search_memories(
+                query_text="conversation dialogue",
+                limit=3,
+                use_vector=True
+            )
+            
+            # Extract memory content safely
+            for memory in recent_memories:
+                if hasattr(memory, 'content'):
+                    recent_dialogue_content.append(memory.content[:100] + '...')
+                elif isinstance(memory, dict) and 'content' in memory:
+                    recent_dialogue_content.append(memory['content'][:100] + '...')
+        except Exception as mem_error:
+            logger.warning(f"Error getting recent memories: {mem_error}")
+        
+        # Check if we're already in dialogue
+        already_in_dialogue = False
+        time_since_last = None
+        if current_context:
+            already_in_dialogue = (
+                current_context.in_dialogue and 
+                current_context.last_exchange is not None
+            )
+            if already_in_dialogue and current_context.last_exchange:
+                time_since_last = (datetime.now() - current_context.last_exchange).seconds
+                already_in_dialogue = time_since_last < 300  # 5 min timeout
+        
+        # Initialize detection variables
+        should_use = False
+        confidence = 0.0
+        detected_type = "narrative"
+        reason = "Default to narrative mode"
+        
+        # Analyze input patterns
+        input_lower = user_input.lower().strip()
+        word_count = len(user_input.split())
+        
+        # Pattern-based detection with confidence scores
+        patterns = {
+            # Direct questions
+            (input_lower.endswith('?') and word_count < 15): {
+                'use': True, 'confidence': 0.9, 'type': 'question',
+                'reason': 'Direct question under 15 words'
+            },
+            # Direct speech commands
+            (any(input_lower.startswith(prefix) for prefix in ['say ', 'tell ', 'ask ', 'reply ', 'answer '])): {
+                'use': True, 'confidence': 0.85, 'type': 'direct_speech',
+                'reason': 'Starts with speech verb'
+            },
+            # Quoted speech
+            ('"' in user_input or "'" in user_input): {
+                'use': True, 'confidence': 0.8, 'type': 'quoted_speech',
+                'reason': 'Contains quoted text'
+            },
+            # Short conversational responses
+            (word_count < 10 and not any(action in input_lower for action in [
+                'walk', 'go', 'move', 'take', 'pick', 'grab', 'look', 'examine',
+                'use', 'open', 'close', 'push', 'pull', 'attack', 'flee'
+            ])): {
+                'use': True, 'confidence': 0.7, 'type': 'casual',
+                'reason': 'Short input without action verbs'
+            },
+            # Conversational keywords
+            (any(word in input_lower for word in [
+                'yes', 'no', 'maybe', 'okay', 'sure', 'fine', 'alright',
+                'hello', 'hi', 'goodbye', 'bye', 'thanks', 'sorry'
+            ]) and word_count < 5): {
+                'use': True, 'confidence': 0.75, 'type': 'response',
+                'reason': 'Brief conversational response'
+            },
+            # Continuing conversation
+            (already_in_dialogue and word_count < 20): {
+                'use': True, 'confidence': 0.8, 'type': 'continuation',
+                'reason': 'Continuing existing dialogue'
+            }
+        }
+        
+        # Apply pattern matching
+        for condition, result in patterns.items():
+            if condition:
+                should_use = result['use']
+                confidence = max(confidence, result['confidence'])
+                detected_type = result['type']
+                reason = result['reason']
+                break
+        
+        # Adjust confidence based on context
+        if already_in_dialogue:
+            confidence = min(1.0, confidence + 0.1)  # Boost confidence if continuing
+            reason += f" (continuing conversation, {time_since_last}s ago)"
+        
+        # Check for multi-NPC or complex scenarios that should NOT use dialogue mode
+        npc_count = len([npc for npc in npcs if npc['npc_name'].lower() in input_lower])
+        if npc_count > 1:
+            should_use = False
+            confidence = 0.2
+            detected_type = "multi_npc"
+            reason = "Multiple NPCs addressed"
+        
+        # Check for time-passage indicators
+        time_indicators = ['wait', 'rest', 'sleep', 'later', 'tomorrow', 'hour', 'minute']
+        if any(indicator in input_lower for indicator in time_indicators):
+            should_use = False
+            confidence = 0.3
+            detected_type = "time_passage"
+            reason = "Input suggests time passage"
+        
+        # Find the most likely NPC if in dialogue mode
+        suggested_npc_id = None
+        if should_use and npcs:
+            # First, check if an NPC name is directly mentioned
+            mentioned_npc = None
+            for npc in npcs:
+                npc_name_lower = npc['npc_name'].lower()
+                # Check for exact name or common variations
+                if (npc_name_lower in input_lower or 
+                    npc_name_lower.split()[0] in input_lower):  # First name only
+                    mentioned_npc = npc
+                    confidence = min(1.0, confidence + 0.1)
+                    break
+            
+            if mentioned_npc:
+                suggested_npc_id = mentioned_npc['npc_id']
+            elif current_context and current_context.npc_id and already_in_dialogue:
+                # Use the NPC from ongoing conversation
+                suggested_npc_id = current_context.npc_id
+            elif len(npcs) == 1:
+                # Only one NPC nearby
+                suggested_npc_id = npcs[0]['npc_id']
+                confidence = min(1.0, confidence + 0.05)
+            elif npcs:
+                # Multiple NPCs, use the one with highest closeness/dominance
+                sorted_npcs = sorted(
+                    npcs, 
+                    key=lambda n: (n.get('closeness', 0) + n.get('dominance', 0)), 
+                    reverse=True
+                )
+                suggested_npc_id = sorted_npcs[0]['npc_id']
+                confidence *= 0.9  # Reduce confidence when guessing
+        
+        # Final validation
+        if should_use and not suggested_npc_id and not already_in_dialogue:
+            # Can't determine NPC, fall back to narrative
+            should_use = False
+            confidence = 0.4
+            reason = "No clear NPC target for dialogue"
+        
+        return DialogueModeDetection(
+            should_use_dialogue_mode=should_use,
+            confidence=confidence,
+            detected_type=detected_type,
+            reason=reason,
+            suggested_npc_id=suggested_npc_id
+        )
+        
+    except Exception as e:
+        logger.error(f"Error detecting dialogue mode: {e}", exc_info=True)
+        return DialogueModeDetection(
+            should_use_dialogue_mode=False,
+            confidence=0.0,
+            detected_type="error",
+            reason=f"Detection error: {str(e)}"
+        )
+
+@function_tool
+async def generate_dialogue_exchange(
+    ctx: RunContextWrapper[ContextType],
+    user_input: str,
+    npc_id: int,
+    dialogue_context: Optional[DialogueContext] = None
+) -> Dict[str, Any]:
+    """
+    Generate a quick dialogue exchange without full narrative wrapper.
+    
+    Args:
+        user_input: Player's dialogue/input
+        npc_id: ID of the NPC in conversation
+        dialogue_context: Current dialogue context
+        
+    Returns:
+        Quick dialogue response with metadata
+    """
+    context = ctx.context
+    
+    try:
+        # Get NPC details
+        npc_details = await get_npc_details(ctx, npc_id)
+        if not npc_details:
+            return {
+                "success": False, 
+                "error": "NPC not found",
+                "fallback_to_narrative": True
+            }
+        
+        # Get NPC's narrative stage
+        stage = await get_npc_narrative_stage(
+            context.user_id, 
+            context.conversation_id, 
+            npc_id
+        )
+        
+        # Build context about recent exchanges
+        dialogue_depth = 0
+        recent_context = ""
+        if dialogue_context:
+            dialogue_depth = dialogue_context.dialogue_depth
+            if dialogue_depth > 0:
+                recent_context = f"\nConversation depth: {dialogue_depth} exchanges"
+                if dialogue_depth > 3:
+                    recent_context += "\n(Conversation getting long - consider wrapping up)"
+        
+        # Get recent memories with this NPC for better context
+        memory_context = ""
+        try:
+            memory_manager = await get_memory_manager(context.user_id, context.conversation_id)
+            npc_memories = await memory_manager.search_memories(
+                query_text=f"dialogue with {npc_details['npc_name']}",
+                tags=[f"npc_{npc_id}", "dialogue"],
+                limit=2,
+                use_vector=True
+            )
+            if npc_memories:
+                memory_context = "\nRecent exchanges:"
+                for mem in npc_memories[:2]:
+                    if hasattr(mem, 'content'):
+                        memory_context += f"\n- {mem.content[:100]}..."
+        except Exception as mem_error:
+            logger.warning(f"Could not retrieve dialogue memories: {mem_error}")
+        
+        # Determine appropriate response style based on stage
+        stage_guidance = {
+            "Innocent Beginning": "Friendly and casual, no power dynamics",
+            "First Doubts": "Subtly suggestive, gentle steering",
+            "Creeping Realization": "More confident, occasional gentle commands",
+            "Veil Thinning": "Openly manipulative, direct but not harsh",
+            "Full Revelation": "Complete control, expects obedience"
+        }
+        
+        style_guide = stage_guidance.get(stage.name, "Natural and character-appropriate")
+        
+        # Build the prompt
+        prompt = f"""Generate a quick dialogue response for {npc_details['npc_name']}.
+
+Player says: "{user_input}"
+
+NPC Profile:
+- Name: {npc_details['npc_name']}
+- Personality: {', '.join(npc_details.get('personality_traits', ['confident']))}
+- Narrative Stage: {stage.name}
+- Response Style: {style_guide}
+- Dominance: {npc_details.get('dominance', 50)}/100
+{recent_context}
+{memory_context}
+
+Generate ONLY a dialogue line (1-3 sentences max). 
+Keep it conversational and natural.
+Match their personality and current narrative stage.
+Do NOT include character names or action descriptions."""
+
+        # Use the dialogue generator agent
+        from story_agent.specialized_agents import Agent, Runner, ModelSettings
+        
+        dialogue_generator = Agent(
+            name="QuickDialogue",
+            instructions="""You generate brief, natural dialogue responses for NPCs.
+Keep responses under 3 sentences. Match the character's personality and narrative stage.
+Output only the spoken words, no names or actions.""",
+            model="gpt-4",
+            model_settings=ModelSettings(
+                temperature=0.7,
+                max_tokens=100
+            )
+        )
+        
+        result = await Runner.run(dialogue_generator, prompt)
+        dialogue_line = result.final_output.strip()
+        
+        # Clean up the response
+        # Remove character name if accidentally included
+        if ':' in dialogue_line:
+            parts = dialogue_line.split(':', 1)
+            if len(parts) > 1:
+                dialogue_line = parts[1].strip()
+        
+        # Remove quotes if wrapped
+        dialogue_line = dialogue_line.strip('"\'')
+        
+        # Update or create dialogue context
+        new_depth = dialogue_depth + 1
+        new_context = DialogueContext(
+            in_dialogue=True,
+            npc_id=npc_id,
+            npc_name=npc_details['npc_name'],
+            dialogue_depth=new_depth,
+            last_exchange=datetime.now(),
+            dialogue_type=dialogue_context.dialogue_type if dialogue_context else "casual"
+        )
+        
+        # Determine if we should suggest exiting dialogue
+        should_exit = False
+        exit_reason = None
+        
+        if new_depth > 6:
+            should_exit = True
+            exit_reason = "Conversation running long"
+        elif any(farewell in dialogue_line.lower() for farewell in ['goodbye', 'farewell', 'see you', 'talk later']):
+            should_exit = True
+            exit_reason = "Natural conversation end"
+        elif len(user_input.split()) > 20:
+            should_exit = True
+            exit_reason = "Player input suggests narrative action"
+        
+        # Create a memory of this exchange
+        try:
+            memory_manager = await get_memory_manager(context.user_id, context.conversation_id)
+            await memory_manager.add_memory(
+                content=f"Dialogue: Player: '{user_input}' | {npc_details['npc_name']}: '{dialogue_line}'",
+                memory_type="dialogue",
+                importance=0.4,
+                tags=["dialogue", "conversation", f"npc_{npc_id}", stage.name.lower().replace(" ", "_")],
+                metadata={
+                    "dialogue_mode": True,
+                    "exchange_number": new_depth,
+                    "npc_id": npc_id,
+                    "stage": stage.name
+                }
+            )
+        except Exception as mem_error:
+            logger.warning(f"Could not store dialogue memory: {mem_error}")
+        
+        return {
+            "success": True,
+            "npc_id": npc_id,
+            "npc_name": npc_details['npc_name'],
+            "dialogue": dialogue_line,
+            "dialogue_context": new_context.model_dump(),
+            "stage": stage.name,
+            "dominance": npc_details.get('dominance', 50),
+            "should_exit_dialogue": should_exit,
+            "exit_reason": exit_reason,
+            "exchange_number": new_depth
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating dialogue exchange: {e}", exc_info=True)
+        return {
+            "success": False, 
+            "error": str(e),
+            "fallback_to_narrative": True
+        }
+
+@function_tool
+async def exit_dialogue_mode(
+    ctx: RunContextWrapper[ContextType],
+    dialogue_context: DialogueContext,
+    reason: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Gracefully exit dialogue mode and return to full narrative.
+    
+    Args:
+        dialogue_context: Current dialogue context
+        reason: Optional reason for exiting
+        
+    Returns:
+        Exit confirmation with transition text
+    """
+    context = ctx.context
+    
+    try:
+        if not dialogue_context or not dialogue_context.in_dialogue:
+            return {
+                "success": True,
+                "already_exited": True,
+                "message": "Not currently in dialogue mode"
+            }
+        
+        # Create a summary of the conversation
+        summary_parts = [
+            f"Ended {dialogue_context.dialogue_depth}-exchange conversation with {dialogue_context.npc_name}"
+        ]
+        
+        if reason:
+            summary_parts.append(f"Reason: {reason}")
+        
+        # Determine transition text based on how conversation ended
+        transition_text = ""
+        if dialogue_context.dialogue_depth > 5:
+            transition_text = f"The conversation with {dialogue_context.npc_name} winds down."
+        elif reason and "farewell" in reason.lower():
+            transition_text = f"You part ways with {dialogue_context.npc_name}."
+        else:
+            transition_text = f"The moment passes."
+        
+        # Store conversation summary
+        try:
+            memory_manager = await get_memory_manager(context.user_id, context.conversation_id)
+            await memory_manager.add_memory(
+                content=" ".join(summary_parts),
+                memory_type="dialogue_end",
+                importance=0.5,
+                tags=["dialogue", "conversation_end", f"npc_{dialogue_context.npc_id}"],
+                metadata={
+                    "total_exchanges": dialogue_context.dialogue_depth,
+                    "dialogue_type": dialogue_context.dialogue_type
+                }
+            )
+        except Exception as mem_error:
+            logger.warning(f"Could not store dialogue summary: {mem_error}")
+        
+        return {
+            "success": True,
+            "exited_dialogue": True,
+            "message": "Returning to full narrative mode",
+            "transition_text": transition_text,
+            "conversation_summary": {
+                "npc_name": dialogue_context.npc_name,
+                "total_exchanges": dialogue_context.dialogue_depth,
+                "duration_seconds": (
+                    (datetime.now() - dialogue_context.last_exchange).seconds 
+                    if dialogue_context.last_exchange else 0
+                )
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error exiting dialogue mode: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Error transitioning to narrative mode"
+        }
+
+@function_tool
+async def get_dialogue_suggestions(
+    ctx: RunContextWrapper[ContextType],
+    npc_id: int,
+    dialogue_context: Optional[DialogueContext] = None,
+    context_hint: Optional[str] = None
+) -> List[str]:
+    """
+    Get contextually appropriate dialogue suggestions for the player.
+    
+    Args:
+        npc_id: ID of the NPC in conversation
+        dialogue_context: Current dialogue context
+        context_hint: Optional hint about conversation topic
+        
+    Returns:
+        List of 3-5 suggested player dialogue options
+    """
+    context = ctx.context
+    
+    try:
+        # Get NPC details and stage
+        npc_details = await get_npc_details(ctx, npc_id)
+        if not npc_details:
+            return ["What?", "I see.", "I should go."]
+            
+        stage = await get_npc_narrative_stage(
+            context.user_id, 
+            context.conversation_id, 
+            npc_id
+        )
+        
+        # Base suggestions on narrative stage and context
+        suggestions = []
+        
+        # Stage-specific suggestions
+        stage_suggestions = {
+            "Innocent Beginning": [
+                "How have you been?",
+                "What do you think about that?",
+                "That's interesting...",
+                "Want to hang out sometime?",
+                "I should get going."
+            ],
+            "First Doubts": [
+                "You seem different lately.",
+                "Why do you say that?",
+                "I'm not sure I understand.",
+                "That's... an interesting way to put it.",
+                "I need to think about this."
+            ],
+            "Creeping Realization": [
+                "Yes, of course.",
+                "Do I have to?",
+                "What are you really asking?",
+                "I... I'll do it.",
+                "This feels strange."
+            ],
+            "Veil Thinning": [
+                "As you wish.",
+                "I understand.",
+                "Yes, Ma'am.",
+                "Please, I need a moment.",
+                "Why does this feel so natural?"
+            ],
+            "Full Revelation": [
+                "Yes, Mistress.",
+                "I obey.",
+                "Thank you for your guidance.",
+                "How may I serve?",
+                "I am yours."
+            ]
+        }
+        
+        # Get base suggestions for stage
+        base_suggestions = stage_suggestions.get(stage.name, stage_suggestions["Innocent Beginning"])
+        
+        # Adjust based on dialogue depth if available
+        if dialogue_context and dialogue_context.dialogue_depth > 3:
+            # Add exit options for long conversations
+            base_suggestions = base_suggestions[:-1] + ["I should go.", "We'll talk later."]
+        
+        # Add context-specific options if hint provided
+        if context_hint:
+            hint_lower = context_hint.lower()
+            if "conflict" in hint_lower or "problem" in hint_lower:
+                base_suggestions.insert(0, "What should we do about it?")
+            elif "request" in hint_lower or "task" in hint_lower:
+                base_suggestions.insert(0, "What do you need me to do?")
+            elif "personal" in hint_lower:
+                base_suggestions.insert(0, "You can tell me anything.")
+        
+        # Ensure variety and appropriateness
+        suggestions = base_suggestions[:5]  # Limit to 5 options
+        
+        # Adjust formality based on dominance
+        if npc_details.get('dominance', 50) > 70 and stage.name != "Innocent Beginning":
+            # Make suggestions more respectful/submissive
+            suggestions = [s.replace(".", ", Ma'am.") if not any(
+                word in s.lower() for word in ['ma\'am', 'mistress', 'yes', 'no']
+            ) else s for s in suggestions]
+        
+        return suggestions
+        
+    except Exception as e:
+        logger.error(f"Error getting dialogue suggestions: {e}", exc_info=True)
+        return ["What?", "I see.", "Goodbye."]
+
+@function_tool
+async def analyze_dialogue_flow(
+    ctx: RunContextWrapper[ContextType],
+    dialogue_history: List[Dict[str, str]],
+    npc_id: int
+) -> Dict[str, Any]:
+    """
+    Analyze the flow and dynamics of an ongoing dialogue.
+    
+    Args:
+        dialogue_history: List of dialogue exchanges
+        npc_id: ID of the NPC in conversation
+        
+    Returns:
+        Analysis of dialogue progression and dynamics
+    """
+    context = ctx.context
+    
+    try:
+        # Get NPC details
+        npc_details = await get_npc_details(ctx, npc_id)
+        if not npc_details:
+            return {"success": False, "error": "NPC not found"}
+        
+        stage = await get_npc_narrative_stage(
+            context.user_id, 
+            context.conversation_id, 
+            npc_id
+        )
+        
+        # Analyze dialogue patterns
+        total_exchanges = len(dialogue_history)
+        player_word_count = sum(len(ex.get('player', '').split()) for ex in dialogue_history)
+        npc_word_count = sum(len(ex.get('npc', '').split()) for ex in dialogue_history)
+        
+        # Detect power dynamics shifts
+        submission_indicators = ['yes', 'okay', 'sorry', 'please', "ma'am", 'mistress']
+        resistance_indicators = ['no', 'why', 'but', "don't", "can't", "won't"]
+        
+        player_submission_score = 0
+        player_resistance_score = 0
+        
+        for exchange in dialogue_history:
+            player_text = exchange.get('player', '').lower()
+            for indicator in submission_indicators:
+                if indicator in player_text:
+                    player_submission_score += 1
+            for indicator in resistance_indicators:
+                if indicator in player_text:
+                    player_resistance_score += 1
+        
+        # Determine dialogue dynamic
+        if player_submission_score > player_resistance_score * 2:
+            dynamic = "submissive"
+        elif player_resistance_score > player_submission_score * 2:
+            dynamic = "resistant"
+        else:
+            dynamic = "balanced"
+        
+        # Check for escalation
+        escalation_detected = False
+        if total_exchanges > 3:
+            # Compare early vs late exchanges
+            early_submission = sum(1 for ex in dialogue_history[:2] 
+                                 for word in submission_indicators 
+                                 if word in ex.get('player', '').lower())
+            late_submission = sum(1 for ex in dialogue_history[-2:] 
+                                for word in submission_indicators 
+                                if word in ex.get('player', '').lower())
+            escalation_detected = late_submission > early_submission
+        
+        # Recommendations
+        recommendations = []
+        if total_exchanges > 5:
+            recommendations.append("Consider wrapping up - conversation getting long")
+        if dynamic == "resistant" and stage.name in ["Veil Thinning", "Full Revelation"]:
+            recommendations.append("Player resistance conflicts with established dynamic")
+        if escalation_detected:
+            recommendations.append("Power dynamic escalation detected")
+        
+        return {
+            "success": True,
+            "total_exchanges": total_exchanges,
+            "average_player_words": player_word_count / max(1, total_exchanges),
+            "average_npc_words": npc_word_count / max(1, total_exchanges),
+            "dialogue_dynamic": dynamic,
+            "submission_score": player_submission_score,
+            "resistance_score": player_resistance_score,
+            "escalation_detected": escalation_detected,
+            "npc_stage": stage.name,
+            "recommendations": recommendations
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing dialogue flow: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 @function_tool
 async def retrieve_relevant_memories(
@@ -3591,6 +4307,14 @@ async def get_player_journal_entries(
 
 # ===== TOOL LISTS FOR EXPORT =====
 
+dialogue_tools = [
+    detect_dialogue_mode,
+    generate_dialogue_exchange,
+    exit_dialogue_mode,
+    get_dialogue_suggestions,
+    analyze_dialogue_flow
+]
+
 # Context management tools
 context_tools = [
     get_optimized_context,
@@ -3639,7 +4363,7 @@ conflict_tools = [
     track_conflict_story_beat,
     suggest_potential_manipulation,
     analyze_manipulation_opportunities,
-    generate_conflict_beat  # Add this
+    generate_conflict_beat
 ]
 
 # Resource management tools
@@ -3651,14 +4375,14 @@ resource_tools = [
     get_resource_history
 ]
 
-# Narrative element tools
+# Narrative element tools (now includes dialogue tools)
 narrative_tools = [
-    generate_personal_revelation,  # Keep legacy version
-    generate_dream_sequence,       # Keep legacy version
+    generate_personal_revelation,
+    generate_dream_sequence,
     check_relationship_events,
     add_moment_of_clarity,
     get_player_journal_entries
-] + npc_narrative_tools  # Add all the new NPC-specific tools
+] + npc_narrative_tools + dialogue_tools  # Add dialogue tools here
 
 # All tools combined
 all_tools = (
@@ -3667,7 +4391,7 @@ all_tools = (
     relationship_tools +
     conflict_tools +
     resource_tools +
-    narrative_tools
+    narrative_tools  # This now includes dialogue_tools
 )
 
 # Export for easy access
@@ -3679,5 +4403,6 @@ __all__ = [
     'resource_tools',
     'narrative_tools',
     'npc_narrative_tools',
+    'dialogue_tools',  # Add this
     'all_tools'
 ]
