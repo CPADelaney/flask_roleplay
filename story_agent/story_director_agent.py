@@ -18,7 +18,7 @@ from story_agent.tools import (
     TriggerEventData, ConflictEvolutionData,
     NarrativeEventContent, NarrativeMomentContent,
     PersonalRevelationContent, DreamSequenceContent,
-    NPCRevelationContent
+    NPCRevelationContent, generate_conflict_beat
 )
 
 # Nyx governance integration
@@ -851,6 +851,7 @@ def create_story_director_agent():
         generate_conflict,
         evolve_conflict,
         resolve_conflict_path,
+        generate_conflict_beat,
     ]
 
     all_tools = [tool for tool in all_tools if tool is not None]
