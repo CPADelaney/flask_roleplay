@@ -1759,6 +1759,25 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS NPCNarrativeProgression (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    npc_id INTEGER NOT NULL,
+                    narrative_stage VARCHAR(50) NOT NULL DEFAULT 'Innocent Beginning',
+                    corruption INTEGER DEFAULT 0,
+                    dependency INTEGER DEFAULT 0,
+                    realization_level INTEGER DEFAULT 0,
+                    last_revelation TIMESTAMP,
+                    stage_entered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    stage_history JSONB DEFAULT '[]'::jsonb,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
+                    UNIQUE(user_id, conversation_id, npc_id)
+                );
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS NyxConversations (
                     nyx_conv_id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
