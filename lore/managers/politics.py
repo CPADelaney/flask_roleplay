@@ -553,7 +553,7 @@ class WorldPoliticsManager(BaseLoreManager):
             cultural_traits = cultural_traits or []
             neighboring_nations = neighboring_nations or []
         
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     nation_id = await conn.fetchval("""
                         INSERT INTO Nations (
@@ -609,7 +609,7 @@ class WorldPoliticsManager(BaseLoreManager):
         cultural_traits = cultural_traits or []
         neighboring_nations = neighboring_nations or []
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Use canon system to check for duplicates
                 embedding_text = f"{name} {government_type} {description}"
@@ -674,7 +674,7 @@ class WorldPoliticsManager(BaseLoreManager):
             notable_conflicts = notable_conflicts or []
             notable_alliances = notable_alliances or []
         
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     relation_id = await conn.fetchval("""
                         INSERT INTO InternationalRelations (
@@ -761,7 +761,7 @@ class WorldPoliticsManager(BaseLoreManager):
             return cached
 
         await self.ensure_initialized()
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nations = await conn.fetch("""
                     SELECT id, name, government_type, description, relative_power,
@@ -806,7 +806,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 model_settings=ModelSettings(temperature=0.9)
             )
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     from lore.core import canon
                     
@@ -948,7 +948,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     if not isinstance(emb, list):
                         emb = emb.tolist()
     
-                    async with self.get_connection_pool() as pool:
+                    async with await self.get_connection_pool() as pool:
                         async with pool.acquire() as conn:
                             await conn.execute("""
                                 INSERT INTO ConflictNews (
@@ -975,7 +975,7 @@ class WorldPoliticsManager(BaseLoreManager):
         lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
         
         # Verify the new leader exists
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 leader = await conn.fetchrow("""
                     SELECT id, name FROM NPCStats WHERE id = $1
@@ -1255,7 +1255,7 @@ class WorldPoliticsManager(BaseLoreManager):
             run_ctx = RunContextWrapper(context=ctx.context)
             await self.ensure_initialized()
     
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     from lore.core import canon
                     
@@ -1321,7 +1321,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     if not all(k in issue_data for k in ["name","description","issue_type"]):
                         continue
     
-                    async with self.get_connection_pool() as pool:
+                    async with await self.get_connection_pool() as pool:
                         async with pool.acquire() as conn:
                             # Prepare data for canon
                             issue_data_package = {
@@ -1420,7 +1420,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     if not isinstance(emb, list):
                         emb = emb.tolist()
     
-                    async with self.get_connection_pool() as pool:
+                    async with await self.get_connection_pool() as pool:
                         async with pool.acquire() as conn:
                             await conn.fetchval("""
                                 INSERT INTO DomesticNews (
@@ -1463,7 +1463,7 @@ class WorldPoliticsManager(BaseLoreManager):
             return cached
 
         await self.ensure_initialized()
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 conflicts = await conn.fetch("""
                     SELECT * FROM NationalConflicts
@@ -1510,7 +1510,7 @@ class WorldPoliticsManager(BaseLoreManager):
             return cached
 
         await self.ensure_initialized()
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation = await conn.fetchrow("""
                     SELECT * FROM Nations WHERE id = $1
@@ -1635,7 +1635,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 "leadership_changes": []
             }
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     for conflict in active_conflicts:
                         conflict_id = conflict["id"]
@@ -1775,7 +1775,7 @@ class WorldPoliticsManager(BaseLoreManager):
         resolution_data: Dict[str, Any]
     ) -> None:
         """Update relations between nations after conflict resolution."""
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get existing relation
                 relation = await conn.fetchrow("""
@@ -1889,7 +1889,7 @@ class WorldPoliticsManager(BaseLoreManager):
     
                 bias = "pro_aggressor" if nation["id"] == conflict.get("primary_aggressor") else "pro_defender"
     
-                async with self.get_connection_pool() as pool:
+                async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         await conn.execute("""
                             INSERT INTO ConflictNews (
@@ -1927,7 +1927,7 @@ class WorldPoliticsManager(BaseLoreManager):
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     from lore.core import canon
                     
@@ -1973,7 +1973,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 "matriarchy_level": new_matriarchy
             }
     
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     # Use canon to update nation
                     await canon.update_nation_politics(ctx, conn, nation_id, reform_data)
@@ -2021,7 +2021,7 @@ class WorldPoliticsManager(BaseLoreManager):
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
             
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     from lore.core import canon
                     
@@ -2060,7 +2060,7 @@ class WorldPoliticsManager(BaseLoreManager):
     
             # Insert new members into DynastyLineages using canon
             new_members = lineage_updates.get("new_members", [])
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     for member in new_members:
                         member_data = {
@@ -2128,7 +2128,7 @@ class WorldPoliticsManager(BaseLoreManager):
             run_ctx = RunContextWrapper(context=ctx.context)
     
             await self.ensure_initialized()
-            async with self.get_connection_pool() as pool:
+            async with await self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     factions = await conn.fetch("""
                         SELECT id, name, type, description, values, goals, cultural_traits, territory
@@ -2149,7 +2149,7 @@ class WorldPoliticsManager(BaseLoreManager):
     async def _get_conflict_details(self, conflict_id: int) -> Optional[Dict[str, Any]]:
         """Load conflict details from DB."""
         await self.ensure_initialized()
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow("SELECT * FROM NationalConflicts WHERE id=$1", conflict_id)
                 if row:
@@ -2165,7 +2165,7 @@ class WorldPoliticsManager(BaseLoreManager):
     async def _load_negotiating_nations(self, nation1_id: int, nation2_id: int) -> Dict[str, Any]:
         """Helper to load two nations for negotiation."""
         await self.ensure_initialized()
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 n1 = await conn.fetchrow("SELECT * FROM Nations WHERE id=$1", nation1_id)
                 n2 = await conn.fetchrow("SELECT * FROM Nations WHERE id=$1", nation2_id)
@@ -2186,7 +2186,7 @@ class WorldPoliticsManager(BaseLoreManager):
         nation2_id = nations["nation2"]["id"]
         
         await self.ensure_initialized()
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if relation exists
                 relation = await conn.fetchrow("""
@@ -2234,7 +2234,7 @@ class WorldPoliticsManager(BaseLoreManager):
         then domestic issues, falling back to a generic event schema.
         """
         await self.ensure_initialized()
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Try to load as a national conflict
                 conflict = await conn.fetchrow("SELECT * FROM NationalConflicts WHERE id=$1", event_id)
@@ -2269,7 +2269,7 @@ class WorldPoliticsManager(BaseLoreManager):
         if not isinstance(emb, list):
             emb = emb.tolist()
             
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 if event_type == "national_conflict":
                     # Store as conflict news
