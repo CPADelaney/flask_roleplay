@@ -16,7 +16,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple, Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 # Agent SDK imports
-from agents import Agent, function_tool, RunContextWrapper, Runner
+from agents import Agent, function_tool, RunContextWrapper, Runner, ModelSettings
 
 # Database imports
 from db.connection import get_db_connection_context
@@ -147,7 +147,7 @@ activity_suggester = Agent(
     - Create memorable interactions
     """,
     model="gpt-4.1-nano",
-    temperature=0.7
+    model_settings=ModelSettings(temperature=0.7) 
 )
 
 # Agent for analyzing manipulation opportunities
@@ -171,7 +171,7 @@ manipulation_analyst = Agent(
     - Suggests believable manipulation tactics
     """,
     model="gpt-4.1-nano",
-    temperature=0.6
+    model_settings=ModelSettings(temperature=0.6) 
 )
 
 conflict_beat_writer = Agent(
@@ -201,7 +201,7 @@ conflict_beat_writer = Agent(
     IMPACT: [brief description of consequences]
     """,
     model="gpt-4.1-nano",
-    temperature=0.7
+    model_settings=ModelSettings(temperature=0.7) 
 )
 
 dialogue_detector = Agent(
@@ -227,7 +227,7 @@ dialogue_detector = Agent(
     Assess confidence level (0.0-1.0) based on how clear the signals are.
     """,
     model="gpt-4.1-nano",
-    temperature=0.3
+    model_settings=ModelSettings(temperature=0.3) 
 )
 
 # ===== PYDANTIC MODELS =====
@@ -3771,215 +3771,156 @@ async def get_resource_history(
 @function_tool
 @track_performance("generate_personal_revelation")
 async def generate_personal_revelation(
-    ctx: RunContextWrapper[ContextType], 
-    npc_name: str, 
+    ctx: RunContextWrapper[ContextType],
+    npc_name: str,
     revelation_type: str
 ) -> Dict[str, Any]:
     """
-    Generate a personal revelation for the player about their relationship with an NPC.
-
-    Args:
-        npc_name: Name of the NPC involved in the revelation
-        revelation_type: Type of revelation
-
-    Returns:
-        A personal revelation
+    Generate a *bespoke* personal revelation (internal monologue) using the
+    RevelationGenerator agent instead of static templates.
     """
     context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-    
-    # Define revelation templates based on type
-    templates = {
-        "dependency": [
-            f"I've been checking my phone constantly to see if {npc_name} has messaged me. When did I start needing her approval so much?",
-            f"I realized today that I haven't made a significant decision without consulting {npc_name} in weeks. Is that normal?",
-            f"The thought of spending a day without talking to {npc_name} makes me anxious. I should be concerned about that, shouldn't I?"
-        ],
-        "obedience": [
-            f"I caught myself automatically rearranging my schedule when {npc_name} hinted she wanted to see me. I didn't even think twice about it.",
-            f"Today I changed my opinion the moment I realized it differed from {npc_name}'s. That's... not like me. Or is it becoming like me?",
-            f"{npc_name} gave me that look, and I immediately stopped what I was saying. When did her disapproval start carrying so much weight?"
-        ],
-        "corruption": [
-            f"I found myself enjoying the feeling of following {npc_name}'s instructions perfectly. The pride I felt at her approval was... intense.",
-            f"Last year, I would have been offended if someone treated me the way {npc_name} did today. Now I'm grateful for her attention.",
-            f"Sometimes I catch glimpses of my old self, like a stranger I used to know. When did I change so fundamentally?"
-        ],
-        "willpower": [
-            f"I had every intention of saying no to {npc_name} today. The 'yes' came out before I even realized I was speaking.",
-            f"I've been trying to remember what it felt like to disagree with {npc_name}. The memory feels distant, like it belongs to someone else.",
-            f"I made a list of boundaries I wouldn't cross. Looking at it now, I've broken every single one at {npc_name}'s suggestion."
-        ],
-        "confidence": [
-            f"I opened my mouth to speak in the meeting, then saw {npc_name} watching me. I suddenly couldn't remember what I was going to say.",
-            f"I used to trust my judgment. Now I find myself second-guessing every thought that {npc_name} hasn't explicitly approved.",
-            f"When did I start feeling this small? This uncertain? I can barely remember how it felt to be sure of myself."
-        ]
-    }
+    user_id, conversation_id = context.user_id, context.conversation_id
+
+    # ---- build a focused prompt for the agent ----
+    prompt = f"""
+    Give me a first-person internal monologue in which the player realises a new
+    level of **{revelation_type}** in their relationship with {npc_name}.
+    • Keep it concise (1-3 sentences).
+    • Show subtle unease rather than outright horror.
+    • Write in present tense, no dialogue tags.
+    """
 
     try:
-        revelation_templates = templates.get(
-            revelation_type.lower(), 
-            templates["dependency"]
-        )
-        inner_monologue = random.choice(revelation_templates)
+        # run the agent
+        result = await Runner.run(revelation_generator, prompt)
+        inner_monologue: str = result.output.strip().strip('"')
 
+        # --- persist exactly as before ---
         canon_ctx = SimpleContext(user_id, conversation_id)
-        
         async with get_db_connection_context() as conn:
-            try:
-                # Use canon to create journal entry
-                journal_id = await canon.create_journal_entry(
-                    ctx=canon_ctx,
-                    conn=conn,
-                    entry_type='personal_revelation',
-                    entry_text=inner_monologue,
-                    revelation_types=revelation_type,
-                    narrative_moment=None,
-                    fantasy_flag=False,
-                    intensity_level=0,
-                    importance=0.8,
-                    tags=[
-                        revelation_type, 
-                        "revelation", 
-                        npc_name.lower().replace(" ", "_")
-                    ]
-                )
+            journal_id = await canon.create_journal_entry(
+                ctx=canon_ctx,
+                conn=conn,
+                entry_type="personal_revelation",
+                entry_text=inner_monologue,
+                revelation_types=revelation_type,
+                narrative_moment=None,
+                fantasy_flag=False,
+                intensity_level=0,
+                importance=0.8,
+                tags=[revelation_type, "revelation",
+                      npc_name.lower().replace(" ", "_")]
+            )
 
-                if hasattr(context, 'add_narrative_memory'):
-                    await context.add_narrative_memory(
-                        f"Personal revelation about {npc_name}: {inner_monologue}", 
-                        "personal_revelation", 
-                        0.8, 
-                        tags=[
-                            revelation_type, 
-                            "revelation", 
-                            npc_name.lower().replace(" ", "_")
-                        ]
-                    )
-                    
-                if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                    await context.narrative_manager.add_revelation(
-                        content=inner_monologue, 
-                        revelation_type=revelation_type, 
-                        importance=0.8, 
-                        tags=[revelation_type, "revelation"]
-                    )
+        if hasattr(context, "add_narrative_memory"):
+            await context.add_narrative_memory(
+                f"Personal revelation about {npc_name}: {inner_monologue}",
+                "personal_revelation",
+                0.8,
+                tags=[revelation_type, "revelation",
+                      npc_name.lower().replace(" ", "_")]
+            )
 
-                return {
-                    "type": "personal_revelation", 
-                    "name": f"{revelation_type.capitalize()} Awareness", 
-                    "inner_monologue": inner_monologue, 
-                    "journal_id": journal_id, 
-                    "success": True
-                }
-            except Exception as db_error:
-                logger.error(f"Database error recording personal revelation: {db_error}")
-                raise
-    except Exception as e:
-        logger.error(f"Error generating personal revelation: {str(e)}", exc_info=True)
+        if getattr(context, "narrative_manager", None):
+            await context.narrative_manager.add_revelation(
+                content=inner_monologue,
+                revelation_type=revelation_type,
+                importance=0.8,
+                tags=[revelation_type, "revelation"]
+            )
+
         return {
-            "type": "personal_revelation", 
-            "name": f"{revelation_type.capitalize()} Awareness", 
-            "inner_monologue": f"Error generating revelation: {str(e)}", 
-            "success": False
+            "type": "personal_revelation",
+            "name": f"{revelation_type.capitalize()} Awareness",
+            "inner_monologue": inner_monologue,
+            "journal_id": journal_id,
+            "success": True
         }
+
+    except Exception as e:
+        logger.error("Error generating personal revelation", exc_info=True)
+        return {"success": False,
+                "error": str(e),
+                "type": "personal_revelation"}
+
 
 @function_tool
 @track_performance("generate_dream_sequence")
 async def generate_dream_sequence(
-    ctx: RunContextWrapper[ContextType], 
+    ctx: RunContextWrapper[ContextType],
     npc_names: List[str]
 ) -> Dict[str, Any]:
     """
-    Generate a symbolic dream sequence based on player's current state.
-
-    Args:
-        npc_names: List of NPC names to include in the dream
-
-    Returns:
-        A dream sequence
+    Produce a symbolic dream via the DreamWeaver agent instead of picking from a
+    fixed list.
     """
-    while len(npc_names) < 3: 
-        npc_names.append(f"Unknown Figure {len(npc_names) + 1}")
+    # ensure at least 3 placeholders for coherence
+    while len(npc_names) < 3:
+        npc_names.append(f"Unknown Figure {len(npc_names)+1}")
     npc1, npc2, npc3 = npc_names[:3]
-    
-    # Dream templates
-    dream_templates = [
-        f"""You're sitting in a chair as {npc1} circles you slowly. "Show me your hands," she says. You extend them, surprised to find intricate strings wrapped around each finger, extending upward. "Do you see who's holding them?" she asks. You look up, but the ceiling is mirrored, showing only your own face looking back down at you, smiling with an expression that isn't yours.""",
-        
-        f"""You're searching your home frantically, calling {npc1}'s name. The rooms shift and expand, doorways leading to impossible spaces. Your phone rings. It's {npc1}. "Where are you?" you ask desperately. "I'm right here," she says, her voice coming both from the phone and from behind you. "I've always been right here. You're the one who's lost." """,
-        
-        f"""You're trying to walk away from {npc1}, but your feet sink deeper into the floor with each step. "I don't understand why you're struggling," she says, not moving yet somehow keeping pace beside you. "You stopped walking on your own long ago." You look down to find your legs have merged with the floor entirely, indistinguishable from the material beneath.""",
-        
-        f"""You're giving a presentation to a room full of people, but every time you speak, your voice comes out as {npc1}'s voice, saying words you didn't intend. The audience nods approvingly. "Much better," whispers {npc2} from beside you. "Your ideas were never as good as hers anyway." """,
-        
-        f"""You're walking through an unfamiliar house, opening doors that should lead outside but only reveal more rooms. In each room, {npc1} is engaged in a different activity, wearing a different expression. In the final room, all versions of her turn to look at you simultaneously. "Which one is real?" they ask in unison. "The one you needed, or the one who needed you?" """,
-        
-        f"""You're swimming in deep water. Below you, {npc1} and {npc2} walk along the bottom, looking up at you and conversing, their voices perfectly clear despite the water. "They still think they're above it all," says {npc1}, and they both laugh. You realize you can't remember how to reach the surface."""
-    ]
+
+    prompt = f"""
+    Create a brief (120-180 words) second-person dream sequence that feels
+    surreal and faintly disquieting.
+
+    • Feature {npc1}, {npc2}, and {npc3}.
+    • Symbols of control, dependency, transformation must appear.
+    • Keep explicit content mild; rely on implication and atmosphere.
+    • End with an unresolved image or question.
+    """
+
+    context = ctx.context
+    user_id, conversation_id = context.user_id, context.conversation_id
 
     try:
-        dream_text = random.choice(dream_templates)
-        context = ctx.context
-        user_id = context.user_id
-        conversation_id = context.conversation_id
+        result = await Runner.run(dream_weaver, prompt)
+        dream_text: str = result.output.strip()
 
         canon_ctx = SimpleContext(user_id, conversation_id)
-
         async with get_db_connection_context() as conn:
-            try:
-                # Use canon to create journal entry
-                journal_id = await canon.create_journal_entry(
-                    ctx=canon_ctx,
-                    conn=conn,
-                    entry_type='dream_sequence',
-                    entry_text=dream_text,
-                    revelation_types=None,
-                    narrative_moment=True,
-                    fantasy_flag=True,
-                    intensity_level=0,
-                    importance=0.7,
-                    tags=["dream", "symbolic"] + [
-                        npc.lower().replace(" ", "_") for npc in npc_names[:3]
-                    ]
-                )
+            journal_id = await canon.create_journal_entry(
+                ctx=canon_ctx,
+                conn=conn,
+                entry_type="dream_sequence",
+                entry_text=dream_text,
+                narrative_moment=True,
+                fantasy_flag=True,
+                intensity_level=0,
+                importance=0.7,
+                tags=["dream", "symbolic"] + [
+                    n.lower().replace(" ", "_") for n in npc_names[:3]]
+            )
 
-                if hasattr(context, 'add_narrative_memory'):
-                    await context.add_narrative_memory(
-                        f"Dream sequence: {dream_text}", 
-                        "dream_sequence", 
-                        0.7, 
-                        tags=["dream", "symbolic"] + [
-                            npc.lower().replace(" ", "_") for npc in npc_names[:3]
-                        ]
-                    )
-                    
-                if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                    await context.narrative_manager.add_dream_sequence(
-                        content=dream_text, 
-                        symbols=[npc1, npc2, npc3, "control", "manipulation"], 
-                        importance=0.7, 
-                        tags=["dream", "symbolic"]
-                    )
+        if hasattr(context, "add_narrative_memory"):
+            await context.add_narrative_memory(
+                f"Dream sequence: {dream_text}",
+                "dream_sequence",
+                0.7,
+                tags=["dream", "symbolic"] + [
+                    n.lower().replace(" ", "_") for n in npc_names[:3]]
+            )
 
-                return {
-                    "type": "dream_sequence", 
-                    "text": dream_text, 
-                    "journal_id": journal_id, 
-                    "success": True
-                }
-            except Exception as db_error:
-                logger.error(f"Database error recording dream sequence: {db_error}")
-                raise
-    except Exception as e:
-        logger.error(f"Error generating dream sequence: {str(e)}", exc_info=True)
+        if getattr(context, "narrative_manager", None):
+            await context.narrative_manager.add_dream_sequence(
+                content=dream_text,
+                symbols=[npc1, npc2, npc3, "control", "transformation"],
+                importance=0.7,
+                tags=["dream", "symbolic"]
+            )
+
         return {
-            "type": "dream_sequence", 
-            "text": f"Error generating dream: {str(e)}", 
-            "success": False
+            "type": "dream_sequence",
+            "text": dream_text,
+            "journal_id": journal_id,
+            "success": True
         }
+
+    except Exception as e:
+        logger.error("Error generating dream sequence", exc_info=True)
+        return {"success": False,
+                "error": str(e),
+                "type": "dream_sequence"}
 
 @function_tool
 @track_performance("check_relationship_events")
