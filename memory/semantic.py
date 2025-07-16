@@ -1009,36 +1009,95 @@ class SemanticMemoryManager:
         current_topic: str,
     ) -> List[str]:
         """
-        Extract 2-3 related topics from *memory_text* via Responses API.
+        Extract 2-3 related topics from *memory_text* via the OpenAI Responses API.
+    
+        Falls back to a heuristic word-sampling strategy if the model call fails
+        or returns invalid JSON.
         """
         client = get_openai_client()
     
-        prompt = f"""
-        Memory: {memory_text}
-        Current topic: {current_topic}
+        system_msg = (
+            "You extract 2-3 short topical keywords related to the provided memory text. "
+            "Return ONLY a JSON array of strings. Example: [\"topic1\", \"topic2\"]. "
+            "Topics must be distinct and different from the current topic."
+        )
     
-        Return JSON array of 2-3 distinct but related topics.
-        Example: ["topic1", "topic2", "topic3"]
-        """
+        user_msg = f"""Memory: {memory_text}
+    Current topic: {current_topic}
+    Return JSON array of 2-3 related topics (strings)."""
     
-        try:
-            resp = client.responses.create(
-                model="gpt-4.1-nano",
-                instructions="You extract related topics. Always return a valid JSON array.",
-                input=prompt,
-                temperature=0.5
-            )
-            
-            # Check if response exists and is not empty
-            if not resp or not hasattr(resp, 'output_text') or not resp.output_text:
-                logger.warning("Empty response from OpenAI for topic extraction")
-                # Use fallback
-                words = [
-                    w.capitalize()
-                    for w in memory_text.split()
-                    if len(w) > 5 and w.lower() != current_topic.lower()
-                ]
-                return random.sample(words, min(3, len(words)))
+        # Retry loop (up to 3 attempts)
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = await client.responses.create(
+                    model="gpt-4.1-nano",
+                    input=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    temperature=0.5,
+                    max_output_tokens=100,
+                    response_format={"type": "json_schema", "json_schema": {
+                        "name": "topic_array",
+                        "schema": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "maxItems": 5,
+                        },
+                        "strict": True,
+                    }},
+                )
+    
+                raw = (resp.output_text or "").strip()
+                topics = json.loads(raw)
+    
+                # normalize: ensure list[str], filter current_topic, dedupe, trim whitespace
+                if not isinstance(topics, list):
+                    raise ValueError(f"Expected list, got {type(topics)}")
+                cleaned = []
+                seen = set()
+                cur_lower = current_topic.strip().lower()
+                for t in topics:
+                    if not isinstance(t, str):
+                        continue
+                    s = t.strip()
+                    if not s:
+                        continue
+                    if s.lower() == cur_lower:
+                        continue
+                    if s.lower() in seen:
+                        continue
+                    seen.add(s.lower())
+                    cleaned.append(s)
+                if cleaned:
+                    return cleaned[:3]
+    
+                raise ValueError("No usable topics in model output.")
+    
+            except Exception as e:  # catch JSON parse errors, API errors, etc.
+                last_err = e
+                logger.warning(
+                    "Topic extraction attempt %s failed: %s", attempt + 1, e
+                )
+                await asyncio.sleep(0.75 * (attempt + 1))
+    
+        # --- Fallback heuristic ------------------------------------------------
+        logger.error(
+            "Topic extraction failed after retries; using fallback. Last error: %s",
+            last_err,
+        )
+        words = [
+            w.capitalize()
+            for w in (memory_text or "").split()
+            if len(w) > 5 and w.strip() and w.strip().lower() != current_topic.lower()
+        ]
+        if not words:
+            return []
+        # sample up to 3 unique
+        k = min(3, len(words))
+        return random.sample(words, k)
 
 async def create_semantic_tables():
     """Create the necessary tables for the semantic memory system if they don't exist."""
