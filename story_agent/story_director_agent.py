@@ -12,6 +12,21 @@ from db.connection import get_db_connection_context
 
 from agents import Agent, function_tool, Runner, trace, handoff, ModelSettings, RunContextWrapper, FunctionTool
 
+from logic.npc_narrative_progression import (
+    get_npc_narrative_stage,
+    progress_npc_narrative_stage,
+    check_for_npc_revelation,
+    NPC_NARRATIVE_STAGES
+)
+from logic.narrative_events import (
+    get_relationship_overview,
+    check_for_personal_revelations,
+    check_for_narrative_moments,
+    add_dream_sequence,
+    add_moment_of_clarity,
+    analyze_narrative_tone
+)
+
 # Import the new schemas
 from story_agent.tools import (
     NPCInfo, RelationshipCrossroads, RelationshipRitual,
@@ -376,7 +391,9 @@ class StoryDirectorContext:
     
             elif "advance narrative" in instruction.lower():
                 params = directive.get("parameters", {})
-                stage_name = params.get("target_stage")
+                target_stage = params.get("target_stage")
+                npc_ids = params.get("npc_ids", [])  # Specific NPCs to advance
+                advance_all = params.get("advance_all", False)  # Advance all NPCs
                 
                 from lore.core.lore_system import LoreSystem
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
@@ -385,49 +402,168 @@ class StoryDirectorContext:
                     'user_id': self.directive_handler.user_id,
                     'conversation_id': self.directive_handler.conversation_id
                 })
-                            
+                
                 try:
-                    from logic.narrative_progression import advance_narrative_stage
-                    result = await advance_narrative_stage(self.user_id, self.conversation_id, stage_name)
+                    from logic.npc_narrative_progression import progress_npc_narrative_stage, NPC_NARRATIVE_STAGES
+                    from logic.narrative_events import get_relationship_overview
                     
+                    # Find the target stage
+                    target_stage_obj = None
+                    for stage in NPC_NARRATIVE_STAGES:
+                        if stage.name == target_stage:
+                            target_stage_obj = stage
+                            break
+                    
+                    if not target_stage_obj:
+                        return {"result": "error", "message": f"Unknown narrative stage: {target_stage}"}
+                    
+                    # Get NPCs to advance
+                    if advance_all:
+                        # Get all NPCs
+                        overview = await get_relationship_overview(self.user_id, self.conversation_id)
+                        npc_ids = [rel['npc_id'] for rel in overview.get('relationships', [])]
+                    elif not npc_ids:
+                        # Advance the most influential NPCs
+                        overview = await get_relationship_overview(self.user_id, self.conversation_id)
+                        most_advanced = overview.get('most_advanced_npcs', [])[:3]  # Top 3
+                        npc_ids = [npc['npc_id'] for npc in most_advanced]
+                    
+                    # Progress each NPC towards the target stage
+                    results = []
+                    for npc_id in npc_ids:
+                        # Calculate how much to increase stats to reach target stage
+                        current_stage = await get_npc_narrative_stage(self.user_id, self.conversation_id, npc_id)
+                        
+                        # Only advance if not already at or past target
+                        current_index = next((i for i, s in enumerate(NPC_NARRATIVE_STAGES) if s.name == current_stage.name), 0)
+                        target_index = next((i for i, s in enumerate(NPC_NARRATIVE_STAGES) if s.name == target_stage), 0)
+                        
+                        if current_index < target_index:
+                            # Calculate stat increases needed
+                            corruption_increase = max(0, target_stage_obj.required_corruption - 10)  # Slight boost
+                            dependency_increase = max(0, target_stage_obj.required_dependency - 10)
+                            realization_increase = max(0, target_stage_obj.required_realization - 10)
+                            
+                            result = await progress_npc_narrative_stage(
+                                self.user_id,
+                                self.conversation_id,
+                                npc_id,
+                                corruption_increase,
+                                dependency_increase,
+                                realization_increase,
+                                force_stage=target_stage if params.get("force", False) else None
+                            )
+                            results.append(result)
+                    
+                    # Log the narrative advancement
                     from lore.core import canon
                     async with get_db_connection_context() as conn:
                         await canon.log_canonical_event(
                             ctx, conn,
-                            f"Narrative stage advanced to: {stage_name}",
-                            tags=["narrative", "progression", stage_name.lower().replace(" ", "_")],
-                            significance=9
+                            f"Advanced {len(results)} NPCs towards {target_stage} stage",
+                            tags=["narrative", "progression", target_stage.lower().replace(" ", "_")],
+                            significance=8
                         )
                     
-                    return {"result": "narrative_advanced", "data": result}
+                    # Check for narrative events triggered by the advancement
+                    from logic.narrative_events import check_for_personal_revelations, check_for_narrative_moments
+                    
+                    revelation = await check_for_personal_revelations(self.user_id, self.conversation_id)
+                    moment = await check_for_narrative_moments(self.user_id, self.conversation_id)
+                    
+                    return {
+                        "result": "narrative_advanced",
+                        "data": {
+                            "npcs_advanced": len(results),
+                            "target_stage": target_stage,
+                            "results": results,
+                            "triggered_revelation": revelation is not None,
+                            "triggered_moment": moment is not None
+                        }
+                    }
+                    
                 except ImportError:
-                    logger.error("narrative_progression module not found.")
+                    logger.error("npc_narrative_progression module not found.")
                     return {"result": "error", "message": "Narrative progression module not available"}
                 except Exception as e:
                     logger.error(f"Error advancing narrative stage via directive: {e}", exc_info=True)
                     return {"result": "error", "message": str(e)}
-
+    
+            elif "trigger narrative event" in instruction.lower():
+                params = directive.get("parameters", {})
+                event_type = params.get("event_type", "revelation")
+                
+                try:
+                    from logic.narrative_events import (
+                        check_for_personal_revelations,
+                        check_for_narrative_moments,
+                        add_dream_sequence,
+                        add_moment_of_clarity
+                    )
+                    
+                    result = None
+                    if event_type == "revelation":
+                        result = await check_for_personal_revelations(self.user_id, self.conversation_id)
+                    elif event_type == "moment":
+                        result = await check_for_narrative_moments(self.user_id, self.conversation_id)
+                    elif event_type == "dream":
+                        result = await add_dream_sequence(self.user_id, self.conversation_id)
+                    elif event_type == "clarity":
+                        realization_text = params.get("realization_text")
+                        result = await add_moment_of_clarity(
+                            self.user_id, 
+                            self.conversation_id, 
+                            realization_text
+                        )
+                    
+                    return {
+                        "result": "narrative_event_triggered" if result else "no_event_triggered",
+                        "data": result
+                    }
+                    
+                except Exception as e:
+                    logger.error(f"Error triggering narrative event: {e}", exc_info=True)
+                    return {"result": "error", "message": str(e)}
+    
+            elif "analyze narrative tone" in instruction.lower():
+                params = directive.get("parameters", {})
+                text = params.get("text", "")
+                
+                try:
+                    from logic.narrative_events import analyze_narrative_tone
+                    
+                    analysis = await analyze_narrative_tone(text)
+                    
+                    return {
+                        "result": "tone_analyzed",
+                        "data": analysis
+                    }
+                    
+                except Exception as e:
+                    logger.error(f"Error analyzing narrative tone: {e}", exc_info=True)
+                    return {"result": "error", "message": str(e)}
+    
             elif "retrieve context" in instruction.lower():
                 params = directive.get("parameters", {})
                 input_text = params.get("input_text", "")
                 use_vector = params.get("use_vector", True)
-
+    
                 if not self.context_service:
                     logger.warning("Context service not initialized, attempting initialization.")
                     await self.initialize_context_components()
                 if not self.context_service:
                     logger.error("Context service failed to initialize.")
                     return {"result": "error", "message": "Context service not available"}
-
+    
                 context_data = await self.context_service.get_context(
                     input_text=input_text,
                     use_vector_search=use_vector
                 )
-
+    
                 return {"result": "context_retrieved", "data": context_data}
-
+    
             return {"result": "action_not_recognized"}
-
+    
         except Exception as e:
             logger.error(f"Error handling action directive: {e}", exc_info=True)
             return {"result": "error", "message": str(e)}
@@ -441,6 +577,32 @@ class StoryDirectorContext:
         logger.warning(f"Override directive received, but application logic is not implemented: {override_action}")
 
         return {"result": "override_applied"}
+
+    async def get_overall_narrative_stage(user_id: int, conversation_id: int):
+        """
+        Derive the overall narrative stage based on NPC relationship stages.
+        Returns the most advanced stage among all NPCs.
+        """
+        overview = await get_relationship_overview(user_id, conversation_id)
+        
+        # Order stages by progression
+        stage_order = {stage.name: i for i, stage in enumerate(NPC_NARRATIVE_STAGES)}
+        
+        most_advanced_stage = NPC_NARRATIVE_STAGES[0]  # Default to first stage
+        highest_index = 0
+        
+        for stage_name, npcs in overview.get('by_stage', {}).items():
+            if npcs and stage_name in stage_order:
+                stage_index = stage_order[stage_name]
+                if stage_index > highest_index:
+                    highest_index = stage_index
+                    # Find the actual stage object
+                    for stage in NPC_NARRATIVE_STAGES:
+                        if stage.name == stage_name:
+                            most_advanced_stage = stage
+                            break
+        
+        return most_advanced_stage
 
     def invalidate_cache(self, key: Optional[str] = None) -> None:
         """Invalidate specific cache key or entire cache"""
@@ -800,24 +962,35 @@ def create_story_director_agent():
         Use the tools at your disposal to:
         - Monitor the current state of the story (use get_story_state tool)
         - Check world tension and monitor for conflict opportunities
-        - Generate appropriate conflicts based on the narrative stage and world state
+        - Generate appropriate conflicts based on the narrative stage, relationship dynamics, and world state
         - Evolve conflicts based on player actions and story events (use evolve_conflict_from_event tool)
         - Trigger specific conflicts from major events (use trigger_conflict_event tool)
         - Create narrative moments, revelations, and dreams that align with the player's current state
         - Track and manage player resources in relation to conflicts
         - Process autonomous stakeholder actions to make conflicts feel alive
+        - Progress individual NPC narrative stages (use progress_npc_narrative tool)
+        - Check for and trigger personal revelations across multiple NPCs
+        - Create narrative moments that highlight NPC stage contrasts
+        - Track and manage player resources in relation to narrative events
+
+        Key principles for the new narrative system:
+        - Each NPC progresses independently through their own narrative stages
+        - NPCs at different stages create interesting dynamics (e.g., one revealing while another maintains innocence)
+        - Personal revelations should consider the aggregate effect of multiple relationships
+        - The overall narrative emerges from the interplay of individual NPC progressions
+        
+        NPC PROGRESSION GUIDELINES:
+        - NPCs progress at different rates based on player interactions
+        - Some NPCs may reveal their nature quickly, others maintain facades longer
+        - Contrasts between NPC stages create dramatic tension
+        - Coordinate NPCs at similar stages for group dynamics
+        - Use stage differences to create doubt and confusion
     
         Always maintain the central theme: a gradual shift in power dynamics where the player character slowly loses autonomy while believing they maintain control. 
-        Conflicts should reinforce this theme through manipulation, betrayal, and shifting alliances.
+        Different NPCs should embody different aspects of this control, creating a web of manipulation.
         
         CONFLICT GENERATION GUIDELINES:
         - Use check_for_conflict_opportunity when major events occur or tensions rise
-        - Generate conflicts organically when:
-          * Relationships deteriorate significantly  
-          * Power dynamics shift dramatically
-          * Resources become scarce
-          * Secrets are revealed
-          * The narrative reaches natural tension points
         - Don't force conflicts - let them emerge from the story
         - Consider the narrative stage when deciding conflict scale
         
@@ -851,6 +1024,7 @@ def create_story_director_agent():
         generate_conflict,
         evolve_conflict,
         resolve_conflict_path,
+        progress_npc_narrative,
         generate_conflict_beat,
     ]
 
@@ -955,35 +1129,39 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
     logger.info(f"Executing get_story_state tool for user {user_id}, conv {conversation_id}")
 
     try:
-        # Get current narrative stage
+        # Get overall narrative stage based on NPC relationships
         try:
-             from logic.narrative_progression import get_current_narrative_stage as fetch_narrative_stage
-             narrative_stage = await fetch_narrative_stage(user_id, conversation_id)
-             stage_info = NarrativeStageInfo(name=narrative_stage.name, description=narrative_stage.description) if narrative_stage else None
-        except (ImportError, AttributeError, Exception) as e:
-             logger.warning(f"Could not fetch narrative stage: {e}")
-             stage_info = None
+            narrative_stage = await get_overall_narrative_stage(user_id, conversation_id)
+            stage_info = NarrativeStageInfo(
+                name=narrative_stage.name, 
+                description=narrative_stage.description
+            ) if narrative_stage else None
+        except Exception as e:
+            logger.warning(f"Could not fetch narrative stage: {e}")
+            stage_info = None
+
+        # Get relationship overview for detailed NPC information
+        relationship_overview = await get_relationship_overview(user_id, conversation_id)
 
         # Get active conflicts
         active_conflicts_raw = await conflict_manager.get_active_conflicts()
         conflict_infos = [ConflictInfo(**conflict) for conflict in active_conflicts_raw]
 
-        # Get key NPCs - convert to NPCInfo models
+        # Get key NPCs from relationship overview
+        key_npcs = []
         try:
-            # Placeholder - replace with actual implementation
-            key_npcs = [
-                NPCInfo(
-                    npc_id=1,
-                    name="Placeholder NPC",
-                    status="Unknown",
-                    relationship_level=50,
-                    location="Unknown"
-                )
-            ]
-            logger.warning("Using placeholder for get_key_npcs")
+            # Get the most influential NPCs based on corruption/dependency
+            most_influential = relationship_overview.get('most_advanced_npcs', [])
+            for npc_data in most_influential[:5]:  # Top 5 NPCs
+                key_npcs.append(NPCInfo(
+                    npc_id=npc_data['npc_id'],
+                    name=npc_data['npc_name'],
+                    status=f"Stage: {npc_data['stage']}",
+                    relationship_level=npc_data.get('link_level', 50),
+                    location="Unknown"  # Would need to fetch from NPCStats
+                ))
         except Exception as e:
-            logger.warning(f"Could not fetch key NPCs: {e}")
-            key_npcs = []
+            logger.warning(f"Could not process key NPCs: {e}")
 
         # Get player resources and vitals
         resources_raw = await resource_manager.get_resources()
@@ -1001,87 +1179,98 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
         # Check for narrative events
         narrative_events = []
         try:
-            # Placeholders - replace with actual implementations
-            personal_revelation = None
+            # Check for personal revelations
+            personal_revelation = await check_for_personal_revelations(user_id, conversation_id)
             if personal_revelation:
                 narrative_events.append(NarrativeEvent(
                     event_type="personal_revelation",
                     content=PersonalRevelationContent(
-                        revelation_type="insight",
-                        title="New Understanding",
-                        inner_monologue="The player realizes something important..."
+                        revelation_type=personal_revelation.get('type', 'dependency'),
+                        title=personal_revelation.get('name', 'Personal Revelation'),
+                        inner_monologue=personal_revelation.get('inner_monologue', '')
                     ),
                     should_present=True,
                     priority=8
                 ))
 
-            narrative_moment = None
+            # Check for narrative moments
+            narrative_moment = await check_for_narrative_moments(user_id, conversation_id)
             if narrative_moment:
-                 narrative_events.append(NarrativeEvent(
+                narrative_events.append(NarrativeEvent(
                     event_type="narrative_moment",
                     content=NarrativeMomentContent(
-                        moment_type="tension",
-                        title="A Critical Moment",
-                        scene_text="The atmosphere becomes heavy with unspoken words..."
+                        moment_type="dynamic",
+                        title=narrative_moment.get('name', 'Narrative Moment'),
+                        scene_text=narrative_moment.get('scene_text', '')
                     ),
                     should_present=True,
                     priority=9
-                 ))
+                ))
 
-            npc_revelation = None
-            if npc_revelation:
-                 narrative_events.append(NarrativeEvent(
-                    event_type="npc_revelation",
-                    content=NPCRevelationContent(
-                        npc_id=1,
-                        revelation_type="secret",
-                        title="Hidden Truth",
-                        revelation_text="The NPC reveals something shocking...",
-                        changes_relationship=True
-                    ),
-                    should_present=True,
-                    priority=7
-                 ))
-            logger.warning("Using placeholders for narrative event checks")
+            # Check for NPC-specific revelations for key NPCs
+            for npc_info in key_npcs[:3]:  # Check top 3 NPCs
+                npc_revelation = await check_for_npc_revelation(user_id, conversation_id, npc_info.npc_id)
+                if npc_revelation:
+                    narrative_events.append(NarrativeEvent(
+                        event_type="npc_revelation",
+                        content=NPCRevelationContent(
+                            npc_id=npc_info.npc_id,
+                            revelation_type=npc_revelation.get('type', 'realization'),
+                            title=f"{npc_info.name} Revelation",
+                            revelation_text=npc_revelation.get('revelation_text', ''),
+                            changes_relationship=True
+                        ),
+                        should_present=True,
+                        priority=7
+                    ))
         except Exception as e:
-             logger.warning(f"Could not check for narrative events: {e}")
+            logger.warning(f"Error checking for narrative events: {e}")
 
         # Check for relationship events
         try:
+            # These would need to be implemented or imported from appropriate modules
             crossroads = None  # Placeholder
             ritual = None  # Placeholder
-            logger.warning("Using placeholders for relationship event checks")
         except Exception as e:
             logger.warning(f"Could not check for relationship events: {e}")
             crossroads, ritual = None, None
 
-        # Get NPC-specific narrative stages
+        # Add NPC-specific narrative stages to observations
         npc_stages = {}
-        for npc_info in key_npcs:
-            npc_id = npc_info.npc_id
-            from logic.npc_narrative_progression import get_npc_narrative_stage
-            stage = await get_npc_narrative_stage(user_id, conversation_id, npc_id)
-            npc_stages[npc_id] = {
-                'npc_name': npc_info.name,
-                'stage': stage.name,
-                'description': stage.description
+        for npc_data in relationship_overview.get('relationships', [])[:10]:  # Top 10 relationships
+            npc_stages[npc_data['npc_id']] = {
+                'npc_name': npc_data['npc_name'],
+                'stage': npc_data['stage'],
+                'corruption': npc_data['corruption'],
+                'dependency': npc_data['dependency'],
+                'realization': npc_data['realization']
             }
-        
-        # Add to state data
-        state_data.npc_narrative_stages = npc_stages
 
-        # Generate key observations
+        # Generate key observations based on relationship overview
         key_observations = []
         current_stage_name = stage_info.name if stage_info else "Unknown"
 
-        if current_stage_name in ["Creeping Realization", "Veil Thinning", "Full Revelation"]:
-            key_observations.append(f"Player has progressed to {current_stage_name} stage, indicating significant narrative development.")
+        # Stage distribution observations
+        stage_distribution = relationship_overview.get('stage_distribution', {})
+        if stage_distribution.get('Full Revelation', 0) > 0:
+            key_observations.append(f"{stage_distribution['Full Revelation']} NPCs have reached Full Revelation stage.")
+        if stage_distribution.get('Veil Thinning', 0) > 0:
+            key_observations.append(f"{stage_distribution['Veil Thinning']} NPCs are in Veil Thinning stage.")
+        
+        # Aggregate stats observations
+        aggregate_stats = relationship_overview.get('aggregate_stats', {})
+        avg_corruption = aggregate_stats.get('average_corruption', 0)
+        avg_dependency = aggregate_stats.get('average_dependency', 0)
+        if avg_corruption > 60:
+            key_observations.append(f"Average corruption across relationships is high: {avg_corruption:.1f}")
+        if avg_dependency > 60:
+            key_observations.append(f"Average dependency across relationships is high: {avg_dependency:.1f}")
+
+        # Conflict observations
         if len(conflict_infos) > 2:
             key_observations.append(f"Player is juggling {len(conflict_infos)} active conflicts.")
-        major_conflicts = [c for c in conflict_infos if c.conflict_type in ["major", "catastrophic"]]
-        if major_conflicts:
-            conflict_names = ", ".join([c.conflict_name for c in major_conflicts])
-            key_observations.append(f"Major conflicts in progress: {conflict_names}")
+        
+        # Resource observations
         if resource_status.money < 30:
             key_observations.append("Player is low on money.")
         if resource_status.energy < 30:
@@ -1089,15 +1278,18 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
         if resource_status.hunger > 70:
             key_observations.append("Player is significantly hungry.")
 
-        # Determine story direction
-        story_direction_map = {
-            "Innocent Beginning": "Introduce subtle hints of control dynamics.",
-            "First Doubts": "Highlight inconsistencies, raise questions.",
-            "Creeping Realization": "Test boundaries, NPCs more openly manipulative.",
-            "Veil Thinning": "Drop pretense more frequently, openly direct player.",
-            "Full Revelation": "Explicit nature of control acknowledged.",
-        }
-        story_direction = story_direction_map.get(current_stage_name, "Maintain current narrative trajectory.")
+        # Determine story direction based on stage distribution
+        story_direction = "Maintain current narrative trajectory."
+        if stage_distribution.get('Full Revelation', 0) >= 2:
+            story_direction = "Multiple NPCs have revealed their true nature. Focus on the consequences and player's acceptance or resistance."
+        elif stage_distribution.get('Veil Thinning', 0) >= 3:
+            story_direction = "Several NPCs are dropping their masks. Increase coordination between them."
+        elif stage_distribution.get('Creeping Realization', 0) >= 2:
+            story_direction = "Player is becoming aware of multiple manipulations. Test their boundaries."
+        elif stage_distribution.get('First Doubts', 0) >= 3:
+            story_direction = "Seeds of doubt are planted. Begin revealing inconsistencies."
+        else:
+            story_direction = "Continue subtle introduction of control dynamics."
 
         # Construct state object
         state_data = StoryStateUpdate(
@@ -1113,10 +1305,15 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
             last_updated=datetime.now(timezone.utc)
         )
 
+        # Store additional data in context
+        state_data.npc_narrative_stages = npc_stages
+        state_data.relationship_overview = relationship_overview
+
         # Add a memory about retrieving the state
         try:
             await context.add_narrative_memory(
-                f"Retrieved story state. Stage: {current_stage_name}. Conflicts: {len(conflict_infos)}.",
+                f"Retrieved story state. Overall stage: {current_stage_name}. "
+                f"NPCs in various stages: {stage_distribution}. Conflicts: {len(conflict_infos)}.",
                 "story_state_retrieval",
                 0.4
             )
@@ -1129,10 +1326,51 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
     except Exception as e:
         logger.error(f"Error executing get_story_state tool: {str(e)}", exc_info=True)
         return StoryStateUpdate(
-             key_observations=[f"Error retrieving state: {str(e)}"],
-             last_updated=datetime.now(timezone.utc)
+            key_observations=[f"Error retrieving state: {str(e)}"],
+            last_updated=datetime.now(timezone.utc)
         )
 
+# Add new tool for progressing NPC narrative stages
+@function_tool
+async def progress_npc_narrative(
+    ctx: RunContextWrapper[StoryDirectorContext],
+    npc_id: int,
+    corruption_change: int = 0,
+    dependency_change: int = 0,
+    realization_change: int = 0,
+    reason: str = ""
+) -> Dict[str, Any]:
+    """
+    Progress a specific NPC's narrative stage.
+    
+    Args:
+        npc_id: ID of the NPC
+        corruption_change: Change in corruption (-100 to 100)
+        dependency_change: Change in dependency (-100 to 100)
+        realization_change: Change in realization (-100 to 100)
+        reason: Reason for the progression
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    result = await progress_npc_narrative_stage(
+        user_id,
+        conversation_id,
+        npc_id,
+        corruption_change,
+        dependency_change,
+        realization_change
+    )
+    
+    if result.get('success') and result.get('stage_changed'):
+        await context.add_narrative_memory(
+            f"NPC narrative stage progressed: {result.get('old_stage')} -> {result.get('new_stage')} - {reason}",
+            "npc_narrative_progression",
+            0.7
+        )
+    
+    return result
 
 @track_performance("get_current_story_state_wrapper")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state_analysis")
