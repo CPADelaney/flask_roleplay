@@ -100,6 +100,7 @@ class DecisionContext:
         self.npc_stats = None
         self.perception = None
         self.behavior_evolution_factors = BehaviorEvolFactors()
+        self.enhanced_memory_manager = None  # Add this
     
     async def get_memory_system(self) -> MemorySystem:
         """Lazy-load the memory system."""
@@ -109,6 +110,17 @@ class DecisionContext:
                 self.conversation_id
             )
         return self.memory_system
+
+    async def get_enhanced_memory_manager(self):
+        """Get the enhanced memory manager."""
+        if self.enhanced_memory_manager is None:
+            from .npc_memory import NPCMemoryManager
+            self.enhanced_memory_manager = NPCMemoryManager(
+                self.npc_id,
+                self.user_id,
+                self.conversation_id
+            )
+        return self.enhanced_memory_manager
     
     def add_to_decision_log(self, decision: Dict[str, Any]) -> None:
         """Add a decision to the log."""
