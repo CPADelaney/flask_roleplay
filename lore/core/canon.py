@@ -10,7 +10,7 @@ from embedding.vector_store import generate_embedding # Assuming you have this
 from lore.core.context import CanonicalContext
 
 from typing import List, Dict, Any, Union, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from agents import Runner
 
 # Import the new validation agent
