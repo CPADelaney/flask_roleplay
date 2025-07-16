@@ -33,7 +33,7 @@ from logic.gpt_helpers import fetch_npc_name
 from logic.calendar import load_calendar_names
 from memory.memory_nyx_integration import remember_through_nyx
 
-from dynamic_templates import (
+from npcs.dynamic_templates import (
     get_mask_slippage_triggers,
     get_relationship_stages,
     generate_core_beliefs,
