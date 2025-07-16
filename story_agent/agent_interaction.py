@@ -156,10 +156,10 @@ async def orchestrate_conflict_analysis_and_narrative(
             )
         )
         
-        # Get narrative stage in parallel
-        from logic.narrative_progression import get_current_narrative_stage
-        narrative_stage_task = asyncio.create_task(
-            get_current_narrative_stage(user_id, conversation_id)
+        # Get relationship overview instead of single narrative stage
+        from logic.narrative_events import get_relationship_overview
+        relationship_overview_task = asyncio.create_task(
+            get_relationship_overview(user_id, conversation_id)
         )
         
         # Wait for all primary tasks to complete
@@ -168,7 +168,7 @@ async def orchestrate_conflict_analysis_and_narrative(
         # Wait for secondary tasks
         involved_npcs_results = await involved_npcs_task
         relevant_memories = await relevant_memories_task
-        narrative_stage = await narrative_stage_task
+        relationship_overview = await relationship_overview_task
         
         # Process involved NPCs from vector search
         npc_names = []
@@ -218,7 +218,10 @@ async def orchestrate_conflict_analysis_and_narrative(
                     recent_events.append(event["content"])
         
         # Generate narrative based on conflict analysis with enriched context
-        stage_name = narrative_stage.name if narrative_stage else "Unknown"
+        # Get the most advanced NPC's stage from relationship overview
+        most_advanced_stage = "Unknown"
+        if relationship_overview and relationship_overview.get('most_advanced_npcs'):
+            most_advanced_stage = relationship_overview['most_advanced_npcs'][0].get('stage', 'Unknown')
         
         # Pass context to narrative generation
         narrative_task = asyncio.create_task(
@@ -226,7 +229,8 @@ async def orchestrate_conflict_analysis_and_narrative(
                 "conflict_narrative",
                 {
                     "npc_names": npc_names[:3],  # Limit to top 3 most relevant NPCs
-                    "narrative_stage": stage_name,
+                    "narrative_stage": most_advanced_stage,
+                    "relationship_overview": relationship_overview,
                     "recent_events": "\n".join(recent_events[:5]),  # Top 5 most relevant memories
                     "conflict_name": conflict_details.get("conflict_name", ""),
                     "faction_a": conflict_details.get("faction_a_name", ""),
@@ -289,8 +293,10 @@ async def orchestrate_conflict_analysis_and_narrative(
         KEY NPCs INVOLVED:
         {', '.join(npc_names[:5])}
         
-        NARRATIVE STAGE:
-        {stage_name}
+        RELATIONSHIP OVERVIEW:
+        - Total relationships: {relationship_overview.get('total_relationships', 0)}
+        - Most advanced stage: {most_advanced_stage}
+        - Stage distribution: {relationship_overview.get('stage_distribution', {})}
         
         RELEVANT MEMORIES:
         {recent_events[0] if recent_events else "No relevant memories found."}
@@ -345,7 +351,8 @@ async def orchestrate_conflict_analysis_and_narrative(
             "integrated_update": integration_result.final_output,
             "execution_time": execution_time,
             "involved_npcs": npc_names[:5],
-            "narrative_stage": stage_name,
+            "relationship_overview": relationship_overview,
+            "most_advanced_stage": most_advanced_stage,
             "metrics": {
                 "conflict_analysis_metrics": conflict_context.get_metrics() if hasattr(conflict_context, "get_metrics") else {},
                 "narrative_metrics": narrative_context.get_metrics() if hasattr(narrative_context, "get_metrics") else {},
@@ -464,8 +471,9 @@ async def generate_comprehensive_story_beat(
         )
         
         # Launch parallel tasks for efficiency
-        narrative_stage_task = asyncio.create_task(
-            get_narrative_stage_info(comprehensive_context)
+        from logic.narrative_events import get_relationship_overview
+        relationship_overview_task = asyncio.create_task(
+            get_relationship_overview(user_id, conversation_id)
         )
         
         relevant_memories_task = asyncio.create_task(
@@ -493,7 +501,7 @@ async def generate_comprehensive_story_beat(
         )
         
         # Wait for all parallel tasks
-        narrative_stage_info = await narrative_stage_task
+        relationship_overview = await relationship_overview_task
         relevant_memories = await relevant_memories_task
         active_conflicts = await active_conflicts_task
         vector_results = await vector_results_task
@@ -533,11 +541,14 @@ async def generate_comprehensive_story_beat(
         # Determine appropriate narrative element type based on story context
         element_type = story_context.get("requested_element_type", "")
         if not element_type:
-            # Choose appropriate element type based on narrative stage
-            narrative_stage = narrative_stage_info.get("name", "Unknown")
-            if narrative_stage in ["Innocent Beginning", "First Doubts"]:
+            # Choose appropriate element type based on relationship stages
+            most_advanced_stage = "Unknown"
+            if relationship_overview and relationship_overview.get('most_advanced_npcs'):
+                most_advanced_stage = relationship_overview['most_advanced_npcs'][0].get('stage', 'Unknown')
+            
+            if most_advanced_stage in ["Innocent Beginning", "First Doubts"]:
                 element_type = "subtle_manipulation"
-            elif narrative_stage in ["Creeping Realization"]:
+            elif most_advanced_stage in ["Creeping Realization"]:
                 element_type = "revelation"
             else:
                 element_type = "explicit_control"
@@ -567,7 +578,7 @@ async def generate_comprehensive_story_beat(
             element_type,
             {
                 "npc_names": npc_names,
-                "narrative_stage": narrative_stage_info.get("name", "Unknown"),
+                "relationship_overview": relationship_overview,
                 "player_stats": player_stats,
                 "conflict_analysis": conflict_analysis["analysis"],
                 "requested_focus": story_context.get("narrative_focus", ""),
@@ -586,7 +597,7 @@ async def generate_comprehensive_story_beat(
             tags=[element_type, "story_beat"],
             metadata={
                 "element_type": element_type,
-                "narrative_stage": narrative_stage_info.get("name", "Unknown"),
+                "relationship_stages": relationship_overview.get('stage_distribution', {}),
                 "source": "story_beat_generation"
             }
         )
@@ -618,11 +629,17 @@ async def generate_comprehensive_story_beat(
         director_agent, _ = await initialize_story_director(user_id, conversation_id)
         
         # Build a rich, context-aware prompt
+        most_advanced_stage = "Unknown"
+        if relationship_overview and relationship_overview.get('most_advanced_npcs'):
+            most_advanced_stage = relationship_overview['most_advanced_npcs'][0].get('stage', 'Unknown')
+        
         integration_prompt = f"""
         Create a compelling story beat that integrates the following elements:
         
-        CURRENT NARRATIVE STAGE: {narrative_stage_info.get("name", "Unknown")}
-        {narrative_stage_info.get("description", "")}
+        RELATIONSHIP OVERVIEW:
+        - Total relationships: {relationship_overview.get('total_relationships', 0)}
+        - Most advanced stage: {most_advanced_stage}
+        - Stage distribution: {json.dumps(relationship_overview.get('stage_distribution', {}), indent=2)}
         
         CONFLICT ANALYSIS: 
         {conflict_analysis["analysis"]}
@@ -644,7 +661,7 @@ async def generate_comprehensive_story_beat(
         Tone: {story_context.get("tone", "Default tone")}
         
         Create a cohesive story beat that:
-        1. Advances the narrative appropriately for the current stage
+        1. Advances the narrative appropriately for the current relationship stages
         2. Integrates conflict elements naturally
         3. Showcases characters authentically
         4. Presents meaningful choices to the player
@@ -671,10 +688,10 @@ async def generate_comprehensive_story_beat(
             content=f"Generated story beat: {story_beat.final_output[:200]}...",
             memory_type="story_beat",
             importance=0.9,  # High importance for story beats
-            tags=["story_beat", element_type, narrative_stage_info.get("name", "Unknown").lower().replace(" ", "_")],
+            tags=["story_beat", element_type, most_advanced_stage.lower().replace(" ", "_")],
             metadata={
                 "element_type": element_type,
-                "narrative_stage": narrative_stage_info.get("name", "Unknown"),
+                "relationship_overview": relationship_overview,
                 "timestamp": datetime.now().isoformat()
             }
         )
@@ -687,7 +704,8 @@ async def generate_comprehensive_story_beat(
         # Return the final comprehensive story beat with rich metadata
         return {
             "story_beat": story_beat.final_output,
-            "narrative_stage": narrative_stage_info.get("name", "Unknown"),
+            "relationship_overview": relationship_overview,
+            "most_advanced_stage": most_advanced_stage,
             "element_type": element_type,
             "conflict_analysis": conflict_analysis,
             "narrative_element": narrative_element,
@@ -728,6 +746,7 @@ async def generate_comprehensive_story_beat(
 async def get_narrative_stage_info(comprehensive_context: Dict[str, Any]) -> Dict[str, str]:
     """
     Extract narrative stage information from comprehensive context.
+    Now uses relationship overview to determine the overall narrative state.
     
     Args:
         comprehensive_context: Comprehensive context from context service
@@ -735,14 +754,32 @@ async def get_narrative_stage_info(comprehensive_context: Dict[str, Any]) -> Dic
     Returns:
         Dictionary with narrative stage name and description
     """
-    narrative_stage = comprehensive_context.get("narrative_stage", {})
-    if not narrative_stage or not isinstance(narrative_stage, dict):
-        return {"name": "Unknown", "description": "No narrative stage information available"}
-        
-    return {
-        "name": narrative_stage.get("name", "Unknown"),
-        "description": narrative_stage.get("description", "No description available")
-    }
+    relationship_overview = comprehensive_context.get("relationship_overview", {})
+    if not relationship_overview or not isinstance(relationship_overview, dict):
+        return {"name": "Unknown", "description": "No relationship overview information available"}
+    
+    # Get the most advanced NPC's stage
+    most_advanced_npcs = relationship_overview.get("most_advanced_npcs", [])
+    if most_advanced_npcs and len(most_advanced_npcs) > 0:
+        most_advanced = most_advanced_npcs[0]
+        return {
+            "name": most_advanced.get("stage", "Unknown"),
+            "description": f"Relationship with {most_advanced.get('npc_name', 'Unknown')} has progressed to {most_advanced.get('stage', 'Unknown')}"
+        }
+    
+    # If no advanced NPCs, check stage distribution
+    stage_distribution = relationship_overview.get("stage_distribution", {})
+    if stage_distribution:
+        # Find the most advanced stage with NPCs
+        stages_order = ["Full Revelation", "Veil Thinning", "Creeping Realization", "First Doubts", "Innocent Beginning"]
+        for stage in stages_order:
+            if stage in stage_distribution and stage_distribution[stage] > 0:
+                return {
+                    "name": stage,
+                    "description": f"{stage_distribution[stage]} NPCs are at the {stage} stage"
+                }
+    
+    return {"name": "Unknown", "description": "No narrative stage information available"}
 
 # ----- Agent Communication Interface -----
 
@@ -872,6 +909,17 @@ async def agent_communicate(
             for npc in npcs[:3]:  # Limit to top 3
                 npc_text += f"- {npc.get('npc_name', 'Unknown')}: {npc.get('description', '')[:100]}...\n"
         
+        # Get relationship overview for context
+        from logic.narrative_events import get_relationship_overview
+        relationship_overview = await get_relationship_overview(user_id, conversation_id)
+        relationship_text = ""
+        if relationship_overview:
+            relationship_text = f"\nRelationship Overview:\n"
+            relationship_text += f"- Total relationships: {relationship_overview.get('total_relationships', 0)}\n"
+            if relationship_overview.get('most_advanced_npcs'):
+                most_advanced = relationship_overview['most_advanced_npcs'][0]
+                relationship_text += f"- Most advanced: {most_advanced.get('npc_name', 'Unknown')} at {most_advanced.get('stage', 'Unknown')}\n"
+        
         # Format the message with rich context
         formatted_message = f"""
         Message from {source_agent_type.replace('_', ' ').title()}:
@@ -879,8 +927,8 @@ async def agent_communicate(
         {message}
         
         Relevant context:
-        - Current narrative stage: {comprehensive_context.get('narrative_stage', {}).get('name', 'Unknown')}
         - Current location: {comprehensive_context.get('current_location', 'Unknown')}
+        {relationship_text}
         
         {npc_text}
         
@@ -1034,10 +1082,14 @@ async def get_agent_recommendations(user_id: int, conversation_id: int) -> Dict[
         # Get current story state
         director_agent, director_context = await initialize_story_director(user_id, conversation_id)
         
+        # Get relationship overview
+        from logic.narrative_events import get_relationship_overview
+        relationship_overview = await get_relationship_overview(user_id, conversation_id)
+        
         # Build an enhanced prompt with comprehensive context
         story_state_prompt = f"""
         Analyze the current state of the story and provide a comprehensive overview of:
-        1. The current narrative stage ({comprehensive_context.get('narrative_stage', {}).get('name', 'Unknown')})
+        1. The relationship overview ({relationship_overview.get('total_relationships', 0)} relationships, stage distribution: {relationship_overview.get('stage_distribution', {})})
         2. Active conflicts and their status ({len(comprehensive_context.get('conflicts', []))})
         3. Key NPC relationships ({len(comprehensive_context.get('npcs', []))})
         4. Player stats and their implications
@@ -1139,7 +1191,9 @@ async def get_agent_recommendations(user_id: int, conversation_id: int) -> Dict[
             
             {narrative_context_text}
             
-            Current narrative stage: {comprehensive_context.get('narrative_stage', {}).get('name', 'Unknown')}
+            Relationship Overview:
+            - Total relationships: {relationship_overview.get('total_relationships', 0)}
+            - Stage distribution: {relationship_overview.get('stage_distribution', {})}
             
             As the {agent_type.replace('_', ' ').title()}, what do you recommend for advancing the story?
             
@@ -1211,6 +1265,7 @@ async def get_agent_recommendations(user_id: int, conversation_id: int) -> Dict[
         return {
             "story_state": story_state.final_output,
             "recommendations": recommendations,
+            "relationship_overview": relationship_overview,
             "timestamp": datetime.now().isoformat(),
             "performance_metrics": performance_monitor.get_metrics(),
             "context_version": comprehensive_context.get("version", None),
