@@ -32,7 +32,7 @@ plot_hook_generator = Agent(
                       "secret","choice"]
       - description: 1-2 sentences written for the GM to drop into play
       - details:      any useful keys (npc_id, npc_name, stat, kink, location…)
-    Keep text intriguing but PG-13.  Do not wrap the JSON in markdown fences.
+    Keep text intriguing. Do not wrap the JSON in markdown fences.
     """,
     model="gpt-4.1-nano",
     model_settings=ModelSettings(temperature=0.8))
