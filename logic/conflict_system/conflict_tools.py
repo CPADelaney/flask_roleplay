@@ -1882,7 +1882,6 @@ async def generate_manipulation_content_from_templates(
 
     try:
         # The helper now expects the full objects – not just IDs.
-        from logic.template_helpers.dynamic_templates import get_manipulation_lines
 
         # NOTE: we pass the *same* objects we already have so the template
         #       engine can assess dominance, closeness, etc.
