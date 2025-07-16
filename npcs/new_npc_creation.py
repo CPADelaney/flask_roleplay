@@ -47,6 +47,43 @@ logger = logging.getLogger(__name__)
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
 
+async def _await_logged(label: str, awaitable):
+    """
+    Await `awaitable` with detailed debug logging.
+
+    Logs:
+      • label starting
+      • object type, repr, id()
+      • whether object is a coroutine, Task, or Future
+      • completion or exception (including stack)
+    """
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "[npc_init] %s: awaiting %s (type=%s, id=%s, iscoroutine=%s, isfuture=%s, istask=%s)",
+            label,
+            awaitable,
+            type(awaitable).__name__,
+            id(awaitable),
+            asyncio.iscoroutine(awaitable),
+            asyncio.isfuture(awaitable),
+            isinstance(awaitable, asyncio.Task),
+        )
+    try:
+        result = await awaitable
+    except Exception as e:  # catch to add context, then re-raise
+        if logger.isEnabledFor(logging.ERROR):
+            logger.error(
+                "[npc_init] %s: await FAILED: %s\n%s",
+                label,
+                e,
+                "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            )
+        raise
+    else:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("[npc_init] %s: completed ok (%r)", label, result)
+        return result
+
 # Models for input/output
 class NPCCreationContext(BaseModel):
     user_id: int
@@ -1924,18 +1961,155 @@ class NPCCreationHandler:
             
             # Initialize memory system
             try:
-                memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-                
-                # Store memories with governance
-                await self.store_npc_memories(user_id, conversation_id, npc_id, memories)
-                
-                # Initialize emotional state
-                await self.initialize_npc_emotional_state(user_id, conversation_id, npc_id, {
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "archetype_summary": archetype_summary
-                }, memories)
+                memory_system = await _await_logged(
+                    "MemorySystem.get_instance",
+                    MemorySystem.get_instance(user_id, conversation_id),
+                )
+            
+                await _await_logged(
+                    "store_npc_memories",
+                    self.store_npc_memories(user_id, conversation_id, npc_id, memories),
+                )
+            
+                await _await_logged(
+                    "initialize_npc_emotional_state",
+                    self.initialize_npc_emotional_state(
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "npc_name": npc_name,
+                            "dominance": dominance,
+                            "cruelty": cruelty,
+                            "archetype_summary": archetype_summary,
+                        },
+                        memories,
+                    ),
+                )
+            
+                await _await_logged(
+                    "generate_npc_beliefs",
+                    self.generate_npc_beliefs(
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "npc_name": npc_name,
+                            "dominance": dominance,
+                            "cruelty": cruelty,
+                            "archetype_summary": archetype_summary,
+                        },
+                    ),
+                )
+            
+                await _await_logged(
+                    "initialize_npc_memory_schemas",
+                    self.initialize_npc_memory_schemas(
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "npc_name": npc_name,
+                            "dominance": dominance,
+                            "archetype_summary": archetype_summary,
+                        },
+                    ),
+                )
+            
+                await _await_logged(
+                    "setup_npc_trauma_model",
+                    self.setup_npc_trauma_model(
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "npc_name": npc_name,
+                            "dominance": dominance,
+                            "cruelty": cruelty,
+                            "archetype_summary": archetype_summary,
+                        },
+                        memories,
+                    ),
+                )
+            
+                await _await_logged(
+                    "setup_npc_flashback_triggers",
+                    self.setup_npc_flashback_triggers(
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "npc_name": npc_name,
+                            "dominance": dominance,
+                            "archetype_summary": archetype_summary,
+                        },
+                    ),
+                )
+            
+                await _await_logged(
+                    "generate_counterfactual_memories",
+                    self.generate_counterfactual_memories(
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "npc_name": npc_name,
+                            "dominance": dominance,
+                            "archetype_summary": archetype_summary,
+                        },
+                    ),
+                )
+            
+                await _await_logged(
+                    "plan_mask_revelations",
+                    self.plan_mask_revelations(
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "npc_name": npc_name,
+                            "dominance": dominance,
+                            "cruelty": cruelty,
+                            "archetype_summary": archetype_summary,
+                        },
+                    ),
+                )
+            
+                await _await_logged(
+                    "setup_relationship_evolution_tracking",
+                    self.setup_relationship_evolution_tracking(
+                        user_id, conversation_id, npc_id, relationships=[]
+                    ),
+                )
+            
+                await _await_logged(
+                    "build_initial_semantic_network",
+                    self.build_initial_semantic_network(
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                        {
+                            "npc_name": npc_name,
+                            "archetype_summary": archetype_summary,
+                        },
+                    ),
+                )
+            
+                await _await_logged(
+                    "detect_memory_patterns",
+                    self.detect_memory_patterns(user_id, conversation_id, npc_id),
+                )
+            
+                await _await_logged(
+                    "schedule_npc_memory_maintenance",
+                    self.schedule_npc_memory_maintenance(user_id, conversation_id, npc_id),
+                )
+            
+            except Exception as e:
+                logging.error(
+                    f"Error initializing memory system for NPC {npc_id}: {e}",
+                    exc_info=True,
+                )
                 
                 # Generate initial beliefs
                 await self.generate_npc_beliefs(user_id, conversation_id, npc_id, {
