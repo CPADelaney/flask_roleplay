@@ -760,3 +760,11 @@ def get_agents_openai_model() -> OpenAIResponsesModel:
         model="gpt-4.1-nano",
         openai_client=AsyncOpenAI(api_key=api_key)
     )
+
+def get_async_openai_client():
+    """Get an async OpenAI client for use with await."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not found in environment")
+    from openai import AsyncOpenAI
+    return AsyncOpenAI(api_key=api_key)
