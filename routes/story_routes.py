@@ -11,6 +11,7 @@ from datetime import datetime, date, timedelta
 from quart import Blueprint, request, jsonify, session
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from logic.activity_analyzer import ActivityAnalyzer
+from logic.npc_narrative_progression import check_for_npc_revelation
 
 # Import utility modules
 from utils.db_helpers import db_transaction, with_transaction, handle_database_operation, fetch_row_async, fetch_all_async, execute_async
@@ -1713,6 +1714,46 @@ async def next_storybeat():
             context
         )
         tracker.end_phase()
+        
+        # 6.5) Check for NPC-specific revelations based on interactions
+        tracker.start_phase("npc_revelations")
+        npc_revelations = []
+        if npc_responses:
+            # Check for revelations for each NPC we just interacted with
+            for npc_resp in npc_responses[:3]:  # Limit to top 3 to avoid spam
+                npc_id = npc_resp.get("npc_id")
+                if npc_id:
+                    revelation = await check_for_npc_revelation(
+                        user_id, 
+                        conv_id, 
+                        npc_id
+                    )
+                    if revelation:
+                        npc_revelations.append(revelation)
+                        logging.info(f"NPC revelation triggered for {revelation['npc_name']}: {revelation['stage']}")
+        tracker.end_phase()
+        
+        # Add revelations to response if any occurred
+        if npc_revelations:
+            # Add to the context dict that gets passed to Nyx
+            context["narrative_hints"] = {
+                "npc_revelations": [
+                    {
+                        "npc_name": rev["npc_name"],
+                        "stage": rev["stage"],
+                        "revelation_type": "player_realization"
+                    }
+                    for rev in npc_revelations
+                ],
+                "tone_guidance": "The player is beginning to understand the true nature of their relationships. Incorporate subtle, ominous hints about the NPCs' control without being explicit."
+            }
+
+        if "narrative_context" not in aggregator_data:
+            aggregator_data["narrative_context"] = {}
+        
+        aggregator_data["narrative_context"]["active_revelations"] = [
+            f"{rev['npc_name']} - {rev['stage']}" for rev in npc_revelations
+        ]
 
         # 7) Time advancement
         tracker.start_phase("time_advancement")
@@ -1943,6 +1984,13 @@ async def next_storybeat():
             "npc_responses": format_npc_responses_for_client(npc_responses),
             "performance_metrics": tracker.get_metrics()
         })
+        
+        # Optionally, you might want to track that revelations occurred for debugging/analytics
+        if npc_revelations:
+            response["_debug"] = {
+                "revelations_triggered": len(npc_revelations),
+                "revelation_npcs": [rev["npc_name"] for rev in npc_revelations]
+            } if os.getenv("FLASK_ENV") == "development" else None
 
         # Optional: If agent provided tension level or environment changes, etc.
         if "tension_level" in agent_output:
