@@ -8,6 +8,7 @@ This module merges:
   - time_cycle_conflict_integration.py
 
 All integrated as a single "TimeCycleAgent" using the OpenAI Agents SDK.
+Updated to use NPC-specific narrative progression.
 """
 
 import logging
@@ -95,7 +96,8 @@ SPECIAL_EVENT_CHANCES = {
     "relationship_ritual": 0.1,
     "dream_sequence": 0.4,
     "moment_of_clarity": 0.25,
-    "mask_slippage": 0.3
+    "mask_slippage": 0.3,
+    "npc_revelation": 0.25  # New: chance for NPC-specific revelations
 }
 
 logger = logging.getLogger(__name__)
@@ -305,16 +307,21 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
     """
     Advances time (if the activity is time-consuming), triggers special events, 
     updates player stats, etc.
+    
+    Updated to use NPC-specific narrative progression.
     """
-    # Update imports to use new NPC creation system
+    # Update imports to use new NPC creation system and NPC-specific progression
     from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
-    from logic.narrative_progression import (
-        get_current_narrative_stage,
+    from logic.narrative_events import (
+        get_relationship_overview,
         check_for_personal_revelations,
         check_for_narrative_moments,
-        check_for_npc_revelations,
         add_dream_sequence,
         add_moment_of_clarity
+    )
+    from logic.npc_narrative_progression import (
+        get_npc_narrative_stage,
+        check_for_npc_revelation
     )
     from logic.social_links import check_for_relationship_crossroads, check_for_relationship_ritual
 
@@ -339,7 +346,6 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
         events = []
         
         # Use the new NPC system for daily activities and stage changes
-        # (The NPCCreationHandler should implement these methods)
         ctx = RunContextWrapper({
             "user_id": user_id,
             "conversation_id": conversation_id
@@ -351,16 +357,17 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
         # Detect relationship stages
         await npc_handler.detect_relationship_stage_changes(ctx)
 
-        # Narrative stage
-        narrative_stage = await get_current_narrative_stage(user_id, conversation_id)
-        if narrative_stage:
+        # Get relationship overview instead of single narrative stage
+        relationship_overview = await get_relationship_overview(user_id, conversation_id)
+        if relationship_overview and relationship_overview.get('total_relationships', 0) > 0:
             events.append({
-                "type": "narrative_stage",
-                "stage": narrative_stage.name,
-                "description": narrative_stage.description
+                "type": "relationship_overview",
+                "total_relationships": relationship_overview['total_relationships'],
+                "stage_distribution": relationship_overview['stage_distribution'],
+                "most_advanced": relationship_overview['most_advanced_npcs'][:1]  # Just the top one
             })
 
-        # Random checks
+        # Random checks for various events
         if random.random() < SPECIAL_EVENT_CHANCES["personal_revelation"]:
             revelation = await check_for_personal_revelations(user_id, conversation_id)
             if revelation:
@@ -411,9 +418,24 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
                             "events": slip_events
                         })
 
-        npc_rev = await check_for_npc_revelations(user_id, conversation_id)
-        if npc_rev:
-            events.append(npc_rev)
+        # Check for NPC-specific revelations for multiple NPCs
+        if random.random() < SPECIAL_EVENT_CHANCES["npc_revelation"]:
+            async with get_db_connection_context() as conn:
+                # Get NPCs who aren't in the innocent beginning stage
+                npc_rows = await conn.fetch("""
+                    SELECT np.npc_id 
+                    FROM NPCNarrativeProgression np
+                    WHERE np.user_id=$1 AND np.conversation_id=$2
+                    AND np.narrative_stage != 'Innocent Beginning'
+                    ORDER BY RANDOM() LIMIT 3
+                """, user_id, conversation_id)
+                
+                for npc_row in npc_rows:
+                    npc_id = npc_row["npc_id"]
+                    npc_rev = await check_for_npc_revelation(user_id, conversation_id, npc_id)
+                    if npc_rev:
+                        events.append(npc_rev)
+                        break  # Only one revelation per time period
 
         # Stat effects from activity
         if activity_type in TIME_CONSUMING_ACTIVITIES:
