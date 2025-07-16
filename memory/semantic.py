@@ -6,13 +6,40 @@ import random
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union, Set
 import asyncio
-from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
-import openai
+from logic.chatgpt_integration import get_openai_client
 
 from .connection import with_transaction, TransactionContext
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
 
 logger = logging.getLogger("memory_semantic")
+
+def _parse_json_block(text: str) -> Any:
+    """Strip ```json fences and parse JSON; return None on failure."""
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith("```json") and t.endswith("```"):
+        t = t[7:-3].strip()
+    elif t.startswith("```") and t.endswith("```"):
+        t = t[3:-3].strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        return None
+
+def _safe_block(txt: str) -> str:
+    """
+    Wrap untrusted text in a triple-quoted block for LLM prompts and
+    neuter any embedded triple quotes to reduce prompt injection risk.
+    """
+    if txt is None:
+        txt = ""
+    # collapse backticks that models sometimes treat as code fences
+    # (optional; remove if undesired)
+    txt = txt.replace("```", "¸¸¸")  # harmless chars
+    # escape literal triple double-quotes so we can safely embed
+    txt = txt.replace('"""', '\\"""')
+    return f'"""\n{txt}\n"""'
 
 class SemanticMemoryManager:
     """
@@ -66,6 +93,12 @@ class SemanticMemoryManager:
             
         memory_text = row["memory_text"]
         tags = row["tags"] or []
+        # Handle tags if stored as JSON string
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags) or []
+            except Exception:
+                tags = []
         significance = row["significance"]
         timestamp = row["timestamp"]
         
@@ -83,10 +116,17 @@ class SemanticMemoryManager:
         )
         
         # Create the semantic memory
+        # Handle significance properly if it's an enum
+        try:
+            medium_val = MemorySignificance.MEDIUM.value
+        except AttributeError:
+            medium_val = MemorySignificance.MEDIUM
+        new_significance = max(medium_val, (significance - 1))
+            
         semantic_memory = Memory(
             text=abstraction,
             memory_type=MemoryType.SEMANTIC,
-            significance=max(MemorySignificance.MEDIUM, significance - 1),
+            significance=new_significance,
             emotional_intensity=0,  # Semantic memories are emotionally neutral
             tags=tags + ["semantic", "abstraction"],
             metadata={
@@ -107,34 +147,14 @@ class SemanticMemoryManager:
         }
 
     def _strip_markdown_and_parse_json(self, text: str) -> Any:
-        """
-        Helper method to strip markdown code blocks and parse JSON.
-        Handles responses wrapped in ```json ... ``` or ``` ... ```
-        """
-        if not text:
-            return None
-            
-        text = text.strip()
-        
-        # Strip markdown code blocks if present
-        if text.startswith("```json") and text.endswith("```"):
-            text = text[7:-3].strip()
-        elif text.startswith("```") and text.endswith("```"):
-            text = text[3:-3].strip()
-        
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return None
+        return _parse_json_block(text)
     
     async def _generate_semantic_abstraction(
         self,
         memory_text: str,
         abstraction_level: float,
     ) -> str:
-        """
-        Create a semantic abstraction (minimal/moderate/high) via Responses API.
-        """
+        """Create a semantic abstraction (minimal/moderate/high) via Responses API."""
         client = get_openai_client()
         level = (
             "minimal" if abstraction_level < 0.3
@@ -142,33 +162,38 @@ class SemanticMemoryManager:
             else "moderate"
         )
     
-        prompt = f"""
-        Observation: {memory_text}
-    
-        Produce a {level} abstraction (≤ 50 words) capturing the general insight.
-        Return ONLY the abstraction.
-        """
+        obs_block = _safe_block(memory_text)
+        prompt = (
+            f"Observation:\n{obs_block}\n\n"
+            f"Produce a {level} abstraction (≤ 50 words) capturing the general insight.\n"
+            "Return ONLY the abstraction."
+        )
     
         try:
-            resp = client.responses.create(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You extract semantic abstractions.",
                 input=prompt,
-                temperature=0.4
+                temperature=0.4,
             )
-            return resp.output_text.strip()
+            txt = getattr(resp, "output_text", "") or ""
+            if txt.strip():
+                return txt.strip()
+            logger.warning("Empty response from OpenAI for semantic abstraction")
         except Exception as e:
             logger.error("Semantic abstraction failed: %s", e)
-            return (
-                f"General pattern observed: {memory_text[:100]}..."
-                if len(memory_text) > 100 else f"General pattern observed: {memory_text}"
-            )
+    
+        # fallback
+        return (
+            f"General pattern observed: {memory_text[:100]}..."
+            if len(memory_text) > 100 else f"General pattern observed: {memory_text}"
+        )
         
     @with_transaction
     async def find_patterns_across_memories(self,
                                          entity_type: str,
                                          entity_id: int,
-                                         topic: str = None,
+                                         topic: Optional[str] = None,
                                          min_memories: int = 3,
                                          conn = None) -> Dict[str, Any]:
         """
@@ -298,118 +323,69 @@ class SemanticMemoryManager:
     async def _extract_pattern_from_cluster(
         self,
         cluster: List[Memory],
-        topic: str | None = None,
+        topic: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """
-        Extract a pattern from a cluster of Memory objects.
-        """
+        """Extract a pattern from a cluster of Memory objects."""
         client = get_openai_client()
     
         memories_text = "\n".join(f"- {m.text}" for m in cluster)
-        topic_line = f"TOPIC FOCUS: {topic}" if topic else ""
-    
-        prompt = f"""
-        MEMORIES:
-        {memories_text}
-    
-        {topic_line}
-    
-        Identify pattern, confidence (0-1) and implications.
-        Respond JSON:
-        {{
-          "pattern": "...",
-          "confidence": 0.x,
-          "implications": "..."
-        }}
-        """
+        mem_block = _safe_block(memories_text)
+        topic_line = f"TOPIC FOCUS:\n{_safe_block(topic)}\n" if topic else ""
+        
+        prompt = (
+            f"MEMORIES:\n{mem_block}\n\n"
+            f"{topic_line}"
+            "Identify pattern, confidence (0-1) and implications.\n"
+            "Respond JSON:\n"
+            "{\n"
+            '  "pattern": "...",\n'
+            '  "confidence": 0.x,\n'
+            '  "implications": "..."\n'
+            "}"
+        )
     
         try:
-            resp = client.responses.create(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You extract patterns from memory clusters.",
                 input=prompt,
-                temperature=0.3
+                temperature=0.3,
             )
-            
-            # Check response validity
-            if not resp or not hasattr(resp, 'output_text') or not resp.output_text:
+    
+            if not resp or not hasattr(resp, "output_text") or not resp.output_text:
                 logger.warning("Empty response from OpenAI for pattern extraction")
                 return None
-                
+    
             output_text = resp.output_text.strip()
             if not output_text:
                 logger.warning("Empty output_text from OpenAI for pattern extraction")
                 return None
-            
-            # Try to parse JSON with markdown stripping
-            data = self._strip_markdown_and_parse_json(output_text)
-            
-            if data:
+    
+            data = _parse_json_block(output_text)
+            if data and isinstance(data, dict):
                 return data
-            else:
-                logger.error(f"Failed to parse JSON in pattern extraction. Response: {output_text[:100]}")
-                return None
-                
+            if data and isinstance(data, list):
+                return {
+                    "pattern": "; ".join(map(str, data)),
+                    "confidence": 0.5,
+                    "implications": "",
+                }
+    
+            logger.error("Failed to parse JSON in pattern extraction. Response: %s", output_text[:100])
+            return None
+    
         except Exception as e:
             logger.error("Cluster pattern extraction failed: %s", e)
             return None
             
-            output_text = resp.output_text.strip()
-            if not output_text:
-                logger.warning("Empty output_text from OpenAI for topic extraction")
-                # Use fallback
-                words = [
-                    w.capitalize()
-                    for w in memory_text.split()
-                    if len(w) > 5 and w.lower() != current_topic.lower()
-                ]
-                return random.sample(words, min(3, len(words)))
-            
-            # Strip markdown code blocks if present
-            if output_text.startswith("```json") and output_text.endswith("```"):
-                output_text = output_text[7:-3].strip()
-            elif output_text.startswith("```") and output_text.endswith("```"):
-                output_text = output_text[3:-3].strip()
-                
-            # Try to parse JSON (with markdown stripping)
-            data = self._strip_markdown_and_parse_json(output_text)
-            
-            if data:
-                if isinstance(data, list):
-                    return data[:3]  # Limit to 3 topics
-                if isinstance(data, dict) and "topics" in data:
-                    return data["topics"][:3]
-                
-                logger.warning(f"Unexpected response format: {type(data)}")
-            else:
-                logger.error(f"Failed to parse JSON in topic extraction. Response: {output_text[:100]}")
-            
-            # Use fallback
-            words = [
-                w.capitalize()
-                for w in memory_text.split()
-                if len(w) > 5 and w.lower() != current_topic.lower()
-            ]
-            return random.sample(words, min(3, len(words)))
-                
-        except Exception as e:
-            logger.error("Topic extraction failed: %s", e)
-            # Use fallback
-            words = [
-                w.capitalize()
-                for w in memory_text.split()
-                if len(w) > 5 and w.lower() != current_topic.lower()
-            ]
-            return random.sample(words, min(3, len(words)))
-        
     @with_transaction
     async def create_belief(self,
                          entity_type: str,
                          entity_id: int,
                          belief_text: str,
-                         supporting_memory_ids: List[int] = None,
+                         supporting_memory_ids: Optional[List[int]] = None,
                          confidence: float = 0.5,
-                         tags: List[str] = None,
+                         tags: Optional[List[str]] = None,
                          conn = None) -> Dict[str, Any]:
         """
         Create a belief based on experiences.
@@ -427,7 +403,11 @@ class SemanticMemoryManager:
             Information about the created belief
         """
         # Format the belief
-        formatted_belief = f"I believe that {belief_text}" if not belief_text.startswith("I believe") else belief_text
+        formatted_belief = (
+            f"I believe that {belief_text}" 
+            if not belief_text.startswith("I believe") 
+            else belief_text
+        )
         
         # Create memory manager
         memory_manager = UnifiedMemoryManager(
@@ -437,8 +417,9 @@ class SemanticMemoryManager:
             conversation_id=self.conversation_id
         )
         
-        # Verify supporting memories exist
+        # Verify supporting memories exist (fixed: don't mutate list while iterating)
         if supporting_memory_ids:
+            valid_ids = []
             for memory_id in supporting_memory_ids:
                 row = await conn.fetchrow("""
                     SELECT id FROM unified_memories
@@ -449,9 +430,11 @@ class SemanticMemoryManager:
                       AND conversation_id = $5
                 """, memory_id, entity_type, entity_id, self.user_id, self.conversation_id)
                 
-                if not row:
-                    supporting_memory_ids.remove(memory_id)
-                    logger.warning(f"Supporting memory {memory_id} not found")
+                if row:
+                    valid_ids.append(memory_id)
+                else:
+                    logger.warning("Supporting memory %s not found", memory_id)
+            supporting_memory_ids = valid_ids
         
         # Create the belief as a semantic memory
         belief_memory = Memory(
@@ -482,7 +465,7 @@ class SemanticMemoryManager:
     async def get_beliefs(self,
                         entity_type: str,
                         entity_id: int,
-                        topic: str = None,
+                        topic: Optional[str] = None,
                         min_confidence: float = 0.0,
                         limit: int = 10,
                         conn = None) -> List[Dict[str, Any]]:
@@ -543,7 +526,7 @@ class SemanticMemoryManager:
                                      entity_type: str,
                                      entity_id: int,
                                      new_confidence: float,
-                                     reason: str = None,
+                                     reason: Optional[str] = None,
                                      conn = None) -> Dict[str, Any]:
         """
         Update the confidence level in a belief.
@@ -644,6 +627,12 @@ class SemanticMemoryManager:
         memory_type = row["memory_type"]
         significance = row["significance"]
         tags = row["tags"] or []
+        # Handle tags if stored as JSON string
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags) or []
+            except Exception:
+                tags = []
         
         # Generate counterfactual
         counterfactual = await self._generate_counterfactual_variation(
@@ -688,9 +677,7 @@ class SemanticMemoryManager:
         memory_text: str,
         variation_type: str,
     ) -> str:
-        """
-        Counterfactual variation (alternative/opposite/exaggeration) via Responses API.
-        """
+        """Counterfactual variation (alternative/opposite/exaggeration) via Responses API."""
         client = get_openai_client()
     
         description = {
@@ -699,29 +686,34 @@ class SemanticMemoryManager:
             "exaggeration": "an exaggerated version of events",
         }.get(variation_type, "an alternative version")
     
-        prompt = f"""
-        Original: {memory_text}
-    
-        Generate {description}. Begin with "What if..." and return ONLY the variation.
-        """
+        orig_block = _safe_block(memory_text)
+        prompt = (
+            f"Original memory:\n{orig_block}\n\n"
+            f"Generate {description}. Begin with 'What if...' and return ONLY the variation."
+        )
     
         try:
-            resp = client.responses.create(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You generate counterfactual variations.",
                 input=prompt,
-                temperature=0.7
+                temperature=0.7,
             )
-            return resp.output_text.strip()
+            txt = getattr(resp, "output_text", "") or ""
+            if txt.strip():
+                return txt.strip()
+            logger.warning("Empty response from OpenAI for counterfactual generation")
         except Exception as e:
             logger.error("Counterfactual generation failed: %s", e)
-            prefix = {
-                "alternative": "What if instead ",
-                "opposite": "What if the opposite happened and ",
-                "exaggeration": "What if, to a much greater extent, ",
-            }.get(variation_type, "What if ")
-            return prefix + memory_text
     
+        # fallback
+        prefix = {
+            "alternative": "What if instead ",
+            "opposite": "What if the opposite happened and ",
+            "exaggeration": "What if, to a much greater extent, ",
+        }.get(variation_type, "What if ")
+        return prefix + memory_text
+        
     @with_transaction
     async def build_semantic_network(self,
                                    entity_type: str,
@@ -847,162 +839,6 @@ class SemanticMemoryManager:
         
         return semantic_network
     
-    async def _generate_semantic_abstraction(
-        self,
-        memory_text: str,
-        abstraction_level: float,
-    ) -> str:
-        """
-        Create a semantic abstraction (minimal/moderate/high) via Responses API.
-        """
-        client = get_openai_client()
-        level = (
-            "minimal" if abstraction_level < 0.3
-            else "high" if abstraction_level > 0.7
-            else "moderate"
-        )
-    
-        prompt = f"""
-        Observation: {memory_text}
-    
-        Produce a {level} abstraction (≤ 50 words) capturing the general insight.
-        Return ONLY the abstraction.
-        """
-    
-        try:
-            resp = client.responses.create(
-                model="gpt-4.1-nano",
-                instructions="You extract semantic abstractions.",
-                input=prompt,
-                temperature=0.4
-            )
-            
-            # Check if response exists and has content
-            if resp and hasattr(resp, 'output_text') and resp.output_text:
-                return resp.output_text.strip()
-            else:
-                logger.warning("Empty response from OpenAI for semantic abstraction")
-                # Fallback
-                return (
-                    f"General pattern observed: {memory_text[:100]}..."
-                    if len(memory_text) > 100 else f"General pattern observed: {memory_text}"
-                )
-                
-        except Exception as e:
-            logger.error("Semantic abstraction failed: %s", e)
-            return (
-                f"General pattern observed: {memory_text[:100]}..."
-                if len(memory_text) > 100 else f"General pattern observed: {memory_text}"
-            )
-    
-    async def _extract_pattern_from_cluster(
-        self,
-        cluster: List[Memory],
-        topic: str | None = None,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Extract a pattern from a cluster of Memory objects.
-        """
-        client = get_openai_client()
-    
-        memories_text = "\n".join(f"- {m.text}" for m in cluster)
-        topic_line = f"TOPIC FOCUS: {topic}" if topic else ""
-    
-        prompt = f"""
-        MEMORIES:
-        {memories_text}
-    
-        {topic_line}
-    
-        Identify pattern, confidence (0-1) and implications.
-        Respond JSON:
-        {{
-          "pattern": "...",
-          "confidence": 0.x,
-          "implications": "..."
-        }}
-        """
-    
-        try:
-            resp = client.responses.create(
-                model="gpt-4.1-nano",
-                instructions="You extract patterns from memory clusters.",
-                input=prompt,
-                temperature=0.3
-            )
-            
-            # Check response validity
-            if not resp or not hasattr(resp, 'output_text') or not resp.output_text:
-                logger.warning("Empty response from OpenAI for pattern extraction")
-                return None
-                
-            output_text = resp.output_text.strip()
-            if not output_text:
-                logger.warning("Empty output_text from OpenAI for pattern extraction")
-                return None
-                
-            try:
-                return json.loads(output_text)
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error in pattern extraction: {e}. Response: {output_text[:100]}")
-                return None
-                
-        except Exception as e:
-            logger.error("Cluster pattern extraction failed: %s", e)
-            return None
-    
-    async def _generate_counterfactual_variation(
-        self,
-        memory_text: str,
-        variation_type: str,
-    ) -> str:
-        """
-        Counterfactual variation (alternative/opposite/exaggeration) via Responses API.
-        """
-        client = get_openai_client()
-    
-        description = {
-            "alternative": "what might have gone differently",
-            "opposite": "the opposite outcome",
-            "exaggeration": "an exaggerated version of events",
-        }.get(variation_type, "an alternative version")
-    
-        prompt = f"""
-        Original: {memory_text}
-    
-        Generate {description}. Begin with "What if..." and return ONLY the variation.
-        """
-    
-        try:
-            resp = client.responses.create(
-                model="gpt-4.1-nano",
-                instructions="You generate counterfactual variations.",
-                input=prompt,
-                temperature=0.7
-            )
-            
-            # Check response validity
-            if resp and hasattr(resp, 'output_text') and resp.output_text:
-                return resp.output_text.strip()
-            else:
-                logger.warning("Empty response from OpenAI for counterfactual generation")
-                # Fallback
-                prefix = {
-                    "alternative": "What if instead ",
-                    "opposite": "What if the opposite happened and ",
-                    "exaggeration": "What if, to a much greater extent, ",
-                }.get(variation_type, "What if ")
-                return prefix + memory_text
-                
-        except Exception as e:
-            logger.error("Counterfactual generation failed: %s", e)
-            prefix = {
-                "alternative": "What if instead ",
-                "opposite": "What if the opposite happened and ",
-                "exaggeration": "What if, to a much greater extent, ",
-            }.get(variation_type, "What if ")
-            return prefix + memory_text
-    
     async def _extract_related_topics(
         self,
         memory_text: str,
@@ -1010,9 +846,7 @@ class SemanticMemoryManager:
     ) -> List[str]:
         """
         Extract 2-3 related topics from *memory_text* via the OpenAI Responses API.
-    
-        Falls back to a heuristic word-sampling strategy if the model call fails
-        or returns invalid JSON.
+        No `response_format=` param (SDK rejects it). Enforce JSON via instruction.
         """
         client = get_openai_client()
     
@@ -1022,11 +856,14 @@ class SemanticMemoryManager:
             "Topics must be distinct and different from the current topic."
         )
     
-        user_msg = f"""Memory: {memory_text}
-    Current topic: {current_topic}
-    Return JSON array of 2-3 related topics (strings)."""
+        mem_block = _safe_block(memory_text)
+        cur_block = _safe_block(current_topic)
+        user_msg = (
+            f"Memory:\n{mem_block}\n\n"
+            f"Current topic:\n{cur_block}\n\n"
+            "Return JSON array of 2-3 related topics (strings)."
+        )
     
-        # Retry loop (up to 3 attempts)
         last_err = None
         for attempt in range(3):
             try:
@@ -1038,24 +875,18 @@ class SemanticMemoryManager:
                     ],
                     temperature=0.5,
                     max_output_tokens=100,
-                    response_format={"type": "json_schema", "json_schema": {
-                        "name": "topic_array",
-                        "schema": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "minItems": 1,
-                            "maxItems": 5,
-                        },
-                        "strict": True,
-                    }},
                 )
-    
                 raw = (resp.output_text or "").strip()
-                topics = json.loads(raw)
+                try:
+                    topics = json.loads(raw)
+                except Exception:
+                    topics = _parse_json_block(raw)
+                    if topics is None:
+                        raise ValueError("Invalid JSON in topic extraction")
     
-                # normalize: ensure list[str], filter current_topic, dedupe, trim whitespace
                 if not isinstance(topics, list):
                     raise ValueError(f"Expected list, got {type(topics)}")
+    
                 cleaned = []
                 seen = set()
                 cur_lower = current_topic.strip().lower()
@@ -1071,23 +902,16 @@ class SemanticMemoryManager:
                         continue
                     seen.add(s.lower())
                     cleaned.append(s)
+    
                 if cleaned:
                     return cleaned[:3]
-    
                 raise ValueError("No usable topics in model output.")
-    
-            except Exception as e:  # catch JSON parse errors, API errors, etc.
+            except Exception as e:
                 last_err = e
-                logger.warning(
-                    "Topic extraction attempt %s failed: %s", attempt + 1, e
-                )
+                logger.warning("Topic extraction attempt %s failed: %s", attempt + 1, e)
                 await asyncio.sleep(0.75 * (attempt + 1))
     
-        # --- Fallback heuristic ------------------------------------------------
-        logger.error(
-            "Topic extraction failed after retries; using fallback. Last error: %s",
-            last_err,
-        )
+        logger.error("Topic extraction failed after retries; using fallback. Last error: %s", last_err)
         words = [
             w.capitalize()
             for w in (memory_text or "").split()
@@ -1095,15 +919,14 @@ class SemanticMemoryManager:
         ]
         if not words:
             return []
-        # sample up to 3 unique
-        k = min(3, len(words))
-        return random.sample(words, k)
+        return random.sample(words, min(3, len(words)))
 
 async def create_semantic_tables():
     """Create the necessary tables for the semantic memory system if they don't exist."""
     try:
         async with TransactionContext() as conn:
             
+            # Create SemanticNetworks table
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS SemanticNetworks (
                     id SERIAL PRIMARY KEY,
@@ -1116,15 +939,22 @@ async def create_semantic_tables():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                
+                )
+            """)
+            
+            # Create indexes for SemanticNetworks
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_semantic_networks_entity 
-                ON SemanticNetworks(user_id, conversation_id, entity_type, entity_id);
-                
+                ON SemanticNetworks(user_id, conversation_id, entity_type, entity_id)
+            """)
+            
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_semantic_networks_topic 
-                ON SemanticNetworks(central_topic);
-                
-                -- Table for tracking semantic patterns across memories
+                ON SemanticNetworks(central_topic)
+            """)
+            
+            # Create SemanticPatterns table
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS SemanticPatterns (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
@@ -1138,12 +968,17 @@ async def create_semantic_tables():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                
+                )
+            """)
+            
+            # Create indexes for SemanticPatterns
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_semantic_patterns_entity 
-                ON SemanticPatterns(user_id, conversation_id, entity_type, entity_id);
-                
-                -- Table for counterfactual memories
+                ON SemanticPatterns(user_id, conversation_id, entity_type, entity_id)
+            """)
+            
+            # Create CounterfactualMemories table
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS CounterfactualMemories (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
@@ -1156,13 +991,18 @@ async def create_semantic_tables():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                
+                )
+            """)
+            
+            # Create indexes for CounterfactualMemories
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_counterfactual_entity 
-                ON CounterfactualMemories(user_id, conversation_id, entity_type, entity_id);
-                
+                ON CounterfactualMemories(user_id, conversation_id, entity_type, entity_id)
+            """)
+            
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_counterfactual_source 
-                ON CounterfactualMemories(source_memory_id);
+                ON CounterfactualMemories(source_memory_id)
             """)
             
             logger.info("Semantic memory tables created successfully")
