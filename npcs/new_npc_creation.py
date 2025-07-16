@@ -2316,135 +2316,143 @@ class NPCCreationHandler:
         return created_npc
     
     async def create_npc_with_context(self, environment_desc=None, archetype_names=None, specific_traits=None, user_id=None, conversation_id=None, db_dsn=None) -> NPCCreationResult:
-        """
-        Main function to create a complete NPC using the agent.
-        
-        Args:
-            environment_desc: Description of the environment (optional)
-            archetype_names: List of desired archetype names (optional)
-            specific_traits: Dictionary with specific traits to incorporate (optional)
-            user_id: User ID (required)
-            conversation_id: Conversation ID (required)
-            db_dsn: Database connection string (optional)
+            """
+            Main function to create a complete NPC using the agent.
             
-        Returns:
-            NPCCreationResult object
-        """
-        if not user_id or not conversation_id:
-            raise ValueError("user_id and conversation_id are required")
-        
-        # Create context
-        context = NPCCreationContext(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            db_dsn=db_dsn or DB_DSN
-        )
-        
-        ctx = RunContextWrapper(context.dict())
-        
-        # Get environment description if not provided
-        if not environment_desc:
-            env_details = await self.get_environment_details(ctx)
-            environment_desc = env_details["environment_desc"]
-        
-        # Build prompt
-        archetypes_str = ", ".join(archetype_names) if archetype_names else "to be determined based on setting"
-        traits_str = ""
-        if specific_traits:
-            traits_str = "Please incorporate these specific traits:\n"
-            for trait_type, traits in specific_traits.items():
-                if isinstance(traits, list):
-                    traits_str += f"- {trait_type}: {', '.join(traits)}\n"
-                else:
-                    traits_str += f"- {trait_type}: {traits}\n"
-        
-        prompt = f"""
-        Create a detailed, psychologically realistic NPC for this environment:
-        
-        {environment_desc}
-        
-        Desired archetypes: {archetypes_str}
-        
-        {traits_str}
-        
-        Generate a complete NPC with:
-        1. A unique name and physical description
-        2. A coherent personality with traits, likes, dislikes, and hobbies
-        3. Appropriate stats (dominance, cruelty, etc.)
-        4. A synthesis of the desired archetypes
-        5. A detailed weekly schedule
-        6. Rich, diverse memories
-        
-        The NPC should feel like a real person with psychological depth and subtle complexity.
-        For femdom-themed worlds, incorporate natural elements of control and influence
-        that feel organic to the character rather than forced or explicit.
-        """
-        
-        # Generate a name
-        npc_name = await self.generate_npc_name(ctx)
-        
-        # Synthesize archetypes
-        archetypes = await self.synthesize_archetypes(ctx, archetype_names, npc_name)
-        
-        # Generate a physical description
-        physical_description = await self.generate_physical_description(
-            ctx, npc_name, archetypes.archetype_summary, environment_desc
-        )
-        
-        # Design personality
-        personality = await self.design_personality(
-            ctx, npc_name, archetypes.archetype_summary, environment_desc
-        )
-        
-        # Calibrate stats
-        stats = await self.calibrate_stats(
-            ctx, npc_name, personality, archetypes.archetype_summary
-        )
-        
-        # Create the NPC in the database
-        npc_data = {
-            "npc_name": npc_name,
-            "physical_description": physical_description,
-            "personality": personality.dict(),
-            "stats": stats.dict(),
-            "archetypes": archetypes.dict(),
-            "environment_desc": environment_desc
-        }
-        
-        created_npc = await self.create_npc_in_database(ctx, npc_data)
-        
-        # Extract the NPC ID
-        npc_id = created_npc.get("npc_id")
-        
-        # Generate schedule
-        schedule = await self.generate_schedule(ctx, npc_name, environment_desc)
-        
-        # Generate memories
-        memories = await self.generate_memories(ctx, npc_name, environment_desc)
-        
-        # Update schedule and memories in the database
-        async with get_db_connection_context() as conn:
-            query = """
-                UPDATE NPCStats
-                SET schedule = $1, memory = $2
-                WHERE npc_id = $3
+            Args:
+                environment_desc: Description of the environment (optional)
+                archetype_names: List of desired archetype names (optional)
+                specific_traits: Dictionary with specific traits to incorporate (optional)
+                user_id: User ID (required)
+                conversation_id: Conversation ID (required)
+                db_dsn: Database connection string (optional)
+                
+            Returns:
+                NPCCreationResult object
+            """
+            if not user_id or not conversation_id:
+                raise ValueError("user_id and conversation_id are required")
+            
+            # Create context
+            context = NPCCreationContext(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                db_dsn=db_dsn or DB_DSN
+            )
+            
+            ctx = RunContextWrapper(context.dict())
+            
+            # Get environment description if not provided
+            if not environment_desc:
+                env_details = await self.get_environment_details(ctx)
+                environment_desc = env_details["environment_desc"]
+            
+            # Build prompt
+            archetypes_str = ", ".join(archetype_names) if archetype_names else "to be determined based on setting"
+            traits_str = ""
+            if specific_traits:
+                traits_str = "Please incorporate these specific traits:\n"
+                for trait_type, traits in specific_traits.items():
+                    if isinstance(traits, list):
+                        traits_str += f"- {trait_type}: {', '.join(traits)}\n"
+                    else:
+                        traits_str += f"- {trait_type}: {traits}\n"
+            
+            prompt = f"""
+            Create a detailed, psychologically realistic NPC for this environment:
+            
+            {environment_desc}
+            
+            Desired archetypes: {archetypes_str}
+            
+            {traits_str}
+            
+            Generate a complete NPC with:
+            1. A unique name and physical description
+            2. A coherent personality with traits, likes, dislikes, and hobbies
+            3. Appropriate stats (dominance, cruelty, etc.)
+            4. A synthesis of the desired archetypes
+            5. A detailed weekly schedule
+            6. Rich, diverse memories
+            
+            The NPC should feel like a real person with psychological depth and subtle complexity.
+            For femdom-themed worlds, incorporate natural elements of control and influence
+            that feel organic to the character rather than forced or explicit.
             """
             
-            await conn.execute(query, json.dumps(schedule), json.dumps(memories), npc_id)
+            # Generate a name
+            npc_name = await self.generate_npc_name(ctx)
+            
+            # Synthesize archetypes
+            archetypes = await self.synthesize_archetypes(ctx, archetype_names, npc_name)
+            
+            # Generate a physical description
+            physical_description = await self.generate_physical_description(
+                ctx, npc_name, archetypes.archetype_summary, environment_desc
+            )
+            
+            # Design personality
+            personality = await self.design_personality(
+                ctx, npc_name, archetypes.archetype_summary, environment_desc
+            )
+            
+            # Calibrate stats
+            stats = await self.calibrate_stats(
+                ctx, npc_name, personality, archetypes.archetype_summary
+            )
+            
+            # Create the NPC in the database
+            npc_data = {
+                "npc_name": npc_name,
+                "physical_description": physical_description,
+                "personality": personality.dict(),
+                "stats": stats.dict(),
+                "archetypes": archetypes.dict(),
+                "environment_desc": environment_desc
+            }
+            
+            created_npc = await self.create_npc_in_database(ctx, npc_data)
+            
+            # Check if there was an error during creation
+            if "error" in created_npc:
+                raise RuntimeError(f"Failed to create NPC in database: {created_npc['error']}")
+            
+            # Extract the NPC ID
+            npc_id = created_npc.get("npc_id")
+            
+            # Ensure we have a valid NPC ID
+            if not npc_id:
+                raise RuntimeError("NPC creation succeeded but no ID was returned")
+            
+            # Generate schedule
+            schedule = await self.generate_schedule(ctx, npc_name, environment_desc)
+            
+            # Generate memories
+            memories = await self.generate_memories(ctx, npc_name, environment_desc)
+            
+            # Update schedule and memories in the database
+            async with get_db_connection_context() as conn:
+                query = """
+                    UPDATE NPCStats
+                    SET schedule = $1, memory = $2
+                    WHERE npc_id = $3
+                """
+                
+                await conn.execute(query, json.dumps(schedule), json.dumps(memories), npc_id)
+            
+            # Return the final NPC
+            return NPCCreationResult(
+                npc_id=npc_id,
+                npc_name=npc_name,
+                physical_description=physical_description,
+                personality=personality,
+                stats=stats,
+                archetypes=archetypes,
+                schedule=schedule,
+                memories=memories,
+                current_location=created_npc.get("current_location", "")
+            )
         
-        # Return the final NPC
-        return NPCCreationResult(
-            npc_id=npc_id,
-            npc_name=npc_name,
-            physical_description=physical_description,
-            personality=personality,
-            stats=stats,
-            archetypes=archetypes,
-            schedule=schedule,
-            memories=memories,
-            current_location=created_npc.get("current_location", "")
-        )
-    
     # --- Multiple NPC creation ---
     
     async def spawn_multiple_npcs(self, ctx: RunContextWrapper, count=3) -> List[int]:
