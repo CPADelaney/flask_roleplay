@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # GPT wrapper
 # ───────────────────────────────────────────────────────────────────────────
 
-async def _gpt_json(system: str, user: str, *, model: str = "gpt-4o-mini") -> Any:
+async def _gpt_json(system: str, user: str, *, model: str = "gpt-4.1-nano") -> Any:
     """Call OpenAI forcing JSON output, three retries, else raise."""
     if get_openai_client is None:
         raise RuntimeError("OpenAI client unavailable – falling back")
