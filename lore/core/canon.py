@@ -10,7 +10,7 @@ from embedding.vector_store import generate_embedding # Assuming you have this
 from lore.core.context import CanonicalContext
 
 from typing import List, Dict, Any, Union, Optional
-from datetime import datetime, timezone
+from datetime import datetime
 from agents import Runner
 
 # Import the new validation agent
@@ -263,7 +263,7 @@ async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None
             user_id, conversation_id, event_text, tags, significance, timestamp
         )
         VALUES ($1, $2, $3, $4, $5, $6)
-    """, ctx.user_id, ctx.conversation_id, event_text, tags, significance, datetime.now())
+    """, ctx.user_id, ctx.conversation_id, event_text, tags, significance, datetime.utcnow())
 
 async def ensure_npc_exists(ctx, conn, npc_reference: Union[int, str, Dict[str, Any]]) -> int:
     """
@@ -666,7 +666,7 @@ async def find_or_create_social_custom(
         'context': kwargs.get('context', 'social'),
         'formality_level': kwargs.get('formality_level', 'medium'),
         'adopted_by': kwargs.get('adopted_by', []),
-        'adoption_date': kwargs.get('adoption_date', datetime.now())
+        'adoption_date': kwargs.get('adoption_date', datetime.utcnow())
     }
     
     search_fields = {
@@ -1661,7 +1661,7 @@ async def create_message(ctx, conn, conversation_id: int, sender: str, content: 
         INSERT INTO messages (conversation_id, sender, content, created_at)
         VALUES ($1, $2, $3, $4)
         RETURNING id
-    """, conversation_id, sender, content, datetime.now(timezone.utc))
+    """, conversation_id, sender, content, datetime.utcnow())
     
     await log_canonical_event(
         ctx, conn,
