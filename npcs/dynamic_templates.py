@@ -28,11 +28,7 @@ import hashlib
 import json
 import logging
 from typing import Any, Dict, List, TypedDict
-
-try:
-    from logic.chatgpt_integration import get_openai_client  # project‑level wrapper
-except ImportError:  # unit‑tests / offline
-    get_openai_client = None  # type: ignore
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -40,26 +36,67 @@ logger = logging.getLogger(__name__)
 # GPT wrapper
 # ───────────────────────────────────────────────────────────────────────────
 
-async def _gpt_json(system: str, user: str, *, model: str = "gpt-4.1-nano") -> Any:
-    """Call OpenAI forcing JSON output, three retries, else raise."""
-    if get_openai_client is None:
+_client: AsyncOpenAI | None = None
+
+def get_openai_client() -> AsyncOpenAI:
+    global _client
+    if _client is None:
+        _client = AsyncOpenAI()
+    return _client
+
+
+async def _gpt_json(
+    system: str,
+    user: str,
+    *,
+    model: str = "gpt-4.1-nano",   # pick what you actually want
+    max_output_tokens: int = 640,
+) -> Any:
+    """
+    Call the OpenAI Responses API and return parsed JSON.
+
+    Retries up to 3x on error. Raises RuntimeError if all attempts fail.
+    Enforces JSON through a permissive json_schema response_format.
+    """
+    client = get_openai_client()
+    if client is None:
         raise RuntimeError("OpenAI client unavailable – falling back")
 
-    client = get_openai_client()
+    # Permissive schema: accept any top-level JSON object
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "AnyObject",
+            "schema": {"type": "object", "additionalProperties": True},
+        },
+    }
+
+    # We’ll pass system guidance via `instructions`, user via `input`
+    # (Responses API will build the conversation from this.) :contentReference[oaicite:6]{index=6}
+    instructions = system
+
+    # The simplest input form is a plain string; the SDK wraps it correctly. :contentReference[oaicite:7]{index=7}
+    input_text = user
+
+    last_err = None
     for attempt in range(3):
         try:
-            r = client.chat.completions.create(
+            resp = await client.responses.create(
                 model=model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                temperature=0.7,
-                max_tokens=640,
-                response_format={"type": "json_object"},
+                instructions=instructions,
+                input=input_text,
+                response_format=response_format,
+                max_output_tokens=max_output_tokens,
             )
-            return json.loads(r.choices[0].message.content)
-        except Exception as e:  # pragma: no cover
-            logger.warning("GPT call failed (%s/3): %s", attempt + 1, e)
+            # `output_text` concatenates all model text outputs in order. :contentReference[oaicite:8]{index=8}
+            text = resp.output_text
+            return json.loads(text)
+        except Exception as e:  # broaden: network, JSON parse, API errors
+            last_err = e
+            logger.warning("OpenAI JSON call failed (%s/3): %s", attempt + 1, e)
             await asyncio.sleep(1.5 * (attempt + 1))
-    raise RuntimeError("GPT failed after 3 attempts")
+
+    raise RuntimeError(f"OpenAI JSON call failed after 3 attempts: {last_err}")
 
 _hash = lambda txt: hashlib.sha1(txt.encode()).hexdigest()[:12]  # campaign isolator
 
@@ -220,11 +257,18 @@ async def get_calendar_day_names(environment_desc: str = "") -> List[str]:
 # ───────────────────────────────────────────────────────────────────────────
 
 @functools.lru_cache(maxsize=128)
-async def generate_core_beliefs(archetype_summary: str, personality_traits: List[str], environment_desc: str = "", *, n: int = 5) -> List[str]:
+async def generate_core_beliefs(archetype_summary: str, personality_traits_str: str, environment_desc: str = "", *, n: int = 5) -> List[str]:
+    """
+    Generate core beliefs. Note: personality_traits_str should be a comma-separated string, not a list.
+    """
     try:
         data = await _gpt_json(
             "NPC belief generator.",
-            f"World: {environment_desc}\nArchetype: {archetype_summary}\nTraits: {', '.join(personality_traits)}\nReturn {n} core first‑person beliefs (≤14 words).",
+            f"""World: {environment_desc}
+Archetype: {archetype_summary}
+Traits: {personality_traits_str}
+Generate {n} core first-person beliefs (≤14 words each).
+Return as JSON array of belief strings.""",
         )
         if isinstance(data, list):
             return [str(b) for b in data][:n]
