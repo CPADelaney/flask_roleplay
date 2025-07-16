@@ -1701,7 +1701,7 @@ async def create_all_tables():
                     id BIGSERIAL PRIMARY KEY,
                     nyx_id TEXT NOT NULL,
                     instance_id TEXT NOT NULL,
-                    checkpoint_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    checkpoint_time TIMESTAMP NOT NULL DEFAULT now(),
                     event TEXT,
                     serialized_state JSONB NOT NULL,
                     merged_from TEXT[],
@@ -1718,7 +1718,7 @@ async def create_all_tables():
                     id BIGSERIAL PRIMARY KEY,
                     nyx_id TEXT NOT NULL,
                     instance_id TEXT NOT NULL,
-                    event_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    event_time TIMESTAMP NOT NULL DEFAULT now(),
                     event_type TEXT NOT NULL,
                     event_payload JSONB NOT NULL,
                     UNIQUE(nyx_id, instance_id, event_time, event_type)
@@ -2427,6 +2427,36 @@ async def create_all_tables():
                 ''',
                 '''
                 ALTER TABLE NPCStats ADD COLUMN revelation_plan JSONB;
+                ''',
+                '''
+                ALTER TABLE NyxAgentDirectives 
+                    ALTER COLUMN created_at TYPE TIMESTAMP,
+                    ALTER COLUMN expires_at TYPE TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE NyxAgentCommunication 
+                    ALTER COLUMN timestamp TYPE TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE NyxJointMemoryGraph 
+                    ALTER COLUMN created_at TYPE TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE NyxJointMemoryAccess 
+                    ALTER COLUMN granted_at TYPE TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE NyxNarrativeGovernance 
+                    ALTER COLUMN active_from TYPE TIMESTAMP,
+                    ALTER COLUMN active_until TYPE TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE nyx_brain_checkpoints 
+                    ALTER COLUMN checkpoint_time TYPE TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE nyx_brain_events 
+                    ALTER COLUMN event_time TYPE TIMESTAMP;
                 ''',
             ]  # End of sql_commands list
 
