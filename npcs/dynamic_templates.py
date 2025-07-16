@@ -45,53 +45,84 @@ def get_openai_client() -> AsyncOpenAI:
     return _client
 
 
+def _strip_json_fences(text: str) -> str:
+    """
+    Remove ```json ... ``` or ``` ... ``` fences if present.
+    Returns stripped text.
+    """
+    if not text:
+        return ""
+    t = text.strip()
+    if t.startswith("```json") and t.endswith("```"):
+        return t[7:-3].strip()
+    if t.startswith("```") and t.endswith("```"):
+        return t[3:-3].strip()
+    return t
+
+
 async def _gpt_json(
     system: str,
     user: str,
     *,
-    model: str = "gpt-4.1-nano",   # pick what you actually want
+    model: str = "gpt-4.1-nano",
     max_output_tokens: int = 640,
 ) -> Any:
     """
     Call the OpenAI Responses API and return parsed JSON.
 
-    Retries up to 3x on error. Raises RuntimeError if all attempts fail.
-    Enforces JSON through a permissive json_schema response_format.
+    We *hint* JSON format via instructions; the Responses API currently
+    has no `response_format=` kwarg (unlike legacy chat.completions),
+    so we enforce in prompt + parse defensively.
+
+    Retries up to 3x on error (network / parse / API). Raises RuntimeError if all fail.
     """
     client = get_openai_client()
     if client is None:
         raise RuntimeError("OpenAI client unavailable – falling back")
 
-    # Permissive schema: accept any top-level JSON object
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "AnyObject",
-            "schema": {"type": "object", "additionalProperties": True},
-        },
-    }
+    # Strengthen the system guidance to produce valid JSON.
+    # (We append the instruction if caller didn't already mention JSON.)
+    if "json" not in system.lower():
+        system = (
+            system.rstrip()
+            + "\n\nYou MUST respond with a single valid JSON object. No prose."
+        )
+    if "json" not in user.lower():
+        user = user.rstrip() + "\nReturn ONLY a valid JSON object."
 
-    # We’ll pass system guidance via `instructions`, user via `input`
-    # (Responses API will build the conversation from this.) :contentReference[oaicite:6]{index=6}
     instructions = system
-
-    # The simplest input form is a plain string; the SDK wraps it correctly. :contentReference[oaicite:7]{index=7}
     input_text = user
 
-    last_err = None
+    last_err: Optional[Exception] = None
     for attempt in range(3):
         try:
             resp = await client.responses.create(
                 model=model,
                 instructions=instructions,
                 input=input_text,
-                response_format=response_format,
                 max_output_tokens=max_output_tokens,
             )
-            # `output_text` concatenates all model text outputs in order. :contentReference[oaicite:8]{index=8}
-            text = resp.output_text
-            return json.loads(text)
-        except Exception as e:  # broaden: network, JSON parse, API errors
+
+            raw_text = getattr(resp, "output_text", None)
+            if raw_text is None:
+                raise ValueError("No output_text in response.")
+
+            # First parse try
+            try:
+                return json.loads(raw_text)
+            except Exception:
+                pass
+
+            # Strip code fences and retry
+            stripped = _strip_json_fences(raw_text)
+            try:
+                return json.loads(stripped)
+            except Exception as parse_err:
+                raise ValueError(
+                    f"Model output not valid JSON (after strip). Text starts: {stripped[:120]!r}"
+                ) from parse_err
+
+        except Exception as e:  # catch all; we retry
             last_err = e
             logger.warning("OpenAI JSON call failed (%s/3): %s", attempt + 1, e)
             await asyncio.sleep(1.5 * (attempt + 1))
