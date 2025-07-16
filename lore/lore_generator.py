@@ -15,6 +15,7 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime
 from dataclasses import dataclass
+from db.connection import get_db_connection_context
 
 # Agents SDK imports
 from agents import Agent, ModelSettings, function_tool, Runner
@@ -807,12 +808,6 @@ class WorldBuilder(BaseGenerator):
         except Exception as e:
             logger.error(f"Error getting setting name: {e}")
             return "The Setting"
-
-    async def get_connection_pool(self):
-        """Get database connection pool."""
-        # Return the context manager that can be used with 'async with'
-        from db.connection import get_db_connection_context
-        return get_db_connection_context()
 
 class FactionGenerator(BaseGenerator):
     """Generates faction and related lore content."""
