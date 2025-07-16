@@ -810,9 +810,9 @@ class WorldBuilder(BaseGenerator):
 
     async def get_connection_pool(self):
         """Get database connection pool."""
-        # This would need to be implemented based on your database connection implementation
-        from db.connection import get_connection_pool
-        return await get_connection_pool()
+        # Return the context manager that can be used with 'async with'
+        from db.connection import get_db_connection_context
+        return get_db_connection_context()
 
 class FactionGenerator(BaseGenerator):
     """Generates faction and related lore content."""
