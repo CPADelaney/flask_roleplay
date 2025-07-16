@@ -18,7 +18,7 @@ from agents.tracing import custom_span, function_span, generation_span
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from memory.core import MemoryType, MemorySignificance
-from memory.npc_behavior import BehaviorEvolution
+from npcs.npc_behavior import BehaviorEvolution
 
 logger = logging.getLogger(__name__)
 
