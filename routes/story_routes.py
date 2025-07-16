@@ -11,7 +11,21 @@ from datetime import datetime, date, timedelta
 from quart import Blueprint, request, jsonify, session
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from logic.activity_analyzer import ActivityAnalyzer
-from logic.npc_narrative_progression import check_for_npc_revelation
+from logic.npc_narrative_progression import (
+    check_for_npc_revelation,
+    get_npc_narrative_stage,
+    progress_npc_narrative_stage,
+    NPC_NARRATIVE_STAGES
+)
+from logic.narrative_events import (
+    get_relationship_overview,
+    check_for_personal_revelations,
+    check_for_narrative_moments,
+    add_dream_sequence,
+    add_moment_of_clarity,
+    initialize_player_stats,
+    analyze_narrative_tone
+)
 
 # Import utility modules
 from utils.db_helpers import db_transaction, with_transaction, handle_database_operation, fetch_row_async, fetch_all_async, execute_async
@@ -234,6 +248,32 @@ async def fetch_quest_details_async(user_id, conversation_id, quest_id):
     NPC_CACHE.set(cache_key, quest_data, 60)  # TTL: 60 seconds
     
     return quest_data
+
+async def get_overall_narrative_stage(user_id: int, conversation_id: int):
+    """
+    Derive the overall narrative stage based on NPC relationship stages.
+    Returns the most advanced stage among all NPCs.
+    """
+    overview = await get_relationship_overview(user_id, conversation_id)
+    
+    # Order stages by progression
+    stage_order = {stage.name: i for i, stage in enumerate(NPC_NARRATIVE_STAGES)}
+    
+    most_advanced_stage = NPC_NARRATIVE_STAGES[0]  # Default to first stage
+    highest_index = 0
+    
+    for stage_name, npcs in overview.get('by_stage', {}).items():
+        if npcs and stage_name in stage_order:
+            stage_index = stage_order[stage_name]
+            if stage_index > highest_index:
+                highest_index = stage_index
+                # Find the actual stage object
+                for stage in NPC_NARRATIVE_STAGES:
+                    if stage.name == stage_name:
+                        most_advanced_stage = stage
+                        break
+    
+    return most_advanced_stage
 
 async def fetch_location_details_async(user_id, conversation_id, location_id=None, location_name=None):
     """
@@ -1634,6 +1674,9 @@ async def next_storybeat():
         conv_id = data.get("conversation_id")
         player_name = data.get("player_name", "Chase")
 
+        # Initialize player stats if needed
+        await initialize_player_stats(user_id, conv_id)
+
         # Initialize NPC system
         resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
         
@@ -1713,45 +1756,52 @@ async def next_storybeat():
         )
         tracker.end_phase()
         
-        # 6.5) Check for NPC-specific revelations based on interactions
-        tracker.start_phase("npc_revelations")
-        npc_revelations = []
-        if npc_responses:
-            # Check for revelations for each NPC we just interacted with
-            for npc_resp in npc_responses[:3]:  # Limit to top 3 to avoid spam
-                npc_id = npc_resp.get("npc_id")
-                if npc_id:
-                    revelation = await check_for_npc_revelation(
-                        user_id, 
-                        conv_id, 
-                        npc_id
-                    )
-                    if revelation:
-                        npc_revelations.append(revelation)
-                        logging.info(f"NPC revelation triggered for {revelation['npc_name']}: {revelation['stage']}")
-        tracker.end_phase()
+        # 6.5) Check for narrative events based on the overall state
+        tracker.start_phase("narrative_events")
         
-        # Add revelations to response if any occurred
-        if npc_revelations:
-            # Add to the context dict that gets passed to Nyx
-            context["narrative_hints"] = {
-                "npc_revelations": [
-                    {
-                        "npc_name": rev["npc_name"],
-                        "stage": rev["stage"],
-                        "revelation_type": "player_realization"
-                    }
-                    for rev in npc_revelations
-                ],
-                "tone_guidance": "The player is beginning to understand the true nature of their relationships. Incorporate subtle, ominous hints about the NPCs' control without being explicit."
-            }
+        # Check for personal revelations across all NPCs
+        personal_revelation = await check_for_personal_revelations(user_id, conv_id)
+        if personal_revelation:
+            # Add to context for Nyx
+            if "narrative_hints" not in context:
+                context["narrative_hints"] = {}
+            context["narrative_hints"]["personal_revelation"] = personal_revelation
+            logging.info(f"Personal revelation triggered: {personal_revelation['type']}")
 
+        # Check for narrative moments
+        narrative_moment = await check_for_narrative_moments(user_id, conv_id)
+        if narrative_moment:
+            if "narrative_hints" not in context:
+                context["narrative_hints"] = {}
+            context["narrative_hints"]["narrative_moment"] = narrative_moment
+            logging.info(f"Narrative moment triggered: {narrative_moment['name']}")
+
+        # Possibly add a dream sequence (random chance or based on conditions)
+        if random.random() < 0.1:  # 10% chance
+            dream = await add_dream_sequence(user_id, conv_id)
+            if dream:
+                if "narrative_hints" not in context:
+                    context["narrative_hints"] = {}
+                context["narrative_hints"]["dream_sequence"] = dream
+                logging.info("Dream sequence added to player journal")
+
+        tracker.end_phase()
+
+        # Update aggregator_data with narrative context
         if "narrative_context" not in aggregator_data:
             aggregator_data["narrative_context"] = {}
         
-        aggregator_data["narrative_context"]["active_revelations"] = [
-            f"{rev['npc_name']} - {rev['stage']}" for rev in npc_revelations
-        ]
+        # Add relationship overview
+        relationship_overview = await get_relationship_overview(user_id, conv_id)
+        aggregator_data["narrative_context"]["relationship_overview"] = relationship_overview
+        
+        # Add active revelations
+        active_revelations = []
+        if npc_revelations:
+            active_revelations.extend([f"{rev['npc_name']} - {rev['stage']}" for rev in npc_revelations])
+        if personal_revelation:
+            active_revelations.append(f"Personal - {personal_revelation['type']}")
+        aggregator_data["narrative_context"]["active_revelations"] = active_revelations
 
         # 7) Time advancement
         tracker.start_phase("time_advancement")
@@ -2045,6 +2095,41 @@ async def next_storybeat():
 
     finally:
         await cleanup_resources(resources)
+
+# Add new endpoint for narrative overview
+@story_bp.route("/narrative_overview", methods=["GET"])
+@timed_function
+async def get_narrative_overview():
+    """
+    Get an overview of all NPC relationships and narrative progression.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        conversation_id = request.args.get("conversation_id")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        # Get relationship overview
+        overview = await get_relationship_overview(user_id, int(conversation_id))
+        
+        # Get overall narrative stage
+        overall_stage = await get_overall_narrative_stage(user_id, int(conversation_id))
+        
+        # Add overall stage to overview
+        overview["overall_narrative_stage"] = {
+            "name": overall_stage.name,
+            "description": overall_stage.description
+        }
+        
+        return jsonify(overview)
+        
+    except Exception as e:
+        logging.exception("[get_narrative_overview] Error")
+        return jsonify({"error": str(e)}), 500
 
 @contextlib.asynccontextmanager
 async def npc_system_context(user_id, conv_id):
