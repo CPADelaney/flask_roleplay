@@ -2,10 +2,6 @@
 
 """
 Unified NPC creation functionality.
-This module consolidates and replaces functionality from:
-- logic/npc_creation.py
-- npcs/npc_creation_agent.py
-- npcs/npc_handler_agent.py
 """
 
 import logging
@@ -19,7 +15,7 @@ import os
 import asyncpg
 from datetime import datetime
 
-from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail
+from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, ModelSettings
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from memory.core import Memory, MemoryType, MemorySignificance
@@ -37,57 +33,19 @@ from logic.gpt_helpers import fetch_npc_name
 from logic.calendar import load_calendar_names
 from memory.memory_nyx_integration import remember_through_nyx
 
+from dynamic_templates import (
+    get_mask_slippage_triggers,
+    get_relationship_stages,
+    generate_core_beliefs,
+    get_semantic_seed_topics,
+    get_calendar_day_names,
+    get_trauma_keywords,
+)
+
 logger = logging.getLogger(__name__)
 
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
-
-# NPC mask slippage triggers - these are moments when the NPC's true nature begins to show
-MASK_SLIPPAGE_TRIGGERS = {
-    "dominance": [
-        {"threshold": 30, "event": "subtle_control", "memory": "I let my control slip through a bit today. Nobody seemed to notice the subtle shift in dynamic."},
-        {"threshold": 50, "event": "mask_adjustment", "memory": "It's getting harder to maintain this facade. I caught myself giving commands too firmly, had to play it off as a joke."},
-        {"threshold": 70, "event": "partial_revelation", "memory": "I showed a glimpse of my true self today. The flash of fear in their eyes was... intoxicating."},
-        {"threshold": 90, "event": "mask_removal", "memory": "I'm barely pretending anymore. Those who understand appreciate the honesty. Those who don't will learn."}
-    ],
-    "cruelty": [
-        {"threshold": 30, "event": "sharp_comment", "memory": "I said something cutting today and quickly covered it with a laugh. The momentary hurt in their eyes was satisfying."},
-        {"threshold": 50, "event": "testing_boundaries", "memory": "I'm pushing further each time to see what I can get away with. People are so willing to excuse 'playful' cruelty."},
-        {"threshold": 70, "event": "deliberate_harm", "memory": "I orchestrated a situation today that caused genuine distress. I maintained plausible deniability, of course."},
-        {"threshold": 90, "event": "overt_sadism", "memory": "My reputation for 'intensity' is established enough that I barely need to hide my enjoyment of others' suffering now."}
-    ],
-    "intensity": [
-        {"threshold": 30, "event": "piercing_gaze", "memory": "Someone commented on my intense stare today. I've learned to soften it in public, but sometimes I forget."},
-        {"threshold": 50, "event": "forceful_presence", "memory": "People naturally move aside when I walk through a room now. My presence is becoming harder to disguise."},
-        {"threshold": 70, "event": "commanding_aura", "memory": "I no longer need to raise my voice to be obeyed. My quiet commands carry weight that surprises even me."},
-        {"threshold": 90, "event": "overwhelming_presence", "memory": "The mask has become nearly transparent. My true nature radiates from me, drawing submission from the vulnerable."}
-    ]
-}
-
-# Relationship stages that track the evolution of NPC-NPC and NPC-player relationships
-RELATIONSHIP_STAGES = {
-    "dominant": [
-        {"level": 10, "name": "Initial Interest", "description": "Beginning to notice potential for control"},
-        {"level": 30, "name": "Strategic Friendship", "description": "Establishing trust while assessing vulnerabilities"},
-        {"level": 50, "name": "Subtle Influence", "description": "Exercising increasing control through 'guidance'"},
-        {"level": 70, "name": "Open Control", "description": "Dropping pretense of equality in the relationship"},
-        {"level": 90, "name": "Complete Dominance", "description": "Relationship is explicitly based on control and submission"}
-    ],
-    "alliance": [
-        {"level": 10, "name": "Mutual Recognition", "description": "Recognizing similar controlling tendencies"},
-        {"level": 30, "name": "Cautious Cooperation", "description": "Sharing limited information and techniques"},
-        {"level": 50, "name": "Strategic Partnership", "description": "Actively collaborating while maintaining independence"},
-        {"level": 70, "name": "Power Coalition", "description": "Forming a unified front with clear internal hierarchy"},
-        {"level": 90, "name": "Dominant Cabal", "description": "Operating as a coordinated group to control others"}
-    ],
-    "rivalry": [
-        {"level": 10, "name": "Veiled Competition", "description": "Competing subtly while maintaining cordial appearance"},
-        {"level": 30, "name": "Strategic Undermining", "description": "Actively working to diminish the other's influence"},
-        {"level": 50, "name": "Open Challenge", "description": "Directly competing for control and resources"},
-        {"level": 70, "name": "Psychological Warfare", "description": "Actively attempting to break the other's control"},
-        {"level": 90, "name": "Domination Contest", "description": "All-out struggle for supremacy"}
-    ]
-}
 
 # Models for input/output
 class NPCCreationContext(BaseModel):
@@ -2447,46 +2405,45 @@ class NPCCreationHandler:
                     logging.error(f"Error generating semantic memory for NPC {npc_id}: {e}")
 
     
-    def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relationship_type, reciprocal_type):
-            """
-            Create a reciprocal memory from the perspective of the second NPC.
+    async def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relationship_type, reciprocal_type):
+        """
+        Create a reciprocal memory from the perspective of the second NPC using LLM.
+        
+        Args:
+            original_memory: The original memory text
+            npc1_name: Name of the first NPC (original memory owner)
+            npc2_name: Name of the second NPC (reciprocal memory owner)
+            relationship_type: Original relationship type
+            reciprocal_type: Reciprocal relationship type
             
-            Args:
-                original_memory: The original memory text
-                npc1_name: Name of the first NPC (original memory owner)
-                npc2_name: Name of the second NPC (reciprocal memory owner)
-                relationship_type: Original relationship type
-                reciprocal_type: Reciprocal relationship type
-                
-            Returns:
-                Reciprocal memory string or None if error
-            """
-            try:
-                # Simple conversion for prototype
-                # In a full implementation, this would use GPT to create a properly
-                # transformed memory from the other perspective
-                
-                # Replace names
-                memory = original_memory.replace(npc1_name, "THE_OTHER_PERSON")
-                memory = memory.replace(npc2_name, "MYSELF")
-                memory = memory.replace("THE_OTHER_PERSON", npc1_name)
-                memory = memory.replace("MYSELF", "I")
-                
-                # Flip perspective words
-                memory = memory.replace("I told them", f"{npc1_name} told me")
-                memory = memory.replace("I noticed", f"{npc1_name} seemed to notice")
-                memory = memory.replace("my hand", "her hand")
-                memory = memory.replace("I suggested", f"{npc1_name} suggested")
-                
-                # Convert to first person
-                memory = memory.replace(f"{npc2_name} was", "I was")
-                memory = memory.replace(f"{npc2_name} had", "I had")
-                memory = memory.replace(f"{npc2_name} and I", f"{npc1_name} and I")
-                
-                return memory
-            except Exception as e:
-                logging.error(f"Error creating reciprocal memory: {e}")
-                return None
+        Returns:
+            Reciprocal memory string or None if error
+        """
+        try:
+            payload = json.dumps({
+                "original_memory": original_memory,
+                "npc1_name": npc1_name,
+                "npc2_name": npc2_name,
+                "relationship_type": relationship_type,
+                "reciprocal_type": reciprocal_type
+            }, ensure_ascii=False)
+            
+            result = await Runner.run(
+                starting_agent=reciprocal_memory_generator,
+                input=payload
+            )
+            
+            parsed = json.loads(result.output.strip())
+            return parsed.get("reciprocal_memory")
+            
+        except Exception as e:
+            logging.error(f"Error creating reciprocal memory: {e}")
+            # Fallback to simple transformation
+            memory = original_memory.replace(npc1_name, "THE_OTHER_PERSON")
+            memory = memory.replace(npc2_name, "MYSELF")
+            memory = memory.replace("THE_OTHER_PERSON", npc1_name)
+            memory = memory.replace("MYSELF", "I")
+            return memory
     
     # --- API Methods ---
     
@@ -2630,26 +2587,42 @@ class NPCCreationHandler:
             logging.error(f"Error in get_npc_api: {e}")
             return {"error": str(e)}
 
-    async def check_for_mask_slippage(self, user_id, conversation_id, npc_id):
+    async def check_for_mask_slippage(
+        self,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        *,
+        overwrite_description: bool = True,
+    ) -> list[dict] | None:
         """
-        Check dominance / cruelty / intensity thresholds and record mask-slippage events.
-        Adds memories, tweaks the physical description, and writes history to NPCEvolution.
+        Evaluate whether the NPC’s *facade* cracks for the **player** based on the
+        *current* values of dominance / cruelty / intensity.
+    
+        • Uses the environment‑aware templates supplied by `dynamic_templates`.
+        • Writes *cue* events to **NPCEvolution.mask_slippage_events** so later
+          logic (e.g. dialogue colouring) can react.
+        • No longer creates canned memories – mask slippage is a *criterion*, not
+          a retrospective thought.
+        • Optionally appends a short physical tell to `physical_description`
+          the first time each cue fires (can be disabled).
+    
+        Returns
+        -------
+        list[dict] | None
+            The list of newly triggered cue dictionaries, or `None` on error.
         """
         try:
             from lore.core import canon
     
-            # Build a lightweight context object for canon helpers
-            ctx = type(
-                "CanonContext",
-                (),
-                {"user_id": user_id, "conversation_id": conversation_id},
-            )()
-    
+            # ── gather context ──────────────────────────────────────────────────
+            ctx = type("CanonCtx", (), {"user_id": user_id, "conversation_id": conversation_id})()
             async with get_db_connection_context() as conn:
-                # ── Fetch current NPC state ───────────────────────────────────────────
-                stats_row = await conn.fetchrow(
+                row = await conn.fetchrow(
                     """
-                    SELECT npc_name, dominance, cruelty, intensity, memory
+                    SELECT npc_name, dominance, cruelty, intensity, memory,
+                           (SELECT value FROM CurrentRoleplay
+                            WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc') AS env
                     FROM NPCStats
                     WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
                     """,
@@ -2657,24 +2630,25 @@ class NPCCreationHandler:
                     conversation_id,
                     npc_id,
                 )
-                if not stats_row:
+                if not row:
                     return None
     
-                npc_name = stats_row["npc_name"]
-                dominance = stats_row["dominance"]
-                cruelty = stats_row["cruelty"]
-                intensity = stats_row["intensity"]
-                memory_json = stats_row["memory"]
+                npc_name       = row["npc_name"]
+                env_desc       = row["env"] or ""
+                stats_current  = {
+                    "dominance": row["dominance"],
+                    "cruelty":   row["cruelty"],
+                    "intensity": row["intensity"],
+                }
     
-                # Parse stored memories safely
-                memory = (
-                    self.safe_json_loads(memory_json, [])
-                    if memory_json
-                    else []
-                )
+            # ── fetch *dynamic* trigger tables ──────────────────────────────────
+            trigger_map: dict[str, list[dict]] = {}
+            for stat in stats_current:
+                trigger_map[stat] = await get_mask_slippage_triggers(stat, env_desc)
     
-                # ── Load previous slippage history ───────────────────────────────────
-                evo_row = await conn.fetchrow(
+            # ── load prior history ──────────────────────────────────────────────
+            async with get_db_connection_context() as conn:
+                hist_row = await conn.fetchrow(
                     """
                     SELECT mask_slippage_events
                     FROM NPCEvolution
@@ -2684,63 +2658,52 @@ class NPCCreationHandler:
                     conversation_id,
                     npc_id,
                 )
-                slippage_history = self.safe_json_loads(
-                    evo_row["mask_slippage_events"] if evo_row else None, []
+                history: list[dict] = (
+                    json.loads(hist_row["mask_slippage_events"])
+                    if hist_row and hist_row["mask_slippage_events"]
+                    else []
                 )
     
-                # ── Evaluate thresholds ─────────────────────────────────────────────
-                triggered_events = []
-                physical_description_updates: list[str] = []
+            history_cues   = {h["cue"] for h in history}
+            newly_triggered: list[dict] = []
     
-                for stat_name, thresholds in MASK_SLIPPAGE_TRIGGERS.items():
-                    stat_value = stats_row[stat_name]        # direct lookup is clearer
+            # ── evaluate each stat’s ladder ─────────────────────────────────────
+            for stat, value in stats_current.items():
+                for step in trigger_map[stat]:
+                    cue = step["cue"]
+                    if cue in history_cues:
+                        continue                       # already fired
     
-                    for threshold in thresholds:
-                        event_name = threshold["event"]
+                    if value >= step["threshold"]:
+                        newly_triggered.append(
+                            {
+                                "cue": cue,
+                                "stat": stat,
+                                "threshold": step["threshold"],
+                                "description": step["description"],
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+                        history_cues.add(cue)
     
-                        if any(e.get("event") == event_name for e in slippage_history):
-                            continue  # already happened
+            if not newly_triggered:
+                return []                              # nothing new this tick
     
-                        if stat_value >= threshold["threshold"]:
-                            triggered_events.append(
-                                {
-                                    "event": event_name,
-                                    "stat": stat_name,
-                                    "threshold": threshold["threshold"],
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-                            )
+            # ── persist to NPCEvolution ─────────────────────────────────────────
+            history.extend(newly_triggered)
     
-                            if "memory" in threshold:
-                                memory.append(threshold["memory"])
+            async with get_db_connection_context() as conn:
+                await canon.update_entity_canonically(
+                    ctx,
+                    conn,
+                    "NPCEvolution",
+                    npc_id,
+                    {"mask_slippage_events": json.dumps(history)},
+                    f"Mask‑slippage cues fired for {npc_name}: {', '.join(e['cue'] for e in newly_triggered)}",
+                )
     
-                            # Small visual tells as the mask cracks
-                            if stat_name == "dominance" and threshold["threshold"] >= 50:
-                                physical_description_updates.append(
-                                    " In unguarded moments her posture straightens, and a commanding glint flashes in her eyes before she reins it in."
-                                )
-                            if stat_name == "cruelty" and threshold["threshold"] >= 50:
-                                physical_description_updates.append(
-                                    " Occasionally her smile falters, revealing a fleeting chill behind the warmth."
-                                )
-                            if stat_name == "intensity" and threshold["threshold"] >= 50:
-                                physical_description_updates.append(
-                                    " When no one is watching, her gaze turns razor-sharp, studying others with unnerving focus."
-                                )
-    
-                # ── Persist memory / description updates ────────────────────────────
-                original_mem = self.safe_json_loads(memory_json, [])
-                if memory != original_mem:
-                    await canon.update_entity_canonically(
-                        ctx,
-                        conn,
-                        "NPCStats",
-                        npc_id,
-                        {"memory": json.dumps(memory)},
-                        f"Mask-slippage memories recorded for {npc_name}",
-                    )
-    
-                if physical_description_updates:
+                # ── optionally tweak physical description the first time a cue fires
+                if overwrite_description:
                     desc_row = await conn.fetchrow(
                         """
                         SELECT physical_description
@@ -2752,75 +2715,25 @@ class NPCCreationHandler:
                         npc_id,
                     )
                     current_desc = desc_row["physical_description"] if desc_row else ""
-                    new_desc = current_desc + "".join(physical_description_updates)
-    
-                    await canon.update_entity_canonically(
-                        ctx,
-                        conn,
-                        "NPCStats",
-                        npc_id,
-                        {"physical_description": new_desc},
-                        f"{npc_name}'s veneer shows cracks after mask slippage",
-                    )
-    
-                # ── Record slippage history in NPCEvolution ─────────────────────────
-                if triggered_events:
-                    slippage_history.extend(triggered_events)
-    
-                    exists = await conn.fetchval(
-                        """
-                        SELECT 1 FROM NPCEvolution
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                        """,
-                        user_id,
-                        conversation_id,
-                        npc_id,
-                    )
-    
-                    if exists:
-                        await canon.update_entity_with_governance(
+                    # only add snippets that are brand‑new
+                    additions = [
+                        f" {e['description']}" for e in newly_triggered
+                        if e["description"] and e["description"] not in current_desc
+                    ]
+                    if additions:
+                        await canon.update_entity_canonically(
                             ctx,
                             conn,
-                            "NPCEvolution",
+                            "NPCStats",
                             npc_id,
-                            {"mask_slippage_events": json.dumps(slippage_history)},
-                            f"Mask-slippage progression logged for {npc_name}",
-                            significance=5,
-                        )
-                    else:
-                        await canon.find_or_create_entity(
-                            ctx,
-                            conn,
-                            entity_type="npc_evolution",
-                            entity_name=f"evolution_{npc_id}",
-                            search_fields={
-                                "user_id": user_id,
-                                "conversation_id": conversation_id,
-                                "npc_id": npc_id,
-                            },
-                            create_data={
-                                "user_id": user_id,
-                                "conversation_id": conversation_id,
-                                "npc_id": npc_id,
-                                "mask_slippage_events": json.dumps(slippage_history),
-                            },
-                            table_name="NPCEvolution",
-                            embedding_text=f"NPC {npc_id} evolution tracking",
-                            similarity_threshold=0.95,
+                            {"physical_description": current_desc + "".join(additions)},
+                            f"Physical tells added after mask slippage for {npc_name}",
                         )
     
-                        await canon.log_canonical_event(
-                            ctx,
-                            conn,
-                            f"Initialized evolution tracking for NPC {npc_name}",
-                            tags=["npc_evolution", "mask_slippage", "init"],
-                            significance=5,
-                        )
+            return newly_triggered
     
-            return triggered_events
-    
-        except Exception as e:
-            logging.error(f"Error checking mask slippage for NPC {npc_id}: {e}", exc_info=True)
+        except Exception as err:
+            logging.error("check_for_mask_slippage failed (NPC %s): %s", npc_id, err, exc_info=True)
             return None
         
     async def assign_random_relationships_canonical(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
@@ -3343,58 +3256,40 @@ class NPCCreationHandler:
             logging.error(f"Error initializing emotional state for NPC {npc_id}: {e}")
             return False
     
-    async def generate_npc_beliefs(self, user_id, conversation_id, npc_id, npc_data):
-        """
-        Generate initial beliefs based on NPC archetype.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-            npc_data: Dict containing NPC data
-        
-        Returns:
-            Boolean indicating success
-        """
+    async def generate_npc_beliefs(
+        self,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+        *,
+        n: int = 5,
+    ) -> bool:
+        """Create core beliefs via GPT and store them in the memory system."""
         try:
+            from memory.wrapper import MemorySystem  # local import to avoid cycles
+    
             memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-            archetype_summary = npc_data.get("archetype_summary", "")
-            
-            # Generate beliefs based on archetype
-            beliefs = []
-            
-            # Dominance-related beliefs
-            if npc_data.get("dominance", 50) > 60:
-                beliefs.append("I deserve to be in control of social situations.")
-                beliefs.append("Those who submit easily are meant to be guided by stronger personalities.")
-            
-            # Cruelty-related beliefs
-            if npc_data.get("cruelty", 30) > 60:
-                beliefs.append("A little discomfort is necessary for growth in others.")
-                beliefs.append("Emotional reactions reveal useful vulnerabilities in people.")
-            
-            # Archetype-specific beliefs (simple keyword matching for demonstration)
-            if "maternal" in archetype_summary.lower() or "mother" in archetype_summary.lower():
-                beliefs.append("I know what's best for those under my care.")
-                beliefs.append("Guidance requires a firm hand and clear boundaries.")
-            
-            if "mentor" in archetype_summary.lower() or "teacher" in archetype_summary.lower():
-                beliefs.append("Knowledge is a form of power to be carefully dispensed.")
-                beliefs.append("Those who learn from me owe me their loyalty and respect.")
-            
-            # Add beliefs to memory system
-            for belief_text in beliefs:
+    
+            beliefs = await dynamic_templates.generate_core_beliefs(
+                npc_data.get("archetype_summary", ""),
+                npc_data.get("personality_traits", []),
+                npc_data.get("environment_desc", ""),
+                n=n,
+            )
+    
+            for text in beliefs:
                 await memory_system.create_belief(
                     entity_type="npc",
                     entity_id=npc_id,
-                    belief_text=belief_text,
-                    confidence=0.8
+                    belief_text=text,
+                    confidence=0.75,
                 )
-            
             return True
-        except Exception as e:
-            logging.error(f"Error generating beliefs for NPC {npc_id}: {e}")
+        except Exception as e:  # pragma: no cover
+            logger.error("Belief generation failed for NPC %s: %s", npc_id, e)
             return False
+
     
     async def initialize_npc_memory_schemas(self, user_id, conversation_id, npc_id, npc_data):
         """
@@ -3536,83 +3431,59 @@ class NPCCreationHandler:
             logging.error(f"Error setting up trauma model for NPC {npc_id}: {e}")
             return {"error": str(e)}
     
-    async def setup_npc_flashback_triggers(self, user_id, conversation_id, npc_id, npc_data):
-        """
-        Set up potential flashback triggers based on NPC traits and memories using canon system.
-        """
+    async def setup_npc_flashback_triggers(
+        self,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+    ):
+        """Choose trigger words via GPT then store them canonically."""
+        from lore.core import canon
+        from memory.flashbacks import FlashbackManager
+        from db.connection import get_db_connection_context
+    
+        ctx = type("CanonCtx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+    
+        flashback_manager = FlashbackManager(user_id, conversation_id)
+    
+        # 1) Try pulling high‑intensity memory keywords (original logic)…
+        trigger_words: List[str] = []
         try:
-            from lore.core import canon
-            
-            # Create context - FIX: Use simple object instead of RunContextWrapper
-            ctx = type("CanonCtx", (), {
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })()
-            
-            flashback_manager = FlashbackManager(user_id, conversation_id)
-            
-            # Get NPC's memories to extract potential triggers
-            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-            npc_memories = await memory_system.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                limit=10
+            memory_system = await (await __import__("memory.wrapper").wrapper.MemorySystem.get_instance)(
+                user_id, conversation_id
             )
-        
-            
-            # Identify potential trigger words from memories
-            trigger_words = []
-            high_intensity_memories = [m for m in npc_memories.get("memories", []) 
-                                      if m.get("emotional_intensity", 0) > 60]
-            
-            for memory in high_intensity_memories:
-                # Extract significant words as potential triggers
-                content = memory.get("text", "")
-                words = [w for w in content.split() if len(w) > 4 and w.isalpha()]
-                
-                if words:
-                    # Select 1-2 significant words as triggers
-                    selected = random.sample(words, min(2, len(words)))
-                    trigger_words.extend(selected)
-            
-            # If no triggers found from memories, use archetype-based triggers
-            if not trigger_words:
-                archetype = npc_data.get("archetype_summary", "").lower()
-                
-                if "mother" in archetype or "maternal" in archetype:
-                    trigger_words = ["child", "mother", "family", "responsibility"]
-                elif "teacher" in archetype or "mentor" in archetype:
-                    trigger_words = ["student", "failure", "potential", "discipline"]
-                elif "dominant" in archetype:
-                    trigger_words = ["control", "power", "obedience", "submission"]
-                else:
-                    trigger_words = ["past", "mistake", "secret", "fear"]
-            
-            # Create a test flashback
-            if trigger_words:
-                test_flashback = await flashback_manager.check_for_triggered_flashback(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    trigger_words=trigger_words,
-                    chance=1.0  # Ensure creation for testing
-                )
-                
-                # Store trigger words in database using canon system
-                async with get_db_connection_context() as conn:
-                    await canon.update_entity_canonically(
-                        ctx, conn, "NPCStats", npc_id,
-                        {"flashback_triggers": json.dumps(trigger_words)},
-                        f"Setting up flashback triggers for NPC {npc_data.get('npc_name', npc_id)}"
-                    )
-                
-                return {
-                    "triggers_established": len(trigger_words),
-                    "trigger_words": trigger_words,
-                    "test_flashback": test_flashback is not None
-                }
-        except Exception as e:
-            logging.error(f"Error setting up flashback triggers for NPC {npc_id}: {e}")
-            return {"error": str(e)}
+            mems = await memory_system.recall(entity_type="npc", entity_id=npc_id, limit=10)
+            intense = [m for m in mems.get("memories", []) if m.get("emotional_intensity", 0) > 60]
+            for m in intense:
+                trigger_words += [w for w in m["text"].split() if len(w) > 4][:2]
+        except Exception:
+            pass
+    
+        # 2) Supplement with GPT‑derived trauma keywords if still sparse
+        if len(trigger_words) < 3:
+            trigger_words += await dynamic_templates.get_trauma_keywords(npc_data.get("environment_desc", ""))
+            trigger_words = trigger_words[:5]
+    
+        if not trigger_words:
+            return {"triggers_established": 0}
+    
+        # Make sure at least one flashback path can run immediately (chance=1.0 for test)
+        await flashback_manager.check_for_triggered_flashback(
+            entity_type="npc", entity_id=npc_id, trigger_words=trigger_words, chance=1.0
+        )
+    
+        async with get_db_connection_context() as conn:
+            await canon.update_entity_canonically(
+                ctx,
+                conn,
+                "NPCStats",
+                npc_id,
+                {"flashback_triggers": json.dumps(trigger_words)},
+                f"Set dynamic flashback triggers for NPC {npc_id}",
+            )
+        return {"triggers_established": len(trigger_words), "trigger_words": trigger_words}
+
     
     async def generate_counterfactual_memories(self, user_id, conversation_id, npc_id, npc_data):
         """
@@ -3832,78 +3703,46 @@ class NPCCreationHandler:
             logging.error(f"Error setting up relationship evolution for NPC {npc_id}: {e}")
             return {"error": str(e)}
     
-    async def build_initial_semantic_network(self, user_id, conversation_id, npc_id, npc_data):
-        """
-        Build initial semantic networks for the NPC's knowledge structure.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-            npc_data: Dict containing NPC data
-        
-        Returns:
-            Dict with semantic network information
-        """
-        try:
-            semantic_manager = SemanticMemoryManager(user_id, conversation_id)
-            
-            # Determine central topics based on archetype
-            archetype_summary = npc_data.get("archetype_summary", "").lower()
-            central_topics = []
-            
-            # Extract key themes from archetype
-            if "mother" in archetype_summary or "maternal" in archetype_summary:
-                central_topics.append("Family")
-            if "teacher" in archetype_summary or "mentor" in archetype_summary:
-                central_topics.append("Education")
-            if "dominant" in archetype_summary or "control" in archetype_summary:
-                central_topics.append("Power")
-            if "professional" in archetype_summary or "career" in archetype_summary:
-                central_topics.append("Career")
-            
-            # Add default topic if none detected
-            if not central_topics:
-                central_topics.append("Self")
-            
-            # Build semantic networks for each central topic
-            networks = []
-            for topic in central_topics:
-                network = await semantic_manager.build_semantic_network(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    central_topic=topic,
-                    depth=1  # Start with shallow networks
-                )
-                
-                # Store network in database
-                async with get_db_connection_context() as conn:
-                    query = """
-                        INSERT INTO SemanticNetworks (
-                            user_id, conversation_id, entity_type, entity_id,
-                            central_topic, network_data, created_at
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    async def build_initial_semantic_network(
+        self,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+    ):
+        """Generate seed topics dynamically then build networks (depth‑1)."""
+        from memory.semantic import SemanticMemoryManager
+        from db.connection import get_db_connection_context
+    
+        topics = await dynamic_templates.get_semantic_seed_topics(
+            npc_data.get("archetype_summary", ""),
+            npc_data.get("environment_desc", ""),
+        )
+    
+        semantic_manager = SemanticMemoryManager(user_id, conversation_id)
+        results: List[Dict[str, Any]] = []
+    
+        for topic in topics:
+            net = await semantic_manager.build_semantic_network(
+                entity_type="npc", entity_id=npc_id, central_topic=topic, depth=1
+            )
+            # Persist (same as original implementation, but condensed)
+            async with get_db_connection_context() as conn:
+                await conn.execute(
                     """
-                    
-                    await conn.execute(
-                        query,
-                        user_id, conversation_id, "npc", npc_id, topic, json.dumps(network)
-                    )
-                
-                networks.append({
-                    "topic": topic,
-                    "nodes": len(network.get("nodes", [])),
-                    "edges": len(network.get("edges", []))
-                })
-            
-            return {
-                "semantic_networks_created": len(networks),
-                "networks": networks
-            }
-        except Exception as e:
-            logging.error(f"Error building semantic networks for NPC {npc_id}: {e}")
-            return {"error": str(e)}
+                    INSERT INTO SemanticNetworks (user_id, conversation_id, entity_type, entity_id,
+                                                   central_topic, network_data, created_at)
+                    VALUES ($1,$2,'npc',$3,$4,$5,CURRENT_TIMESTAMP)
+                    """,
+                    user_id,
+                    conversation_id,
+                    npc_id,
+                    topic,
+                    json.dumps(net),
+                )
+            results.append({"topic": topic, "nodes": len(net["nodes"]), "edges": len(net["edges"])})
+        return {"semantic_networks_created": len(results), "networks": results}
+
     
     async def detect_memory_patterns(self, user_id, conversation_id, npc_id):
         """
