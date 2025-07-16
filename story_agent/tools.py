@@ -1330,16 +1330,13 @@ Generate ONLY a dialogue line (1-3 sentences max).
 Keep it conversational and natural.
 Match their personality and current narrative stage.
 Do NOT include character names or action descriptions."""
-
-        # Use the dialogue generator agent
-        from story_agent.specialized_agents import Agent, Runner, ModelSettings
         
         dialogue_generator = Agent(
             name="QuickDialogue",
             instructions="""You generate brief, natural dialogue responses for NPCs.
 Keep responses under 3 sentences. Match the character's personality and narrative stage.
 Output only the spoken words, no names or actions.""",
-            model="gpt-4",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.7,
                 max_tokens=100
