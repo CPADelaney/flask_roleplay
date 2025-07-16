@@ -3,6 +3,8 @@
 Refactored Addiction System with full Nyx Governance integration.
 
 REFACTORED: All database writes now go through canon or LoreSystem
+FIXED: Separated implementation functions from decorated tools to avoid 'FunctionTool' not callable errors
+FIXED: Incorporated feedback from code review
 
 Features:
 1) Complete integration with Nyx central governance
@@ -33,7 +35,8 @@ from agents import (
     trace,
     handoff
 )
-from pydantic import BaseModel, Field
+from agents.models.openai_responses import OpenAIResponsesModel
+from pydantic import BaseModel, Field, validator, root_validator
 
 # DB connection - UPDATED: Using new async context manager
 from db.connection import get_db_connection_context
@@ -87,6 +90,31 @@ class AddictionSafety(BaseModel):
     reasoning: str = Field(..., description="Reasoning for the decision")
     suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
 
+
+class ThematicMessage(BaseModel):
+    level: int = Field(..., ge=1, le=4, description="Addiction severity tier 1-4")
+    text: str = Field(..., description="Short in-world narrative line; 1-2 sentences max.")
+
+    @validator("text")
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+class ThematicAddictionMessages(BaseModel):
+    addiction_type: str = Field(..., description="e.g., 'feet', 'humiliation'")
+    messages: List[ThematicMessage] = Field(..., min_items=4, max_items=4)
+
+    @root_validator
+    def _levels_cover_1_to_4(cls, values):
+        msgs = values.get("messages", [])
+        levels = sorted({m.level for m in msgs})
+        if levels != [1, 2, 3, 4]:
+            raise ValueError("Must include levels 1-4 exactly once each.")
+        return values
+
+class ThematicMessagesBundle(BaseModel):
+    """Top-level object returned by the generator agent."""
+    addictions: List[ThematicAddictionMessages]
+
 # -------------------------------------------------------------------------------
 # Global Constants & Thematic Messages
 # -------------------------------------------------------------------------------
@@ -100,53 +128,22 @@ ADDICTION_LEVELS = {
 }
 
 # Default fallback if external JSON is missing
-DEFAULT_THEMATIC_MESSAGES = {
-    "socks": {
-        "1": "You occasionally steal glances at sumptuous stockings.",
-        "2": "A subtle craving for the delicate feel of silk emerges within you.",
-        "3": "The allure of sensuous socks overwhelms your thoughts.",
-        "4": "Under your Mistress's commanding presence, your obsession with exquisite socks leaves you trembling in servile adoration."
-    },
-    "feet": {
-        "1": "Your eyes frequently wander to the graceful arch of bare feet.",
-        "2": "A surge of forbidden excitement courses through you at the mere glimpse of uncovered toes.",
-        "3": "Distracted by the sight of enticing feet, you find it difficult to focus on anything else.",
-        "4": "In the presence of your dominant Mistress, your fixation on every tantalizing curve of feet renders you utterly submissive."
-    },
-    "sweat": {
-        "1": "The scent of perspiration begins to evoke an unspoken thrill within you.",
-        "2": "Each drop of sweat stokes a simmering desire you dare not fully acknowledge.",
-        "3": "Your senses heighten as the aroma of exertion casts a spell over your inhibitions.",
-        "4": "Overwhelmed by the intoxicating allure of sweat, you are compelled to seek it out under your Mistress's relentless command."
-    },
-    "ass": {
-        "1": "Your gaze lingers a little longer on the curves of a well-shaped rear.",
-        "2": "A subtle, forbidden thrill courses through you at the sight of a pert backside.",
-        "3": "You find yourself fixated on every tantalizing detail of exposed derrieres, your mind wandering into submissive fantasies.",
-        "4": "Under your Mistress's unwavering control, your obsession with perfectly sculpted rear ends drives you to desperate submission."
-    },
-    "scent": {
-        "1": "You become acutely aware of natural pheromones and subtle scents around you.",
-        "2": "Every hint of an enticing aroma sends a shiver down your spine, awakening deep desires.",
-        "3": "You begin to collect memories of scents, each evoking a surge of submissive longing.",
-        "4": "In the grip of your extreme addiction, the mere whiff of a scent under your Mistress's watchful eye reduces you to euphoric submission."
-    },
-    "humiliation": {
-        "1": "The sting of humiliation sparks a curious thrill in your submissive heart.",
-        "2": "You find yourself yearning for more degrading scenarios as your pride withers under each slight.",
-        "3": "Every act of public embarrassment intensifies your craving to be dominated and humiliated.",
-        "4": "In the presence of your ruthless Mistress, the exquisite agony of humiliation consumes you, binding your will entirely to her desires."
-    },
-    "submission": {
-        "1": "The taste of obedience becomes subtly intoxicating as you seek her approval in every glance.",
-        "2": "Your need to surrender grows, craving the reassurance that only your Mistress can provide.",
-        "3": "In every command, you find a deeper satisfaction in your subjugated state, yearning to be molded by her hand.",
-        "4": "Your identity dissolves in the overwhelming tide of submission, as your Mistress's word becomes the sole law governing your existence."
-    }
+# ---------------------------------------------------------------------------
+# Thematic message *seeds* (labels only) used if we must synthesize messages.
+# Actual text will be generated agentically at runtime.
+# ---------------------------------------------------------------------------
+ADDICTION_TYPES = ["socks", "feet", "sweat", "ass", "scent", "humiliation", "submission"]
+
+# Minimal bare fallback used only if generation fails catastrophically.
+_MIN_FALLBACK_MSG = "You feel a tug of desire you can't quite ignore."
+_DEFAULT_THEMATIC_MESSAGES_MIN = {
+    t: {str(i): _MIN_FALLBACK_MSG for i in range(1, 5)} for t in ADDICTION_TYPES
 }
 
 THEMATIC_MESSAGES_FILE = os.getenv("THEMATIC_MESSAGES_FILE", "thematic_messages.json")
-_DEFAULT_THEMATIC_MESSAGES = DEFAULT_THEMATIC_MESSAGES  # Store for later use
+# Historical compatibility var kept for callers that may still import it.
+# Point them to the minimal fallback.
+_DEFAULT_THEMATIC_MESSAGES = _DEFAULT_THEMATIC_MESSAGES_MIN
 
 ################################################################################
 # Thematic Message Loader - Singleton, Async & Dynamic
@@ -156,38 +153,85 @@ class ThematicMessages:
     _instance: Optional["ThematicMessages"] = None
     _lock = asyncio.Lock()
 
-    def __init__(self, fallback: dict):
+    def __init__(self, fallback: dict, user_id: Optional[int] = None, conversation_id: Optional[int] = None):
         self.messages = fallback
         self.file_source = None
+        self.user_id = user_id
+        self.conversation_id = conversation_id
 
     @classmethod
-    async def get(cls) -> "ThematicMessages":
+    async def get(cls, user_id: Optional[int] = None, conversation_id: Optional[int] = None, refresh: bool = False):
+        """
+        Global singleton. Pass user & convo if available for agent generation / governance.
+        refresh=True forces regeneration (ignoring cached file).
+        """
         async with cls._lock:
-            if cls._instance is None:
-                instance = cls(_DEFAULT_THEMATIC_MESSAGES)
-                await instance._load()
+            if cls._instance is None or refresh:
+                instance = cls(_DEFAULT_THEMATIC_MESSAGES_MIN, user_id, conversation_id)
+                await instance._load(refresh=refresh)
                 cls._instance = instance
+            else:
+                # attach IDs if newly provided
+                if user_id is not None:
+                    cls._instance.user_id = user_id
+                if conversation_id is not None:
+                    cls._instance.conversation_id = conversation_id
             return cls._instance
 
-    async def _load(self):
+    async def _load(self, refresh: bool = False):
+        """
+        Load from file if present & not refreshing; else generate via agent.
+        Merge user overrides over generated; fill gaps w/ min fallback.
+        """
+        generated: Dict[str, Dict[str, str]] = {}
+        file_msgs: Dict[str, Dict[str, str]] = {}
+
+        # Load file overrides if available
         try:
-            if os.path.exists(THEMATIC_MESSAGES_FILE):
+            if not refresh and os.path.exists(THEMATIC_MESSAGES_FILE):
                 with open(THEMATIC_MESSAGES_FILE, "r") as f:
-                    self.messages = json.load(f)
+                    file_msgs = json.load(f)
                     self.file_source = THEMATIC_MESSAGES_FILE
                 logging.info(f"Thematic messages loaded from {THEMATIC_MESSAGES_FILE}")
-            else:
-                raise FileNotFoundError()
-        except Exception:
-            self.file_source = "default"
-            logging.warning("Could not load external thematic messages, using defaults.")
+        except Exception as e:
+            logging.warning(f"Could not load external thematic messages: {e}")
 
+        # Generate (always if refresh; else only if no file data)
+        if refresh or not file_msgs:
+            try:
+                generated = await generate_thematic_messages_via_agent(
+                    user_id=self.user_id or 0,
+                    conversation_id=self.conversation_id or 0,
+                )
+                self.file_source = "generated"
+                # write to disk for caching
+                # TODO: Consider atomic write (temp file + rename) to avoid race conditions
+                try:
+                    with open(THEMATIC_MESSAGES_FILE, "w") as f:
+                        json.dump(generated, f, indent=2, ensure_ascii=False)
+                except Exception as e:
+                    logging.warning(f"Failed to persist generated thematic messages: {e}")
+            except Exception as e:
+                logging.error(f"Thematic message generation error: {e}")
+
+        # Merge precedence: file overrides > generated > min fallback
+        merged: Dict[str, Dict[str, str]] = {}
+        for t in ADDICTION_TYPES:
+            merged[t] = _DEFAULT_THEMATIC_MESSAGES_MIN[t].copy()
+            if generated and t in generated:
+                # Ensure all keys are strings
+                merged[t].update({str(k): v for k, v in generated[t].items()})
+            if file_msgs and t in file_msgs:
+                # file already string-keyed; ensure string keys anyway
+                merged[t].update({str(k): v for k, v in file_msgs[t].items()})
+        self.messages = merged
+
+    # --- existing public helpers unchanged ----------------------------
     def get_for(self, addiction_type: str, level: Union[int, str]) -> str:
         level_str = str(level)
         return self.messages.get(addiction_type, {}).get(level_str, "")
 
     def get_levels(self, addiction_type: str, up_to_level: int) -> List[str]:
-        """Get all non-empty messages for a type up to a given level."""
         return [
             msg for lvl in range(1, up_to_level + 1)
             if (msg := self.get_for(addiction_type, lvl))
@@ -196,6 +240,12 @@ class ThematicMessages:
 ################################################################################
 # Agent Model Settings (Configurable)
 ################################################################################
+
+def get_openai_client():
+    """Get OpenAI client instance for agents"""
+    from openai import AsyncOpenAI
+    import os
+    return AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def get_model_settings(agent_name: str = "", env_override: str = "") -> ModelSettings:
     temp_env = os.getenv(f"{agent_name}_MODEL_TEMP", os.getenv(env_override, None))
@@ -223,7 +273,7 @@ class AddictionContext:
     async def initialize(self):
         from nyx.integrate import get_central_governance
         self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        self.thematic_messages = await ThematicMessages.get()
+        self.thematic_messages = await ThematicMessages.get(self.user_id, self.conversation_id)
         self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
         self.directive_handler = DirectiveHandler(
             self.user_id, self.conversation_id,
@@ -238,14 +288,17 @@ class AddictionContext:
     async def _handle_action_directive(self, directive):
         instruction = directive.get("instruction", "")
         if "monitor addictions" in instruction.lower():
-            return await check_addiction_status(
-                self.user_id, self.conversation_id, directive.get("player_name", "player")
+            ctx_wrapper = RunContextWrapper(context=self)
+            return await _check_addiction_levels_impl(
+                ctx_wrapper,
+                directive.get("player_name", "player")
             )
         if "apply addiction effect" in instruction.lower():
             addiction_type = directive.get("addiction_type")
             if addiction_type:
-                return await update_addiction_level(
-                    RunContextWrapper(self),
+                ctx_wrapper = RunContextWrapper(context=self)
+                return await _update_addiction_level_impl(
+                    ctx_wrapper,
                     directive.get("player_name", "player"),
                     addiction_type,
                     progression_multiplier=directive.get("multiplier", 1.0),
@@ -259,20 +312,60 @@ class AddictionContext:
         return {"status": "prohibition_registered", "prohibited": prohibited}
 
 ################################################################################
-# Core Functions as Agent Tools (Governance-wrapped) - REFACTORED
+# Database Helper Functions
 ################################################################################
 
-@function_tool
-@with_governance(
-    agent_type=AgentType.UNIVERSAL_UPDATER,
-    action_type="view_addictions",
-    action_description="Checking addiction levels for {player_name}",
-    id_from_context=lambda ctx: "addiction_system"
-)
-async def check_addiction_levels(
+async def ensure_addiction_table_exists(context: AddictionContext, conn):
+    """Ensure the PlayerAddictions table exists."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS PlayerAddictions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name VARCHAR(255) NOT NULL,
+            addiction_type VARCHAR(50) NOT NULL,
+            level INTEGER NOT NULL DEFAULT 0,
+            target_npc_id INTEGER NULL,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, conversation_id, player_name, addiction_type, target_npc_id)
+        )
+    """)
+
+async def find_or_create_addiction(
+    context: AddictionContext, 
+    conn, 
+    player_name: str, 
+    addiction_type: str, 
+    level: int, 
+    target_npc_id: Optional[int] = None
+) -> int:
+    """Find or create an addiction entry."""
+    insert_stmt = """
+        INSERT INTO PlayerAddictions
+        (user_id, conversation_id, player_name, addiction_type, level, target_npc_id, last_updated)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (user_id, conversation_id, player_name, addiction_type, target_npc_id)
+        DO UPDATE SET level=EXCLUDED.level, last_updated=NOW()
+        RETURNING id
+    """
+    
+    addiction_id = await conn.fetchval(
+        insert_stmt,
+        context.user_id, context.conversation_id, player_name, addiction_type,
+        level, target_npc_id if target_npc_id is not None else None
+    )
+    
+    return addiction_id
+
+################################################################################
+# IMPLEMENTATION FUNCTIONS (not decorated, for internal use)
+################################################################################
+
+async def _check_addiction_levels_impl(
     ctx: RunContextWrapper[AddictionContext],
     player_name: str
 ) -> Dict[str, Any]:
+    """Internal implementation of check_addiction_levels"""
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     try:
@@ -316,15 +409,7 @@ async def check_addiction_levels(
         logging.error(f"Error checking addiction levels: {e}")
         return {"error": str(e), "has_addictions": False}
 
-
-@function_tool
-@with_governance(
-    agent_type=AgentType.UNIVERSAL_UPDATER,
-    action_type="update_addiction",
-    action_description="Updating addiction level for {player_name}: {addiction_type}",
-    id_from_context=lambda ctx: "addiction_system"
-)
-async def update_addiction_level(
+async def _update_addiction_level_impl(
     ctx: RunContextWrapper[AddictionContext],
     player_name: str,
     addiction_type: str,
@@ -333,6 +418,7 @@ async def update_addiction_level(
     regression_chance: float = 0.1,
     target_npc_id: Optional[int] = None
 ) -> Dict[str, Any]:
+    """Internal implementation of update_addiction_level"""
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
 
@@ -405,30 +491,24 @@ async def update_addiction_level(
         logging.error(f"Error updating addiction: {e}")
         return {"error": str(e)}
 
-@function_tool(strict_mode=False)
-@with_governance(
-    agent_type=AgentType.UNIVERSAL_UPDATER,
-    action_type="generate_effects",
-    action_description="Generating narrative effects for {player_name}'s addictions",
-    id_from_context=lambda ctx: "addiction_system"
-)
-async def generate_addiction_effects(
+async def _generate_addiction_effects_impl(
     ctx: RunContextWrapper[AddictionContext],
     player_name: str,
-    addiction_status: AddictionStatus  # Use the Pydantic model
+    addiction_status: AddictionStatus
 ) -> Dict[str, Any]:
+    """Internal implementation of generate_addiction_effects"""
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     thematic = ctx.context.thematic_messages
 
     effects = []
-    addiction_levels = addiction_status.addiction_levels  # Now properly typed
+    addiction_levels = addiction_status.addiction_levels
     for addiction_type, level in addiction_levels.items():
         if level <= 0:
             continue
         effects.extend(thematic.get_levels(addiction_type, level))
 
-    npc_specific = addiction_status.npc_specific_addictions  # Also properly typed
+    npc_specific = addiction_status.npc_specific_addictions
     
     async with get_db_connection_context() as conn:
         for entry in npc_specific:
@@ -459,14 +539,78 @@ async def generate_addiction_effects(
                             result = await Runner.run(
                                 special_event_agent, prompt, context=ctx.context
                             )
-                            special_event = result.final_output
+                            # Safer result extraction
+                            special_event = None
+                            if hasattr(result, "final_output"):
+                                special_event = result.final_output
+                            elif hasattr(result, "output_text"):
+                                special_event = result.output_text
+                            else:
+                                special_event = str(result)
+                            
                             if special_event:
                                 effects.append(special_event)
                     except Exception as e:
                         logging.error(f"Error generating special event: {e}")
     
     return {"effects": effects, "has_effects": bool(effects)}
-    
+
+################################################################################
+# DECORATED TOOL FUNCTIONS (for agent framework use)
+################################################################################
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.UNIVERSAL_UPDATER,
+    action_type="view_addictions",
+    action_description="Checking addiction levels for {player_name}",
+    id_from_context=lambda ctx: "addiction_system"
+)
+async def check_addiction_levels(
+    ctx: RunContextWrapper[AddictionContext],
+    player_name: str
+) -> Dict[str, Any]:
+    """Check all addiction levels for a player (decorated tool version)"""
+    return await _check_addiction_levels_impl(ctx, player_name)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.UNIVERSAL_UPDATER,
+    action_type="update_addiction",
+    action_description="Updating addiction level for {player_name}: {addiction_type}",
+    id_from_context=lambda ctx: "addiction_system"
+)
+async def update_addiction_level(
+    ctx: RunContextWrapper[AddictionContext],
+    player_name: str,
+    addiction_type: str,
+    progression_chance: float = 0.2,
+    progression_multiplier: float = 1.0,
+    regression_chance: float = 0.1,
+    target_npc_id: Optional[int] = None
+) -> Dict[str, Any]:
+    """Update addiction level for a player (decorated tool version)"""
+    return await _update_addiction_level_impl(
+        ctx, player_name, addiction_type,
+        progression_chance, progression_multiplier,
+        regression_chance, target_npc_id
+    )
+
+@function_tool(strict_mode=False)
+@with_governance(
+    agent_type=AgentType.UNIVERSAL_UPDATER,
+    action_type="generate_effects",
+    action_description="Generating narrative effects for {player_name}'s addictions",
+    id_from_context=lambda ctx: "addiction_system"
+)
+async def generate_addiction_effects(
+    ctx: RunContextWrapper[AddictionContext],
+    player_name: str,
+    addiction_status: AddictionStatus
+) -> Dict[str, Any]:
+    """Generate narrative effects for addictions (decorated tool version)"""
+    return await _generate_addiction_effects_impl(ctx, player_name, addiction_status)
+
 ################################################################################
 # Guardrail Functions
 ################################################################################
@@ -480,6 +624,7 @@ async def addiction_content_safety(ctx, agent, input_data):
             "or that trivializes real addiction issues in a way that's ethically problematic."
         ),
         output_type=AddictionSafety,
+        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
         model_settings=get_model_settings("Addiction Content Moderator", "ADD_CONTENT_MOD_TEMP")
     )
     result = await Runner.run(content_moderator, input_data, context=ctx.context)
@@ -498,8 +643,8 @@ special_event_agent = Agent[AddictionContext](
     instructions=(
         "You generate vivid, immersive narrative events for extreme addiction situations. "
         "Scenes should be immersive, impactful, psychologically realistic, and maintain a femdom theme. "
-        "Avoid explicit content. Use second person."
     ),
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
     model_settings=get_model_settings("Special Event Generator", "SPECIAL_EVENT_TEMP")
 )
 
@@ -511,6 +656,7 @@ addiction_progression_agent = Agent[AddictionContext](
     ),
     tools=[update_addiction_level],
     output_type=AddictionUpdate,
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
     model_settings=get_model_settings("Addiction Progression Agent", "PROGRESS_AGENT_TEMP")
 )
 
@@ -522,6 +668,7 @@ addiction_narrative_agent = Agent[AddictionContext](
     ),
     tools=[generate_addiction_effects],
     output_type=AddictionEffects,
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
     model_settings=get_model_settings("Addiction Narrative Agent", "NARRATIVE_AGENT_TEMP")
 )
 
@@ -545,8 +692,95 @@ addiction_system_agent = Agent[AddictionContext](
     input_guardrails=[
         InputGuardrail(guardrail_function=addiction_content_safety)
     ],
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
     model_settings=get_model_settings("Addiction System Agent", "ADDICTION_SYS_TEMP")
 )
+
+def get_thematic_message_agent():
+    """
+    Agent that generates level-tiered thematic messages per addiction type
+    in a femdom RPG. 
+    """
+    return Agent(
+        name="ThematicMessageAgent",
+        instructions=(
+            "You generate short narrative addiction progression blurbs for a femdom RPG.\n"
+            "Input: JSON specifying addiction types.\n"
+            "Output: JSON object matching ThematicMessagesBundle schema.\n\n"
+            "Rules:\n"
+            "- Provide EXACTLY 4 levels (1=mild tease, 4=intense submission) per addiction.\n"
+            "- 1-2 sentences; <=160 characters preferred.\n"
+            "- Tone: immersive, suggestive, explicit sexual detail
+            "- Reference 'Mistress' or dominant presence sparingly; more intensity at higher levels.\n"
+            "- Return ONLY JSON.\n"
+        ),
+        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model_settings=ModelSettings(temperature=0.8),
+        output_type=ThematicMessagesBundle,
+    )
+
+async def generate_thematic_messages_via_agent(
+    user_id: int,
+    conversation_id: int,
+    addiction_types: List[str] = ADDICTION_TYPES,
+    governor=None,
+) -> Dict[str, Dict[str, str]]:
+    """
+    Ask LLM to synthesize messages. Returns {addiction_type: {1:txt,...,4:txt}, ...}
+    Falls back to _DEFAULT_THEMATIC_MESSAGES_MIN on failure.
+    """
+    # governance (optional)
+    if governor is None:
+        from nyx.integrate import get_central_governance
+        try:
+            governor = await get_central_governance(user_id, conversation_id)
+            perm = await governor.check_action_permission(
+                agent_type=AgentType.UNIVERSAL_UPDATER,  # or a dedicated type
+                agent_id="addiction_thematic_generator",
+                action_type="generate_thematic_messages",
+                action_details={"addiction_types": addiction_types},
+            )
+            if not perm.get("approved", True):
+                logging.warning("Governance denied thematic message generation; using min fallback.")
+                return _DEFAULT_THEMATIC_MESSAGES_MIN
+        except Exception as e:
+            logging.warning(f"Governance check failed; continuing anyway: {e}")
+
+    agent = get_thematic_message_agent()
+
+    payload = {
+        "addiction_types": addiction_types,
+        # you can add environment / tone knobs here
+        "tone": "femdom",
+        "max_length": 160,
+    }
+
+    # The RunContextWrapper expects something like AddictionContext? We can fake a minimal dict.
+    run_ctx = RunContextWrapper(context={
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "purpose": "generate_thematic_messages",
+    })
+
+    try:
+        resp = await Runner.run(agent, json.dumps(payload), context=run_ctx.context)
+        bundle = resp.final_output_as(ThematicMessagesBundle)
+
+        out: Dict[str, Dict[str, str]] = {}
+        entries = bundle.addictions or []  # Guard against None
+        for entry in entries:
+            # Ensure all keys are strings
+            out[entry.addiction_type] = {str(m.level): m.text for m in entry.messages}
+        # Basic sanity fill for any missing types
+        for t in addiction_types:
+            out.setdefault(t, _DEFAULT_THEMATIC_MESSAGES_MIN[t])
+            for lvl in ("1", "2", "3", "4"):
+                out[t].setdefault(lvl, _MIN_FALLBACK_MSG)
+        return out
+    except Exception as e:
+        logging.error(f"Thematic message generation failed: {e}")
+        return _DEFAULT_THEMATIC_MESSAGES_MIN
+
 
 ################################################################################
 # MAIN ENTRY / UTILITY FUNCTIONS (Extensible) - REFACTORED
@@ -562,7 +796,6 @@ async def process_addiction_update(
     addiction_context = AddictionContext(user_id, conversation_id)
     await addiction_context.initialize()
     
-    # Remove the connection context here
     with trace(
         workflow_name="Addiction System",
         trace_id=f"addiction-{conversation_id}-{int(datetime.now().timestamp())}",
@@ -571,23 +804,23 @@ async def process_addiction_update(
         prompt = f"Update the player's addiction to {addiction_type}{f' related to NPC #{target_npc_id}' if target_npc_id else ''}. Player name: {player_name}. Progression multiplier: {progression_multiplier}"
         
         # Create context wrapper without connection
-        ctx_wrapper = RunContextWrapper(addiction_context)
+        ctx_wrapper = RunContextWrapper(context=addiction_context)
         
-        # Call update function without connection parameter
-        update_result = await update_addiction_level(
+        # Call implementation function directly
+        update_result = await _update_addiction_level_impl(
             ctx_wrapper, player_name, addiction_type,
             progression_multiplier=progression_multiplier,
             target_npc_id=target_npc_id
         )
         
         # Get addiction status for effects
-        addiction_status_dict = await check_addiction_levels(ctx_wrapper, player_name)
+        addiction_status_dict = await _check_addiction_levels_impl(ctx_wrapper, player_name)
         addiction_status = AddictionStatus(
             addiction_levels=addiction_status_dict.get("addiction_levels", {}),
             npc_specific_addictions=addiction_status_dict.get("npc_specific_addictions", []),
             has_addictions=addiction_status_dict.get("has_addictions", False)
         )
-        narrative_effects = await generate_addiction_effects(ctx_wrapper, player_name, addiction_status)
+        narrative_effects = await _generate_addiction_effects_impl(ctx_wrapper, player_name, addiction_status)
         
     return {"update": update_result, "narrative_effects": narrative_effects, "addiction_type": addiction_type, "target_npc_id": target_npc_id}
 
@@ -602,8 +835,8 @@ async def process_addiction_effects(
         npc_specific_addictions=addiction_status.get("npc_specific_addictions", []),
         has_addictions=addiction_status.get("has_addictions", False)
     )
-    effects_result = await generate_addiction_effects(
-        RunContextWrapper(addiction_context), player_name, addiction_status_obj
+    effects_result = await _generate_addiction_effects_impl(
+        RunContextWrapper(context=addiction_context), player_name, addiction_status_obj
     )
     return effects_result
 
@@ -618,8 +851,8 @@ async def check_addiction_status(
         trace_id=f"addiction-status-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
-        ctx_wrapper = RunContextWrapper(addiction_context)
-        levels_result = await check_addiction_levels(ctx_wrapper, player_name)
+        ctx_wrapper = RunContextWrapper(context=addiction_context)
+        levels_result = await _check_addiction_levels_impl(ctx_wrapper, player_name)
         effects_result = {"effects": [], "has_effects": False}
         if levels_result.get("has_addictions", False):
             addiction_status = AddictionStatus(
@@ -627,7 +860,7 @@ async def check_addiction_status(
                 npc_specific_addictions=levels_result.get("npc_specific_addictions", []),
                 has_addictions=levels_result.get("has_addictions", False)
             )
-            effects_result = await generate_addiction_effects(ctx_wrapper, player_name, addiction_status)
+            effects_result = await _generate_addiction_effects_impl(ctx_wrapper, player_name, addiction_status)
     
     return {"status": levels_result, "effects": effects_result}
 
@@ -637,7 +870,8 @@ async def get_addiction_status(
     addiction_context = AddictionContext(user_id, conversation_id)
     await addiction_context.initialize()
     
-    levels_result = await check_addiction_levels(RunContextWrapper(addiction_context), player_name)
+    ctx_wrapper = RunContextWrapper(context=addiction_context)
+    levels_result = await _check_addiction_levels_impl(ctx_wrapper, player_name)
     
     result = {"has_addictions": levels_result.get("has_addictions", False), "addictions": {}}
     for addiction_type, level in levels_result.get("addiction_levels", {}).items():
@@ -659,7 +893,6 @@ async def get_addiction_status(
                 "addiction_type": addiction_type
             }
     return result
-
 
 async def register_with_governance(user_id: int, conversation_id: int):
     from nyx.integrate import get_central_governance
@@ -694,46 +927,7 @@ async def process_addiction_directive(directive_data: Dict[str, Any], user_id: i
         return await addiction_context._handle_prohibition_directive(directive_data)
     return await addiction_context._handle_action_directive(directive_data)
 
-# Add helper functions for canon that don't exist yet
-async def ensure_addiction_table_exists(context: AddictionContext, conn):
-    """Ensure the PlayerAddictions table exists."""
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS PlayerAddictions (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name VARCHAR(255) NOT NULL,
-            addiction_type VARCHAR(50) NOT NULL,
-            level INTEGER NOT NULL DEFAULT 0,
-            target_npc_id INTEGER NULL,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(user_id, conversation_id, player_name, addiction_type, target_npc_id)
-        )
-    """)
-
-
-async def find_or_create_addiction(
-    context: AddictionContext, 
-    conn, 
-    player_name: str, 
-    addiction_type: str, 
-    level: int, 
-    target_npc_id: Optional[int] = None
-) -> int:
-    """Find or create an addiction entry."""
-    insert_stmt = """
-        INSERT INTO PlayerAddictions
-        (user_id, conversation_id, player_name, addiction_type, level, target_npc_id, last_updated)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW())
-        ON CONFLICT (user_id, conversation_id, player_name, addiction_type, target_npc_id)
-        DO UPDATE SET level=EXCLUDED.level, last_updated=NOW()
-        RETURNING id
-    """
-    
-    addiction_id = await conn.fetchval(
-        insert_stmt,
-        context.user_id, context.conversation_id, player_name, addiction_type,
-        level, target_npc_id if target_npc_id is not None else None
-    )
-    
-    return addiction_id
+# Export implementation functions for external use if needed
+check_addiction_levels_impl = _check_addiction_levels_impl
+update_addiction_level_impl = _update_addiction_level_impl
+generate_addiction_effects_impl = _generate_addiction_effects_impl
