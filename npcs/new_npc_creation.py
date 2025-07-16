@@ -2405,45 +2405,95 @@ class NPCCreationHandler:
                     logging.error(f"Error generating semantic memory for NPC {npc_id}: {e}")
 
     
-    async def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relationship_type, reciprocal_type):
+    async def create_reciprocal_memory(
+        self,
+        original_memory: str,
+        npc1_name: str,
+        npc2_name: str,
+        relationship_type: str,
+        reciprocal_type: str,
+        *,
+        model: str = "gpt-4.1-nano",
+        temperature: float = 0.7,
+        max_output_tokens: int = 200,
+    ) -> Optional[str]:
         """
-        Create a reciprocal memory from the perspective of the second NPC using LLM.
-        
-        Args:
-            original_memory: The original memory text
-            npc1_name: Name of the first NPC (original memory owner)
-            npc2_name: Name of the second NPC (reciprocal memory owner)
-            relationship_type: Original relationship type
-            reciprocal_type: Reciprocal relationship type
-            
-        Returns:
-            Reciprocal memory string or None if error
+        Use an LLM to rewrite `original_memory` (npc1's POV) into npc2's POV.
+    
+        Returns the rewritten memory text (string) on success, or a heuristic
+        fallback transformation on error.
         """
-        try:
-            payload = json.dumps({
-                "original_memory": original_memory,
-                "npc1_name": npc1_name,
-                "npc2_name": npc2_name,
-                "relationship_type": relationship_type,
-                "reciprocal_type": reciprocal_type
-            }, ensure_ascii=False)
-            
-            result = await Runner.run(
-                starting_agent=reciprocal_memory_generator,
-                input=payload
-            )
-            
-            parsed = json.loads(result.output.strip())
-            return parsed.get("reciprocal_memory")
-            
-        except Exception as e:
-            logging.error(f"Error creating reciprocal memory: {e}")
-            # Fallback to simple transformation
-            memory = original_memory.replace(npc1_name, "THE_OTHER_PERSON")
-            memory = memory.replace(npc2_name, "MYSELF")
-            memory = memory.replace("THE_OTHER_PERSON", npc1_name)
-            memory = memory.replace("MYSELF", "I")
-            return memory
+        # --- Build prompts ----------------------------------------------------
+        system_msg = (
+            "You are a narrative rewriter for an RPG memory system. "
+            "Given an event described from Character-A's perspective, "
+            "rewrite it from Character-B's point of view. "
+            "Preserve the underlying event, emotional tone, and significance. "
+            "Return ONLY the rewritten memory text with no JSON, no prefix, "
+            "no quotes, no explanations."
+        )
+    
+        user_msg = f"""
+    Convert this memory from {npc1_name}'s perspective to {npc2_name}'s perspective.
+    
+    Original memory from {npc1_name}: "{original_memory}"
+    
+    Relationship context:
+    - {npc1_name} is {npc2_name}'s {relationship_type}.
+    - {npc2_name} is {npc1_name}'s {reciprocal_type}.
+    
+    Rewrite this memory from {npc2_name}'s perspective, keeping the same event,
+    emotional tone, and significance. Adjust pronouns appropriately.
+    Return ONLY the rewritten memory text.
+    """.strip()
+    
+        client = get_openai_client()
+    
+        # --- Call Responses API w/ retry -------------------------------------
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = await client.responses.create(
+                    model=model,
+                    input=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                    response_format={"type": "text"},  # plain text (default, but explicit)
+                )
+    
+                # Preferred convenience accessor (unifies across content parts).
+                text = (resp.output_text or "").strip()
+    
+                if not text:
+                    raise ValueError("Empty model response.")
+    
+                return text
+    
+            except Exception as e:  # pragma: no cover
+                last_err = e
+                logging.warning(
+                    "create_reciprocal_memory: attempt %s failed: %s",
+                    attempt + 1,
+                    e,
+                )
+                # simple backoff
+                await asyncio.sleep(1.5 * (attempt + 1))
+    
+        # --- Fallback heuristic ------------------------------------------------
+        logging.error(
+            "create_reciprocal_memory: all attempts failed; falling back. Last error: %s",
+            last_err,
+        )
+        # crude perspective flip (best-effort)
+        memory = original_memory.replace(npc1_name, "___OTHER___")
+        memory = memory.replace(npc2_name, "___SELF___")
+        memory = memory.replace("___OTHER___", npc1_name)
+        # very naive pronoun shift
+        memory = memory.replace("___SELF___", "I")
+        return memory
     
     # --- API Methods ---
     
