@@ -105,6 +105,27 @@ class SemanticMemoryManager:
             "abstraction": abstraction,
             "abstraction_level": abstraction_level
         }
+
+    def _strip_markdown_and_parse_json(self, text: str) -> Any:
+        """
+        Helper method to strip markdown code blocks and parse JSON.
+        Handles responses wrapped in ```json ... ``` or ``` ... ```
+        """
+        if not text:
+            return None
+            
+        text = text.strip()
+        
+        # Strip markdown code blocks if present
+        if text.startswith("```json") and text.endswith("```"):
+            text = text[7:-3].strip()
+        elif text.startswith("```") and text.endswith("```"):
+            text = text[3:-3].strip()
+        
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
     
     async def _generate_semantic_abstraction(
         self,
@@ -309,10 +330,77 @@ class SemanticMemoryManager:
                 input=prompt,
                 temperature=0.3
             )
-            return json.loads(resp.output_text)
+            
+            # Check response validity
+            if not resp or not hasattr(resp, 'output_text') or not resp.output_text:
+                logger.warning("Empty response from OpenAI for pattern extraction")
+                return None
+                
+            output_text = resp.output_text.strip()
+            if not output_text:
+                logger.warning("Empty output_text from OpenAI for pattern extraction")
+                return None
+            
+            # Try to parse JSON with markdown stripping
+            data = self._strip_markdown_and_parse_json(output_text)
+            
+            if data:
+                return data
+            else:
+                logger.error(f"Failed to parse JSON in pattern extraction. Response: {output_text[:100]}")
+                return None
+                
         except Exception as e:
             logger.error("Cluster pattern extraction failed: %s", e)
             return None
+            
+            output_text = resp.output_text.strip()
+            if not output_text:
+                logger.warning("Empty output_text from OpenAI for topic extraction")
+                # Use fallback
+                words = [
+                    w.capitalize()
+                    for w in memory_text.split()
+                    if len(w) > 5 and w.lower() != current_topic.lower()
+                ]
+                return random.sample(words, min(3, len(words)))
+            
+            # Strip markdown code blocks if present
+            if output_text.startswith("```json") and output_text.endswith("```"):
+                output_text = output_text[7:-3].strip()
+            elif output_text.startswith("```") and output_text.endswith("```"):
+                output_text = output_text[3:-3].strip()
+                
+            # Try to parse JSON (with markdown stripping)
+            data = self._strip_markdown_and_parse_json(output_text)
+            
+            if data:
+                if isinstance(data, list):
+                    return data[:3]  # Limit to 3 topics
+                if isinstance(data, dict) and "topics" in data:
+                    return data["topics"][:3]
+                
+                logger.warning(f"Unexpected response format: {type(data)}")
+            else:
+                logger.error(f"Failed to parse JSON in topic extraction. Response: {output_text[:100]}")
+            
+            # Use fallback
+            words = [
+                w.capitalize()
+                for w in memory_text.split()
+                if len(w) > 5 and w.lower() != current_topic.lower()
+            ]
+            return random.sample(words, min(3, len(words)))
+                
+        except Exception as e:
+            logger.error("Topic extraction failed: %s", e)
+            # Use fallback
+            words = [
+                w.capitalize()
+                for w in memory_text.split()
+                if len(w) > 5 and w.lower() != current_topic.lower()
+            ]
+            return random.sample(words, min(3, len(words)))
         
     @with_transaction
     async def create_belief(self,
@@ -951,54 +1039,6 @@ class SemanticMemoryManager:
                     if len(w) > 5 and w.lower() != current_topic.lower()
                 ]
                 return random.sample(words, min(3, len(words)))
-            
-            output_text = resp.output_text.strip()
-            if not output_text:
-                logger.warning("Empty output_text from OpenAI for topic extraction")
-                # Use fallback
-                words = [
-                    w.capitalize()
-                    for w in memory_text.split()
-                    if len(w) > 5 and w.lower() != current_topic.lower()
-                ]
-                return random.sample(words, min(3, len(words)))
-                
-            try:
-                data = json.loads(output_text)
-                if isinstance(data, list):
-                    return data[:3]  # Limit to 3 topics
-                if isinstance(data, dict) and "topics" in data:
-                    return data["topics"][:3]
-                
-                logger.warning(f"Unexpected response format: {type(data)}")
-                # Use fallback
-                words = [
-                    w.capitalize()
-                    for w in memory_text.split()
-                    if len(w) > 5 and w.lower() != current_topic.lower()
-                ]
-                return random.sample(words, min(3, len(words)))
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error in topic extraction: {e}. Response: {output_text[:100]}")
-                # Use fallback
-                words = [
-                    w.capitalize()
-                    for w in memory_text.split()
-                    if len(w) > 5 and w.lower() != current_topic.lower()
-                ]
-                return random.sample(words, min(3, len(words)))
-                
-        except Exception as e:
-            logger.error("Topic extraction failed: %s", e)
-            # Use fallback
-            words = [
-                w.capitalize()
-                for w in memory_text.split()
-                if len(w) > 5 and w.lower() != current_topic.lower()
-            ]
-            return random.sample(words, min(3, len(words)))
-            
 
 async def create_semantic_tables():
     """Create the necessary tables for the semantic memory system if they don't exist."""
