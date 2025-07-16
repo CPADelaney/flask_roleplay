@@ -180,6 +180,7 @@ class NPCAgentSystem:
         self._system_agent = None
         self._lore_system = None
         self.lore_context_manager = LoreContextManager(user_id, conversation_id)
+        self._coordinator = None
 
         # Track when memory maintenance was last run
         self._last_memory_maintenance = datetime.now() - timedelta(hours=1)  # Run on first init
@@ -250,6 +251,15 @@ class NPCAgentSystem:
             )
         return self._memory_system
 
+    async def _get_coordinator(self):
+        """Lazy-load the coordinator."""
+        if self._coordinator is None:
+            from .npc_coordinator import NPCAgentCoordinator
+            self._coordinator = NPCAgentCoordinator(self.user_id, self.conversation_id)
+            # Load agents into coordinator
+            await self._coordinator.load_agents(list(self.active_agents.keys()))
+        return self._coordinator
+
     async def _get_system_agent(self):
         """Lazy-load the system agent."""
         if self._system_agent is None:
@@ -266,7 +276,8 @@ class NPCAgentSystem:
                 
                 Output true for is_appropriate if the content is appropriate, false otherwise.
                 """,
-                output_type=ModerationCheck
+                output_type=ModerationCheck,
+                model="gpt-4.1-nano"
             )
             
             async def moderation_guardrail(
@@ -713,7 +724,7 @@ class NPCAgentSystem:
         player_action: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Handle a player action directed at multiple NPCs."""
+        """Handle a player action directed at multiple NPCs using coordinator with Nyx governance."""
         logger.info("Handling group NPC interaction: %s", npc_ids)
         
         # Ask Nyx to approve or modify this group interaction
@@ -736,7 +747,8 @@ class NPCAgentSystem:
             approval = {
                 "approved": approval.get("approved", True),
                 "modified_context": approval.get("modified_action_details", {}).get("context", context),
-                "modified_npc_ids": approval.get("modified_action_details", {}).get("npc_ids", npc_ids)
+                "modified_npc_ids": approval.get("modified_action_details", {}).get("npc_ids", npc_ids),
+                "modified_player_action": approval.get("modified_action_details", {}).get("player_action", player_action)
             }
             
             # Apply Nyx's modifications if any
@@ -746,24 +758,48 @@ class NPCAgentSystem:
             if approval.get("modified_npc_ids"):
                 npc_ids = approval.get("modified_npc_ids")
                 
+            if approval.get("modified_player_action"):
+                player_action = approval.get("modified_player_action")
+                    
         except Exception as e:
             logger.error(f"Error consulting Nyx for group interaction: {e}")
         
-        # Initialize all affected agents
+        # Initialize all affected agents before coordinator processing
         await self.initialize_agents(npc_ids)
         
-        npc_responses = []
-        for npc_id in npc_ids:
-            # Process with each NPC agent
-            try:
-                agent = self.npc_agents.get(npc_id)
-                if agent:
-                    response = await agent.process_player_action(player_action, context)
-                    npc_responses.append(response)
-            except Exception as e:
-                logger.error(f"Error handling group interaction with NPC {npc_id}: {e}")
-        
-        return {"npc_responses": npc_responses}
+        # Get coordinator and process with proper models
+        try:
+            coordinator = await self._get_coordinator()
+            
+            # Convert to proper models
+            from .npc_coordinator import PlayerAction, ActionContext
+            
+            player_action_model = PlayerAction(**player_action)
+            context_model = ActionContext(**context)
+            
+            # Use coordinator's group decision making with Nyx-approved parameters
+            result = await coordinator.handle_player_action(
+                player_action_model.model_dump(),
+                context_model.model_dump(),
+                npc_ids
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in coordinator group interaction: {e}")
+            # Fallback to individual processing if coordinator fails
+            npc_responses = []
+            for npc_id in npc_ids:
+                try:
+                    agent = self.npc_agents.get(npc_id)
+                    if agent:
+                        response = await agent.process_player_action(player_action, context)
+                        npc_responses.append(response)
+                except Exception as inner_e:
+                    logger.error(f"Error handling fallback interaction with NPC {npc_id}: {inner_e}")
+            
+            return {"npc_responses": npc_responses}
 
     @function_tool(strict_mode=False)
     async def get_current_game_time(self) -> GameTime:
