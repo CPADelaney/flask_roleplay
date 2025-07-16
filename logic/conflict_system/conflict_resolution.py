@@ -21,6 +21,9 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
 from db.connection import get_db_connection_context
 
+from npcs.npc_relationship import NPCRelationshipManager
+from logic.resource_management import ResourceManager
+
 from logic.conflict_system.conflict_tools import (
     get_active_conflicts, get_conflict_details, get_conflict_stakeholders,
     get_resolution_paths, get_player_involvement, get_internal_conflicts,
@@ -717,6 +720,10 @@ class ConflictResolutionSystem:
     ) -> Dict[str, Any]:
         """Analyze the current state of a conflict."""
         try:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
             # Analyze stakeholder dynamics
             stakeholder_analysis = await self._analyze_stakeholder_dynamics(stakeholders)
             
@@ -811,6 +818,10 @@ class ConflictResolutionSystem:
     async def _analyze_conflict_progression(self, conflict: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze the progression of the conflict."""
         try:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
             # Get resolution paths
             resolution_paths = await get_resolution_paths(ctx, conflict["conflict_id"])
             
@@ -836,6 +847,10 @@ class ConflictResolutionSystem:
     async def _analyze_internal_conflicts(self, internal_conflicts: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze internal faction conflicts."""
         try:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
             # Group by faction
             faction_internal_conflicts = {}
             for conflict in internal_conflicts:
@@ -1824,6 +1839,10 @@ class ConflictResolutionSystem:
     ) -> Dict[str, Any]:
         """Execute an internal conflict resolution action."""
         try:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
             # Get internal conflict
             conflict_id = parameters.get("conflict_id")
             internal_conflicts = await get_internal_conflicts(ctx, conflict_id)
