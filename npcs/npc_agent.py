@@ -837,6 +837,11 @@ class NPCAgent:
         self.conflict_system = None
         self.story_context = None
         self.lore_context_manager = LoreContextManager(user_id, conversation_id)
+
+        self.memory_manager = None  # Lazy load
+        
+        # Add EnvironmentPerception
+        self.perception_system = None  # Lazy load
         
     async def initialize(self):
         """Initialize the NPC agent with all necessary systems."""
@@ -877,6 +882,84 @@ class NPCAgent:
         # Merge contexts
         story_context.update(lore_context)
         return story_context
+
+    async def get_memory_manager(self) -> NPCMemoryManager:
+        """Lazy-load the enhanced memory manager."""
+        if self.memory_manager is None:
+            from .npc_memory import NPCMemoryManager
+            npc_data = await self._get_npc_data(self.npc_id)
+            personality = self._determine_personality_type(npc_data)
+            intelligence = npc_data.get("intelligence", 1.0)
+            
+            self.memory_manager = NPCMemoryManager(
+                self.npc_id,
+                self.user_id,
+                self.conversation_id,
+                npc_personality=personality,
+                npc_intelligence=intelligence
+            )
+        return self.memory_manager
+        
+    async def get_perception_system(self) -> EnvironmentPerception:
+        """Lazy-load the perception system."""
+        if self.perception_system is None:
+            from .npc_perception import EnvironmentPerception
+            self.perception_system = EnvironmentPerception(
+                self.npc_id,
+                self.user_id,
+                self.conversation_id
+            )
+        return self.perception_system
+    
+    def _determine_personality_type(self, npc_data: Dict[str, Any]) -> str:
+        """Determine personality type from NPC data."""
+        dominance = npc_data.get("dominance", 50)
+        cruelty = npc_data.get("cruelty", 50)
+        
+        if dominance > 70:
+            return "dominant"
+        elif dominance < 30:
+            return "submissive"
+        elif cruelty > 70:
+            return "cruel"
+        else:
+            return "neutral"
+    
+    async def perceive_environment(self, context: Dict[str, Any] = None) -> NPCPerception:
+        """Use the dedicated perception system instead of inline code."""
+        perception_system = await self.get_perception_system()
+        
+        # Convert context to PerceptionContext if needed
+        from .npc_perception import PerceptionContext
+        if context and not isinstance(context, PerceptionContext):
+            context = PerceptionContext(**context)
+        
+        # Use the perception system
+        result = await perception_system.perceive_environment(
+            context or {},
+            detail_level="auto"
+        )
+        
+        # Convert PerceptionResult to NPCPerception
+        from .npc_decisions import NPCPerception
+        perception = NPCPerception(
+            environment=result.environment,
+            relevant_memories=result.relevant_memories,
+            relationships=result.relationships,
+            emotional_state=result.emotional_state,
+            flashback=result.flashback,
+            traumatic_trigger=result.traumatic_trigger,
+            mask=result.mask,
+            beliefs=result.beliefs,
+            time_context=result.time_context,
+            narrative_context=result.narrative_context
+        )
+        
+        # Cache in context
+        self.context.perception = perception.model_dump()
+        self.context.last_perception = perception
+        
+        return perception
         
     async def _determine_npc_role(self) -> Dict[str, Any]:
         """Determine NPC role with lore-aware analysis."""
