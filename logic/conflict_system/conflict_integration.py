@@ -118,7 +118,7 @@ class ConflictSystemIntegration:
                 self.stakeholder_autonomy = StakeholderAutonomySystem(self.user_id, self.conversation_id)
                 
                 # Initialize player stats if needed
-                from logic.narrative_progression import initialize_player_stats
+                from logic.narrative_events import initialize_player_stats
                 await initialize_player_stats(self.user_id, self.conversation_id)
                 
                 # Initialize context-related systems
