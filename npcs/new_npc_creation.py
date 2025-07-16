@@ -3034,7 +3034,7 @@ class NPCCreationHandler:
                         )
                         
                         # Create a reciprocal memory for the target NPC
-                        reciprocal_memory = self.create_reciprocal_memory(
+                        reciprocal_memory = await self.create_reciprocal_memory(
                             specific_memory, npc_name, target_npc_name, 
                             rel["relationship_label"], rec_type
                         )
