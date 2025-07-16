@@ -306,21 +306,19 @@ async def get_npc(
 @router.post("/{npc_id}/interact", response_model=NPCInteractionResponse)
 async def interact_with_npc(
     npc_id: int,
-    request: NPCInteractionRequest,
-    interaction_handler: NPCInteractionHandler = Depends(get_npc_interaction_handler)
+    request: NPCInteractionRequest
 ):
-    """
-    Interact with an NPC.
-    """
+    """Interact with an NPC using the proper handler."""
     try:
-        # Process the interaction
-        response = await interaction_handler.handle_interaction(
+        # Create handler
+        handler = NPCHandler(request.user_id, request.conversation_id)
+        
+        # Process interaction
+        response = await handler.handle_interaction(
             npc_id=npc_id,
             interaction_type=request.interaction_type,
             player_input=request.player_input,
-            context=request.context,
-            user_id=request.user_id,
-            conversation_id=request.conversation_id
+            context=request.context
         )
         
         if "error" in response:
@@ -336,6 +334,99 @@ async def interact_with_npc(
     
     except Exception as e:
         logging.error(f"Error interacting with NPC: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{npc_id}/memories")
+async def get_npc_memories(
+    npc_id: int,
+    user_id: int,
+    conversation_id: int,
+    query: Optional[str] = None,
+    limit: int = 10,
+    memory_types: Optional[List[str]] = None,
+    femdom_focus: bool = False
+):
+    """Get memories for an NPC."""
+    try:
+        # Create agent
+        agent = NPCAgent(npc_id, user_id, conversation_id)
+        await agent.initialize()
+        
+        # Get memory manager
+        memory_manager = await agent.get_memory_manager()
+        
+        # Retrieve memories
+        result = await memory_manager.retrieve_memories(
+            query=query or "",
+            limit=limit,
+            memory_types=memory_types,
+            femdom_focus=femdom_focus
+        )
+        
+        return result
+    
+    except Exception as e:
+        logging.error(f"Error getting NPC memories: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{npc_id}/memories")
+async def add_npc_memory(
+    npc_id: int,
+    user_id: int,
+    conversation_id: int,
+    memory_text: str,
+    memory_type: str = "observation",
+    significance: int = 5,
+    feminine_context: bool = False
+):
+    """Add a memory for an NPC."""
+    try:
+        # Create agent
+        agent = NPCAgent(npc_id, user_id, conversation_id)
+        await agent.initialize()
+        
+        # Get memory manager
+        memory_manager = await agent.get_memory_manager()
+        
+        # Add memory
+        memory_id = await memory_manager.add_memory(
+            memory_text=memory_text,
+            memory_type=memory_type,
+            significance=significance,
+            feminine_context=feminine_context
+        )
+        
+        return {"memory_id": memory_id, "success": True}
+    
+    except Exception as e:
+        logging.error(f"Error adding NPC memory: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/group-interaction")
+async def handle_group_interaction(
+    user_id: int,
+    conversation_id: int,
+    npc_ids: List[int],
+    player_action: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None
+):
+    """Handle a group interaction with multiple NPCs."""
+    try:
+        # Get coordinator
+        coordinator = NPCAgentCoordinator(user_id, conversation_id)
+        await coordinator.load_agents(npc_ids)
+        
+        # Process group interaction
+        result = await coordinator.handle_player_action(
+            player_action=player_action,
+            context=context or {},
+            npc_ids=npc_ids
+        )
+        
+        return result
+    
+    except Exception as e:
+        logging.error(f"Error in group interaction: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{npc_id}/relationship", response_model=NPCRelationshipResponse)
