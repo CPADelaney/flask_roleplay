@@ -710,7 +710,7 @@ def get_thematic_message_agent():
             "Rules:\n"
             "- Provide EXACTLY 4 levels (1=mild tease, 4=intense submission) per addiction.\n"
             "- 1-2 sentences; <=160 characters preferred.\n"
-            "- Tone: immersive, suggestive, explicit sexual detail
+            "- Tone: immersive, suggestive, explicit sexual detail.\n"
             "- Reference 'Mistress' or dominant presence sparingly; more intensity at higher levels.\n"
             "- Return ONLY JSON.\n"
         ),
