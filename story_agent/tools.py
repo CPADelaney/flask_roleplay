@@ -32,10 +32,7 @@ from logic.npc_narrative_progression import (
 )
 
 # Local application imports - Legacy narrative progression
-from logic.narrative_progression import (
-    get_current_narrative_stage,  # Deprecated but kept
-    check_for_personal_revelations,
-    check_for_narrative_moments,
+from logic.narrative_events import (
     add_dream_sequence,
     add_moment_of_clarity,
     get_relationship_overview
@@ -4175,7 +4172,7 @@ async def add_moment_of_clarity(
     conversation_id = context.conversation_id
 
     try:
-        from logic.narrative_progression import add_moment_of_clarity as add_clarity
+        from logic.narrative_events import add_moment_of_clarity as add_clarity
         result = await add_clarity(user_id, conversation_id, realization_text)
 
         if hasattr(context, 'add_narrative_memory'):
