@@ -99,7 +99,7 @@ revelation_generator = Agent(
     - Written in first person
     """,
     model="gpt-4.1-nano",
-    temperature=0.8
+    model_settings=ModelSettings(temperature=0.8)
 )
 
 # Agent for creating dynamic dream sequences
@@ -123,7 +123,7 @@ dream_weaver = Agent(
     - Open to interpretation
     """,
     model="gpt-4.1-nano",
-    temperature=0.9
+    model_settings=ModelSettings(temperature=0.9)
 )
 
 # Agent for suggesting contextual activities
