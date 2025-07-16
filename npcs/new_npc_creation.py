@@ -3271,7 +3271,7 @@ class NPCCreationHandler:
     
             memory_system = await MemorySystem.get_instance(user_id, conversation_id)
     
-            beliefs = await dynamic_templates.generate_core_beliefs(
+            beliefs = await generate_core_beliefs(
                 npc_data.get("archetype_summary", ""),
                 npc_data.get("personality_traits", []),
                 npc_data.get("environment_desc", ""),
@@ -3462,7 +3462,7 @@ class NPCCreationHandler:
     
         # 2) Supplement with GPT‑derived trauma keywords if still sparse
         if len(trigger_words) < 3:
-            trigger_words += await dynamic_templates.get_trauma_keywords(npc_data.get("environment_desc", ""))
+            trigger_words += await get_trauma_keywords(npc_data.get("environment_desc", ""))
             trigger_words = trigger_words[:5]
     
         if not trigger_words:
@@ -3714,7 +3714,7 @@ class NPCCreationHandler:
         from memory.semantic import SemanticMemoryManager
         from db.connection import get_db_connection_context
     
-        topics = await dynamic_templates.get_semantic_seed_topics(
+        topics = await get_semantic_seed_topics(
             npc_data.get("archetype_summary", ""),
             npc_data.get("environment_desc", ""),
         )
