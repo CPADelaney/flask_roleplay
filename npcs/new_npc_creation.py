@@ -3503,9 +3503,8 @@ class NPCCreationHandler:
         # 1) Try pulling high‑intensity memory keywords (original logic)…
         trigger_words: List[str] = []
         try:
-            memory_system = await (await __import__("memory.wrapper").wrapper.MemorySystem.get_instance)(
-                user_id, conversation_id
-            )
+            from memory.wrapper import MemorySystem
+            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
             mems = await memory_system.recall(entity_type="npc", entity_id=npc_id, limit=10)
             intense = [m for m in mems.get("memories", []) if m.get("emotional_intensity", 0) > 60]
             for m in intense:
