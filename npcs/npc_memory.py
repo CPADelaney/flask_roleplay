@@ -1900,6 +1900,74 @@ class NPCMemoryManager:
         Get the NPC's current emotional state.
         """
         return await get_emotional_state_impl(RunContextWrapper(self.context))
+
+    async def record_player_journal_entry(self, entry_type: str, entry_text: str, 
+                                        fantasy_flag: bool = False, 
+                                        intensity_level: int = 0) -> int:
+        """
+        Record an entry in the player's journal.
+        
+        Args:
+            entry_type: Type of entry
+            entry_text: Text of the entry
+            fantasy_flag: Whether the entry is fantasy
+            intensity_level: Intensity level
+            
+        Returns:
+            ID of the created entry
+        """
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    INSERT INTO PlayerJournal (
+                        user_id, conversation_id, entry_type, entry_text, 
+                        fantasy_flag, intensity_level, timestamp
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+                    RETURNING id
+                """, 
+                self.user_id, self.conversation_id, entry_type, entry_text,
+                fantasy_flag, intensity_level)
+                
+                if row:
+                    return row['id']
+                return 0
+                
+        except Exception as e:
+            logger.error(f"Error recording player journal entry: {e}", exc_info=True)
+            return 0
+    
+    async def record_dream_sequence(self, dream_text: str, 
+                                  intensity_level: int = 3) -> int:
+        """
+        Record a dream sequence in the player's journal.
+        
+        Args:
+            dream_text: Text of the dream
+            intensity_level: Intensity level
+            
+        Returns:
+            ID of the created entry
+        """
+        return await self.record_player_journal_entry(
+            "dream_sequence", dream_text, fantasy_flag=True, intensity_level=intensity_level
+        )
+    
+    async def record_moment_of_clarity(self, clarity_text: str, 
+                                     intensity_level: int = 2) -> int:
+        """
+        Record a moment of clarity in the player's journal.
+        
+        Args:
+            clarity_text: Text of the clarity moment
+            intensity_level: Intensity level
+            
+        Returns:
+            ID of the created entry
+        """
+        return await self.record_player_journal_entry(
+            "moment_of_clarity", clarity_text, fantasy_flag=False, intensity_level=intensity_level
+        )
     
     async def generate_mask_slippage(
         self,
@@ -2047,3 +2115,187 @@ class NPCMemoryManager:
         Get performance metrics for the memory manager.
         """
         return self.context.get_performance_report()
+
+    async def record_event(self, event_description: str) -> Dict[str, Any]:
+        """
+        Record a memory event for an NPC.
+        
+        Args:
+            event_description: Description of the event
+            
+        Returns:
+            Result dictionary
+        """
+        # This is essentially the same as add_memory with default parameters
+        return await self.add_memory(
+            memory_text=event_description,
+            memory_type="event",
+            significance=5,
+            tags=["event"]
+        )
+    
+    async def generate_flashback(self, current_context: str) -> Optional[Dict[str, Any]]:
+        """
+        Generate a flashback for an NPC based on current context.
+        
+        Args:
+            current_context: Current context that may trigger a flashback
+            
+        Returns:
+            Flashback data or None if no flashback was generated
+        """
+        # Retrieve emotional memories related to the context
+        memories = await self.retrieve_memories(
+            query=current_context,
+            memory_types=["emotional", "observation"],
+            limit=10
+        )
+        
+        # Find highly emotional memories that could trigger flashback
+        flashback_candidates = [
+            m for m in memories.get("memories", [])
+            if m.get("emotional_intensity", 0) > 70
+        ]
+        
+        if flashback_candidates and random.random() < 0.3:  # 30% chance
+            flashback_memory = random.choice(flashback_candidates)
+            return {
+                "triggered": True,
+                "memory": flashback_memory,
+                "trigger_context": current_context,
+                "intensity": flashback_memory.get("emotional_intensity", 80)
+            }
+        
+        return None
+    
+    async def get_shared_memory(self, target: str = "player", 
+                              target_name: str = "Chase", 
+                              rel_type: str = "related") -> str:
+        """
+        Generate a shared memory between an NPC and another entity.
+        
+        Args:
+            target: Target type
+            target_name: Target name
+            rel_type: Relationship type
+            
+        Returns:
+            Generated memory text
+        """
+        # Retrieve memories related to the target
+        memories = await self.retrieve_memories(
+            query=f"{target_name} {rel_type}",
+            limit=5
+        )
+        
+        if memories.get("memories"):
+            # Build a shared memory based on existing memories
+            base_memory = memories["memories"][0]
+            shared_text = f"I remember when {target_name} and I {base_memory.get('text', 'shared an experience')}"
+            return shared_text
+        else:
+            # Create a generic shared memory
+            return f"I have a vague memory of interacting with {target_name}"
+    
+    async def create_group_memory(self, npc_ids: List[int], event_description: str, 
+                                significance: int = 5) -> bool:
+        """
+        Create a shared memory for a group of NPCs.
+        
+        Args:
+            npc_ids: List of NPC IDs
+            event_description: Description of the event
+            significance: Significance level (1-10)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Note: This method needs to create memories for OTHER NPCs
+        # Since NPCMemoryManager is for a single NPC, we'll just create the memory for this NPC
+        # and mark it as a group memory
+        
+        result = await self.add_memory(
+            memory_text=f"Group experience: {event_description}",
+            memory_type="shared_experience",
+            significance=significance,
+            tags=["group_memory", "shared_experience"]
+        )
+        
+        # For propagating to other NPCs, you'd need to use the propagate_memory functionality
+        if result and significance >= 4:
+            await propagate_memory_impl(
+                RunContextWrapper(self.context),
+                event_description,
+                ["group_memory", "shared_experience"],
+                significance,
+                50.0  # Default emotional intensity for group memories
+            )
+        
+        return result is not None
+    
+    async def get_memory_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of an NPC's memories.
+        
+        Returns:
+            Dictionary with memory summary
+        """
+        # Retrieve a larger set of memories for analysis
+        all_memories = await self.retrieve_memories(
+            query="",  # Empty query to get all
+            limit=50
+        )
+        
+        memories = all_memories.get("memories", [])
+        
+        # Calculate statistics
+        total_memories = len(memories)
+        significant_memories = sum(1 for m in memories if m.get("significance", 0) >= 7)
+        emotional_memories = sum(1 for m in memories if m.get("emotional_intensity", 0) >= 70)
+        
+        # Get most significant memories
+        significant_memories_list = sorted(
+            [m for m in memories if m.get("significance", 0) >= 5],
+            key=lambda x: x.get("significance", 0),
+            reverse=True
+        )[:5]
+        
+        # Group memories by type
+        memory_types = {}
+        for memory in memories:
+            memory_type = memory.get("type", "unknown")
+            if memory_type not in memory_types:
+                memory_types[memory_type] = 0
+            memory_types[memory_type] += 1
+        
+        return {
+            "npc_id": self.npc_id,
+            "total_memories": total_memories,
+            "significant_memories_count": significant_memories,
+            "emotional_memories_count": emotional_memories,
+            "most_significant": significant_memories_list,
+            "memory_types": memory_types
+        }
+    
+    async def fade_old_memories(self, days_old: int = 14, 
+                              significance_threshold: int = 3) -> int:
+        """
+        Fade old, less significant memories for an NPC.
+        
+        Args:
+            days_old: Age threshold in days
+            significance_threshold: Significance threshold
+            
+        Returns:
+            Number of memories faded
+        """
+        # Run maintenance with specific options
+        options = MaintenanceOptions(
+            archive_old_memories=True,
+            consolidate_memories=True
+        )
+        
+        result = await self.run_memory_maintenance(include_femdom_maintenance=False)
+        
+        # Return the number of archived memories
+        return result.get("memories_archived", 0)
