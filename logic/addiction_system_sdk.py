@@ -36,7 +36,7 @@ from agents import (
     handoff
 )
 from agents.models.openai_responses import OpenAIResponsesModel
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # DB connection - UPDATED: Using new async context manager
 from db.connection import get_db_connection_context
@@ -95,21 +95,21 @@ class ThematicMessage(BaseModel):
     level: int = Field(..., ge=1, le=4, description="Addiction severity tier 1-4")
     text: str = Field(..., description="Short in-world narrative line; 1-2 sentences max.")
 
-    @validator("text")
+    @field_validator("text", mode="before")
+    @classmethod
     def _strip(cls, v: str) -> str:
-        return v.strip()
+        return v.strip() if isinstance(v, str) else v
 
 class ThematicAddictionMessages(BaseModel):
     addiction_type: str = Field(..., description="e.g., 'feet', 'humiliation'")
     messages: List[ThematicMessage] = Field(..., min_items=4, max_items=4)
 
-    @root_validator
-    def _levels_cover_1_to_4(cls, values):
-        msgs = values.get("messages", [])
-        levels = sorted({m.level for m in msgs})
+    @model_validator(mode="after")
+    def _levels_cover_1_to_4(self) -> "ThematicAddictionMessages":
+        levels = sorted({m.level for m in self.messages})
         if levels != [1, 2, 3, 4]:
             raise ValueError("Must include levels 1-4 exactly once each.")
-        return values
+        return self
 
 class ThematicMessagesBundle(BaseModel):
     """Top-level object returned by the generator agent."""
