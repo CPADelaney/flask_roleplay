@@ -193,7 +193,7 @@ async def process_end_of_day(user_id: int, conversation_id: int) -> Dict[str, An
     
     # 4. Generate dream sequence
     dream = None
-    from logic.narrative_progression import add_dream_sequence
+    from logic.narrative_events import add_dream_sequence
     dream_result = await add_dream_sequence(user_id, conversation_id)
     if dream_result:
         dream = dream_result.get("text")
