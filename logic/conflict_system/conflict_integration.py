@@ -40,9 +40,6 @@ from context.context_service import get_context_service
 from context.memory_manager import get_memory_manager
 from context.vector_service import get_vector_service
 
-from npcs.npc_relationship import NPCRelationshipManager
-from logic.resource_management import ResourceManager
-
 
 logger = logging.getLogger(__name__)
 
