@@ -27,8 +27,9 @@ from logic.conflict_system.conflict_tools import (
     get_resolution_paths, get_player_involvement, get_internal_conflicts,
     update_conflict_progress, update_stakeholder_status, add_resolution_path,
     update_player_involvement, add_internal_conflict, resolve_internal_conflict,
-    generate_conflict_consequences, track_story_beat, resolve_conflict as resolve_conflict_tool
+    get_conflict_consequences, track_story_beat, resolve_conflict as resolve_conflict_tool
 )
+
 from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
 from logic.conflict_system.dynamic_stakeholder_agents import StakeholderAutonomySystem
 from npcs.npc_agent_system import NPCAgentSystem
@@ -38,6 +39,9 @@ from logic.conflict_system.conflict_guardrails import apply_guardrails
 from context.context_service import get_context_service
 from context.memory_manager import get_memory_manager
 from context.vector_service import get_vector_service
+
+from npcs.npc_relationship import NPCRelationshipManager
+from logic.resource_management import ResourceManager
 
 
 logger = logging.getLogger(__name__)
