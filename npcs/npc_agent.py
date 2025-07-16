@@ -1,8 +1,8 @@
 # npcs/npc_agent.py
-
 """
 Core NPC agent implementation using OpenAI Agents SDK.
 """
+from __future__ import annotations  # Add this line
 
 import logging
 import json
@@ -21,6 +21,7 @@ from agents import Agent, Runner, RunContextWrapper, trace, function_tool, hando
 from agents.tracing import custom_span, generation_span, function_span
 from db.connection import get_db_connection_context  # Updated import
 from memory.wrapper import MemorySystem
+from npcs.npc_memory import NPCMemoryManager
 from .lore_context_manager import LoreContextManager
 
 logger = logging.getLogger(__name__)
