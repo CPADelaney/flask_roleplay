@@ -7,6 +7,7 @@ the state of multiple NPC relationships at different progression stages.
 
 import logging
 import random
+import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
@@ -488,3 +489,92 @@ async def add_moment_of_clarity(user_id: int, conversation_id: int, realization_
     except Exception as e:
         logger.error(f"Error creating moment of clarity: {e}")
         return None
+
+
+async def initialize_player_stats(user_id: int, conversation_id: int):
+    """
+    Initialize player stats if they don't exist.
+    This remains global as it's about the player, not NPC relationships.
+    """
+    try:
+        async with get_db_connection_context() as conn:
+            # Check if stats exist
+            exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM PlayerStats WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase')",
+                user_id, conversation_id
+            )
+            
+            if not exists:
+                await conn.execute(
+                    """
+                    INSERT INTO PlayerStats 
+                    (user_id, conversation_id, player_name, corruption, dependency, confidence, 
+                     willpower, obedience, lust, timestamp)
+                    VALUES ($1, $2, 'Chase', 0, 0, 50, 50, 0, 0, CURRENT_TIMESTAMP)
+                    """,
+                    user_id, conversation_id
+                )
+                logger.info(f"Initialized default PlayerStats for user {user_id}, convo {conversation_id}")
+                
+    except Exception as e:
+        logger.error(f"Error initializing player stats: {e}")
+
+
+async def analyze_narrative_tone(narrative_text: str) -> Dict[str, Any]:
+    """
+    Analyze the tone of a narrative text.
+    This remains useful for analyzing any narrative content.
+    """
+    from logic.chatgpt_integration import get_chatgpt_response
+    import json
+    
+    prompt = f"""
+    Analyze the tone and thematic elements of this narrative text from a femdom roleplaying game:
+
+    {narrative_text}
+
+    Consider which NPC relationships this might relate to and what stages they might be in.
+    
+    Return your analysis in JSON format with these fields:
+    - dominant_tone: The primary tone of the text
+    - power_dynamics: Analysis of power relationships
+    - implied_stages: Dict of potential NPC stages based on the text
+    - manipulation_techniques: Any manipulation methods identified
+    - intensity_level: Rating from 1-5 of how intense the power dynamic is
+    """
+    
+    try:
+        response = await get_chatgpt_response(None, "narrative_analysis", prompt)
+        
+        if response and "function_args" in response:
+            return response["function_args"]
+        else:
+            # Extract JSON from text response
+            response_text = response.get("response", "{}")
+            import re
+            
+            json_match = re.search(r'{.*}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    return json.loads(json_match.group(0))
+                except json.JSONDecodeError:
+                    pass
+        
+        # Fallback
+        return {
+            "dominant_tone": "unknown",
+            "power_dynamics": "unclear",
+            "implied_stages": {},
+            "manipulation_techniques": [],
+            "intensity_level": 1
+        }
+    except Exception as e:
+        logger.error(f"Error analyzing narrative tone: {e}", exc_info=True)
+        return {
+            "dominant_tone": "error",
+            "power_dynamics": "error",
+            "implied_stages": {},
+            "manipulation_techniques": [],
+            "intensity_level": 0,
+            "error": str(e)
+        }
