@@ -1216,19 +1216,44 @@ class NewGameAgent:
             
         # Initialize and generate lore
         try:
-            # Get the lore system instance and initialize it
-            lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
-            await lore_system.initialize()
+            # Use LoreSystem which has all the integration methods
+            from lore.core.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(user_id, conversation_id)
             
             # Generate comprehensive lore based on the environment
             logging.info(f"Generating lore for new game (user_id={user_id}, conversation_id={conversation_id})")
-            lore_result = await lore_system.generate_complete_lore(environment_desc)
-
+            
+            # Create proper context for lore operations
+            lore_ctx = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })
+            
+            lore_result = await lore_system.generate_complete_lore(lore_ctx, environment_desc)
             
             # Integrate lore with NPCs if we have any
             if npc_ids:
                 logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
-                await lore_system.integrate_lore_with_npcs(npc_ids)
+                for npc_id in npc_ids:
+                    # Get NPC's faction affiliation if any
+                    faction_affiliations = []
+                    async with get_db_connection_context() as conn:
+                        npc_row = await conn.fetchrow("""
+                            SELECT faction_affiliation 
+                            FROM NPCStats
+                            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                        """, npc_id, user_id, conversation_id)
+                        
+                        if npc_row and npc_row['faction_affiliation']:
+                            faction_affiliations = [npc_row['faction_affiliation']]
+                    
+                    # Initialize NPC's lore knowledge
+                    await lore_system.initialize_npc_lore_knowledge(
+                        lore_ctx,
+                        npc_id,
+                        cultural_background="common",  # Default background
+                        faction_affiliations=faction_affiliations
+                    )
                 
             lore_summary = f"Generated {len(lore_result.get('factions', []))} factions, {len(lore_result.get('cultural_elements', []))} cultural elements, and {len(lore_result.get('locations', []))} locations"
             
@@ -1250,15 +1275,20 @@ class NewGameAgent:
             from logic.conflict_system.conflict_integration import ConflictSystemIntegration
             
             conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
-            initial_conflict = await conflict_integration.generate_conflict({
+            
+            # Create proper context for conflict generation
+            conflict_ctx = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })
+            
+            # Pass context as first parameter
+            initial_conflict = await conflict_integration.generate_conflict(conflict_ctx, {
                 "conflict_type": "major",
                 "intensity": "medium",
                 "player_involvement": "indirect"
             })
             conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
-        except Exception as e:
-            logging.error(f"Error generating initial conflict: {e}")
-            conflict_name = "Failed to generate conflict"
         
         # Generate currency system canonically
         try:
