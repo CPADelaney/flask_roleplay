@@ -6,7 +6,7 @@ import random
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union, Set
 import asyncio
-from logic.chatgpt_integration import get_openai_client
+from logic.chatgpt_integration import get_openai_client, get_async_openai_client
 
 from .connection import with_transaction, TransactionContext
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
@@ -155,7 +155,7 @@ class SemanticMemoryManager:
         abstraction_level: float,
     ) -> str:
         """Create a semantic abstraction (minimal/moderate/high) via Responses API."""
-        client = get_openai_client()
+        client = get_async_openai_client()
         level = (
             "minimal" if abstraction_level < 0.3
             else "high" if abstraction_level > 0.7
@@ -326,7 +326,7 @@ class SemanticMemoryManager:
         topic: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Extract a pattern from a cluster of Memory objects."""
-        client = get_openai_client()
+        client = get_async_openai_client()
     
         memories_text = "\n".join(f"- {m.text}" for m in cluster)
         mem_block = _safe_block(memories_text)
@@ -678,7 +678,7 @@ class SemanticMemoryManager:
         variation_type: str,
     ) -> str:
         """Counterfactual variation (alternative/opposite/exaggeration) via Responses API."""
-        client = get_openai_client()
+        client = get_async_openai_client()
     
         description = {
             "alternative": "what might have gone differently",
@@ -848,7 +848,7 @@ class SemanticMemoryManager:
         Extract 2-3 related topics from *memory_text* via the OpenAI Responses API.
         No `response_format=` param (SDK rejects it). Enforce JSON via instruction.
         """
-        client = get_openai_client()
+        client = get_async_openai_client()
     
         system_msg = (
             "You extract 2-3 short topical keywords related to the provided memory text. "
