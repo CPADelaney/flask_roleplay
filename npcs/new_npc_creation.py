@@ -3271,9 +3271,13 @@ class NPCCreationHandler:
     
             memory_system = await MemorySystem.get_instance(user_id, conversation_id)
     
+            # Convert personality_traits list to string for caching
+            personality_traits = npc_data.get("personality_traits", [])
+            personality_traits_str = ", ".join(personality_traits) if personality_traits else ""
+    
             beliefs = await generate_core_beliefs(
                 npc_data.get("archetype_summary", ""),
-                npc_data.get("personality_traits", []),
+                personality_traits_str,  # Pass as string instead of list
                 npc_data.get("environment_desc", ""),
                 n=n,
             )
@@ -3289,7 +3293,6 @@ class NPCCreationHandler:
         except Exception as e:  # pragma: no cover
             logger.error("Belief generation failed for NPC %s: %s", npc_id, e)
             return False
-
     
     async def initialize_npc_memory_schemas(self, user_id, conversation_id, npc_id, npc_data):
         """
