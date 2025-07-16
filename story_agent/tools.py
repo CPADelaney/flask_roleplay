@@ -1,4 +1,5 @@
 # story_agent/tools.py
+
 """
 Refactored tools for the Story Director agent with NPC-specific narrative progression
 and generative agent integration for dynamic content generation.
@@ -265,6 +266,11 @@ class MentionedFaction(BaseModel):
     """Faction mentioned in conflict analysis."""
     faction_id: int
     faction_name: str
+
+class DialogueExchange(BaseModel):
+    """One player ↔ NPC exchange for dialogue flow analysis."""
+    player: str = ""
+    npc: str = ""
     
     
 
@@ -426,13 +432,25 @@ class PlayerInvolvementParams(BaseModel):
     
     
 
+class ManipulatorInfo(BaseModel):
+    """Who (if anyone) is manipulating the player within the conflict."""
+    npc_id: Optional[int] = None
+    npc_name: Optional[str] = None
+    method: Optional[str] = None          # e.g., "blackmail", "seduction"
+    notes: Optional[str] = None            # short free‑text
+
+class ResourceCommitmentSummary(BaseModel):
+    """One committed resource line item."""
+    resource: Literal["money", "supplies", "influence"]
+    amount: int = Field(ge=0)
+
 class PlayerInvolvementData(BaseModel):
     """Current player involvement in a conflict."""
     involvement_level: Literal["none", "observing", "participating", "leading"]
     faction: Literal["a", "b", "neutral"]
     is_manipulated: bool = False
-    manipulated_by: Optional[Dict[str, Any]] = None
-    resources_committed: Optional[Dict[str, int]] = None
+    manipulated_by: Optional[ManipulatorInfo] = None
+    resources_committed: List[ResourceCommitmentSummary] = Field(default_factory=list)
     
     
 
@@ -1598,7 +1616,7 @@ async def get_dialogue_suggestions(
 @function_tool
 async def analyze_dialogue_flow(
     ctx: RunContextWrapper[ContextType],
-    dialogue_history: List[Dict[str, str]],
+    dialogue_history: List[DialogueExchange],
     npc_id: int
 ) -> Dict[str, Any]:
     """
@@ -1627,8 +1645,8 @@ async def analyze_dialogue_flow(
         
         # Analyze dialogue patterns
         total_exchanges = len(dialogue_history)
-        player_word_count = sum(len(ex.get('player', '').split()) for ex in dialogue_history)
-        npc_word_count = sum(len(ex.get('npc', '').split()) for ex in dialogue_history)
+        player_word_count = sum(len(ex.player.split()) for ex in dialogue_history)
+        npc_word_count = sum(len(ex.npc.split()) for ex in dialogue_history)
         
         # Detect power dynamics shifts
         submission_indicators = ['yes', 'okay', 'sorry', 'please', "ma'am", 'mistress']
@@ -1637,8 +1655,8 @@ async def analyze_dialogue_flow(
         player_submission_score = 0
         player_resistance_score = 0
         
-        for exchange in dialogue_history:
-            player_text = exchange.get('player', '').lower()
+        for ex in dialogue_history:
+            player_text = ex.player.lower()
             for indicator in submission_indicators:
                 if indicator in player_text:
                     player_submission_score += 1
@@ -1658,12 +1676,18 @@ async def analyze_dialogue_flow(
         escalation_detected = False
         if total_exchanges > 3:
             # Compare early vs late exchanges
-            early_submission = sum(1 for ex in dialogue_history[:2] 
-                                 for word in submission_indicators 
-                                 if word in ex.get('player', '').lower())
-            late_submission = sum(1 for ex in dialogue_history[-2:] 
-                                for word in submission_indicators 
-                                if word in ex.get('player', '').lower())
+            early_submission = sum(
+                1
+                for ex in dialogue_history[:2]
+                for word in submission_indicators
+                if word in ex.player.lower()
+            )
+            late_submission = sum(
+                1
+                for ex in dialogue_history[-2:]
+                for word in submission_indicators
+                if word in ex.player.lower()
+            )
             escalation_detected = late_submission > early_submission
         
         # Recommendations
