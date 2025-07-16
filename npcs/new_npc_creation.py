@@ -9,6 +9,7 @@ import json
 import asyncio
 import random
 import re
+import traceback
 from typing import List, Dict, Any, Optional, Tuple, Union
 from pydantic import BaseModel, Field
 import os
