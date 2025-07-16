@@ -53,7 +53,7 @@ class BaseContextData(BaseModel):
     player_stats: 'PlayerStats'
     current_roleplay: 'RoleplayData'
     current_location: str
-    narrative_stage: Optional['NarrativeStageInfo'] = None
+    relationship_overview: Optional['RelationshipOverview'] = None  # Changed from narrative_stage
     error: Optional[str] = None
     
     class Config:
@@ -97,10 +97,12 @@ class RoleplayData(BaseModel):
         extra = "forbid"
 
 
-class NarrativeStageInfo(BaseModel):
-    """Narrative stage information"""
-    name: str
-    description: str
+class RelationshipOverview(BaseModel):
+    """Overview of all NPC relationships and their stages"""
+    total_relationships: int
+    stage_distribution: Dict[str, int]  # stage_name -> count
+    most_advanced_npcs: List[Dict[str, Any]]  # Top NPCs by progression
+    aggregate_stats: Dict[str, float]  # avg corruption, dependency, realization
     
     class Config:
         extra = "forbid"
@@ -232,6 +234,7 @@ class ContextService:
     """
     Unified context service that integrates all context components.
     Refactored to use OpenAI Agents SDK but without using @function_tool on instance methods.
+    Updated to use NPC-specific narrative progression.
     """
 
     def __init__(self, user_id: int, conversation_id: int):
@@ -513,14 +516,17 @@ class ContextService:
                         roleplay_dict[row["key"]] = row["value"]
                     roleplay_data = RoleplayData(**roleplay_dict)
                     
-                    # Narrative stage
-                    from logic.narrative_progression import get_current_narrative_stage
-                    narrative_stage = await get_current_narrative_stage(self.user_id, self.conversation_id)
-                    narrative_stage_info = None
-                    if narrative_stage:
-                        narrative_stage_info = NarrativeStageInfo(
-                            name=narrative_stage.name,
-                            description=narrative_stage.description
+                    # Get relationship overview instead of single narrative stage
+                    from logic.narrative_events import get_relationship_overview
+                    overview = await get_relationship_overview(self.user_id, self.conversation_id)
+                    
+                    relationship_overview = None
+                    if overview and overview.get('total_relationships', 0) > 0:
+                        relationship_overview = RelationshipOverview(
+                            total_relationships=overview['total_relationships'],
+                            stage_distribution=overview['stage_distribution'],
+                            most_advanced_npcs=overview['most_advanced_npcs'][:3],  # Top 3
+                            aggregate_stats=overview['aggregate_stats']
                         )
                     
                     return BaseContextData(
@@ -528,7 +534,7 @@ class ContextService:
                         player_stats=player_stats,
                         current_roleplay=roleplay_data,
                         current_location=location or roleplay_data.CurrentLocation or "Unknown",
-                        narrative_stage=narrative_stage_info
+                        relationship_overview=relationship_overview
                     )
             except Exception as e:
                 logger.error(f"Error getting base context: {e}")
@@ -752,7 +758,8 @@ class ContextService:
             "time": ["time_info"],
             "roleplay": ["current_roleplay"],
             "narratives": ["narratives"],
-            "summaries": ["narrative_summaries"]
+            "summaries": ["narrative_summaries"],
+            "relationships": ["relationship_overview"]  # New component
         }
         
         for category, keys in components.items():
@@ -789,18 +796,19 @@ class ContextService:
         if total <= budget:
             return context
         
-        # Basic priority dict
+        # Basic priority dict - relationships is now higher priority
         trim_priority = {
             "player_stats": 10,
             "time": 9,
             "roleplay": 8,
-            "location": 7,
-            "quests": 6,
-            "npcs": 5,
-            "memories": 4,
-            "narratives": 3,
-            "summaries": 2,
-            "other": 1
+            "relationships": 7,  # Changed from narrative_stage
+            "location": 6,
+            "quests": 5,
+            "npcs": 4,
+            "memories": 3,
+            "narratives": 2,
+            "summaries": 1,
+            "other": 0
         }
         reduction_needed = total - budget
         trimmed = context.copy()
@@ -861,6 +869,18 @@ class ContextService:
                 new_tokens = self._calculate_token_usage({"memories": new_memories}).get("memories", 0)
                 trimmed["memories"] = new_memories
                 reduction_needed -= (old_tokens - new_tokens)
+            
+            elif component_name == "relationships" and "relationship_overview" in trimmed:
+                # Trim relationship overview to just key stats
+                overview = trimmed["relationship_overview"]
+                if isinstance(overview, dict):
+                    trimmed["relationship_overview"] = {
+                        "total_relationships": overview.get("total_relationships", 0),
+                        "most_advanced": overview.get("most_advanced_npcs", [])[:1]  # Just top NPC
+                    }
+                    old_tokens = usage_val
+                    new_tokens = self._calculate_token_usage({"relationship_overview": trimmed["relationship_overview"]}).get("relationships", 0)
+                    reduction_needed -= (old_tokens - new_tokens)
             
             elif component_name == "narratives" and "narratives" in trimmed:
                 old_tokens = usage_val
@@ -1273,7 +1293,7 @@ def create_context_service_orchestrator() -> Agent[ServiceContext]:
         name="Context Service Orchestrator",
         instructions="""
         You are a context service orchestrator specialized in managing 
-        context for RPG interactions.
+        context for RPG interactions with NPC-specific narrative progression.
         """,
         tools=[
             validate_context_budget_tool,
