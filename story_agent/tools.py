@@ -242,7 +242,7 @@ class DimensionChanges(BaseModel):
     closeness: Optional[int] = Field(None, ge=-100, le=100)
     dominance: Optional[int] = Field(None, ge=-100, le=100)
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 # Conflict Models
 class FactionAffiliation(BaseModel):
@@ -250,7 +250,7 @@ class FactionAffiliation(BaseModel):
     faction_id: int
     faction_name: str
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class MentionedNPCTyped(BaseModel):
     """Fully typed NPC mentioned in conflict analysis."""
@@ -259,14 +259,14 @@ class MentionedNPCTyped(BaseModel):
     dominance: int
     faction_affiliations: List[FactionAffiliation] = Field(default_factory=list)
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class MentionedFaction(BaseModel):
     """Faction mentioned in conflict analysis."""
     faction_id: int
     faction_name: str
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class NPCRelationship(BaseModel):
     """Relationship between NPCs in conflict analysis."""
@@ -277,7 +277,7 @@ class NPCRelationship(BaseModel):
     relationship_type: Literal["alliance", "rivalry", "unknown"]
     sentence: str
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class InternalFactionConflict(BaseModel):
     """Internal faction conflict details."""
@@ -287,7 +287,7 @@ class InternalFactionConflict(BaseModel):
     prize: str
     approach: str
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ConflictAnalysis(BaseModel):
     """Analysis results from conflict potential detection."""
@@ -300,7 +300,7 @@ class ConflictAnalysis(BaseModel):
     potential_internal_faction_conflict: Optional[InternalFactionConflict] = None
     has_conflict_potential: bool
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ManipulationGoal(BaseModel):
     """Goal for NPC manipulation attempts."""
@@ -311,7 +311,7 @@ class ManipulationGoal(BaseModel):
     influence_committed: int = Field(0, ge=0)
     specific_action: Optional[str] = None
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ManipulationPotential(BaseModel):
     """Analysis of NPC manipulation potential."""
@@ -319,7 +319,7 @@ class ManipulationPotential(BaseModel):
     most_effective_type: Literal["domination", "blackmail", "seduction", "gaslighting", "manipulation"]
     femdom_compatible: bool
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ManipulationOpportunity(BaseModel):
     """Suggested manipulation opportunity."""
@@ -331,7 +331,7 @@ class ManipulationOpportunity(BaseModel):
     manipulation_type: str
     potential: int
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 # Context/Memory Models
 class MemorySearchParams(BaseModel):
@@ -341,7 +341,7 @@ class MemorySearchParams(BaseModel):
     limit: int = Field(5, ge=1, le=100)
     use_vector: bool = True
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ContextQueryParams(BaseModel):
     """Parameters for context retrieval."""
@@ -349,7 +349,7 @@ class ContextQueryParams(BaseModel):
     use_vector: bool = True
     max_tokens: Optional[int] = Field(None, ge=100, le=10000)
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class StoreMemoryParams(BaseModel):
     """Parameters for storing narrative memories."""
@@ -358,7 +358,7 @@ class StoreMemoryParams(BaseModel):
     importance: float = Field(0.6, ge=0.0, le=1.0)
     tags: List[str] = Field(default_factory=lambda: ["story_director"])
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class VectorSearchParams(BaseModel):
     """Parameters for vector search operations."""
@@ -368,7 +368,7 @@ class VectorSearchParams(BaseModel):
     )
     top_k: int = Field(5, ge=1, le=50)
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 # Resource Models
 class ResourceCheck(BaseModel):
@@ -377,7 +377,7 @@ class ResourceCheck(BaseModel):
     supplies: int = Field(0, ge=0)
     influence: int = Field(0, ge=0)
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ResourceCommitment(BaseModel):
     """Resources to commit to a conflict."""
@@ -386,7 +386,7 @@ class ResourceCommitment(BaseModel):
     supplies: int = Field(0, ge=0)
     influence: int = Field(0, ge=0)
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 # Activity Models
 class ActivityAnalysisParams(BaseModel):
@@ -395,7 +395,7 @@ class ActivityAnalysisParams(BaseModel):
     setting_context: Optional[str] = None
     apply_effects: bool = False
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ActivityFilterParams(BaseModel):
     """Parameters for filtering activities."""
@@ -403,7 +403,7 @@ class ActivityFilterParams(BaseModel):
     meltdown_level: int = Field(0, ge=0, le=5)
     setting: str = ""
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ActivitySuggestionParams(BaseModel):
     """Parameters for activity suggestions."""
@@ -411,7 +411,7 @@ class ActivitySuggestionParams(BaseModel):
     intensity_level: int = Field(2, ge=1, le=5)
     archetypes: Optional[List[str]] = None
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 # Player Involvement Models
 class PlayerInvolvementParams(BaseModel):
@@ -424,7 +424,7 @@ class PlayerInvolvementParams(BaseModel):
     influence_committed: int = Field(0, ge=0)
     action: Optional[str] = None
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class PlayerInvolvementData(BaseModel):
     """Current player involvement in a conflict."""
@@ -434,7 +434,7 @@ class PlayerInvolvementData(BaseModel):
     manipulated_by: Optional[Dict[str, Any]] = None
     resources_committed: Optional[Dict[str, int]] = None
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 # Story Beat Models
 class StoryBeatParams(BaseModel):
@@ -445,7 +445,7 @@ class StoryBeatParams(BaseModel):
     involved_npcs: List[int]
     progress_value: float = Field(5.0, ge=0.0, le=100.0)
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ChoiceOption(BaseModel):
     """One selectable option at a relationship crossroads."""
@@ -453,21 +453,21 @@ class ChoiceOption(BaseModel):
     label: str
     consequence: str
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class Requirement(BaseModel):
     """A single prerequisite for a ritual."""
     name: str
     value: Any
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class Reward(BaseModel):
     """A single reward granted by a ritual."""
     name: str
     value: Any
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 # Story Director Models
 class NPCInfo(BaseModel):
@@ -478,7 +478,7 @@ class NPCInfo(BaseModel):
     relationship_level: int = Field(50, ge=0, le=100)
     location: Optional[str] = None
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class RelationshipCrossroads(BaseModel):
     """A decisive relationship fork with an NPC."""
@@ -489,7 +489,7 @@ class RelationshipCrossroads(BaseModel):
     choices: List[ChoiceOption] = Field(default_factory=list)
     triggered_at: Optional[str] = None
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class RelationshipRitual(BaseModel):
     """A repeatable ritual that strengthens/alters a relationship."""
@@ -500,7 +500,7 @@ class RelationshipRitual(BaseModel):
     requirements: List[Requirement] = Field(default_factory=list)
     rewards: List[Reward] = Field(default_factory=list)
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class TriggerEventData(BaseModel):
     """Payload passed to trigger_conflict_event."""
@@ -509,7 +509,7 @@ class TriggerEventData(BaseModel):
     faction_impacts: Optional[List[Requirement]] = None
     severity: int = Field(5, ge=1, le=10)
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ConflictEvolutionData(BaseModel):
     """Payload passed to evolve_conflict."""
@@ -518,7 +518,7 @@ class ConflictEvolutionData(BaseModel):
     progress_change: float = Field(0.1, ge=0.0, le=1.0)
     phase_transition: Optional[str] = None
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 # Narrative Event Content Models
 class NarrativeEventContent(BaseModel):
@@ -526,14 +526,14 @@ class NarrativeEventContent(BaseModel):
     title: str
     description: str
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class NarrativeMomentContent(NarrativeEventContent):
     moment_type: Literal["tension", "revelation", "transition", "climax"]
     scene_text: str
     player_realization: Optional[str] = None
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class PersonalRevelationContent(NarrativeEventContent):
     revelation_type: Literal[
@@ -542,13 +542,13 @@ class PersonalRevelationContent(NarrativeEventContent):
     ]
     inner_monologue: str
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class DreamSequenceContent(NarrativeEventContent):
     dream_text: str
     symbols: List[str] = Field(default_factory=list)
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class NPCRevelationContent(NarrativeEventContent):
     npc_id: int
@@ -557,7 +557,7 @@ class NPCRevelationContent(NarrativeEventContent):
     revelation_text: str
     changes_relationship: bool = False
 
-    model_config = ConfigDict(extra="forbid")
+    
 
 class ConflictBeatGenerationParams(BaseModel):
     """Parameters for generating a conflict story beat."""
@@ -566,7 +566,7 @@ class ConflictBeatGenerationParams(BaseModel):
     player_choice: Optional[str] = None
     involved_npcs: List[int] = Field(default_factory=list)
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class GeneratedConflictBeat(BaseModel):
     """A generated conflict story beat."""
@@ -576,7 +576,7 @@ class GeneratedConflictBeat(BaseModel):
     path_id: str
     involved_npcs: List[int]
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class DialogueContext(BaseModel):
     """Context for dialogue exchanges"""
@@ -587,7 +587,7 @@ class DialogueContext(BaseModel):
     last_exchange: Optional[datetime] = None
     dialogue_type: Optional[str] = None  # "casual", "interrogation", "flirtation", etc.
     
-    model_config = ConfigDict(extra="forbid")
+    
 
 class DialogueModeDetection(BaseModel):
     """Result of dialogue mode detection"""
@@ -597,7 +597,7 @@ class DialogueModeDetection(BaseModel):
     reason: str
     suggested_npc_id: Optional[int] = None
     
-    model_config = ConfigDict(extra="forbid")    
+        
 
 # ===== HELPER FUNCTIONS =====
 
