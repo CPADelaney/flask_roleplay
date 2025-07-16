@@ -263,6 +263,50 @@ class GameCreationResult(BaseModel):
     status: str = "ready"
     model_config = ConfigDict(extra="forbid")
 
+    @function_tool
+    async def _calendar_tool_wrapper(
+        ctx: RunContextWrapper[GameContext],
+        params: CalendarToolParams,
+    ) -> CalendarData:
+        """Create calendar for the game world."""
+        call_id = str(uuid.uuid4())[:8]
+        
+        # Log the call with unique ID
+        logger.info(f"[{call_id}] _calendar_tool_wrapper called with env_desc length: {len(params.environment_desc) if params.environment_desc else 0}")
+        
+        # Validate environment description
+        if not params.environment_desc or params.environment_desc.strip() == "":
+            logger.warning(f"[{call_id}] Empty environment description received, using fallback")
+            params.environment_desc = "A mysterious environment with hidden layers of intrigue and control"
+        
+        agent = ctx.context.get("agent_instance") or NewGameAgent()
+        cal_params = CreateCalendarParams(environment_desc=params.environment_desc)
+        
+        # Prevent duplicate calls by checking if calendar already exists
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        async with get_db_connection_context() as conn:
+            existing = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
+            """, user_id, conversation_id)
+            
+            if existing:
+                logger.info(f"[{call_id}] Calendar already exists, returning cached data")
+                try:
+                    cal_data = json.loads(existing["value"])
+                    return CalendarData(
+                        days=cal_data.get("days", []),
+                        months=cal_data.get("months", []),
+                        seasons=cal_data.get("seasons", [])
+                    )
+                except:
+                    pass
+        
+        logger.info(f"[{call_id}] Creating new calendar")
+        return await agent.create_calendar(ctx, cal_params)
+
 
 @function_tool
 async def _spawn_npcs_tool_wrapper(ctx: RunContextWrapper[GameContext], count: int = 5) -> List[str]:
@@ -504,52 +548,6 @@ class NewGameAgent:
     # --------------------------------------------------------------------- #
     #  main function                                                        #
     # --------------------------------------------------------------------- #
-    
-    import uuid  # Add this import at the top
-    
-    @function_tool
-    async def _calendar_tool_wrapper(
-        ctx: RunContextWrapper[GameContext],
-        params: CalendarToolParams,
-    ) -> CalendarData:
-        """Create calendar for the game world."""
-        call_id = str(uuid.uuid4())[:8]
-        
-        # Log the call with unique ID
-        logger.info(f"[{call_id}] _calendar_tool_wrapper called with env_desc length: {len(params.environment_desc) if params.environment_desc else 0}")
-        
-        # Validate environment description
-        if not params.environment_desc or params.environment_desc.strip() == "":
-            logger.warning(f"[{call_id}] Empty environment description received, using fallback")
-            params.environment_desc = "A mysterious environment with hidden layers of intrigue and control"
-        
-        agent = ctx.context.get("agent_instance") or NewGameAgent()
-        cal_params = CreateCalendarParams(environment_desc=params.environment_desc)
-        
-        # Prevent duplicate calls by checking if calendar already exists
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
-        
-        async with get_db_connection_context() as conn:
-            existing = await conn.fetchrow("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
-            """, user_id, conversation_id)
-            
-            if existing:
-                logger.info(f"[{call_id}] Calendar already exists, returning cached data")
-                try:
-                    cal_data = json.loads(existing["value"])
-                    return CalendarData(
-                        days=cal_data.get("days", []),
-                        months=cal_data.get("months", []),
-                        seasons=cal_data.get("seasons", [])
-                    )
-                except:
-                    pass
-        
-        logger.info(f"[{call_id}] Creating new calendar")
-        return await agent.create_calendar(ctx, cal_params)
     
     # Also update the generate_environment method to better handle the agent tools
     @with_governance(
