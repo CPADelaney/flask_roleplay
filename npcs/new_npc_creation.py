@@ -1260,7 +1260,6 @@ class NPCCreationHandler:
                 model="gpt-4.1-nano",
                 messages=[{"role": "system", "content": prompt}],
                 temperature=0.7,
-                response_format={"type": "json_object"}  # Force JSON output
             )
             
             description_json = response.choices[0].message.content
@@ -1558,7 +1557,6 @@ class NPCCreationHandler:
                     model="gpt-4.1-nano",
                     messages=[{"role": "system", "content": prompt}],
                     temperature=0.7,
-                    response_format={"type": "json_object"}  # Force JSON output
                 )
                 
                 schedule_json = response.choices[0].message.content
@@ -1710,7 +1708,6 @@ class NPCCreationHandler:
                     model="gpt-4.1-nano",
                     messages=[{"role": "system", "content": prompt}],
                     temperature=0.8,
-                    response_format={"type": "json_object"}
                 )
                 
                 memories_json = response.choices[0].message.content
@@ -2644,7 +2641,6 @@ class NPCCreationHandler:
                     ],
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
-                    response_format={"type": "text"},  # plain text (default, but explicit)
                 )
     
                 # Preferred convenience accessor (unifies across content parts).
