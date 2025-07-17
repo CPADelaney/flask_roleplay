@@ -106,7 +106,7 @@ async def _generate_factions_impl(ctx, environment_desc: str, social_structure: 
     factions_agent = get_factions_agent()
     result = await Runner.run(factions_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(FactionsOutput)
-    return [f.dict() for f in final_output.__root__]
+    return [f.dict() for f in final_output.factions]
 
 async def _generate_cultural_elements_impl(ctx, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
     """
