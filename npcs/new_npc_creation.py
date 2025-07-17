@@ -80,8 +80,7 @@ async def _responses_json_call(
                 {"role": "user", "content": user_prompt},
             ],
             temperature=temperature,
-            max_output_tokens=max_output_tokens,
-            response_format=response_format,  # currently None; placeholder for JSON schema
+            max_output_tokens=max_output_tokens
         )
         txt = (resp.output_text or "").strip()
         if not txt:
