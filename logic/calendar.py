@@ -27,7 +27,7 @@ async def get_chatgpt_response_no_function(
     Fire a call to the Responses endpoint and return the plain-text output.
     """
 
-    client = await get_async_openai_client()   # Use the existing function
+    client = get_async_openai_client()   # Use the existing function
 
     # prepare the request payload ------------------------------------------
     messages = await build_message_history(
