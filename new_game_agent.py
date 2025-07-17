@@ -1220,7 +1220,6 @@ class NewGameAgent:
             async with get_db_connection_context() as conn:
                 await canon.update_current_roleplay(
                     canon_ctx, conn,
-                    user_id, conversation_id,
                     'LoreSummary', lore_summary
                 )
                 
