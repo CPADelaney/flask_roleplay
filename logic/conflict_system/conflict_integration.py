@@ -146,7 +146,7 @@ class ConflictSystemIntegration:
 
     @staticmethod
     async def get_lore_system(user_id: int, conversation_id: int):
-        lore_system = LoreSystem.get_instance(user_id, conversation_id)
+        lore_system = await LoreSystem.get_instance(user_id, conversation_id)
         await lore_system.initialize()
         return lore_system
 
