@@ -39,7 +39,7 @@ from .lore_generator import (
 from .config import LoreConfig, ConfigManager, get_config, get_lore_config
 
 # Core managers and utilities
-from .core.base_manager import BaseLoreManager
+from .managers.base_manager import BaseLoreManager
 from .core.cache import LoreCache, GLOBAL_LORE_CACHE
 from .core.registry import ManagerRegistry
 
