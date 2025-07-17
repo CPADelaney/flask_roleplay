@@ -1831,8 +1831,6 @@ async def update_relationship_context(
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 9) The Agent: "SocialLinksAgent"
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-from logic.chatgpt_integration import get_agents_openai_model
-
 SocialLinksAgent = Agent(
     name="SocialLinksAgent",
     instructions=(
@@ -1850,7 +1848,7 @@ SocialLinksAgent = Agent(
         "Use these tools to retrieve or update relationship data, trigger or apply crossroads, or check for rituals. "
         "Return helpful final text or JSON summarizing your result."
     ),
-    model = get_agents_openai_model(),
+    model = "gpt-4.1-nano",
     model_settings=ModelSettings(temperature=0.5),
     tools=[
         get_social_link_tool,
@@ -1864,5 +1862,4 @@ SocialLinksAgent = Agent(
         update_relationships_from_conflict,
         update_relationship_context
     ],
-    output_type=None
 )
