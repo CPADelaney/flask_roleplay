@@ -1129,210 +1129,210 @@ class NewGameAgent:
             return npc_count >= 5 and location_count >= 10 and roleplay_count >= len(roleplay_keys)
 
     @with_governance(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            action_type="finalize_game_setup",
-            action_description="Finalized game setup including lore, conflict, currency and image"
-        )
-        async def finalize_game_setup(self, ctx: RunContextWrapper[GameContext], params: FinalizeGameSetupParams) -> FinalizeResult:
-            """
-            Finalize game setup including lore generation, conflict generation and image generation.
-            """
-            user_id = ctx.context["user_id"]
-            conversation_id = ctx.context["conversation_id"]
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="finalize_game_setup",
+        action_description="Finalized game setup including lore, conflict, currency and image"
+    )
+    async def finalize_game_setup(self, ctx: RunContextWrapper[GameContext], params: FinalizeGameSetupParams) -> FinalizeResult:
+        """
+        Finalize game setup including lore generation, conflict generation and image generation.
+        """
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        from lore.core import canon
+        
+        # Get the environment description for lore generation
+        async with get_db_connection_context() as conn:
+            canon_ctx = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })
+
             
-            from lore.core import canon
+            row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
+            """, user_id, conversation_id)
             
-            # Get the environment description for lore generation
+            environment_desc = row["value"] if row else "A mysterious environment with hidden layers of complexity."
+            
+            # Get NPC IDs for lore integration
+            rows = await conn.fetch("""
+                SELECT npc_id FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            npc_ids = [row["npc_id"] for row in rows] if rows else []
+            
+        # Initialize and generate lore
+        try:
+            # Use LoreSystem which has all the integration methods
+            from lore.core.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+            
+            # Generate comprehensive lore based on the environment
+            logging.info(f"Generating lore for new game (user_id={user_id}, conversation_id={conversation_id})")
+            
+            # Create proper context for lore operations
+            lore_ctx = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })
+            
+            lore_result = await lore_system.generate_complete_lore(lore_ctx, environment_desc)
+            
+            # Integrate lore with NPCs if we have any
+            if npc_ids:
+                logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
+                for npc_id in npc_ids:
+                    # Get NPC's faction affiliation if any
+                    faction_affiliations = []
+                    async with get_db_connection_context() as conn:
+                        npc_row = await conn.fetchrow("""
+                            SELECT affiliations 
+                            FROM NPCStats
+                            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                        """, npc_id, user_id, conversation_id)
+                        
+                        if npc_row and npc_row['affiliations']:
+                            # affiliations is JSONB, so parse it
+                            affiliations_data = npc_row['affiliations']
+                            if isinstance(affiliations_data, str):
+                                try:
+                                    affiliations_data = json.loads(affiliations_data)
+                                except:
+                                    affiliations_data = []
+                            if isinstance(affiliations_data, list):
+                                faction_affiliations = affiliations_data
+                    
+                    # Initialize NPC's lore knowledge
+                    await lore_system.initialize_npc_lore_knowledge(
+                        lore_ctx,
+                        npc_id,
+                        cultural_background="common",  # Default background
+                        faction_affiliations=faction_affiliations
+                    )
+                
+            lore_summary = f"Generated {len(lore_result.get('factions', []))} factions, {len(lore_result.get('cultural_elements', []))} cultural elements, and {len(lore_result.get('locations', []))} locations"
+            
+            # Store lore summary canonically
             async with get_db_connection_context() as conn:
-                canon_ctx = RunContextWrapper(context={
-                    'user_id': user_id,
-                    'conversation_id': conversation_id
-                })
-    
+                await canon.update_current_roleplay(
+                    canon_ctx, conn,
+                    user_id, conversation_id,
+                    'LoreSummary', lore_summary
+                )
                 
-                row = await conn.fetchrow("""
-                    SELECT value FROM CurrentRoleplay
-                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
-                """, user_id, conversation_id)
-                
-                environment_desc = row["value"] if row else "A mysterious environment with hidden layers of complexity."
-                
-                # Get NPC IDs for lore integration
-                rows = await conn.fetch("""
-                    SELECT npc_id FROM NPCStats
-                    WHERE user_id = $1 AND conversation_id = $2
-                """, user_id, conversation_id)
-                
-                npc_ids = [row["npc_id"] for row in rows] if rows else []
-                
-            # Initialize and generate lore
-            try:
-                # Use LoreSystem which has all the integration methods
-                from lore.core.lore_system import LoreSystem
-                lore_system = await LoreSystem.get_instance(user_id, conversation_id)
-                
-                # Generate comprehensive lore based on the environment
-                logging.info(f"Generating lore for new game (user_id={user_id}, conversation_id={conversation_id})")
-                
-                # Create proper context for lore operations
-                lore_ctx = RunContextWrapper(context={
-                    'user_id': user_id,
-                    'conversation_id': conversation_id
-                })
-                
-                lore_result = await lore_system.generate_complete_lore(lore_ctx, environment_desc)
-                
-                # Integrate lore with NPCs if we have any
-                if npc_ids:
-                    logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
-                    for npc_id in npc_ids:
-                        # Get NPC's faction affiliation if any
-                        faction_affiliations = []
-                        async with get_db_connection_context() as conn:
-                            npc_row = await conn.fetchrow("""
-                                SELECT affiliations 
-                                FROM NPCStats
-                                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                            """, npc_id, user_id, conversation_id)
-                            
-                            if npc_row and npc_row['affiliations']:
-                                # affiliations is JSONB, so parse it
-                                affiliations_data = npc_row['affiliations']
-                                if isinstance(affiliations_data, str):
-                                    try:
-                                        affiliations_data = json.loads(affiliations_data)
-                                    except:
-                                        affiliations_data = []
-                                if isinstance(affiliations_data, list):
-                                    faction_affiliations = affiliations_data
-                        
-                        # Initialize NPC's lore knowledge
-                        await lore_system.initialize_npc_lore_knowledge(
-                            lore_ctx,
-                            npc_id,
-                            cultural_background="common",  # Default background
-                            faction_affiliations=faction_affiliations
-                        )
-                    
-                lore_summary = f"Generated {len(lore_result.get('factions', []))} factions, {len(lore_result.get('cultural_elements', []))} cultural elements, and {len(lore_result.get('locations', []))} locations"
-                
-                # Store lore summary canonically
-                async with get_db_connection_context() as conn:
-                    await canon.update_current_roleplay(
-                        canon_ctx, conn,
-                        user_id, conversation_id,
-                        'LoreSummary', lore_summary
-                    )
-                    
-                logging.info(f"Lore generation complete: {lore_summary}")
-            except Exception as e:
-                logging.error(f"Error generating lore: {e}", exc_info=True)
-                lore_summary = "Failed to generate lore"
+            logging.info(f"Lore generation complete: {lore_summary}")
+        except Exception as e:
+            logging.error(f"Error generating lore: {e}", exc_info=True)
+            lore_summary = "Failed to generate lore"
+        
+        # Generate initial conflict
+        try:
+            from logic.conflict_system.conflict_integration import ConflictSystemIntegration
             
-            # Generate initial conflict
-            try:
-                from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-                
-                # Use get_instance instead of direct instantiation
-                conflict_integration = await ConflictSystemIntegration.get_instance(user_id, conversation_id)
-                
-                # No need to pass context - the integration already has user_id and conversation_id
-                initial_conflict = await conflict_integration.generate_conflict({
-                    "conflict_type": "major",
-                    "intensity": "medium",
-                    "player_involvement": "indirect"
-                })
-                conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
-            except Exception as e:
-                logging.error(f"Error generating initial conflict: {e}")
-                conflict_name = "No initial conflict"
+            # Use get_instance instead of direct instantiation
+            conflict_integration = await ConflictSystemIntegration.get_instance(user_id, conversation_id)
             
-            # Generate currency system canonically
-            try:
-                from logic.currency_generator import CurrencyGenerator
-                currency_gen = CurrencyGenerator(user_id, conversation_id)
-                currency_system = await currency_gen.get_currency_system()
+            # No need to pass context - the integration already has user_id and conversation_id
+            initial_conflict = await conflict_integration.generate_conflict({
+                "conflict_type": "major",
+                "intensity": "medium",
+                "player_involvement": "indirect"
+            })
+            conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
+        except Exception as e:
+            logging.error(f"Error generating initial conflict: {e}")
+            conflict_name = "No initial conflict"
+        
+        # Generate currency system canonically
+        try:
+            from logic.currency_generator import CurrencyGenerator
+            currency_gen = CurrencyGenerator(user_id, conversation_id)
+            currency_system = await currency_gen.get_currency_system()
+            
+            # Create currency canonically
+            async with get_db_connection_context() as conn:
+                await canon.find_or_create_currency_system(
+                    canon_ctx, conn,
+                    currency_name=currency_system['currency_name'],
+                    currency_plural=currency_system['currency_plural'],
+                    minor_currency_name=currency_system.get('minor_currency_name'),
+                    minor_currency_plural=currency_system.get('minor_currency_plural'),
+                    exchange_rate=currency_system.get('exchange_rate', 100),
+                    currency_symbol=currency_system.get('currency_symbol', '$'),
+                    description=currency_system.get('description', ''),
+                    setting_context=currency_system.get('setting_context', '')
+                )
                 
-                # Create currency canonically
-                async with get_db_connection_context() as conn:
-                    await canon.find_or_create_currency_system(
-                        canon_ctx, conn,
-                        currency_name=currency_system['currency_name'],
-                        currency_plural=currency_system['currency_plural'],
-                        minor_currency_name=currency_system.get('minor_currency_name'),
-                        minor_currency_plural=currency_system.get('minor_currency_plural'),
-                        exchange_rate=currency_system.get('exchange_rate', 100),
-                        currency_symbol=currency_system.get('currency_symbol', '$'),
-                        description=currency_system.get('description', ''),
-                        setting_context=currency_system.get('setting_context', '')
-                    )
-                    
-                currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
-            except Exception as e:
-                logging.error(f"Error generating currency system: {e}")
-                currency_name = "Standard currency"
-                
-            # Try to generate welcome image, but don't fail if it's not available
-            welcome_image_url = None
-            try:
-                # Check if we have the necessary API key/token
-                if os.getenv("OPENAI_API_KEY") or os.getenv("IMAGE_API_TOKEN"):
-                    scene_data_json = json.dumps({
-                        "scene_data": {
-                            "npc_names": [],
-                            "setting": await self._get_setting_name(ctx),
-                            "actions": ["introduction", "welcome"],
-                            "mood": "atmospheric",
-                            "expressions": {},
-                            "npc_positions": {},
-                            "visibility_triggers": {
-                                "character_introduction": True,
-                                "significant_location": True,
-                                "emotional_intensity": 50,
-                                "intimacy_level": 20,
-                                "appearance_change": False
-                            }
-                        },
-                        "image_generation": {
-                            "generate": True,
-                            "priority": "high",
-                            "focus": "setting",
-                            "framing": "wide_shot",
-                            "reason": "Initial scene visualization"
+            currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
+        except Exception as e:
+            logging.error(f"Error generating currency system: {e}")
+            currency_name = "Standard currency"
+            
+        # Try to generate welcome image, but don't fail if it's not available
+        welcome_image_url = None
+        try:
+            # Check if we have the necessary API key/token
+            if os.getenv("OPENAI_API_KEY") or os.getenv("IMAGE_API_TOKEN"):
+                scene_data_json = json.dumps({
+                    "scene_data": {
+                        "npc_names": [],
+                        "setting": await self._get_setting_name(ctx),
+                        "actions": ["introduction", "welcome"],
+                        "mood": "atmospheric",
+                        "expressions": {},
+                        "npc_positions": {},
+                        "visibility_triggers": {
+                            "character_introduction": True,
+                            "significant_location": True,
+                            "emotional_intensity": 50,
+                            "intimacy_level": 20,
+                            "appearance_change": False
                         }
-                    })
+                    },
+                    "image_generation": {
+                        "generate": True,
+                        "priority": "high",
+                        "focus": "setting",
+                        "framing": "wide_shot",
+                        "reason": "Initial scene visualization"
+                    }
+                })
+                
+                # Parse back to dict for the function call
+                scene_data = json.loads(scene_data_json)
+                
+                image_result = await generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id)
+                if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                    welcome_image_url = image_result["image_urls"][0]
                     
-                    # Parse back to dict for the function call
-                    scene_data = json.loads(scene_data_json)
-                    
-                    image_result = await generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id)
-                    if image_result and "image_urls" in image_result and image_result["image_urls"]:
-                        welcome_image_url = image_result["image_urls"][0]
-                        
-                        # Store the image URL canonically
-                        async with get_db_connection_context() as conn:
-                            await canon.update_current_roleplay(
-                                canon_ctx, conn,
-                                user_id, conversation_id,
-                                'WelcomeImageUrl', welcome_image_url
-                            )
-                        logging.info("Welcome image generated successfully")
-                else:
-                    logging.info("Image generation skipped - no API key configured")
-                    
-            except Exception as e:
-                # Log the error but don't fail the entire setup
-                logging.warning(f"Failed to generate welcome image: {e}")
-                logging.info("Continuing without welcome image")
-            
-            # Return structured result - but DON'T mark as ready yet
-            return FinalizeResult(
-                status="finalized",  # Not "ready" yet
-                welcome_image_url=welcome_image_url,
-                lore_summary=lore_summary,
-                initial_conflict=conflict_name,
-                currency_system=currency_name
-            )
+                    # Store the image URL canonically
+                    async with get_db_connection_context() as conn:
+                        await canon.update_current_roleplay(
+                            canon_ctx, conn,
+                            user_id, conversation_id,
+                            'WelcomeImageUrl', welcome_image_url
+                        )
+                    logging.info("Welcome image generated successfully")
+            else:
+                logging.info("Image generation skipped - no API key configured")
+                
+        except Exception as e:
+            # Log the error but don't fail the entire setup
+            logging.warning(f"Failed to generate welcome image: {e}")
+            logging.info("Continuing without welcome image")
+        
+        # Return structured result - but DON'T mark as ready yet
+        return FinalizeResult(
+            status="finalized",  # Not "ready" yet
+            welcome_image_url=welcome_image_url,
+            lore_summary=lore_summary,
+            initial_conflict=conflict_name,
+            currency_system=currency_name
+        )
 
     async def _get_setting_name(self, ctx: RunContextWrapper[GameContext]) -> str:
         """Helper method to get the setting name from the database"""
