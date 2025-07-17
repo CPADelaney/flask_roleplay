@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 import asyncio
 import openai
 import numpy as np
+from logic.chatgpt_integration import get_openai_client
 
 from .connection import with_transaction, TransactionContext
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
