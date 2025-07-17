@@ -10,6 +10,14 @@ from db.connection import get_db_connection_context  # Updated to context manage
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
 
+# Try to import image prompting functions if available
+try:
+    from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
+    IMAGE_PROMPTING_AVAILABLE = True
+except ImportError:
+    IMAGE_PROMPTING_AVAILABLE = False
+    logging.info("Image prompting module not available, using standard prompts")
+
 # Use your full schema, but add a "narrative" field at the top.
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     "name": "apply_universal_update",
@@ -502,10 +510,18 @@ async def get_chatgpt_response(
         }
 
     # 2) Possibly retrieve or build a system prompt that includes image guidance
-    #    (If your code merges that with PUBLIC_SYSTEM_PROMPT, do so accordingly.)
-    image_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
-    # For demonstration, we'll just store it or ignore it. 
-    # You might want to merge it with your normal PUBLIC_SYSTEM_PROMPT text.
+    #    Try to use image-aware prompt if available, otherwise fall back to regular prompt
+    image_prompt = None
+    if IMAGE_PROMPTING_AVAILABLE:
+        try:
+            image_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
+            logging.debug("Using image-aware system prompt")
+        except Exception as e:
+            logging.info(f"Could not generate image prompt, using regular prompt: {e}")
+            image_prompt = None
+    
+    # Use image prompt if available, otherwise use regular SYSTEM_PROMPT
+    primary_system_prompt = image_prompt if image_prompt else SYSTEM_PROMPT
 
     # 3) Create the OpenAI client
     openai_client = get_openai_client()
@@ -513,21 +529,9 @@ async def get_chatgpt_response(
     # 4) If reflection is OFF, do the single-step call as before
     if not reflection_enabled:
         # Build message history (past user & assistant messages), up to 15
-        raw_history = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
+        messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
 
-        # Create the final messages array
-        # You have two system prompts + the user message + the chat history
-        messages = [
-            {"role": "system", "content": PUBLIC_SYSTEM_PROMPT},
-            {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
-            # optional: you could add the aggregator_text as a system or developer message:
-            {"role": "system", "content": aggregator_text},
-            # Then the new user input
-            {"role": "user", "content": user_input}
-        ]
-        messages.extend(raw_history)
-
-        response = openai_client.responses.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=messages,
             temperature=0.2,
@@ -575,7 +579,7 @@ async def get_chatgpt_response(
         ### STEP A: Reflection Request ###
         # We ask the model for a short JSON reflection (chain-of-thought) about the user input
         reflection_messages = [
-            {"role": "system", "content": PUBLIC_SYSTEM_PROMPT},
+            {"role": "system", "content": primary_system_prompt},
             {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
             # aggregator_text can be included as a system or developer note
             {"role": "system", "content": aggregator_text},
@@ -599,7 +603,7 @@ DO NOT produce user-facing text here; only the JSON.
             }
         ]
 
-        reflection_response = openai_client.responses.create(
+        reflection_response = openai_client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=reflection_messages,
             temperature=0.2,
@@ -632,7 +636,7 @@ DO NOT produce user-facing text here; only the JSON.
         ### STEP B: Final (Public) Answer ###
         # Now we feed the reflection back in as a hidden system note, but never reveal it
         final_messages = [
-            {"role": "system", "content": PUBLIC_SYSTEM_PROMPT},
+            {"role": "system", "content": primary_system_prompt},
             {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
             {"role": "system", "content": aggregator_text},
             {
@@ -648,7 +652,7 @@ DO NOT produce user-facing text here; only the JSON.
         # If you want to include the prior chat history:
         # final_messages.extend(await build_message_history(conversation_id, aggregator_text, user_input, limit=15))
 
-        final_response = openai_client.responses.create(
+        final_response = openai_client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=final_messages,
             temperature=0.2,
@@ -730,6 +734,7 @@ def _ensure_default_scene_data(parsed_args: dict) -> None:
             }
         }
 
+    if "image_generation" not in parsed_args:
         parsed_args["image_generation"] = {
             "generate": False,
             "priority": "low",
@@ -738,28 +743,28 @@ def _ensure_default_scene_data(parsed_args: dict) -> None:
             "reason": ""
         }
 
-from agents import (
-    Agent,
-    ModelSettings,
-    Runner,
-    function_tool,
-    RunContextWrapper,
-    AsyncOpenAI,
-    OpenAIResponsesModel
-)
-
-def get_agents_openai_model() -> OpenAIResponsesModel:
-    """
-    Return a new Agents SDK Model instance for agent-based workflows.
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not found in environment")
+# Import agents SDK components if available
+try:
+    from pydantic_ai import Agent, ModelSettings, Runner, function_tool, RunContextWrapper
+    from pydantic_ai.models.openai import OpenAIResponsesModel
     
-    return OpenAIResponsesModel(
-        model="gpt-4.1-nano",
-        openai_client=AsyncOpenAI(api_key=api_key)
-    )
+    def get_agents_openai_model() -> OpenAIResponsesModel:
+        """
+        Return a new Agents SDK Model instance for agent-based workflows.
+        """
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY not found in environment")
+        
+        return OpenAIResponsesModel(
+            model="gpt-4.1-nano",
+            openai_client=openai.AsyncOpenAI(api_key=api_key)
+        )
+except ImportError:
+    logging.info("Agents SDK not available")
+    
+    def get_agents_openai_model():
+        raise RuntimeError("Agents SDK is not installed")
 
 def get_async_openai_client():
     """Get an async OpenAI client for use with await."""
