@@ -1190,13 +1190,21 @@ class NewGameAgent:
                     faction_affiliations = []
                     async with get_db_connection_context() as conn:
                         npc_row = await conn.fetchrow("""
-                            SELECT faction_affiliation 
+                            SELECT affiliations 
                             FROM NPCStats
                             WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
                         """, npc_id, user_id, conversation_id)
                         
-                        if npc_row and npc_row['faction_affiliation']:
-                            faction_affiliations = [npc_row['faction_affiliation']]
+                        if npc_row and npc_row['affiliations']:
+                            # affiliations is JSONB, so parse it
+                            affiliations_data = npc_row['affiliations']
+                            if isinstance(affiliations_data, str):
+                                try:
+                                    affiliations_data = json.loads(affiliations_data)
+                                except:
+                                    affiliations_data = []
+                            if isinstance(affiliations_data, list):
+                                faction_affiliations = affiliations_data
                     
                     # Initialize NPC's lore knowledge
                     await lore_system.initialize_npc_lore_knowledge(
