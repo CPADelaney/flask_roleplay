@@ -1130,7 +1130,7 @@ class NPCCreationHandler:
                 """
                 
                 client = get_async_openai_client()
-                response = client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model="gpt-4.1-nano",
                     messages=[{"role": "system", "content": prompt}],
                     temperature=0.8,
@@ -1256,7 +1256,7 @@ class NPCCreationHandler:
             """
             
             client = get_async_openai_client()
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model="gpt-4.1-nano",
                 messages=[{"role": "system", "content": prompt}],
                 temperature=0.7,
@@ -1553,7 +1553,7 @@ class NPCCreationHandler:
                 """
                 
                 client = get_async_openai_client()
-                response = client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model="gpt-4.1-nano",
                     messages=[{"role": "system", "content": prompt}],
                     temperature=0.7,
@@ -1704,7 +1704,7 @@ class NPCCreationHandler:
                 """
                 
                 client = get_async_openai_client()
-                response = client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model="gpt-4.1-nano",
                     messages=[{"role": "system", "content": prompt}],
                     temperature=0.8,
