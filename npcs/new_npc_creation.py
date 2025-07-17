@@ -1,9 +1,8 @@
 # npcs/new_npc_creation.py
-
 """
 Unified NPC creation functionality.
 """
-
+from __future__ import
 import logging
 import json
 import asyncio
@@ -15,6 +14,7 @@ from pydantic import BaseModel, Field
 import os
 import asyncpg
 from datetime import datetime
+from agents.models.openai_responses import OpenAIResponsesModel
 
 from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, ModelSettings
 from db.connection import get_db_connection_context
@@ -23,6 +23,7 @@ from memory.core import Memory, MemoryType, MemorySignificance
 from memory.managers import NPCMemoryManager
 from memory.emotional import EmotionalMemoryManager
 from memory.schemas import MemorySchemaManager
+from textwrap import dedent
 from memory.flashbacks import FlashbackManager
 from memory.semantic import SemanticMemoryManager
 from memory.masks import ProgressiveRevealManager, RevealType, RevealSeverity
@@ -33,6 +34,8 @@ from logic.gpt_utils import spaced_gpt_call
 from logic.gpt_helpers import fetch_npc_name
 from logic.calendar import load_calendar_names
 from memory.memory_nyx_integration import remember_through_nyx
+from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from npcs.dynamic_templates import (
     get_mask_slippage_triggers,
@@ -47,6 +50,185 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
+
+# Allow env overrides per-call
+_DEFAULT_NAME_MODEL = os.getenv("OPENAI_NAME_MODEL", "gpt-4.1-nano")
+_DEFAULT_DESC_MODEL = os.getenv("OPENAI_DESC_MODEL", "gpt-4.1-nano")
+_DEFAULT_SCHED_MODEL = os.getenv("OPENAI_SCHED_MODEL", "gpt-4.1-nano")
+_DEFAULT_PERS_MODEL = os.getenv("OPENAI_PERS_MODEL", "gpt-4.1-nano")
+_DEFAULT_STATS_MODEL = os.getenv("OPENAI_STATS_MODEL", "gpt-4.1-nano")
+_DEFAULT_ARCH_MODEL  = os.getenv("OPENAI_ARCH_MODEL", "gpt-4.1-nano")
+
+async def _responses_json_call(
+    *,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.7,
+    max_output_tokens: int | None = None,
+    response_format: str | None = None,  # If OpenAI structured JSON schema used in future
+) -> str:
+    """
+    Call Responses API and return *raw text* (string) extracted from the response.
+    """
+    client = _get_async_client()
+    try:
+        resp = await client.responses.create(
+            model=model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            response_format=response_format,  # currently None; placeholder for JSON schema
+        )
+        txt = (resp.output_text or "").strip()
+        if not txt:
+            raise ValueError("Empty model response.")
+        return txt
+    except Exception as e:
+        logging.error(f"_responses_json_call failed (model={model}): {e}", exc_info=True)
+        raise
+
+def _json_first_obj(text: str) -> dict | None:
+    """
+    Attempt to parse the *first* JSON object found in `text`.
+    Uses same heuristics as safe_json_loads but smaller & fast.
+    """
+    if not text:
+        return None
+    # Direct
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    # find {...}
+    import re
+    m = re.search(r'\{[\s\S]*\}', text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    # code block
+    m = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    # single->double quote brute
+    try:
+        return json.loads(text.replace("'", '"'))
+    except Exception:
+        return None
+
+def _safe_list(value, *, fallback=None):
+    if isinstance(value, list):
+        return value
+    return fallback if fallback is not None else []
+
+def _strip_or(value, default=""):
+    if isinstance(value, str):
+        return value.strip()
+    return default
+
+# --- Per-output coercers ------------------------------------------------------
+
+def _coerce_name(raw_txt: str, *, forbidden: list[str], existing: list[str]) -> str:
+    """
+    Extract a *single name string* from model output.
+    The model is instructed to return just a name, but we defend anyway.
+    """
+    # quick cut: 1st line w/ letters
+    line = raw_txt.splitlines()[0].strip()
+    # Remove wrapping quotes/backticks if present
+    if (line.startswith('"') and line.endswith('"')) or (line.startswith("'") and line.endswith("'")):
+        line = line[1:-1].strip()
+    # Extremely defensive: if JSON present with key 'name'
+    data = _json_first_obj(raw_txt)
+    if data:
+        cand = data.get("name") or data.get("npc_name")
+        if isinstance(cand, str) and cand.strip():
+            line = cand.strip()
+
+    # Fallback if punctuation heavy: grab 2 tokens
+    tokens = [t for t in re.split(r'[\s,]+', line) if t]
+    if len(tokens) >= 2:
+        cand_name = f"{tokens[0].title()} {tokens[1].title()}"
+    else:
+        cand_name = tokens[0].title() if tokens else "Unnamed NPC"
+
+    # uniqueness enforcement reusing external helper pattern
+    unwanted = {"seraphina"}
+    lower_forbidden = {n.lower() for n in forbidden} | {n.lower() for n in existing} | unwanted
+    if cand_name.lower() in lower_forbidden:
+        suffix = 2
+        base = cand_name
+        while f"{base} {suffix}".lower() in lower_forbidden:
+            suffix += 1
+        cand_name = f"{base} {suffix}"
+    return cand_name
+
+def _coerce_personality(data: dict) -> "NPCPersonalityData":
+    return NPCPersonalityData(
+        personality_traits=_safe_list(data.get("personality_traits"), fallback=[]),
+        likes=_safe_list(data.get("likes"), fallback=[]),
+        dislikes=_safe_list(data.get("dislikes"), fallback=[]),
+        hobbies=_safe_list(data.get("hobbies"), fallback=[]),
+    )
+
+def _coerce_stats(data: dict) -> "NPCStatsData":
+    def _iv(v, default):  # int value
+        try:
+            return int(v)
+        except Exception:
+            return default
+    return NPCStatsData(
+        dominance=_iv(data.get("dominance"), 50),
+        cruelty=_iv(data.get("cruelty"), 30),
+        closeness=_iv(data.get("closeness"), 50),
+        trust=_iv(data.get("trust"), 0),
+        respect=_iv(data.get("respect"), 0),
+        intensity=_iv(data.get("intensity"), 40),
+    )
+
+def _coerce_archetype(data: dict, *, provided_names: list[str] | None = None) -> "NPCArchetypeData":
+    names = data.get("archetype_names") or provided_names or []
+    if isinstance(names, str):
+        names = [n.strip() for n in names.split(",") if n.strip()]
+    return NPCArchetypeData(
+        archetype_names=_safe_list(names, fallback=[]),
+        archetype_summary=_strip_or(data.get("archetype_summary"), ""),
+        archetype_extras_summary=_strip_or(data.get("archetype_extras_summary"), ""),
+    )
+
+def _coerce_schedule(data: dict, *, day_names: list[str]) -> dict:
+    # expect {"schedule": {...}} else data = direct schedule
+    sched = data.get("schedule", data)
+    if not isinstance(sched, dict):
+        return {}
+    # ensure required keys
+    out = {}
+    for day in day_names:
+        day_block = sched.get(day, {})
+        if not isinstance(day_block, dict):
+            day_block = {}
+        out[day] = {
+            "Morning": _strip_or(day_block.get("Morning"), f"{day}: Morning routine."),
+            "Afternoon": _strip_or(day_block.get("Afternoon"), f"{day}: Afternoon tasks."),
+            "Evening": _strip_or(day_block.get("Evening"), f"{day}: Evening engagements."),
+            "Night": _strip_or(day_block.get("Night"), f"{day}: Retires for the night."),
+        }
+    return out
+
+def _coerce_physical_desc(data: dict, *, npc_name: str) -> str:
+    desc = data.get("physical_description") or data.get("description") or ""
+    desc = _strip_or(desc, "")
+    if len(desc) < 40:
+        desc = f"{npc_name} has an appearance that reflects her role in the setting."
+    return desc
 
 async def _await_logged(label: str, awaitable):
     """
@@ -143,6 +325,79 @@ class EnvironmentGuardrailOutput(BaseModel):
     is_valid: bool = True
     reasoning: str = ""
 
+class NPCMemories(BaseModel):
+    memories: List[str]
+
+
+def build_memory_system_prompt() -> str:
+    """
+    System-level *contract* for the memory generator.
+    Brief by design; we put creative richness in the user message.
+    """
+    return dedent("""
+        You are an RPG memory-generation model.
+        Return BETWEEN 3 AND 5 memories, first-person, each a concrete past event.
+        Output MUST be valid JSON:
+            {"memories": ["memory1", "memory2", ...]}
+        - Each memory string may contain multiple sentences.
+        - No markdown, no backticks, no additional keys.
+        - Escape internal quotes properly for JSON.
+    """).strip()
+
+
+def build_memory_user_prompt(
+    npc_name: str,
+    environment_desc: str,
+    archetype: str,
+    dominance: int,
+    cruelty: int,
+    personality_traits: List[str],
+    relationships: List[dict],
+) -> str:
+    """
+    Rich creative brief (your original content, lightly edited for token sanity).
+    """
+    traits_str = ", ".join(personality_traits) if personality_traits else "complex personality"
+    rel_lines = []
+    for rel in relationships[:12]:  # cap for context
+        lbl = rel.get("relationship_label", "relation")
+        ety = rel.get("entity_type", "?")
+        eid = rel.get("entity_id", "?")
+        rel_lines.append(f"- {lbl} → {ety}:{eid}")
+    rel_block = "\n".join(rel_lines) if rel_lines else "None documented."
+
+    return dedent(f"""
+        Create 3-5 vivid, detailed *memories* for **{npc_name}**.
+
+        ## Environment Context
+        {environment_desc}
+
+        ## NPC Snapshot
+        - Name: {npc_name}
+        - Archetype: {archetype}
+        - Dominance: {dominance}/100
+        - Cruelty: {cruelty}/100
+        - Personality: {traits_str}
+
+        ## Known Relationships
+        {rel_block}
+
+        ## MEMORY REQUIREMENTS
+        1. Each memory = a SPECIFIC EVENT (time/place/action), not a vague mood.
+        2. Rich sensory detail (sight, sound, smell, touch, body feel).
+        3. Include **quoted dialogue** at least once across the set; more is fine.
+        4. First-person voice from {npc_name}'s perspective ("I...").
+        5. 3–5 sentences per memory (short paragraphs ok).
+        6. Subtle control / influence / boundary-testing beats.
+        7. Emotional truth: show how I felt, noticed power shifts, or chose to conceal something.
+        8. Vary tone & stakes (casual, tense, formative, bittersweet, revealing).
+
+        ## OUTPUT CONTRACT
+        Return ONLY valid JSON with key "memories" containing an array of strings.
+        Do not include markdown fences or commentary.
+    """).strip()
+
+
 class NPCCreationHandler:
     """
     Unified handler for NPC creation and management.
@@ -151,6 +406,7 @@ class NPCCreationHandler:
     
     def __init__(self):
         # Initialize input validation guardrail
+        self._memory_agent = None
         @input_guardrail
         async def environment_guardrail(ctx, agent, input_str):
             """Validate that the environment description is appropriate for NPC creation"""
@@ -210,7 +466,7 @@ class NPCCreationHandler:
             potential for character growth.
             
             For femdom-themed worlds, incorporate subtle traits related to control,
-            authority, or psychological dominance without being explicit or overt.
+            authority, or psychological dominance.
             These should be woven naturally into the personality.
             """,
             output_type=NPCPersonalityData
@@ -363,6 +619,22 @@ class NPCCreationHandler:
         
         # Keep track of existing NPC names to ensure uniqueness
         self.existing_npc_names = set()
+
+    def _get_memory_generation_agent(self) -> Agent:
+        if self._memory_agent is None:
+            self._memory_agent = Agent(
+                name="NPCMemoryGenerator",
+                instructions=build_memory_system_prompt(),
+                output_type=NPCMemories,
+                model=OpenAIResponsesModel(
+                    model="gpt-4.1-nano",
+                    openai_client=get_async_openai_client(),
+                    # optional structured-output hints (if wrapper supports)
+                    max_output_tokens=800,  # bigger to allow 5x ~200-char mems
+                ),
+                model_settings=ModelSettings(temperature=0.8),
+            )
+        return self._memory_agent
     
     # --- Helper methods for robust parsing ---
     
@@ -1083,656 +1355,582 @@ class NPCCreationHandler:
         return updated_data
     
     # --- NPC generation methods ---
-    
-    async def generate_npc_name(self, ctx: RunContextWrapper, desired_gender="female", style="unique", forbidden_names=None) -> str:
+                  
+    async def generate_npc_name(
+        self,
+        ctx: RunContextWrapper,
+        desired_gender: str = "female",
+        style: str = "unique",
+        forbidden_names=None,
+        *,
+        model: str = _DEFAULT_NAME_MODEL,
+        temperature: float = 0.8,
+        max_output_tokens: int = 50,
+    ) -> str:
         """
-        Generate a unique name for an NPC using GPT to ensure no duplicates.
+        Generate a unique NPC name using the Responses API.
+        Returns a *single* name string; falls back to heuristic list on failure.
         """
         try:
             user_id = ctx.context.get("user_id")
             conversation_id = ctx.context.get("conversation_id")
-            
-            # Import canon system
-            from lore.core import canon
-            
-            # Get environment for context
+
+            # Environment context
             env_details = await self.get_environment_details(ctx)
-            
-            # Get existing NPC names to avoid duplicates
+            env_desc = env_details.get("environment_desc", "")
+
+            # Existing names
             async with get_db_connection_context() as conn:
-                query = """
+                rows = await conn.fetch(
+                    """
                     SELECT npc_name FROM NPCStats
                     WHERE user_id=$1 AND conversation_id=$2
-                """
-                
-                rows = await conn.fetch(query, user_id, conversation_id)
-                existing_names = [row['npc_name'] for row in rows]
-            
+                    """,
+                    user_id,
+                    conversation_id,
+                )
+            existing_names = [r["npc_name"] for r in rows] if rows else []
             if forbidden_names:
                 existing_names.extend(forbidden_names)
-            
-            # Generate name using GPT
-            max_attempts = 10
-            for attempt in range(max_attempts):
-                # Create prompt for name generation
-                prompt = f"""
-                Generate a unique name for a {desired_gender} NPC in this environment:
-                {env_details['environment_desc']}
-                
-                Style: {style}
-                
-                The name must be:
-                - Appropriate for the setting
-                - Not in this list of existing names: {', '.join(existing_names) if existing_names else 'None'}
-                - A single first and last name (e.g., "Elena Blackwood")
-                
-                Return ONLY the name, nothing else.
-                """
-                
-                client = get_async_openai_client()
-                response = await client.chat.completions.create(
-                    model="gpt-4.1-nano",
-                    messages=[{"role": "system", "content": prompt}],
-                    temperature=0.8,
-                    max_tokens=50
-                )
-                
-                candidate_name = response.choices[0].message.content.strip()
-                
-                # Ensure the name is unique
-                candidate_name = self.get_unique_npc_name(candidate_name, existing_names)
-                
-                # Check if this name already exists canonically
-                async with get_db_connection_context() as conn:
-                    existing_npc = await conn.fetchrow(
-                        "SELECT npc_id FROM NPCStats WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3",
-                        candidate_name, user_id, conversation_id
-                    )
-                    
-                    if not existing_npc:
-                        # Also check semantic similarity to prevent near-duplicates
-                        similar_npc_id = await canon._find_semantically_similar_npc(
-                            conn, candidate_name, None, threshold=0.95
-                        )
-                        
-                        if not similar_npc_id:
-                            # This name is unique enough
-                            return candidate_name
-                
-                # Add to forbidden list for next iteration
-                existing_names.append(candidate_name)
-            
-            # If we couldn't find a unique name, add a number suffix
-            base_name = candidate_name
-            suffix = 2
-            while True:
-                numbered_name = f"{base_name} {suffix}"
-                async with get_db_connection_context() as conn:
-                    existing_npc = await conn.fetchrow(
-                        "SELECT npc_id FROM NPCStats WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3",
-                        numbered_name, user_id, conversation_id
-                    )
-                    
-                    if not existing_npc:
-                        return numbered_name
-                suffix += 1
-                
+
+            system_prompt = (
+                "You generate *one* in-setting NPC name.\n"
+                "Return ONLY the name OR valid JSON: {\"name\": \"Full Name\"}.\n"
+                "No commentary."
+            )
+
+            # include context JSON block to discourage duplicates
+            context_block = json.dumps(
+                {
+                    "desired_gender": desired_gender,
+                    "style": style,
+                    "existing_names": existing_names,
+                    "environment_excerpt": env_desc[:500],
+                },
+                ensure_ascii=False,
+            )
+            user_prompt = (
+                f"Generate a unique {desired_gender} NPC name styled as {style}.\n"
+                "Avoid existing names listed.\n"
+                "Setting excerpt provided.\n"
+                "Return ONLY the name or JSON with 'name'.\n"
+                f"\n### CONTEXT_JSON\n{context_block}\n"
+            )
+
+            raw_txt = await _responses_json_call(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+
+            name = _coerce_name(
+                raw_txt,
+                forbidden=forbidden_names or [],
+                existing=existing_names,
+            )
+            # Track for uniqueness enforcement in instance list
+            name = self.get_unique_npc_name(name, existing_names)
+            return name
+
         except Exception as e:
-            logging.error(f"Error generating NPC name: {e}")
-            
-            # Fallback name generation
-            first_names = ["Elara", "Thalia", "Vespera", "Lyra", "Nadia", "Corin", "Isadora", "Maren", "Octavia", "Quinn"]
-            last_names = ["Valen", "Nightshade", "Wolfe", "Thorn", "Blackwood", "Frost", "Stone", "Rivers", "Skye", "Ash"]
-            
+            logging.error(f"Error generating NPC name: {e}", exc_info=True)
+            # fallback
+            first_names = [
+                "Elara",
+                "Thalia",
+                "Vespera",
+                "Lyra",
+                "Nadia",
+                "Corin",
+                "Isadora",
+                "Maren",
+                "Octavia",
+                "Quinn",
+            ]
+            last_names = [
+                "Valen",
+                "Nightshade",
+                "Wolfe",
+                "Thorn",
+                "Blackwood",
+                "Frost",
+                "Stone",
+                "Rivers",
+                "Skye",
+                "Ash",
+            ]
             if forbidden_names:
-                for name in list(first_names):
-                    if name in forbidden_names:
-                        first_names.remove(name)
-            
-            if not first_names:
-                first_names = ["Unnamed"]
-            
+                first_names = [n for n in first_names if n not in forbidden_names]
             return f"{random.choice(first_names)} {random.choice(last_names)}"
-    
-    async def generate_physical_description(self, ctx: RunContextWrapper, npc_name, archetype_summary="", environment_desc=None) -> str:
-        """
-        Generate a detailed physical description for an NPC.
-        
-        Args:
-            ctx: Context wrapper with user and conversation IDs
-            npc_name: Name of the NPC
-            archetype_summary: Summary of the NPC's archetypes
-            environment_desc: Description of the environment
             
-        Returns:
-            Physical description
+    async def generate_physical_description(
+        self,
+        ctx: RunContextWrapper,
+        npc_name: str,
+        archetype_summary: str = "",
+        environment_desc: str | None = None,
+        *,
+        model: str = _DEFAULT_DESC_MODEL,
+        temperature: float = 0.7,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        """
+        Generate a detailed physical description for an NPC (2–3 paragraphs).
+        Returns a string.
         """
         try:
-            user_id = ctx.context.get("user_id")
-            conversation_id = ctx.context.get("conversation_id")
-            
-            # Get environment if not provided
             if not environment_desc:
                 env_details = await self.get_environment_details(ctx)
                 environment_desc = env_details["environment_desc"]
-            
-            # Create a basic NPC data structure
-            npc_data = {
+
+            # Rich guidance stays, but trimmed for clarity; we instruct JSON.
+            system_prompt = (
+                "You write vivid *third-person* physical descriptions for NPCs in a mature, "
+                "femdom-toned RPG. Evocative, sensory, explicit detail\n"
+                "Respond as JSON: {\"physical_description\": \"...\"}."
+            )
+
+            user_payload = {
                 "npc_name": npc_name,
                 "archetype_summary": archetype_summary,
-                "dominance": 50,
-                "cruelty": 30,
-                "intensity": 40,
-                "personality_traits": [],
-                "likes": [],
-                "dislikes": []
+                "environment_desc": environment_desc,
+                "requirements": {
+                    "paragraphs": "2-3",
+                    "sensory": True,
+                    "style": "evocative, immersive, erotic",
+                    "show_archetype_in_appearance": True,
+                    "include_mannerisms": True,
+                    "include_voice_scent_presence": True,
+                },
             }
-            
-            # Build the prompt
-            prompt = f"""
-            Generate a detailed physical description for {npc_name}, a female NPC in this femdom-themed environment:
-            {environment_desc}
-
-            IMPORTANT NPC DETAILS TO INCORPORATE:
-            Archetype summary: {archetype_summary}
-            Stats: Dominance 50/100, Cruelty 30/100, Intensity 40/100
-
-            YOUR TASK:
-            Create a detailed physical description that deeply integrates the archetype summary into the NPC's appearance. The archetype summary contains essential character information that should be physically manifested.
-
-            The description must:
-            1. Be 2-3 paragraphs with vivid, sensual details appropriate for a mature audience
-            2. Directly translate key elements from the archetype summary into visible physical features
-            3. Ensure clothing, accessories, and physical appearance reflect her specific archetype role
-            4. Include distinctive physical features that immediately signal her archetype to observers
-            5. Describe her characteristic expressions, posture, and mannerisms that reveal her personality
-            6. Use sensory details beyond just visual (voice quality, scent, the feeling of her presence)
-            7. Be written in third-person perspective with evocative, descriptive language
-            8. Make sure to describe this character's curves in detail
-
-            The description should allow someone to immediately understand the character's archetype and role from her appearance alone.
-
-            Return a valid JSON object with the key "physical_description" containing the description as a string.
-            """
-            
-            client = get_async_openai_client()
-            response = await client.chat.completions.create(
-                model="gpt-4.1-nano",
-                messages=[{"role": "system", "content": prompt}],
-                temperature=0.7,
+            user_prompt = (
+                "Generate a detailed physical description meeting the requirements below.\n"
+                "Return JSON with key physical_description (string).\n"
+                f"\n### CONTEXT_JSON\n{json.dumps(user_payload, ensure_ascii=False)}\n"
             )
-            
-            description_json = response.choices[0].message.content
-            data = self.safe_json_loads(description_json)
-            
-            if data and "physical_description" in data:
-                return data["physical_description"]
-            
-            # Fallback: Extract description using regex if JSON parsing failed
-            description = self.extract_field_from_text(description_json, "physical_description")
-            if description and len(description) > 50:
-                return description
-                
+
+            raw_txt = await _responses_json_call(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+
+            data = _json_first_obj(raw_txt) or {}
+            return _coerce_physical_desc(data, npc_name=npc_name)
+
         except Exception as e:
-            logging.error(f"Error generating physical description for {npc_name}: {e}")
-        
-        # Final fallback
-        return f"{npc_name} has an appearance that matches their personality and role in this environment."
+            logging.error(f"Error generating physical description for {npc_name}: {e}", exc_info=True)
+            return f"{npc_name} has an appearance that matches her role in this environment."
     
-    async def design_personality(self, ctx: RunContextWrapper, npc_name, archetype_summary="", environment_desc=None) -> NPCPersonalityData:
+    async def design_personality(
+        self,
+        ctx: RunContextWrapper,
+        npc_name: str,
+        archetype_summary: str = "",
+        environment_desc: str | None = None,
+        *,
+        model: str = _DEFAULT_PERS_MODEL,
+        temperature: float = 0.7,
+        max_output_tokens: int | None = None,
+    ) -> NPCPersonalityData:
         """
-        Design a coherent personality for an NPC.
-        
-        Args:
-            ctx: Context wrapper with user and conversation IDs
-            npc_name: Name of the NPC
-            archetype_summary: Summary of the NPC's archetypes
-            environment_desc: Description of the environment
-            
-        Returns:
-            NPCPersonalityData object
+        Create a coherent personality profile (traits/likes/dislikes/hobbies).
+        Returns NPCPersonalityData.
         """
         try:
-            # Get environment if not provided
             if not environment_desc:
                 env_details = await self.get_environment_details(ctx)
                 environment_desc = env_details["environment_desc"]
-            
-            prompt = f"""
-            Design a unique personality for {npc_name} in this environment:
-            
-            Environment: {environment_desc}
-            
-            Archetype Summary: {archetype_summary}
-            
-            Create a coherent personality with:
-            - 3-5 distinct personality traits
-            - 3-5 likes that align with the personality
-            - 3-5 dislikes that create interesting tension
-            - 2-4 hobbies or interests
-            
-            The personality should feel like a real individual with subtle psychological depth.
-            Include traits that suggest hidden layers, motivations, or potential for character growth.
-            """
-            
-            # Run the personality designer agent
-            result = await Runner.run(
-                self.personality_designer,
-                prompt,
-                context=ctx.context
+
+            system_prompt = (
+                "You design psychologically coherent NPC personalities for an RPG.\n"
+                "Output JSON: {personality_traits:[], likes:[], dislikes:[], hobbies:[]}.\n"
+                "3-5 items per list; concise natural language phrases."
             )
-            
-            return result.final_output
+            payload = {
+                "npc_name": npc_name,
+                "environment_desc": environment_desc,
+                "archetype_summary": archetype_summary,
+                "guidance": {
+                    "min_traits": 3,
+                    "max_traits": 5,
+                    "min_likes": 3,
+                    "max_likes": 5,
+                    "min_dislikes": 3,
+                    "max_dislikes": 5,
+                    "min_hobbies": 2,
+                    "max_hobbies": 4,
+                    "subtle_femdom": True,
+                },
+            }
+            user_prompt = (
+                "Design a personality profile meeting the guidance below.\n"
+                "Return JSON only.\n"
+                f"\n### CONTEXT_JSON\n{json.dumps(payload, ensure_ascii=False)}\n"
+            )
+
+            raw_txt = await _responses_json_call(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+            data = _json_first_obj(raw_txt) or {}
+            return _coerce_personality(data)
+
         except Exception as e:
-            logging.error(f"Error designing personality: {e}")
-            
-            # Fallback personality generation
+            logging.error(f"Error designing personality: {e}", exc_info=True)
             return NPCPersonalityData(
                 personality_traits=["confident", "observant", "private"],
                 likes=["structure", "competence", "subtle control"],
                 dislikes=["vulnerability", "unpredictability", "unnecessary conflict"],
-                hobbies=["psychology", "strategic games"]
+                hobbies=["psychology", "strategic games"],
             )
+
     
-    async def calibrate_stats(self, ctx: RunContextWrapper, npc_name, personality=None, archetype_summary="") -> NPCStatsData:
+    async def calibrate_stats(
+        self,
+        ctx: RunContextWrapper,
+        npc_name: str,
+        personality: NPCPersonalityData | None = None,
+        archetype_summary: str = "",
+        *,
+        model: str = _DEFAULT_STATS_MODEL,
+        temperature: float = 0.4,
+        max_output_tokens: int | None = None,
+    ) -> NPCStatsData:
         """
-        Calibrate NPC stats based on personality and archetypes.
-        
-        Args:
-            ctx: Context wrapper with user and conversation IDs
-            npc_name: Name of the NPC
-            personality: NPCPersonalityData object
-            archetype_summary: Summary of the NPC's archetypes
-            
-        Returns:
-            NPCStatsData object
+        Calibrate numeric stat block aligned w/ personality + archetype.
+        Returns NPCStatsData.
         """
         try:
-            personality_str = ""
-            if personality:
-                personality_str = f"""
-                Personality Traits: {", ".join(personality.personality_traits)}
-                Likes: {", ".join(personality.likes)}
-                Dislikes: {", ".join(personality.dislikes)}
-                Hobbies: {", ".join(personality.hobbies)}
-                """
-            
-            prompt = f"""
-            Calibrate stats for {npc_name} with:
-            
-            {personality_str}
-            
-            Archetype Summary: {archetype_summary}
-            
-            Determine appropriate values (0-100) for:
-            - dominance: How naturally controlling/authoritative the NPC is
-            - cruelty: How willing the NPC is to cause discomfort/distress
-            - closeness: How emotionally available/connected the NPC is
-            - trust: Trust toward the player (-100 to 100)
-            - respect: Respect toward the player (-100 to 100)
-            - intensity: Overall emotional/psychological intensity
-            
-            The stats should align coherently with the personality traits and archetypes.
-            """
-            
-            # Run the stats calibrator agent
-            result = await Runner.run(
-                self.stats_calibrator,
-                prompt,
-                context=ctx.context
+            pers = personality.dict() if personality else {}
+            system_prompt = (
+                "You assign calibrated numeric stats (0-100 except trust/respect -100..100) "
+                "for RPG NPCs based on personality + archetype.\n"
+                "Return JSON: {dominance:int, cruelty:int, closeness:int, trust:int, respect:int, intensity:int}."
             )
-            
-            return result.final_output
+            payload = {
+                "npc_name": npc_name,
+                "archetype_summary": archetype_summary,
+                "personality": pers,
+                "scales": {
+                    "dominance": "0=passive,100=commanding",
+                    "cruelty": "0=gentle,100=delights in harm",
+                    "closeness": "0=distant,100=deeply bonded",
+                    "trust": "-100=active distrust,0=neutral,100=complete trust",
+                    "respect": "-100=contempt,0=neutral,100=deep respect",
+                    "intensity": "0=muted presence,100=overwhelming force",
+                },
+            }
+            user_prompt = (
+                "Calibrate stats using the context below.\n"
+                "Return JSON only.\n"
+                f"\n### CONTEXT_JSON\n{json.dumps(payload, ensure_ascii=False)}\n"
+            )
+
+            raw_txt = await _responses_json_call(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+            data = _json_first_obj(raw_txt) or {}
+            return _coerce_stats(data)
+
         except Exception as e:
-            logging.error(f"Error calibrating stats: {e}")
-            
-            # Fallback stats generation
-            # Slight femdom bias as per the game's theme
+            logging.error(f"Error calibrating stats: {e}", exc_info=True)
             return NPCStatsData(
                 dominance=60,
                 cruelty=40,
                 closeness=50,
                 trust=20,
                 respect=30,
-                intensity=55
+                intensity=55,
             )
+
     
-    async def synthesize_archetypes(self, ctx: RunContextWrapper, archetype_names=None, npc_name="") -> NPCArchetypeData:
+    async def synthesize_archetypes(
+        self,
+        ctx: RunContextWrapper,
+        archetype_names: list[str] | None = None,
+        npc_name: str = "",
+        *,
+        model: str = _DEFAULT_ARCH_MODEL,
+        temperature: float = 0.8,
+        max_output_tokens: int | None = None,
+    ) -> NPCArchetypeData:
         """
-        Synthesize multiple archetypes into a coherent character concept.
-        
-        Args:
-            ctx: Context wrapper with user and conversation IDs
-            archetype_names: List of archetype names
-            npc_name: Name of the NPC
-            
-        Returns:
-            NPCArchetypeData object
+        Blend multiple archetypes into a cohesive concept & extras summary.
+        Returns NPCArchetypeData.
         """
         try:
             if not archetype_names:
-                # Get available archetypes
+                # fallback: sample from DB
                 available_archetypes = await self.get_available_archetypes(ctx)
-                
-                # Select a few random archetypes
                 if available_archetypes:
                     selected = random.sample(available_archetypes, min(3, len(available_archetypes)))
                     archetype_names = [arch["name"] for arch in selected]
                 else:
                     archetype_names = ["Mentor", "Authority Figure", "Hidden Depth"]
-            
-            archetypes_str = ", ".join(archetype_names)
-            
-            prompt = f"""
-            Synthesize these archetypes for {npc_name}:
-            
-            Archetypes: {archetypes_str}
-            
-            Create:
-            1. A cohesive archetype summary that blends these archetypes
-            2. An extras summary explaining how the archetype fusion affects the character
-            
-            The synthesis should feel natural rather than forced, identifying common
-            themes and resolving contradictions between archetypes. Focus on how the
-            archetypes interact to create a unique character foundation.
-            """
-            
-            # Run the archetype synthesizer agent
-            result = await Runner.run(
-                self.archetype_synthesizer,
-                prompt,
-                context=ctx.context
+
+            system_prompt = (
+                "You synthesize multiple RPG archetypes into one coherent character concept.\n"
+                "Return JSON: {archetype_names:[], archetype_summary:str, archetype_extras_summary:str}."
             )
-            
-            # Ensure archetype_names is preserved
-            result.final_output.archetype_names = archetype_names
-            
-            return result.final_output
+            payload = {
+                "npc_name": npc_name,
+                "archetypes": archetype_names,
+                "guidelines": {
+                    "resolve_conflicts": True,
+                    "highlight_common_themes": True,
+                    "subtle_femdom": True,
+                    "max_summary_chars": 400,
+                    "max_extras_chars": 400,
+                },
+            }
+            user_prompt = (
+                "Blend the listed archetypes into a single coherent character concept.\n"
+                "Return JSON only.\n"
+                f"\n### CONTEXT_JSON\n{json.dumps(payload, ensure_ascii=False)}\n"
+            )
+
+            raw_txt = await _responses_json_call(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+            data = _json_first_obj(raw_txt) or {}
+            return _coerce_archetype(data, provided_names=archetype_names)
+
         except Exception as e:
-            logging.error(f"Error synthesizing archetypes: {e}")
-            
-            # Fallback archetype synthesis
+            logging.error(f"Error synthesizing archetypes: {e}", exc_info=True)
             return NPCArchetypeData(
                 archetype_names=archetype_names or ["Authority Figure"],
                 archetype_summary="A complex character with layers of authority and hidden depth.",
-                archetype_extras_summary="This character's authority is expressed through subtle psychological control rather than overt dominance."
+                archetype_extras_summary="Authority expressed through subtle psychological control rather than overt dominance.",
             )
+
     
-    async def generate_schedule(self, ctx: RunContextWrapper, npc_name, environment_desc=None, day_names=None) -> Dict[str, Any]:
+    async def generate_schedule(
+        self,
+        ctx: RunContextWrapper,
+        npc_name: str,
+        environment_desc: str | None = None,
+        day_names: list[str] | None = None,
+        *,
+        model: str = _DEFAULT_SCHED_MODEL,
+        temperature: float = 0.7,
+        max_output_tokens: int | None = None,
+    ) -> Dict[str, Any]:
         """
-        Generate a detailed schedule for an NPC.
-        
-        Args:
-            ctx: Context wrapper with user and conversation IDs
-            npc_name: Name of the NPC
-            environment_desc: Description of the environment
-            day_names: List of day names
-            
-        Returns:
-            Dictionary with the NPC's schedule
+        Generate a weekly schedule keyed by day -> {Morning/Afternoon/Evening/Night}.
+        Returns dict[str, dict[str,str]].
         """
         try:
             user_id = ctx.context.get("user_id")
             conversation_id = ctx.context.get("conversation_id")
-            
-            # Get environment if not provided
+
             if not environment_desc:
                 env_details = await self.get_environment_details(ctx)
                 environment_desc = env_details["environment_desc"]
-            
-            # Get day names if not provided
+
             if not day_names:
                 day_names = await self.get_day_names(ctx)
-            
-            # Get NPC data from the database
+
+            # Pull NPC row (optional: errors tolerated)
             async with get_db_connection_context() as conn:
-                query = """
+                row = await conn.fetchrow(
+                    """
                     SELECT npc_id, archetypes, hobbies, personality_traits
                     FROM NPCStats
                     WHERE user_id=$1 AND conversation_id=$2 AND npc_name=$3
                     LIMIT 1
-                """
-                
-                row = await conn.fetchrow(query, user_id, conversation_id, npc_name)
-            
-            if row:
-                npc_id = row['npc_id']
-                
-                # Parse JSON fields
-                def parse_json_field(field):
-                    if field is None:
-                        return []
-                    if isinstance(field, str):
-                        try:
-                            return json.loads(field)
-                        except:
-                            return []
-                    return field
-                
-                archetypes = parse_json_field(row['archetypes'])
-                hobbies = parse_json_field(row['hobbies'])
-                personality_traits = parse_json_field(row['personality_traits'])
-                
-                # Create NPC data for the prompt
-                npc_data = {
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "archetypes": archetypes,
-                    "hobbies": hobbies,
-                    "personality_traits": personality_traits
-                }
-                
-                # Build day example
-                example_day = {
-                    "Morning": "Activity description",
-                    "Afternoon": "Activity description",
-                    "Evening": "Activity description",
-                    "Night": "Activity description"
-                }
-                example_schedule = {day: example_day for day in day_names}
-                
-                # Build prompt
-                archetype_names = [a.get("name", "") for a in archetypes]
-                prompt = f"""
-                Generate a weekly schedule for {npc_name}, an NPC in this environment:
-                {environment_desc}
-
-                NPC Details:
-                - Archetypes: {archetype_names}
-                - Personality: {personality_traits}
-                - Hobbies: {hobbies}
-
-                The schedule must include all these days: {day_names}
-                Each day must have activities for: Morning, Afternoon, Evening, and Night
-
-                Return a valid JSON object with a single "schedule" key containing the complete weekly schedule.
-                Example format:
-                {json.dumps({"schedule": example_schedule}, indent=2)}
-
-                Activities should reflect the NPC's personality, archetypes, and the environment.
-                """
-                
-                client = get_async_openai_client()
-                response = await client.chat.completions.create(
-                    model="gpt-4.1-nano",
-                    messages=[{"role": "system", "content": prompt}],
-                    temperature=0.7,
+                    """,
+                    user_id,
+                    conversation_id,
+                    npc_name,
                 )
-                
-                schedule_json = response.choices[0].message.content
-                data = self.safe_json_loads(schedule_json)
-                
-                if data and "schedule" in data and isinstance(data["schedule"], dict):
-                    # Validate schedule has all required days and time periods
-                    schedule = data["schedule"]
-                    is_valid = True
-                    
-                    for day in day_names:
-                        if day not in schedule:
-                            is_valid = False
-                            break
-                            
-                        day_schedule = schedule[day]
-                        if not isinstance(day_schedule, dict):
-                            is_valid = False
-                            break
-                            
-                        for period in ["Morning", "Afternoon", "Evening", "Night"]:
-                            if period not in day_schedule:
-                                is_valid = False
-                                break
-                    
-                    if is_valid:
-                        return schedule
-            
-            # Fallback: create a simple schedule
-            schedule = {}
-            for day in day_names:
-                schedule[day] = {
-                    "Morning": f"{npc_name} starts their day with personal routines.",
-                    "Afternoon": f"{npc_name} attends to their primary responsibilities.",
-                    "Evening": f"{npc_name} engages in social activities or hobbies.",
-                    "Night": f"{npc_name} returns home and rests."
-                }
-            
-            return schedule
+            archetypes = []
+            hobbies = []
+            personality_traits = []
+            if row:
+                def _parse(v):
+                    if not v:
+                        return []
+                    if isinstance(v, str):
+                        try:
+                            return json.loads(v)
+                        except Exception:
+                            return []
+                    return v
+                archetypes = _parse(row["archetypes"])
+                hobbies = _parse(row["hobbies"])
+                personality_traits = _parse(row["personality_traits"])
+
+            # shorter list of archetype names for prompt readability
+            archetype_names = [a.get("name", "") for a in archetypes if isinstance(a, dict)]
+
+            system_prompt = (
+                "You create structured weekly schedules for RPG NPCs.\n"
+                "Output JSON: {\"schedule\": {DAY: {Morning:\"\",Afternoon:\"\",Evening:\"\",Night:\"\"}, ...}}.\n"
+                "Activities must reflect personality, archetypes, environment, and offer interaction hooks."
+            )
+            payload = {
+                "npc_name": npc_name,
+                "environment_desc": environment_desc,
+                "day_names": day_names,
+                "archetypes": archetype_names,
+                "hobbies": hobbies,
+                "personality_traits": personality_traits,
+                "style_guidelines": {
+                    "tie_to_environment": True,
+                    "vary_by_day": True,
+                    "include_social_hooks": True,
+                    "subtle_power_dynamics": True,
+                    "keep_entries_short": True,
+                },
+            }
+            user_prompt = (
+                "Generate the schedule described. Use all listed days.\n"
+                "Return JSON ONLY.\n"
+                f"\n### CONTEXT_JSON\n{json.dumps(payload, ensure_ascii=False)}\n"
+            )
+
+            raw_txt = await _responses_json_call(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+            data = _json_first_obj(raw_txt) or {}
+            return _coerce_schedule(data, day_names=day_names)
+
         except Exception as e:
-            logging.error(f"Error generating schedule: {e}")
-            
-            # Fallback schedule generation
-            day_names = day_names or ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            logging.error(f"Error generating schedule: {e}", exc_info=True)
+            # Fallback simple schedule
+            if not day_names:
+                day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
             schedule = {}
             for day in day_names:
                 schedule[day] = {
-                    "Morning": f"{npc_name} starts their day with personal routines.",
-                    "Afternoon": f"{npc_name} attends to their primary responsibilities.",
-                    "Evening": f"{npc_name} engages in social activities or hobbies.",
-                    "Night": f"{npc_name} returns home and rests."
+                    "Morning": f"{npc_name} starts the day with personal routines.",
+                    "Afternoon": f"{npc_name} attends to responsibilities.",
+                    "Evening": f"{npc_name} engages in social or hobby activities.",
+                    "Night": f"{npc_name} returns home and rests.",
                 }
-            
             return schedule
     
-    async def generate_memories(self, ctx: RunContextWrapper, npc_name, environment_desc=None) -> List[str]:
+    async def generate_memories(
+        self,
+        ctx: RunContextWrapper,
+        npc_name,
+        environment_desc=None,
+    ) -> List[str]:
         """
-        Generate detailed memories for an NPC.
-        
-        Args:
-            ctx: Context wrapper with user and conversation IDs
-            npc_name: Name of the NPC
-            environment_desc: Description of the environment
-            
-        Returns:
-            List of memory strings
+        Generate detailed memories for an NPC (rich-prompt + structured JSON).
         """
         try:
-            user_id = ctx.context.get("user_id") 
+            user_id        = ctx.context.get("user_id")
             conversation_id = ctx.context.get("conversation_id")
-            
-            # Get environment if not provided
+
+            # --- Environment ---------------------------------------------------
             if not environment_desc:
                 env_details = await self.get_environment_details(ctx)
                 environment_desc = env_details["environment_desc"]
-            
-            # Get NPC data from the database
+
+            # --- NPC row -------------------------------------------------------
             async with get_db_connection_context() as conn:
-                query = """
+                row = await conn.fetchrow(
+                    """
                     SELECT npc_id, archetypes, archetype_summary, relationships,
                            dominance, cruelty, personality_traits
                     FROM NPCStats
                     WHERE user_id=$1 AND conversation_id=$2 AND npc_name=$3
                     LIMIT 1
-                """
-                
-                row = await conn.fetchrow(query, user_id, conversation_id, npc_name)
-            
-            if row:
-                npc_id = row['npc_id']
-                dominance = row['dominance']
-                cruelty = row['cruelty']
-                
-                # Parse relationships
-                relationships = []
-                if row['relationships']:
-                    try:
-                        if isinstance(row['relationships'], str):
-                            relationships = json.loads(row['relationships'])
-                        else:
-                            relationships = row['relationships']
-                    except:
-                        relationships = []
-                
-                # Parse personality traits
-                personality_traits = []
-                if row['personality_traits']:
-                    try:
-                        if isinstance(row['personality_traits'], str):
-                            personality_traits = json.loads(row['personality_traits'])
-                        else:
-                            personality_traits = row['personality_traits']
-                    except:
-                        personality_traits = []
-                
-                # Create prompt
-                personality_context = ", ".join(personality_traits) if personality_traits else "complex personality"
-                
-                prompt = f"""
-                Create 3-5 vivid, detailed memories for {npc_name} in this environment:
-                
-                {environment_desc}
-                
-                NPC INFORMATION:
-                - Name: {npc_name}
-                - Archetype: {row['archetype_summary'] if row['archetype_summary'] else "Unknown"}
-                - Dominance Level: {dominance}/100
-                - Cruelty Level: {cruelty}/100
-                - Personality: {personality_context}
-                
-                MEMORY REQUIREMENTS:
-                1. Each memory must be a SPECIFIC EVENT with concrete details - not vague impressions
-                2. Include sensory details (sights, sounds, smells, textures)
-                3. Include precise emotional responses and internal thoughts
-                4. Include dialogue snippets with actual quoted speech
-                5. Write in first-person perspective from {npc_name}'s viewpoint
-                6. Each memory should be 3-5 sentences minimum with specific details
-                
-                IMPORTANT THEME GUIDANCE:
-                * Include subtle hints of control dynamics without being overtly femdom
-                * Show instances where {npc_name} momentarily revealed her true nature before quickly masking it
-                * Show moments where {npc_name} tested boundaries or enjoyed having influence
-                
-                Return a valid JSON object with a single "memories" key containing an array of memory strings.
-                """
-                
-                client = get_async_openai_client()
-                response = await client.chat.completions.create(
-                    model="gpt-4.1-nano",
-                    messages=[{"role": "system", "content": prompt}],
-                    temperature=0.8,
+                    """,
+                    user_id,
+                    conversation_id,
+                    npc_name,
                 )
-                
-                memories_json = response.choices[0].message.content
-                data = self.safe_json_loads(memories_json)
-                
-                if data and "memories" in data and isinstance(data["memories"], list):
-                    memories = data["memories"]
-                    if memories and all(isinstance(m, str) for m in memories):
-                        return memories
-            
-            # Fallback: create basic memories
-            return [
-                f"I remember when I first arrived in this place. The atmosphere was both familiar and strange, like I belonged here but didn't yet know why.",
-                f"There was that conversation last month where I realized how easily people shared their secrets with me. It was fascinating how a simple question, asked the right way, could reveal so much.",
-                f"Sometimes I think about my position here and the subtle influence I've cultivated. Few realize how carefully I've positioned myself within the social dynamics."
-            ]
+
+            if not row:
+                raise RuntimeError(f"NPC '{npc_name}' not found.")
+
+            dominance = row["dominance"]
+            cruelty   = row["cruelty"]
+
+            # local JSON decoders
+            def _parse(field):
+                if not field:
+                    return []
+                if isinstance(field, str):
+                    try:
+                        return json.loads(field)
+                    except Exception:
+                        return []
+                return field
+
+            relationships      = _parse(row["relationships"])
+            personality_traits = _parse(row["personality_traits"])
+
+            # --- Build creative prompt text -----------------------------------
+            user_prompt = build_memory_user_prompt(
+                npc_name=npc_name,
+                environment_desc=environment_desc,
+                archetype=row["archetype_summary"] or "Unknown",
+                dominance=dominance,
+                cruelty=cruelty,
+                personality_traits=personality_traits,
+                relationships=relationships,
+            )
+
+            # --- Run via Agent SDK --------------------------------------------
+            mem_agent  = self._get_memory_generation_agent()
+            run_result = await Runner.run(
+                mem_agent,
+                user_prompt,            # send the rich creative brief
+                context=ctx.context,    # pass through metadata (user_id, etc.)
+            )
+
+            # parse -> Pydantic
+            mem_obj = run_result.final_output_as(NPCMemories)
+
+            if mem_obj and mem_obj.memories:
+                mems = [m.strip() for m in mem_obj.memories if isinstance(m, str) and m.strip()]
+                if mems:
+                    return mems
+
         except Exception as e:
-            logging.error(f"Error generating memories: {e}")
-            
-            # Fallback memory generation
-            return [
-                f"I remember when I first arrived in this place. The atmosphere was both familiar and strange, like I belonged here but didn't yet know why.",
-                f"There was that conversation last month where I realized how easily people shared their secrets with me. It was fascinating how a simple question, asked the right way, could reveal so much.",
-                f"Sometimes I think about my position here and the subtle influence I've cultivated. Few realize how carefully I've positioned myself within the social dynamics."
-            ]
+            logging.error(f"Error generating memories: {e}", exc_info=True)
+
+        # ----------------------------------------------------------------------
+        # Fallback memories (unchanged)
+        # ----------------------------------------------------------------------
+        return [
+            (
+                f"I remember when I first arrived in this place. The atmosphere was "
+                f"both familiar and strange, like I belonged here but didn't yet know why."
+            ),
+            (
+                "There was that conversation last month where I realized how easily "
+                "people shared their secrets with me. It was fascinating how a simple "
+                "question, asked the right way, could reveal so much."
+            ),
+            (
+                "Sometimes I think about my position here and the subtle influence I've cultivated. "
+                "Few realize how carefully I've positioned myself within the social dynamics."
+            ),
+        ]
     
     async def create_npc_in_database(self, ctx: RunContextWrapper, npc_data) -> Dict[str, Any]:
         """
