@@ -367,13 +367,14 @@ class StoryDirectorContext:
                 params = directive.get("parameters", {})
                 conflict_type = params.get("conflict_type", "standard")
                 
-                from lore.core.lore_system import LoreSystem
-                lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
-                
-                ctx = RunContextWrapper(context={
-                    'user_id': self.directive_handler.user_id,
-                    'conversation_id': self.directive_handler.conversation_id
-                })
+                # Ensure the conflict manager is properly initialized
+                if not hasattr(self.conflict_manager, 'user_id') or not hasattr(self.conflict_manager, 'conversation_id'):
+                    # Re-initialize if needed
+                    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+                    self.conflict_manager = await ConflictSystemIntegration.get_instance(
+                        self.user_id, 
+                        self.conversation_id
+                    )
                 
                 result = await self.conflict_manager.generate_conflict(conflict_type)
                 
