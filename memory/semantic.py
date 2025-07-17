@@ -6,7 +6,9 @@ import random
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union, Set
 import asyncio
-from logic.chatgpt_integration import get_openai_client, get_async_openai_client
+
+# Import the OpenAI helper functions from chatgpt_integration
+from logic.chatgpt_integration import get_async_openai_client, get_openai_client
 
 from .connection import with_transaction, TransactionContext
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
@@ -154,7 +156,7 @@ class SemanticMemoryManager:
         memory_text: str,
         abstraction_level: float,
     ) -> str:
-        """Create a semantic abstraction (minimal/moderate/high) via Responses API."""
+        """Create a semantic abstraction (minimal/moderate/high) via OpenAI API."""
         client = get_async_openai_client()
         level = (
             "minimal" if abstraction_level < 0.3
@@ -170,15 +172,19 @@ class SemanticMemoryManager:
         )
     
         try:
-            resp = await client.responses.create(
+            response = await client.chat.completions.create(
                 model="gpt-4.1-nano",
-                instructions="You extract semantic abstractions.",
-                input=prompt,
+                messages=[
+                    {"role": "system", "content": "You extract semantic abstractions from memories."},
+                    {"role": "user", "content": prompt}
+                ],
                 temperature=0.4,
+                max_tokens=100
             )
-            txt = getattr(resp, "output_text", "") or ""
-            if txt.strip():
-                return txt.strip()
+            
+            txt = response.choices[0].message.content.strip()
+            if txt:
+                return txt
             logger.warning("Empty response from OpenAI for semantic abstraction")
         except Exception as e:
             logger.error("Semantic abstraction failed: %s", e)
@@ -345,18 +351,21 @@ class SemanticMemoryManager:
         )
     
         try:
-            resp = await client.responses.create(
+            response = await client.chat.completions.create(
                 model="gpt-4.1-nano",
-                instructions="You extract patterns from memory clusters.",
-                input=prompt,
+                messages=[
+                    {"role": "system", "content": "You extract patterns from memory clusters."},
+                    {"role": "user", "content": prompt}
+                ],
                 temperature=0.3,
+                max_tokens=300
             )
     
-            if not resp or not hasattr(resp, "output_text") or not resp.output_text:
+            if not response.choices[0].message.content:
                 logger.warning("Empty response from OpenAI for pattern extraction")
                 return None
     
-            output_text = resp.output_text.strip()
+            output_text = response.choices[0].message.content.strip()
             if not output_text:
                 logger.warning("Empty output_text from OpenAI for pattern extraction")
                 return None
@@ -677,7 +686,7 @@ class SemanticMemoryManager:
         memory_text: str,
         variation_type: str,
     ) -> str:
-        """Counterfactual variation (alternative/opposite/exaggeration) via Responses API."""
+        """Counterfactual variation (alternative/opposite/exaggeration) via OpenAI API."""
         client = get_async_openai_client()
     
         description = {
@@ -693,15 +702,19 @@ class SemanticMemoryManager:
         )
     
         try:
-            resp = await client.responses.create(
+            response = await client.chat.completions.create(
                 model="gpt-4.1-nano",
-                instructions="You generate counterfactual variations.",
-                input=prompt,
+                messages=[
+                    {"role": "system", "content": "You generate counterfactual variations of memories."},
+                    {"role": "user", "content": prompt}
+                ],
                 temperature=0.7,
+                max_tokens=200
             )
-            txt = getattr(resp, "output_text", "") or ""
-            if txt.strip():
-                return txt.strip()
+            
+            txt = response.choices[0].message.content.strip()
+            if txt:
+                return txt
             logger.warning("Empty response from OpenAI for counterfactual generation")
         except Exception as e:
             logger.error("Counterfactual generation failed: %s", e)
@@ -845,38 +858,35 @@ class SemanticMemoryManager:
         current_topic: str,
     ) -> List[str]:
         """
-        Extract 2-3 related topics from *memory_text* via the OpenAI Responses API.
-        No `response_format=` param (SDK rejects it). Enforce JSON via instruction.
+        Extract 2-3 related topics from memory_text via the OpenAI API.
         """
         client = get_async_openai_client()
     
-        system_msg = (
-            "You extract 2-3 short topical keywords related to the provided memory text. "
-            "Return ONLY a JSON array of strings. Example: [\"topic1\", \"topic2\"]. "
-            "Topics must be distinct and different from the current topic."
-        )
-    
         mem_block = _safe_block(memory_text)
         cur_block = _safe_block(current_topic)
-        user_msg = (
+        
+        prompt = (
             f"Memory:\n{mem_block}\n\n"
             f"Current topic:\n{cur_block}\n\n"
-            "Return JSON array of 2-3 related topics (strings)."
+            "Extract 2-3 related topics as a JSON array. "
+            "Topics must be distinct and different from the current topic.\n"
+            "Return ONLY a JSON array of strings."
         )
     
         last_err = None
         for attempt in range(3):
             try:
-                resp = await client.responses.create(
+                response = await client.chat.completions.create(
                     model="gpt-4.1-nano",
-                    input=[
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": user_msg},
+                    messages=[
+                        {"role": "system", "content": "You extract related topics from memory text."},
+                        {"role": "user", "content": prompt}
                     ],
                     temperature=0.5,
-                    max_output_tokens=100,
+                    max_tokens=100
                 )
-                raw = (resp.output_text or "").strip()
+                
+                raw = response.choices[0].message.content.strip()
                 try:
                     topics = json.loads(raw)
                 except Exception:
