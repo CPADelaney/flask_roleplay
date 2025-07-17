@@ -16,6 +16,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime
 from dataclasses import dataclass
 from db.connection import get_db_connection_context
+from logic.chatgpt_integration import get_async_openai_client
 
 # Agents SDK imports
 from agents import Agent, ModelSettings, function_tool, Runner
@@ -45,6 +46,7 @@ from .data_access import (
     FactionDataAccess,
     LoreKnowledgeAccess
 )
+from embedding.vector_store import generate_embedding
 
 # Import error handling
 from .error_manager import LoreError, ErrorHandler, handle_errors
@@ -2033,6 +2035,7 @@ class DynamicLoreGenerator(BaseGenerator):
 
 
 # Agent getter functions - Updated with wrap_array_field parameter
+# Agent getter functions - Updated to use the proper client
 def get_foundation_lore_agent():
     """Get or create the foundation lore agent."""
     return Agent(
@@ -2047,8 +2050,7 @@ def get_foundation_lore_agent():
         ),
         model=OpenAIResponsesModel(
             model="gpt-4.1-nano", 
-            openai_client=get_openai_client(),
-            output_type=FoundationLoreOutput
+            openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.4),
         output_type=FoundationLoreOutput,
@@ -2069,9 +2071,7 @@ def get_factions_agent():
         ),
         model=OpenAIResponsesModel(
             model="gpt-4.1-nano", 
-            openai_client=get_openai_client(),
-            wrap_array_field="factions",        # Critical: wraps array in object
-            output_type=FactionsOutput
+            openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.7),
         output_type=FactionsOutput,
@@ -2091,9 +2091,7 @@ def get_cultural_agent():
         ),
         model=OpenAIResponsesModel(
             model="gpt-4.1-nano", 
-            openai_client=get_openai_client(),
-            wrap_array_field="elements",        # Critical: wraps array in object
-            output_type=CulturalElementsOutput
+            openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.5),
         output_type=CulturalElementsOutput,
@@ -2113,9 +2111,7 @@ def get_history_agent():
         ),
         model=OpenAIResponsesModel(
             model="gpt-4.1-nano", 
-            openai_client=get_openai_client(),
-            wrap_array_field="events",          # Critical: wraps array in object
-            output_type=HistoricalEventsOutput
+            openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.6),
         output_type=HistoricalEventsOutput,
@@ -2135,9 +2131,7 @@ def get_locations_agent():
         ),
         model=OpenAIResponsesModel(
             model="gpt-4.1-nano", 
-            openai_client=get_openai_client(),
-            wrap_array_field="locations",       # Critical: wraps array in object
-            output_type=LocationsOutput
+            openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.7),
         output_type=LocationsOutput,
@@ -2158,45 +2152,8 @@ def get_quests_agent():
         ),
         model=OpenAIResponsesModel(
             model="gpt-4.1-nano", 
-            openai_client=get_openai_client(),
-            wrap_array_field="quests",          # Critical: wraps array in object
-            output_type=QuestsOutput
+            openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.7),
         output_type=QuestsOutput,
     )
-    
-_openai_client = None
-_client_error = None
-
-class DeferredOpenAIClient:
-    """A placeholder that defers API key checking until actual use."""
-    def __init__(self, error_msg):
-        self.error_msg = error_msg
-    
-    def __getattr__(self, name):
-        raise RuntimeError(self.error_msg)
-
-def get_openai_client():
-    """Get or create the OpenAI client instance."""
-    global _openai_client, _client_error
-    
-    if _openai_client is None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            # Don't raise immediately - return a placeholder that will raise when used
-            if _client_error is None:
-                _client_error = DeferredOpenAIClient("OPENAI_API_KEY not found in environment")
-            return _client_error
-        _openai_client = AsyncOpenAI(api_key=api_key)
-    return _openai_client
-
-# Import generate_embedding if available, or provide a mock implementation
-try:
-    from .embeddings import generate_embedding
-except ImportError:
-    # Mock implementation for when embeddings module is not available
-    async def generate_embedding(text: str) -> List[float]:
-        """Mock embedding generation - returns a dummy embedding."""
-        logger.warning("Using mock embedding generation - embeddings module not available")
-        return [0.0] * 1536  # Return a dummy embedding of the correct size
