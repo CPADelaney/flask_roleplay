@@ -28,7 +28,7 @@ from memory.semantic import SemanticMemoryManager
 from memory.masks import ProgressiveRevealManager, RevealType, RevealSeverity
 from memory.reconsolidation import ReconsolidationManager
 
-from logic.chatgpt_integration import get_openai_client, get_chatgpt_response
+from logic.chatgpt_integration import get_openai_client, get_chatgpt_response, get_async_openai_client
 from logic.gpt_utils import spaced_gpt_call
 from logic.gpt_helpers import fetch_npc_name
 from logic.calendar import load_calendar_names
@@ -1129,7 +1129,7 @@ class NPCCreationHandler:
                 Return ONLY the name, nothing else.
                 """
                 
-                client = get_openai_client()
+                client = get_async_openai_client()
                 response = client.chat.completions.create(
                     model="gpt-4.1-nano",
                     messages=[{"role": "system", "content": prompt}],
@@ -1255,7 +1255,7 @@ class NPCCreationHandler:
             Return a valid JSON object with the key "physical_description" containing the description as a string.
             """
             
-            client = get_openai_client()
+            client = get_async_openai_client()
             response = client.chat.completions.create(
                 model="gpt-4.1-nano",
                 messages=[{"role": "system", "content": prompt}],
@@ -1552,7 +1552,7 @@ class NPCCreationHandler:
                 Activities should reflect the NPC's personality, archetypes, and the environment.
                 """
                 
-                client = get_openai_client()
+                client = get_async_openai_client()
                 response = client.chat.completions.create(
                     model="gpt-4.1-nano",
                     messages=[{"role": "system", "content": prompt}],
@@ -1703,7 +1703,7 @@ class NPCCreationHandler:
                 Return a valid JSON object with a single "memories" key containing an array of memory strings.
                 """
                 
-                client = get_openai_client()
+                client = get_async_openai_client()
                 response = client.chat.completions.create(
                     model="gpt-4.1-nano",
                     messages=[{"role": "system", "content": prompt}],
@@ -2627,7 +2627,7 @@ class NPCCreationHandler:
     Return ONLY the rewritten memory text.
     """.strip()
     
-        client = get_openai_client()
+        client = get_async_openai_client()
     
         # --- Call Responses API w/ retry -------------------------------------
         last_err = None
