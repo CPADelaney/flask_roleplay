@@ -29,7 +29,7 @@ from memory.semantic import SemanticMemoryManager
 from memory.masks import ProgressiveRevealManager, RevealType, RevealSeverity
 from memory.reconsolidation import ReconsolidationManager
 
-from logic.chatgpt_integration import get_openai_client, get_chatgpt_response, 
+from logic.chatgpt_integration import get_openai_client, get_chatgpt_response, get_async_openai_client
 from logic.gpt_utils import spaced_gpt_call
 from logic.gpt_helpers import fetch_npc_name
 from logic.calendar import load_calendar_names
