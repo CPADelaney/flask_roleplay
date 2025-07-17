@@ -67,7 +67,7 @@ from logic.chatgpt_integration import build_message_history
 from routes.ai_image_generator import init_app as init_image_routes, generate_roleplay_image_from_gpt
 from routes.chatgpt_routes import init_app as init_chat_routes
 from logic.gpt_image_decision import should_generate_image_for_response
-from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
+# from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
 from middleware.security import validate_input
 
 # Nyx integration
