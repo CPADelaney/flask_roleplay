@@ -38,10 +38,10 @@ class FactionModel(BaseModel):
     symbol_description: Optional[str] = Field(None, description="Description of faction symbol")
 
 
-# Using RootModel for Pydantic v2 compatibility instead of __root__
-class FactionsOutput(RootModel):
+# Using BaseModel to match the JSON structure the agent produces
+class FactionsOutput(BaseModel):
     """Container for multiple factions."""
-    factions: List[FactionSchema]
+    factions: List[FactionModel]
 
 
 class CulturalElementModel(BaseModel):
@@ -56,9 +56,9 @@ class CulturalElementModel(BaseModel):
 
 
 # Using RootModel for Pydantic v2 compatibility
-class CulturalElementsOutput(RootModel):
+class CulturalElementsOutput(BaseModel):
     """Container for multiple cultural elements."""
-    elements: List[CulturalElementSchema]
+    elements: List[CulturalElementModel]
 
 
 class HistoricalEventModel(BaseModel):
@@ -75,9 +75,9 @@ class HistoricalEventModel(BaseModel):
 
 
 # Using RootModel for Pydantic v2 compatibility
-class HistoricalEventsOutput(RootModel):
+class HistoricalEventsOutput(BaseModel):
     """Container for multiple historical events."""
-    events: List[HistoricalEventSchema]
+    events: List[HistoricalEventModel]
 
 
 class LocationModel(BaseModel):
@@ -92,9 +92,9 @@ class LocationModel(BaseModel):
 
 
 # Using RootModel for Pydantic v2 compatibility
-class LocationsOutput(RootModel):
+class LocationsOutput(BaseModel):
     """Container for multiple locations."""
-    locations: List[LocationSchema]
+    locations: List[LocationModel]
 
 
 class QuestModel(BaseModel):
@@ -110,6 +110,6 @@ class QuestModel(BaseModel):
 
 
 # Using RootModel for Pydantic v2 compatibility
-class QuestsOutput(RootModel):
+class QuestsOutput(BaseModel):
     """Container for multiple quests."""
-    quests: List[QuestSchema]
+    quests: List[QuestModel]
