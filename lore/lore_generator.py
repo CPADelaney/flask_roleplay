@@ -131,7 +131,7 @@ async def _generate_cultural_elements_impl(ctx, environment_desc: str, faction_n
     cultural_agent = get_cultural_agent()
     result = await Runner.run(cultural_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(CulturalElementsOutput)
-    return [c.dict() for c in final_output.__root__]
+    return [c.dict() for c in final_output.elements]
 
 async def _generate_historical_events_impl(ctx, environment_desc: str, world_history: str, faction_names: str) -> List[Dict[str, Any]]:
     """
@@ -157,7 +157,7 @@ async def _generate_historical_events_impl(ctx, environment_desc: str, world_his
     history_agent = get_history_agent()
     result = await Runner.run(history_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(HistoricalEventsOutput)
-    return [h.dict() for h in final_output.__root__]
+    return [h.dict() for h in final_output.events]
 
 async def _generate_locations_impl(ctx, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
     """
@@ -182,7 +182,7 @@ async def _generate_locations_impl(ctx, environment_desc: str, faction_names: st
     locations_agent = get_locations_agent()
     result = await Runner.run(locations_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(LocationsOutput)
-    return [l.dict() for l in final_output.__root__]
+    return [l.dict() for l in final_output.locations]
 
 async def _generate_quest_hooks_impl(ctx, faction_names: str, location_names: str) -> List[Dict[str, Any]]:
     """
@@ -207,7 +207,7 @@ async def _generate_quest_hooks_impl(ctx, faction_names: str, location_names: st
     quests_agent = get_quests_agent()
     result = await Runner.run(quests_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(QuestsOutput)
-    return [q.dict() for q in final_output.__root__]
+    return [q.dict() for q in final_output.quests]
 
 #---------------------------
 # Function Tool Definitions with Nyx Governance
