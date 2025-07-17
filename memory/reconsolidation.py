@@ -300,11 +300,12 @@ class ReconsolidationManager:
         # Generate embedding for comparison
         embedding = None
         try:
-            response = await openai.Embedding.acreate(
+            client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            response = await client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=memory_text
             )
-            embedding = response["data"][0]["embedding"]
+            embedding = response.data[0].embedding
         except Exception as e:
             logger.error(f"Error generating embedding for similar memory search: {e}")
             # If embedding fails, try keyword search as fallback
