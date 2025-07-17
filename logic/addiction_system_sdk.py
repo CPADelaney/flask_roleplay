@@ -798,7 +798,7 @@ async def process_addiction_update(
     
     with trace(
         workflow_name="Addiction System",
-        trace_id=f"addiction-{conversation_id}-{int(datetime.now().timestamp())}",
+        trace_id=f"trace_addiction-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
         prompt = f"Update the player's addiction to {addiction_type}{f' related to NPC #{target_npc_id}' if target_npc_id else ''}. Player name: {player_name}. Progression multiplier: {progression_multiplier}"
@@ -848,7 +848,7 @@ async def check_addiction_status(
     
     with trace(
         workflow_name="Addiction System",
-        trace_id=f"addiction-status-{conversation_id}-{int(datetime.now().timestamp())}",
+        trace_id=f"trace_addiction-status-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
         ctx_wrapper = RunContextWrapper(context=addiction_context)
