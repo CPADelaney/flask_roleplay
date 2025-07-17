@@ -172,11 +172,15 @@ class ReconsolidationManager:
         # Generate embedding for the altered text
         embedding = None
         try:
-            response = await openai.Embedding.acreate(
+            from openai import AsyncOpenAI
+            
+            # In the method, create client
+            client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            response = await client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=altered_text
             )
-            embedding = response["data"][0]["embedding"]
+            embedding = response.data[0].embedding
         except Exception as e:
             logger.error(f"Error generating embedding for reconsolidated memory: {e}")
         
