@@ -304,7 +304,6 @@ class RegionalCultureSystem(BaseLoreManager):
         if not self.initialized:
             await super().ensure_initialized()
             await self.initialize_tables()
-            await self.register_with_governance()
             self.initialized = True
     
     async def initialize_tables(self):
