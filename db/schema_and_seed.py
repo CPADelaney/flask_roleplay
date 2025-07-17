@@ -2253,6 +2253,36 @@ async def create_all_tables():
                 ON ContextEvolution(timestamp);
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS WorldLore (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    significance INTEGER DEFAULT 5 CHECK (significance BETWEEN 1 AND 10),
+                    tags TEXT[] DEFAULT '{}',
+                    metadata JSONB DEFAULT '{}',
+                    embedding vector(384),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_worldlore_user_conv
+                ON WorldLore(user_id, conversation_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_worldlore_category
+                ON WorldLore(category);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_worldlore_embedding_hnsw
+                ON WorldLore USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS MemoryContextEvolution (
                     memory_id INTEGER NOT NULL,
                     evolution_id INTEGER NOT NULL,
