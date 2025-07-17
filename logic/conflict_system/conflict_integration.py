@@ -422,6 +422,11 @@ class ConflictSystemIntegration:
         """Generate a new conflict with stakeholders and resolution paths"""
         await self.initialize()
         try:
+            # Ensure we have proper context
+            if not hasattr(self, 'user_id') or not hasattr(self, 'conversation_id'):
+                logger.error(f"Missing user_id or conversation_id in ConflictSystemIntegration")
+                return {"success": False, "error": "Missing user or conversation context"}
+                
             # Handle string (conflict_type) or None input
             if conflict_data_or_type is None or isinstance(conflict_data_or_type, str):
                 # Use the enhanced conflict generator
