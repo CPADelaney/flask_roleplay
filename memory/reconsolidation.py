@@ -207,9 +207,9 @@ class ReconsolidationManager:
         Get memory schemas for an entity.
         Schemas are patterns that influence how memories are altered.
         """
-        # Try to get from MemorySchemas table
+        # Try to get from MemorySchemas table - updated to match actual schema
         rows = await conn.fetch("""
-            SELECT id, schema_name, pattern, influence_strength
+            SELECT id, schema_name, category, schema_data
             FROM MemorySchemas
             WHERE user_id = $1 
               AND conversation_id = $2
@@ -218,15 +218,16 @@ class ReconsolidationManager:
         """, self.user_id, self.conversation_id, entity_type, entity_id)
         
         if rows:
-            return [
-                {
+            schemas = []
+            for row in rows:
+                schema_data = row["schema_data"] if isinstance(row["schema_data"], dict) else json.loads(row["schema_data"])
+                schemas.append({
                     "schema_name": row["schema_name"],
-                    "pattern": row["pattern"],
-                    "influence_strength": row["influence_strength"]
-                }
-                for row in rows
-            ]
-            
+                    "pattern": schema_data.get("description", ""),  # Extract pattern from schema_data
+                    "influence_strength": schema_data.get("confidence", 0.5)  # Use confidence as influence
+                })
+            return schemas
+        
         # If no schemas found, create default ones based on entity type
         default_schemas = []
         
