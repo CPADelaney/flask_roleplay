@@ -1357,7 +1357,7 @@ class NewGameAgent:
         
         try:
             # Get the lore system instance and initialize it
-            lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
+            lore_system = await DynamicLoreGenerator.get_instance(user_id, conversation_id)
             await lore_system.initialize()
             
             # Generate comprehensive lore based on the environment
