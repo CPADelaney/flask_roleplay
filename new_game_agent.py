@@ -1227,14 +1227,8 @@ class NewGameAgent:
             
             conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
             
-            # Create proper context for conflict generation
-            conflict_ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
-            
-            # Pass context as first parameter
-            initial_conflict = await conflict_integration.generate_conflict(conflict_ctx, {
+            # No need to pass context - the integration already has user_id and conversation_id
+            initial_conflict = await conflict_integration.generate_conflict({
                 "conflict_type": "major",
                 "intensity": "medium",
                 "player_involvement": "indirect"
