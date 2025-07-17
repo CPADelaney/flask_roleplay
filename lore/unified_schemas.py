@@ -41,7 +41,7 @@ class FactionModel(BaseModel):
 # Using RootModel for Pydantic v2 compatibility instead of __root__
 class FactionsOutput(RootModel):
     """Container for multiple factions."""
-    root: List[FactionModel]
+    factions: List[FactionSchema]
 
 
 class CulturalElementModel(BaseModel):
@@ -58,7 +58,7 @@ class CulturalElementModel(BaseModel):
 # Using RootModel for Pydantic v2 compatibility
 class CulturalElementsOutput(RootModel):
     """Container for multiple cultural elements."""
-    root: List[CulturalElementModel]
+    elements: List[CulturalElementSchema]
 
 
 class HistoricalEventModel(BaseModel):
@@ -77,7 +77,7 @@ class HistoricalEventModel(BaseModel):
 # Using RootModel for Pydantic v2 compatibility
 class HistoricalEventsOutput(RootModel):
     """Container for multiple historical events."""
-    root: List[HistoricalEventModel]
+    events: List[HistoricalEventSchema]
 
 
 class LocationModel(BaseModel):
@@ -94,7 +94,7 @@ class LocationModel(BaseModel):
 # Using RootModel for Pydantic v2 compatibility
 class LocationsOutput(RootModel):
     """Container for multiple locations."""
-    root: List[LocationModel]
+    locations: List[LocationSchema]
 
 
 class QuestModel(BaseModel):
@@ -112,4 +112,4 @@ class QuestModel(BaseModel):
 # Using RootModel for Pydantic v2 compatibility
 class QuestsOutput(RootModel):
     """Container for multiple quests."""
-    root: List[QuestModel]
+    quests: List[QuestSchema]
