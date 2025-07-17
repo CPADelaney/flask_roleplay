@@ -373,8 +373,7 @@ async def generate_factions(ctx, environment_desc: str, social_structure: str) -
     """
     result = await Runner.run(factions_agent, user_prompt, context=ctx.context)
     final_output = result.final_output_as(FactionsOutput)
-    # __root__ is a list of FactionSchema objects
-    return [f.dict() for f in final_output.__root__]
+    return [f.dict() for f in final_output.factions]
 
 @create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -400,7 +399,7 @@ async def generate_cultural_elements(ctx, environment_desc: str, faction_names: 
     """
     result = await Runner.run(cultural_agent, user_prompt, context=ctx.context)
     final_output = result.final_output_as(CulturalElementsOutput)
-    return [c.dict() for c in final_output.__root__]
+    return [c.dict() for c in final_output.elements]
 
 @create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -428,7 +427,7 @@ async def generate_historical_events(ctx, environment_desc: str, world_history: 
     """
     result = await Runner.run(history_agent, user_prompt, context=ctx.context)
     final_output = result.final_output_as(HistoricalEventsOutput)
-    return [h.dict() for h in final_output.__root__]
+    return [h.dict() for h in final_output.events]
 
 @create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -454,7 +453,7 @@ async def generate_locations(ctx, environment_desc: str, faction_names: str) -> 
     """
     result = await Runner.run(locations_agent, user_prompt, context=ctx.context)
     final_output = result.final_output_as(LocationsOutput)
-    return [l.dict() for l in final_output.__root__]
+    return [l.dict() for l in final_output.locations]
 
 @create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -482,7 +481,7 @@ async def generate_quest_hooks(ctx, environment_desc: str, faction_names: str, l
     """
     result = await Runner.run(quests_agent, user_prompt, context=ctx.context)
     final_output = result.final_output_as(QuestsOutput)
-    return [q.dict() for q in final_output.__root__]
+    return [q.dict() for q in final_output.quests]
 
 @create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -565,9 +564,10 @@ factions_agent = create_lore_agent(
     name="FactionsAgent",
     instructions=(
         "You generate 3-5 distinct factions for a given setting. "
-        "Return valid JSON as an array of objects, matching FactionsOutput. "
+        'Return valid JSON as an OBJECT with a "factions" field containing an array: {"factions": [{...}, ...]}. '
         "Each faction object has: name, type, description, values, goals, "
         "headquarters, rivals, allies, hierarchy_type, etc. "
+        "Do NOT return just an array. Always wrap in an object with a 'factions' key. "
         "No extra text outside the JSON."
     ),
     output_type=FactionsOutput,
@@ -578,9 +578,10 @@ cultural_agent = create_lore_agent(
     name="CulturalAgent",
     instructions=(
         "You create cultural elements like traditions, customs, rituals. "
-        "Return JSON matching CulturalElementsOutput: an array of objects. "
+        'Return JSON as an OBJECT with an "elements" field containing an array: {"elements": [{...}, ...]}. '
         "Fields include: name, type, description, practiced_by, significance, "
-        "historical_origin. No extra text outside the JSON."
+        "historical_origin. Do NOT return just an array. Always wrap in an object with an 'elements' key. "
+        "No extra text outside the JSON."
     ),
     output_type=CulturalElementsOutput,
     temperature=0.5
@@ -589,9 +590,10 @@ cultural_agent = create_lore_agent(
 history_agent = create_lore_agent(
     name="HistoryAgent",
     instructions=(
-        "You create major historical events. Return JSON matching "
-        "HistoricalEventsOutput: an array with fields name, date_description, "
-        "description, participating_factions, consequences, significance. "
+        "You create major historical events. Return JSON as "
+        'an OBJECT with an "events" field containing an array: {"events": [{...}, ...]}. '
+        "Fields: name, date_description, description, participating_factions, "
+        "consequences, significance. Do NOT return just an array. Always wrap in an object with an 'events' key. "
         "No extra text outside the JSON."
     ),
     output_type=HistoricalEventsOutput,
@@ -601,10 +603,11 @@ history_agent = create_lore_agent(
 locations_agent = create_lore_agent(
     name="LocationsAgent",
     instructions=(
-        "You generate 5-8 significant locations. Return JSON matching "
-        "LocationsOutput: an array of objects with fields name, description, "
-        "type, controlling_faction, notable_features, hidden_secrets, "
-        "strategic_importance. No extra text outside the JSON."
+        "You generate 5-8 significant locations. Return JSON as "
+        'an OBJECT with a "locations" field containing an array: {"locations": [{...}, ...]}. '
+        "Fields: name, description, type, controlling_faction, notable_features, "
+        "hidden_secrets, strategic_importance. Do NOT return just an array. Always wrap in an object with a 'locations' key. "
+        "No extra text outside the JSON."
     ),
     output_type=LocationsOutput,
     temperature=0.7
@@ -613,9 +616,11 @@ locations_agent = create_lore_agent(
 quests_agent = create_lore_agent(
     name="QuestsAgent",
     instructions=(
-        "You create 5-7 quest hooks. Return JSON matching QuestsOutput: an "
-        "array of objects with quest_name, quest_giver, location, description, "
+        "You create 5-7 quest hooks. Return JSON as "
+        'an OBJECT with a "quests" field containing an array: {"quests": [{...}, ...]}. '
+        "Fields: quest_name, quest_giver, location, description, "
         "objectives, rewards, difficulty, lore_significance. "
+        "Do NOT return just an array. Always wrap in an object with a 'quests' key. "
         "No extra text outside the JSON."
     ),
     output_type=QuestsOutput,
