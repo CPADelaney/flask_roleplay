@@ -6,7 +6,9 @@ import json
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
-import openai
+
+# Import the OpenAI helper functions from chatgpt_integration
+from logic.chatgpt_integration import get_async_openai_client, get_openai_client
 
 from .connection import with_transaction
 from .core import Memory, MemoryType, MemorySignificance
@@ -169,13 +171,10 @@ class ReconsolidationManager:
         new_fidelity = max(0.1, min(1.0, current_fidelity + fidelity_change))
         memory.metadata["fidelity"] = new_fidelity
         
-        # Generate embedding for the altered text
+        # Generate embedding for the altered text using the helper function
         embedding = None
         try:
-            from openai import AsyncOpenAI
-            
-            # In the method, create client
-            client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            client = get_async_openai_client()
             response = await client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=altered_text
@@ -208,9 +207,9 @@ class ReconsolidationManager:
         Get memory schemas for an entity.
         Schemas are patterns that influence how memories are altered.
         """
-        # Try to get from MemorySchemas table - using the correct columns
+        # Try to get from MemorySchemas table
         rows = await conn.fetch("""
-            SELECT id, schema_name, schema_data
+            SELECT id, schema_name, pattern, influence_strength
             FROM MemorySchemas
             WHERE user_id = $1 
               AND conversation_id = $2
@@ -219,20 +218,14 @@ class ReconsolidationManager:
         """, self.user_id, self.conversation_id, entity_type, entity_id)
         
         if rows:
-            schemas = []
-            for row in rows:
-                schema_data = row["schema_data"] if isinstance(row["schema_data"], dict) else json.loads(row["schema_data"] or "{}")
-                
-                # Extract pattern and influence_strength from schema_data
-                pattern = schema_data.get("description", "")  # Use description as pattern
-                influence_strength = schema_data.get("confidence", 0.5)  # Use confidence as influence_strength
-                
-                schemas.append({
+            return [
+                {
                     "schema_name": row["schema_name"],
-                    "pattern": pattern,
-                    "influence_strength": influence_strength
-                })
-            return schemas
+                    "pattern": row["pattern"],
+                    "influence_strength": row["influence_strength"]
+                }
+                for row in rows
+            ]
             
         # If no schemas found, create default ones based on entity type
         default_schemas = []
@@ -297,10 +290,10 @@ class ReconsolidationManager:
         """
         Find memories similar to the given one that could cause source confusion.
         """
-        # Generate embedding for comparison
+        # Generate embedding for comparison using the helper function
         embedding = None
         try:
-            client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            client = get_async_openai_client()
             response = await client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=memory_text
@@ -316,7 +309,7 @@ class ReconsolidationManager:
                 
                 if significant_words:
                     # Use OR query with the significant words
-                    conditions = " OR ".join([f"memory_text ILIKE '%' || $" + str(i+5) + " || '%'" for i, _ in enumerate(significant_words[:5])])
+                    conditions = " OR ".join([f"memory_text ILIKE '%' || $" + str(i+6) + " || '%'" for i, _ in enumerate(significant_words[:5])])
                     params = [memory_id, entity_type, entity_id, self.user_id, self.conversation_id] + significant_words[:5]
                     
                     query = f"""
@@ -338,18 +331,22 @@ class ReconsolidationManager:
         
         # If we have an embedding, use vector search
         if embedding:
+            # Convert to PostgreSQL array format if needed
+            embedding_array = embedding if isinstance(embedding, list) else list(embedding)
+            
             rows = await conn.fetch("""
                 SELECT id, memory_text, significance, emotional_intensity,
-                       embedding <-> $1 AS similarity
+                       embedding <-> $1::vector AS similarity
                 FROM unified_memories
                 WHERE id != $2
                   AND entity_type = $3
                   AND entity_id = $4
                   AND user_id = $5
                   AND conversation_id = $6
+                  AND embedding IS NOT NULL
                 ORDER BY similarity
                 LIMIT 3
-            """, embedding, memory_id, entity_type, entity_id, self.user_id, self.conversation_id)
+            """, embedding_array, memory_id, entity_type, entity_id, self.user_id, self.conversation_id)
             
             similar_memories = []
             for row in rows:
@@ -371,12 +368,12 @@ class ReconsolidationManager:
         similar_memories: List[Dict[str, Any]],
     ) -> str:
         """
-        Alter a memory using Responses API (or simple fallback for tiny changes).
+        Alter a memory using the async OpenAI client from chatgpt_integration.
         """
         if alteration_strength < 0.1 and random.random() < 0.7:
             return self._simple_text_alteration(memory_text, alteration_strength)
     
-        client = get_openai_client()
+        client = get_async_openai_client()
     
         schema_text = ""
         if schemas:
@@ -412,13 +409,17 @@ class ReconsolidationManager:
         """
     
         try:
-            resp = await client.responses.create(
+            # Use chat completions instead of responses API
+            response = await client.chat.completions.create(
                 model="gpt-4.1-nano",
-                instructions="You simulate memory reconsolidation.",
-                input=prompt,
-                temperature=0.4
+                messages=[
+                    {"role": "system", "content": "You simulate human memory reconsolidation."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.4,
+                max_tokens=500
             )
-            return resp.output_text.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
             logger.error("Memory alteration failed: %s", e)
             return self._simple_text_alteration(memory_text, alteration_strength)
@@ -500,7 +501,7 @@ class ReconsolidationManager:
               AND conversation_id = $4
               AND memory_type NOT IN ('semantic', 'consolidated')
               AND significance < $5
-              AND is_archived = FALSE
+              AND status = 'active'
             ORDER BY RANDOM()
             LIMIT $6
         """, entity_type, entity_id, self.user_id, self.conversation_id, 
