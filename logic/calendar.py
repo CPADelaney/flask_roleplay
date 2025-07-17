@@ -6,24 +6,16 @@ REFACTORED: All database writes now go through canon
 
 import json
 import logging
-from openai import AsyncOpenAI
+from typing import Dict
 import asyncio
 import asyncpg
 from db.connection import get_db_connection_context
-from logic.chatgpt_integration import get_openai_client, build_message_history, safe_json_loads
+from logic.chatgpt_integration import get_async_openai_client, build_message_history, safe_json_loads
 from lore.core import canon
 from agents import RunContextWrapper
 
 # Configure logging as needed.
 logging.basicConfig(level=logging.INFO)
-
-async def get_openai_client() -> AsyncOpenAI:
-    """
-    Centralised factory so every call site gets the *same* AsyncOpenAI instance.
-    Keeps your API key / base_url in one place.
-    """
-    # Re-use a singleton if you want; demonstration keeps it simple.
-    return AsyncOpenAI()                # or AsyncOpenAI(base_url=..., api_key=...)
 
 # ---------------------------------------------------------------------------
 async def get_chatgpt_response_no_function(
@@ -35,9 +27,7 @@ async def get_chatgpt_response_no_function(
     Fire a call to the Responses endpoint and return the plain-text output.
     """
 
-    client: AsyncOpenAI = await get_openai_client()   # ⭐ now awaited because the
-                                                      #   factory could become async
-                                                      #   (e.g., to fetch creds)
+    client = await get_async_openai_client()   # Use the existing function
 
     # prepare the request payload ------------------------------------------
     messages = await build_message_history(
@@ -59,6 +49,7 @@ async def get_chatgpt_response_no_function(
         "response": response_text,
         "tokens_used": tokens_used,
     }
+
     
 async def generate_calendar_names(environment_desc, conversation_id):
     """
