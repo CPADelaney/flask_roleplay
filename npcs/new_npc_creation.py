@@ -2,7 +2,7 @@
 """
 Unified NPC creation functionality.
 """
-from __future__ import
+from __future__ import annotations
 import logging
 import json
 import asyncio
