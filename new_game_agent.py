@@ -1312,7 +1312,6 @@ class NewGameAgent:
                     async with get_db_connection_context() as conn:
                         await canon.update_current_roleplay(
                             canon_ctx, conn,
-                            user_id, conversation_id,
                             'WelcomeImageUrl', welcome_image_url
                         )
                     logging.info("Welcome image generated successfully")
