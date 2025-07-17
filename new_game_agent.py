@@ -1233,7 +1233,8 @@ class NewGameAgent:
         try:
             from logic.conflict_system.conflict_integration import ConflictSystemIntegration
             
-            conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+            # Use get_instance instead of direct instantiation
+            conflict_integration = await ConflictSystemIntegration.get_instance(user_id, conversation_id)
             
             # No need to pass context - the integration already has user_id and conversation_id
             initial_conflict = await conflict_integration.generate_conflict({
