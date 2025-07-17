@@ -5,7 +5,7 @@ import re
 import logging
 import asyncio
 from db.connection import get_db_connection_context
-from logic.chatgpt_integration import get_chatgpt_response
+from logic.chatgpt_integration import get_async_openai_client
 # from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
 
 logger = logging.getLogger(__name__)
@@ -138,6 +138,7 @@ class CurrencyGenerator:
     async def _generate_currency_system(self, setting_context):
         """
         Use GPT to generate an appropriate currency system for the setting.
+        This uses a direct OpenAI client call instead of the complex roleplay system.
         """
         prompt = f"""
         Create a unique, immersive currency system for this game world:
@@ -167,54 +168,43 @@ class CurrencyGenerator:
         }}
         
         Focus on creating something memorable that enhances immersion.
+        RESPOND ONLY WITH THE JSON, no additional text.
         """
         
         try:
-            gpt_response = await get_chatgpt_response(
-                self.conversation_id,
-                setting_context,
-                prompt
+            # Use the async OpenAI client directly
+            client = get_async_openai_client()
+            
+            response = await client.chat.completions.create(
+                model="gpt-4.1-nano",
+                messages=[
+                    {"role": "system", "content": "You are a creative game world designer specializing in economic systems."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=500,
+                response_format={"type": "json_object"}  # Force JSON response
             )
             
-            # Extract JSON data
-            if gpt_response.get("type") == "function_call":
-                currency_system = gpt_response.get("function_args", {})
-            else:
-                response_text = gpt_response.get("response", "")
-                # Try to extract JSON from the response
-                json_match = re.search(r'```(?:json)?\s*({.*?})\s*```', response_text, re.DOTALL)
-                if json_match:
-                    try:
-                        currency_system = json.loads(json_match.group(1))
-                    except json.JSONDecodeError:
-                        currency_system = {}
-                else:
-                    # Try to find JSON without code blocks
-                    json_match = re.search(r'{[\s\S]*}', response_text)
-                    if json_match:
-                        try:
-                            currency_system = json.loads(json_match.group(0))
-                        except json.JSONDecodeError:
-                            currency_system = {}
-                    else:
-                        currency_system = {}
+            response_text = response.choices[0].message.content or "{}"
+            
+            try:
+                currency_system = json.loads(response_text)
+            except json.JSONDecodeError:
+                logging.error(f"Failed to parse JSON response: {response_text}")
+                currency_system = {}
             
             # Ensure we have the required fields
             if not currency_system.get("currency_name"):
-                # Extract currency name using regex as fallback
-                currency_name_match = re.search(r'"currency_name":\s*"([^"]+)"', response_text)
-                if currency_name_match:
-                    currency_system["currency_name"] = currency_name_match.group(1)
+                # Fallback based on setting
+                if "cyberpunk" in setting_context.lower():
+                    currency_system["currency_name"] = "credit"
+                elif "fantasy" in setting_context.lower() or "medieval" in setting_context.lower():
+                    currency_system["currency_name"] = "gold piece"
+                elif "apocalyptic" in setting_context.lower():
+                    currency_system["currency_name"] = "scrip"
                 else:
-                    # Last resort fallback
-                    if "cyberpunk" in setting_context.lower():
-                        currency_system["currency_name"] = "credit"
-                    elif "fantasy" in setting_context.lower() or "medieval" in setting_context.lower():
-                        currency_system["currency_name"] = "gold piece"
-                    elif "apocalyptic" in setting_context.lower():
-                        currency_system["currency_name"] = "scrip"
-                    else:
-                        currency_system["currency_name"] = "coin"
+                    currency_system["currency_name"] = "coin"
             
             # Set plural form if missing
             if not currency_system.get("currency_plural"):
