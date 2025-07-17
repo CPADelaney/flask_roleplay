@@ -1950,7 +1950,7 @@ class NPCCreationHandler:
             # Import canon system
             from lore.core import canon
             
-            # Create a proper canonical context EARLY - moved to top
+            # Create a proper canonical context EARLY
             canon_ctx = type('CanonicalContext', (), {
                 'user_id': user_id,
                 'conversation_id': conversation_id
@@ -2013,20 +2013,6 @@ class NPCCreationHandler:
             # Format archetypes for database
             archetype_objs = [{"name": name} for name in archetype_names]
             
-            # Get or generate schedule
-            schedule = npc_data.get("schedule", {})
-            if not schedule:
-                schedule = await self.generate_schedule(
-                    ctx, npc_name, environment_desc, day_names
-                )
-            
-            # Get or generate memories
-            memories = npc_data.get("memories", [])
-            if not memories:
-                memories = await self.generate_memories(
-                    ctx, npc_name, environment_desc
-                )
-            
             # Apply subtle femdom elements
             npc_data_with_femdom = await self.integrate_femdom_elements({
                 "npc_name": npc_name,
@@ -2054,7 +2040,73 @@ class NPCCreationHandler:
             birth_day = random.randint(1, 28)
             birthdate = f"{birth_month} {birth_day}"
             
-            # Determine current location using canon
+            # =====================================================
+            # STEP 1: CREATE THE NPC FIRST (with minimal data)
+            # =====================================================
+            async with get_db_connection_context() as conn:
+                # Create NPC canonically with just the basic info
+                npc_id = await canon.find_or_create_npc(
+                    canon_ctx, conn, npc_name,
+                    role=archetype_summary,
+                    affiliations=npc_data.get("affiliations", [])
+                )
+                
+                if not npc_id:
+                    raise ValueError(f"Failed to create NPC {npc_name} - no ID returned")
+                
+                logger.info(f"Created NPC {npc_name} with ID {npc_id}")
+                
+                # Update with basic stats first
+                basic_updates = {
+                    "introduced": introduced,
+                    "sex": sex,
+                    "dominance": dominance,
+                    "cruelty": cruelty,
+                    "closeness": closeness,
+                    "trust": trust,
+                    "respect": respect,
+                    "intensity": intensity,
+                    "archetypes": json.dumps(archetype_objs),
+                    "archetype_summary": archetype_summary,
+                    "archetype_extras_summary": archetype_extras_summary,
+                    "likes": json.dumps(likes),
+                    "dislikes": json.dumps(dislikes),
+                    "hobbies": json.dumps(hobbies),
+                    "personality_traits": json.dumps(personality_traits),
+                    "age": age,
+                    "birthdate": birthdate,
+                    "relationships": '[]',
+                    "memory": '[]',  # Empty for now
+                    "schedule": '{}',  # Empty for now
+                    "physical_description": physical_description,
+                    "current_location": ""  # Will determine later
+                }
+                
+                await canon.update_entity_canonically(
+                    canon_ctx, conn, "NPCStats", npc_id, basic_updates,
+                    f"Initial setup for NPC {npc_name}"
+                )
+            
+            # =====================================================
+            # STEP 2: GENERATE SCHEDULE (requires NPC to exist)
+            # =====================================================
+            schedule = npc_data.get("schedule", {})
+            if not schedule:
+                schedule = await self.generate_schedule(
+                    ctx, npc_name, environment_desc, day_names
+                )
+                
+                # Update the NPC with the schedule
+                async with get_db_connection_context() as conn:
+                    await canon.update_entity_canonically(
+                        canon_ctx, conn, "NPCStats", npc_id,
+                        {"schedule": json.dumps(schedule)},
+                        f"Adding schedule to NPC {npc_name}"
+                    )
+            
+            # =====================================================
+            # STEP 3: DETERMINE CURRENT LOCATION (requires schedule)
+            # =====================================================
             current_location = npc_data.get("current_location", "")
             if not current_location:
                 # Determine current time of day and day
@@ -2097,64 +2149,47 @@ class NPCCreationHandler:
                 if not current_location:
                     async with get_db_connection_context() as conn:
                         current_location = await canon.find_or_create_location(
-                            canon_ctx, conn, "Town Square"  # Using canon_ctx here
+                            canon_ctx, conn, "Town Square"
                         )
+                
+                # Update location
+                async with get_db_connection_context() as conn:
+                    await canon.update_entity_canonically(
+                        canon_ctx, conn, "NPCStats", npc_id,
+                        {"current_location": current_location},
+                        f"Setting current location for NPC {npc_name}"
+                    )
             
-            # Use canon system to find or create the NPC
-            async with get_db_connection_context() as conn:
-                # Create NPC canonically
-                npc_id = await canon.find_or_create_npc(
-                    canon_ctx, conn, npc_name,  # Using canon_ctx here
-                    role=archetype_summary,
-                    affiliations=npc_data.get("affiliations", [])
+            # =====================================================
+            # STEP 4: GENERATE MEMORIES (requires NPC to exist)
+            # =====================================================
+            memories = npc_data.get("memories", [])
+            if not memories:
+                memories = await self.generate_memories(
+                    ctx, npc_name, environment_desc
                 )
                 
-                if not npc_id:
-                    raise ValueError(f"Failed to create NPC {npc_name} - no ID returned")
-                
-                logger.info(f"Created NPC {npc_name} with ID {npc_id}")
-                
-                # Now update the NPC with full details using canon system
-                updates = {
-                    "introduced": introduced,
-                    "sex": sex,
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "closeness": closeness,
-                    "trust": trust,
-                    "respect": respect,
-                    "intensity": intensity,
-                    "archetypes": json.dumps(archetype_objs),
-                    "archetype_summary": archetype_summary,
-                    "archetype_extras_summary": archetype_extras_summary,
-                    "likes": json.dumps(likes),
-                    "dislikes": json.dumps(dislikes),
-                    "hobbies": json.dumps(hobbies),
-                    "personality_traits": json.dumps(personality_traits),
-                    "age": age,
-                    "birthdate": birthdate,
-                    "relationships": '[]',
-                    "memory": json.dumps(memories),
-                    "schedule": json.dumps(schedule),
-                    "physical_description": physical_description,
-                    "current_location": current_location
-                }
-                
-                # Update through canon system
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id, updates,  # Using canon_ctx here
-                    f"Fully initializing NPC {npc_name} with personality, stats, and background"
-                )
+                # Update the NPC with the generated memories
+                async with get_db_connection_context() as conn:
+                    await canon.update_entity_canonically(
+                        canon_ctx, conn, "NPCStats", npc_id,
+                        {"memory": json.dumps(memories)},
+                        f"Adding generated memories to NPC {npc_name}"
+                    )
             
+            # =====================================================
+            # STEP 5: ASSIGN RELATIONSHIPS (requires NPC to exist)
+            # =====================================================
             try:
-                # Assign canonical relationships
                 await self.assign_random_relationships_canonical(
                     user_id, conversation_id, npc_id, npc_name, archetype_objs
                 )
             except Exception as e:
                 logging.error(f"Error assigning relationships for NPC {npc_id}: {e}")
             
-            # Initialize memory system
+            # =====================================================
+            # STEP 6: INITIALIZE MEMORY SYSTEM (requires NPC & memories)
+            # =====================================================
             try:
                 memory_system = await _await_logged(
                     "MemorySystem.get_instance",
@@ -2305,100 +2340,10 @@ class NPCCreationHandler:
                     f"Error initializing memory system for NPC {npc_id}: {e}",
                     exc_info=True,
                 )
-                
-                # Generate initial beliefs
-                await self.generate_npc_beliefs(user_id, conversation_id, npc_id, {
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "archetype_summary": archetype_summary
-                })
-                
-                # Initialize memory schemas
-                await self.initialize_npc_memory_schemas(user_id, conversation_id, npc_id, {
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "archetype_summary": archetype_summary
-                })
-                
-                # Setup trauma model if appropriate
-                await self.setup_npc_trauma_model(user_id, conversation_id, npc_id, {
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "archetype_summary": archetype_summary
-                }, memories)
-                
-                # Setup flashback triggers
-                await self.setup_npc_flashback_triggers(user_id, conversation_id, npc_id, {
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "archetype_summary": archetype_summary
-                })
-                
-                # Generate counterfactual memories
-                await self.generate_counterfactual_memories(user_id, conversation_id, npc_id, {
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "archetype_summary": archetype_summary
-                })
-                
-                # Plan mask revelations
-                await self.plan_mask_revelations(user_id, conversation_id, npc_id, {
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "archetype_summary": archetype_summary
-                })
-                
-                # Setup relationship evolution tracking
-                await self.setup_relationship_evolution_tracking(user_id, conversation_id, npc_id, relationships=[])
-                
-                # Build semantic networks
-                await self.build_initial_semantic_network(user_id, conversation_id, npc_id, {
-                    "npc_name": npc_name,
-                    "archetype_summary": archetype_summary
-                })
-                
-                # Detect memory patterns
-                await self.detect_memory_patterns(user_id, conversation_id, npc_id)
-                
-                # Schedule memory maintenance
-                await self.schedule_npc_memory_maintenance(user_id, conversation_id, npc_id)
-                
-            except Exception as e:
-                logging.error(f"Error initializing memory system for NPC {npc_id}: {e}")
             
-            # Create NPC details dictionary
-            npc_details = {
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "physical_description": physical_description,
-                "personality": {
-                    "personality_traits": personality_traits,
-                    "likes": likes,
-                    "dislikes": dislikes,
-                    "hobbies": hobbies
-                },
-                "stats": {
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "closeness": closeness,
-                    "trust": trust,
-                    "respect": respect,
-                    "intensity": intensity
-                },
-                "archetypes": {
-                    "archetype_names": archetype_names,
-                    "archetype_summary": archetype_summary,
-                    "archetype_extras_summary": archetype_extras_summary
-                },
-                "schedule": schedule,
-                "memories": memories,
-                "current_location": current_location
-            }
-    
-            # Inform Nyx about the new NPC canonically            
+            # =====================================================
+            # STEP 7: INFORM NYX (requires NPC to exist)
+            # =====================================================
             try:
                 from nyx.integrate import remember_with_governance, add_joint_memory_with_governance
                 
@@ -2438,6 +2383,37 @@ class NPCCreationHandler:
             except Exception as e:
                 logging.error(f"Error informing Nyx about new NPC: {e}")
             
+            # =====================================================
+            # STEP 8: CREATE RESULT DICTIONARY
+            # =====================================================
+            npc_details = {
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "physical_description": physical_description,
+                "personality": {
+                    "personality_traits": personality_traits,
+                    "likes": likes,
+                    "dislikes": dislikes,
+                    "hobbies": hobbies
+                },
+                "stats": {
+                    "dominance": dominance,
+                    "cruelty": cruelty,
+                    "closeness": closeness,
+                    "trust": trust,
+                    "respect": respect,
+                    "intensity": intensity
+                },
+                "archetypes": {
+                    "archetype_names": archetype_names,
+                    "archetype_summary": archetype_summary,
+                    "archetype_extras_summary": archetype_extras_summary
+                },
+                "schedule": schedule,
+                "memories": memories,
+                "current_location": current_location
+            }
+    
             # Return the NPC details
             return npc_details
             
