@@ -70,6 +70,9 @@ class LoreSystem:
         self.world_politics_manager = WorldPoliticsManager(user_id, conversation_id)
         self.lore_dynamics_system = LoreDynamicsSystem(user_id, conversation_id)
         
+        # Initialize generator (will be fully set up during initialization)
+        self.generator = None
+        
         # Store prohibited actions from directives
         self.prohibited_actions = []
         # Store modifications from directives
@@ -78,13 +81,14 @@ class LoreSystem:
         # Track which managers need governance registration
         self._managers_needing_registration = []
 
+
     @classmethod
     async def get_instance(cls, user_id: int, conversation_id: int) -> "LoreSystem":
         """Singleton instance retrieval for a given user/conversation context."""
         key = f"{user_id}:{conversation_id}"
         if key not in cls._instances:
             instance = cls(user_id, conversation_id)
-            await instance.ensure_initialized()
+            # Don't await initialization here - let ensure_initialized handle it
             cls._instances[key] = instance
         return cls._instances[key]
 
@@ -92,8 +96,17 @@ class LoreSystem:
         """Ensure the LoreSystem is initialized."""
         if self.initialized:
             return
-        self.initialized = True
+        
+        # Actually initialize the system if not already done
+        if not self._initializing:
+            await self.initialize()
+        else:
+            # Wait for initialization to complete if it's in progress
+            while self._initializing:
+                await asyncio.sleep(0.1)
+        
         logger.info(f"LoreSystem initialized for user {self.user_id}, conversation {self.conversation_id}.")
+
 
     def set_governor(self, governor: Any) -> None:
         """Set the governor instance. Should be called by the governor after creation."""
@@ -432,6 +445,14 @@ class LoreSystem:
     )
     async def generate_complete_lore(self, ctx, environment_desc: str) -> Dict[str, Any]:
         """Generate a complete set of lore for a game world via the generator."""
+        # Ensure the system is initialized
+        await self.ensure_initialized()
+        
+        # Check if generator exists
+        if not hasattr(self, 'generator') or self.generator is None:
+            logger.error("LoreSystem generator not available after initialization")
+            return {"error": "Lore generator not properly initialized"}
+        
         return await self.generator.generate_complete_lore(environment_desc)
 
     @with_governance(
@@ -442,11 +463,21 @@ class LoreSystem:
     )
     async def evolve_lore_with_event(self, ctx, event_description: str) -> Dict[str, Any]:
         """Update world lore based on a significant narrative event."""
+        # Ensure the system is initialized
+        await self.ensure_initialized()
+        
+        # Check if generator exists
+        if not hasattr(self, 'generator') or self.generator is None:
+            logger.error("LoreSystem generator not available after initialization")
+            return {"error": "Lore generator not properly initialized"}
+        
         return await self.generator.evolve_lore_with_event(event_description)
 
-    # Additionally, you could unify dynamic-lore updates with the LoreDynamicsSystem:
     async def mature_world_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
         """Example: call the LoreDynamicsSystem to mature lore over time."""
+        # Ensure the system is initialized
+        await self.ensure_initialized()
+        
         ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id
