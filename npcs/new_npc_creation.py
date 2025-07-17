@@ -629,7 +629,6 @@ class NPCCreationHandler:
                     model="gpt-4.1-nano",
                     openai_client=get_async_openai_client(),
                     # optional structured-output hints (if wrapper supports)
-                    max_output_tokens=800,  # bigger to allow 5x ~200-char mems
                 ),
                 model_settings=ModelSettings(temperature=0.8),
             )
