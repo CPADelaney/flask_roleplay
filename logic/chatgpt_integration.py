@@ -6,9 +6,15 @@ import functools
 import time 
 import openai
 from typing import Dict, List, Any, Optional, Union
-from db.connection import get_db_connection_context  # Updated to context manager
+from db.connection import get_db_connection_context
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
+
+# Nyx system imports
+from nyx.governance import NyxUnifiedGovernor
+from nyx.nyx_agent_sdk import process_user_input as nyx_process_input
+from nyx.nyx_agent_sdk import NyxContext
+from memory.memory_nyx_integration import get_memory_nyx_bridge
 
 # Try to import image prompting functions if available
 try:
@@ -478,15 +484,24 @@ async def get_chatgpt_response(
     conversation_id: int, 
     aggregator_text: str, 
     user_input: str,
-    reflection_enabled: bool = False
+    reflection_enabled: bool = False,
+    use_nyx_integration: bool = False
 ) -> dict[str, Any]:
     """
-    Get a response from OpenAI with an optional hidden reflection step.
-    When reflection_enabled=True, it first requests an internal reflection in JSON, 
-    then uses that hidden reflection to generate the final user-facing text.
+    Get a response from OpenAI with optional Nyx integration.
+    
+    Args:
+        conversation_id: ID of the conversation
+        aggregator_text: Aggregated context text
+        user_input: User's input message
+        reflection_enabled: Whether to use reflection step (default: False)
+        use_nyx_integration: Whether to use full Nyx agent system (default: False)
+    
+    Returns:
+        Dictionary containing response data
     """
-
-    # 1) Identify the user_id for this conversation
+    
+    # Get user_id from conversation
     try:
         async with get_db_connection_context() as conn:
             row = await conn.fetchrow(
@@ -509,8 +524,88 @@ async def get_chatgpt_response(
             "tokens_used": 0
         }
 
-    # 2) Possibly retrieve or build a system prompt that includes image guidance
-    #    Try to use image-aware prompt if available, otherwise fall back to regular prompt
+    # 1) If Nyx integration is enabled, use the full Nyx agent system
+    if use_nyx_integration:
+        try:
+            # Initialize governor
+            governor = NyxUnifiedGovernor(user_id, conversation_id)
+            await governor.initialize()
+            
+            # Build context data
+            context_data = {
+                "aggregator_text": aggregator_text,
+                "reflection_enabled": reflection_enabled,
+                "conversation_id": conversation_id,
+                "user_id": user_id
+            }
+            
+            # Get current game state
+            game_state = await governor.get_current_state()
+            context_data.update(game_state)
+            
+            # Process through Nyx agent system
+            nyx_result = await nyx_process_input(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                user_input=user_input,
+                context_data=context_data
+            )
+            
+            if nyx_result.get("success"):
+                response_data = nyx_result.get("response", {})
+                
+                # Build function call format if there are updates
+                function_args = {
+                    "narrative": response_data.get("narrative", ""),
+                    "roleplay_updates": {},
+                    "ChaseSchedule": {},
+                    "MainQuest": "",
+                    "PlayerRole": "",
+                    "npc_creations": [],
+                    "npc_updates": [],
+                    "character_stat_updates": {},
+                    "relationship_updates": [],
+                    "npc_introductions": [],
+                    "location_creations": [],
+                    "event_list_updates": [],
+                    "inventory_updates": {},
+                    "quest_updates": [],
+                    "social_links": [],
+                    "perk_unlocks": [],
+                    "activity_updates": [],
+                    "journal_updates": [],
+                    "image_generation": {
+                        "generate": response_data.get("generate_image", False),
+                        "priority": "medium" if response_data.get("generate_image") else "low",
+                        "focus": "scene",
+                        "framing": "medium_shot",
+                        "reason": response_data.get("image_prompt", "")
+                    }
+                }
+                
+                # Add time advancement if requested
+                if response_data.get("time_advancement", False):
+                    function_args["roleplay_updates"]["TimeAdvancement"] = True
+                
+                # Return in expected format
+                return {
+                    "type": "function_call",
+                    "function_name": "apply_universal_update",
+                    "function_args": function_args,
+                    "tokens_used": 0,  # Nyx system doesn't track tokens the same way
+                    "nyx_metrics": nyx_result.get("performance", {})
+                }
+            else:
+                # Fall back to regular processing if Nyx fails
+                logging.warning(f"Nyx processing failed: {nyx_result.get('error')}, falling back to regular processing")
+                
+        except Exception as e:
+            logging.error(f"Error in Nyx integration: {e}", exc_info=True)
+            # Fall back to regular processing
+
+    # 2) Regular OpenAI processing (fallback or when Nyx is disabled)
+    
+    # Possibly retrieve or build a system prompt that includes image guidance
     image_prompt = None
     if IMAGE_PROMPTING_AVAILABLE:
         try:
@@ -523,10 +618,10 @@ async def get_chatgpt_response(
     # Use image prompt if available, otherwise use regular SYSTEM_PROMPT
     primary_system_prompt = image_prompt if image_prompt else SYSTEM_PROMPT
 
-    # 3) Create the OpenAI client
+    # Create the OpenAI client
     openai_client = get_openai_client()
 
-    # 4) If reflection is OFF, do the single-step call as before
+    # If reflection is OFF, do the single-step call as before
     if not reflection_enabled:
         # Build message history (past user & assistant messages), up to 15
         messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
@@ -574,14 +669,12 @@ async def get_chatgpt_response(
                 "tokens_used": tokens_used
             }
 
-    # 5) If reflection is ON, do a two-step approach
+    # If reflection is ON, do a two-step approach
     else:
-        ### STEP A: Reflection Request ###
-        # We ask the model for a short JSON reflection (chain-of-thought) about the user input
+        # Step A: Reflection Request
         reflection_messages = [
             {"role": "system", "content": primary_system_prompt},
             {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
-            # aggregator_text can be included as a system or developer note
             {"role": "system", "content": aggregator_text},
             {
                 "role": "user",
@@ -609,7 +702,6 @@ DO NOT produce user-facing text here; only the JSON.
             temperature=0.2,
             max_tokens=2500,
             frequency_penalty=0.0,
-            # We *usually* don't want function calls in the reflection step. 
             functions=[],
             function_call="none"
         )
@@ -626,15 +718,27 @@ DO NOT produce user-facing text here; only the JSON.
             private_goals = reflection_data.get("private_goals", [])
             predicted_futures = reflection_data.get("predicted_futures", [])
         except Exception:
-            # Fallback if parse fails. We store the raw text in reflection_notes anyway.
             logging.warning("Reflection JSON parse failed. Storing raw text.")
             reflection_notes = reflection_msg
 
-        # (Optional) Store the reflection data in a hidden table, e.g. NyxMemories
-        # store_nyx_reflection(user_id, conversation_id, reflection_notes)
+        # Store reflection in memory system if available
+        try:
+            memory_bridge = await get_memory_nyx_bridge(user_id, conversation_id)
+            await memory_bridge.add_memory(
+                memory_text=f"Internal reflection: {reflection_notes}",
+                memory_type="reflection",
+                memory_scope="private",
+                significance=7,
+                tags=["nyx_reflection", "private"],
+                metadata={
+                    "private_goals": private_goals,
+                    "predicted_futures": predicted_futures
+                }
+            )
+        except Exception as e:
+            logging.warning(f"Could not store reflection in memory: {e}")
 
-        ### STEP B: Final (Public) Answer ###
-        # Now we feed the reflection back in as a hidden system note, but never reveal it
+        # Step B: Final (Public) Answer
         final_messages = [
             {"role": "system", "content": primary_system_prompt},
             {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
@@ -645,12 +749,8 @@ DO NOT produce user-facing text here; only the JSON.
                            f"Hidden Private Goals: {private_goals}\n"
                            f"Hidden Predicted Futures: {predicted_futures}"
             },
-            # We'll also retrieve the last ~15 messages of actual user/assistant conversation if you prefer:
-            # *Or* just the user prompt if you want to keep it simpler.
             {"role": "user", "content": user_input}
         ]
-        # If you want to include the prior chat history:
-        # final_messages.extend(await build_message_history(conversation_id, aggregator_text, user_input, limit=15))
 
         final_response = openai_client.chat.completions.create(
             model="gpt-4.1-nano",
