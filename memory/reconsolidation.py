@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 
 # Import the OpenAI helper functions from chatgpt_integration
-from logic.chatgpt_integration import get_async_openai_client, get_openai_client
 
 from .connection import with_transaction
 from .core import Memory, MemoryType, MemorySignificance
@@ -174,6 +173,7 @@ class ReconsolidationManager:
         # Generate embedding for the altered text using the helper function
         embedding = None
         try:
+            from logic.chatgpt_integration import get_async_openai_client, get_openai_client
             client = get_async_openai_client()
             response = await client.embeddings.create(
                 model="text-embedding-ada-002",
@@ -294,6 +294,7 @@ class ReconsolidationManager:
         # Generate embedding for comparison using the helper function
         embedding = None
         try:
+            from logic.chatgpt_integration import get_async_openai_client, get_openai_client
             client = get_async_openai_client()
             response = await client.embeddings.create(
                 model="text-embedding-ada-002",
@@ -373,7 +374,7 @@ class ReconsolidationManager:
         """
         if alteration_strength < 0.1 and random.random() < 0.7:
             return self._simple_text_alteration(memory_text, alteration_strength)
-    
+        from logic.chatgpt_integration import get_async_openai_client, get_openai_client
         client = get_async_openai_client()
     
         schema_text = ""
