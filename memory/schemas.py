@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple, Set
 import asyncio
 import openai
-from logic.chatgpt_integration import get_openai_client, build_message_history, safe_json_loads, get_chatgpt_response
 
 from .connection import TransactionContext, with_transaction
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
@@ -257,6 +256,9 @@ class MemorySchemaManager:
         """
         Detect a recurring pattern/schema in *memories* via Responses API.
         """
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import get_openai_client
+        
         client = get_openai_client()
     
         memories_text = "\n".join(
@@ -793,6 +795,9 @@ class MemorySchemaManager:
         """
         Relevance score (0.0-1.0) of *schema_data* to *memory_text*.
         """
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import get_openai_client
+        
         client = get_openai_client()
     
         schema_name = schema_data.get("name", "")
@@ -972,6 +977,9 @@ class MemorySchemaManager:
         """
         Produce a 100-150 word interpretation using applicable schemas.
         """
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import get_openai_client
+        
         client = get_openai_client()
     
         schemas_text = ""
@@ -1141,6 +1149,9 @@ class MemorySchemaManager:
         """
         Conflict score 0.0-1.0 (1 = total contradiction).
         """
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import get_openai_client
+        
         client = get_openai_client()
     
         schema_name = schema_data.get("name", "")
@@ -1182,6 +1193,9 @@ class MemorySchemaManager:
         """
         Brief (1-2 sentence) explanation of conflict.
         """
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import get_openai_client
+        
         client = get_openai_client()
     
         prompt = f"""
@@ -1308,6 +1322,9 @@ class MemorySchemaManager:
         """
         Produce an evolved schema JSON that resolves *conflicts*.
         """
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import get_openai_client
+        
         client = get_openai_client()
     
         # build prompt pieces
@@ -1470,6 +1487,9 @@ class MemorySchemaManager:
         """
         Merge multiple schemas into one comprehensive schema.
         """
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import get_openai_client
+        
         client = get_openai_client()
     
         schemas_text = ""
@@ -1685,6 +1705,9 @@ class MemorySchemaManager:
         """
         Similarity 0.0-1.0 between two schema descriptions.
         """
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import get_openai_client
+        
         client = get_openai_client()
     
         desc1 = schema1_data.get("description") or schema1_data.get("name", "")
