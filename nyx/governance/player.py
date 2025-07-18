@@ -9,7 +9,6 @@ from typing import Dict, Any, Optional, Union, List
 from datetime import datetime
 from .constants import DirectiveType
 from db.connection import get_db_connection_context
-from logic.chatgpt_integration import generate_text_completion
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +320,9 @@ class PlayerGovernanceMixin:
         context: Dict[str, Any]
     ) -> str:
         """Generate detailed reasoning for disagreement using LLM."""
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import generate_text_completion
+        
         # Build a detailed prompt for the LLM
         concern_descriptions = {
             "narrative_impact": "The action would disrupt narrative flow and pacing",
@@ -381,6 +383,9 @@ class PlayerGovernanceMixin:
         context: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """Generate an alternative suggestion using LLM for better context awareness."""
+        # Lazy import to avoid circular dependency
+        from logic.chatgpt_integration import generate_text_completion
+        
         primary_concern = concerns[0] if concerns else None
         
         # Build context for alternative generation
@@ -560,3 +565,82 @@ class PlayerGovernanceMixin:
             return True
             
         return True
+
+    # The following methods need to be implemented or imported from other mixins
+    async def _calculate_narrative_impact(
+        self,
+        action_type: str,
+        action_details: Dict[str, Any],
+        narrative_context: Dict[str, Any]
+    ) -> float:
+        """Calculate narrative impact - should be implemented in StoryGovernanceMixin."""
+        # Placeholder implementation
+        return 0.0
+
+    async def _calculate_world_integrity(
+        self,
+        action_type: str,
+        action_details: Dict[str, Any],
+        world_state: Dict[str, Any]
+    ) -> float:
+        """Calculate world integrity impact - should be implemented in WorldGovernanceMixin."""
+        # Placeholder implementation
+        return 0.0
+
+    async def _aligns_with_motivation(
+        self,
+        action_type: str,
+        action_details: Dict[str, Any],
+        character_state: Dict[str, Any]
+    ) -> bool:
+        """Check if action aligns with character motivation."""
+        # Placeholder implementation
+        return True
+
+    def _disrupts_development(
+        self,
+        action_type: str,
+        action_details: Dict[str, Any],
+        character_state: Dict[str, Any]
+    ) -> bool:
+        """Check if action disrupts character development."""
+        # Placeholder implementation
+        return False
+
+    def _maintains_relationships(
+        self,
+        action_type: str,
+        action_details: Dict[str, Any],
+        character_state: Dict[str, Any]
+    ) -> bool:
+        """Check if action maintains relationships."""
+        # Placeholder implementation
+        return True
+
+    async def _suggest_narrative_alternative(
+        self,
+        current_state: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate narrative-focused alternative."""
+        # Placeholder implementation
+        return {
+            "type": "narrative_alternative",
+            "suggestion": "Consider actions that advance the story",
+            "specific_options": ["Continue the main quest"],
+            "reasoning": "Story progression is important"
+        }
+
+    async def _suggest_world_alternative(
+        self,
+        world_state: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate world-focused alternative."""
+        # Placeholder implementation
+        return {
+            "type": "world_alternative",
+            "suggestion": "Respect the world's rules and logic",
+            "specific_options": ["Use established mechanics"],
+            "reasoning": "World consistency matters"
+        }
