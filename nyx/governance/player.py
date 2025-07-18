@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, Union, List
 from datetime import datetime
 from .constants import DirectiveType
 from db.connection import get_db_connection_context
-from nyx.llm_integration import generate_text_completion
+from logic.chatgpt_integration import generate_text_completion
 
 logger = logging.getLogger(__name__)
 
