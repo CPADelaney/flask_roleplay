@@ -1360,8 +1360,8 @@ class FactionGenerator(BaseGenerator):
                     embedding
                 )
                     
-                    logger.info(f"Stored location '{location_data['name']}' with id {location_id}")
-                    return location_id
+                logger.info(f"Stored location '{location_data['name']}' with id {location_id}")
+                return location_id
                     
         except Exception as e:
             logger.error(f"Error storing location: {e}")
