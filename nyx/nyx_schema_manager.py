@@ -212,7 +212,7 @@ class NyxSchemaManager:
             }
         
         # Generate schema analysis using LLM
-        from nyx.llm_integration import generate_text_completion
+        from logic.chatgpt_integration import generate_text_completion
         
         schema_analysis = await generate_text_completion(
             system_prompt="""You are analyzing roleplay context to identify database schema needs.
