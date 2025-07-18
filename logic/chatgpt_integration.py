@@ -13,7 +13,6 @@ from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
 
 # Nyx system imports
-from nyx.governance import NyxUnifiedGovernor
 from nyx.nyx_agent_sdk import process_user_input as nyx_process_input
 from nyx.nyx_agent_sdk import NyxContext
 from memory.memory_nyx_integration import get_memory_nyx_bridge
@@ -555,6 +554,7 @@ async def get_chatgpt_response(
     if use_nyx_integration:
         try:
             # Initialize governor
+            from nyx.governance import NyxUnifiedGovernor
             governor = NyxUnifiedGovernor(user_id, conversation_id)
             await governor.initialize()
             
