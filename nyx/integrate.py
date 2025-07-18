@@ -38,7 +38,7 @@ from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, Dir
 from nyx.nyx_agent_sdk import process_user_input, generate_reflection
 from nyx.user_model_sdk import process_user_input_for_model, get_response_guidance_for_user
 from nyx.scene_manager_sdk import process_scene_input, generate_npc_response
-from nyx.llm_integration import generate_text_completion
+from logic.chatgpt_integration import generate_text_completion
 
 # Import new game components
 from new_game_agent import NewGameAgent
