@@ -1,8 +1,9 @@
 # npcs/npc_agent.py
 """
 Core NPC agent implementation using OpenAI Agents SDK.
+Updated to use centralized ChatGPT integration.
 """
-from __future__ import annotations  # Add this line
+from __future__ import annotations
 
 import logging
 import json
@@ -17,19 +18,35 @@ from typing import List, Dict, Any, Optional, Tuple, Union, TypedDict, Set
 from pydantic import BaseModel, Field, validator
 from collections import OrderedDict
 
-from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
-from agents.tracing import custom_span, generation_span, function_span
-from db.connection import get_db_connection_context  # Updated import
+# Import centralized integration functions
+from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
+
+# Import Agents SDK components
+try:
+    from pydantic_ai import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
+except ImportError:
+    from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
+    from agents.tracing import custom_span, generation_span, function_span
+
+from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from npcs.npc_memory import NPCMemoryManager
 from .lore_context_manager import LoreContextManager
 
 logger = logging.getLogger(__name__)
 
+# -- Initialize the centralized model --
+try:
+    openai_model = get_agents_openai_model()
+except Exception as e:
+    logger.error(f"Failed to get OpenAI model from centralized integration: {e}")
+    openai_model = None
+
 # -- Outcome narration -------------------------------------------------
-action_outcome_generator = Agent(
-    name="NPC Action-Outcome Generator",
-    instructions="""
+if openai_model:
+    action_outcome_generator = Agent(
+        name="NPC Action-Outcome Generator",
+        instructions="""
 You turn a structured description of an NPC action into a short, vivid outcome
 sentence plus basic emotional metadata.  
 
@@ -38,35 +55,176 @@ Return *ONLY* valid JSON with keys:
   emotional_impact   – int   (-5…+5, negative = bad)
   target_reactions   – list[dict]   (each needs: entity, reaction, intensity 0-1)
 """,
-    model="gpt-4.1-nano",
-    model_settings=ModelSettings(temperature=0.7)
-)
+        model=openai_model,
+        model_settings=ModelSettings(temperature=0.7)
+    )
+else:
+    action_outcome_generator = None
 
 # -- Interaction detail generator --------------------------------------
-interaction_detail_generator = Agent(
-    name="NPC Interaction-Detail Generator",
-    instructions="""
+if openai_model:
+    interaction_detail_generator = Agent(
+        name="NPC Interaction-Detail Generator",
+        instructions="""
 Given: interaction_type, actor_name, target_name, relationship_state, location,
 create ONE sentence that fits the tone of a dark-erotic RPG but is PG-13.
 
 Return JSON: { "details": "<sentence>" }
 """,
-    model="gpt-4.1-nano",
-    model_settings=ModelSettings(temperature=0.8)
-)
+        model=openai_model,
+        model_settings=ModelSettings(temperature=0.8)
+    )
+else:
+    interaction_detail_generator = None
 
 # -- Activity generator (work / relax) ---------------------------------
-activity_generator = Agent(
-    name="NPC Activity Generator",
-    instructions="""
+if openai_model:
+    activity_generator = Agent(
+        name="NPC Activity Generator",
+        instructions="""
 Given activity_kind (work or relax), subtype, location, npc_name,
 produce a short `description` for what the NPC is doing.
 
 Return JSON: { "description": "<text>" }
 """,
-    model="gpt-4.1-nano",
-    model_settings=ModelSettings(temperature=0.75)
-)
+        model=openai_model,
+        model_settings=ModelSettings(temperature=0.75)
+    )
+else:
+    activity_generator = None
+
+# Fallback generation functions using async OpenAI client
+async def _fallback_generate_outcome(action_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Fallback outcome generation using async OpenAI client."""
+    try:
+        client = get_async_openai_client()
+        
+        messages = [
+            {
+                "role": "system",
+                "content": "You generate outcomes for NPC actions in a narrative game. Return only valid JSON."
+            },
+            {
+                "role": "user",
+                "content": f"""Generate an outcome for this NPC action:
+Action type: {action_data.get('action_type')}
+Description: {action_data.get('description')}
+Target: {action_data.get('target')}
+
+Return a JSON object with:
+- outcome: A vivid description (max 120 chars)
+- emotional_impact: Integer from -5 to +5
+- target_reactions: Array of reaction objects with entity, reaction, intensity"""
+            }
+        ]
+        
+        response = await client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=300,
+            response_format={"type": "json_object"}
+        )
+        
+        # Parse JSON response
+        return json.loads(response.choices[0].message.content)
+        
+    except json.JSONDecodeError:
+        # Fallback to basic outcome
+        return {
+            "outcome": f"{action_data.get('description', 'Action')} succeeds.",
+            "emotional_impact": 0,
+            "target_reactions": []
+        }
+    except Exception as e:
+        logger.error(f"Fallback outcome generation failed: {e}")
+        return {
+            "outcome": f"{action_data.get('description', 'Action')} occurs.",
+            "emotional_impact": 0,
+            "target_reactions": []
+        }
+
+async def _fallback_generate_interaction_details(
+    interaction_type: str,
+    actor_name: str,
+    target_name: str,
+    relationship_state: Dict[str, Any],
+    location: str
+) -> str:
+    """Fallback interaction detail generation using async OpenAI client."""
+    try:
+        client = get_async_openai_client()
+        
+        messages = [
+            {
+                "role": "system",
+                "content": "You describe NPC interactions in a narrative game. Return a JSON object with a 'details' field containing a single vivid sentence."
+            },
+            {
+                "role": "user",
+                "content": f"""Generate a single sentence describing this NPC interaction:
+Type: {interaction_type}
+Actor: {actor_name}
+Target: {target_name}
+Location: {location}
+Relationship trust: {relationship_state.get('trust', 50)}
+
+Make it vivid but appropriate for a narrative game (PG-13)."""
+            }
+        ]
+        
+        response = await client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=messages,
+            temperature=0.8,
+            max_tokens=100,
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result.get("details", f"{interaction_type.replace('_', ' ')} between {actor_name} and {target_name}")
+        
+    except Exception as e:
+        logger.error(f"Fallback interaction detail generation failed: {e}")
+        return f"{interaction_type.replace('_', ' ')} between {actor_name} and {target_name}"
+
+async def _fallback_generate_activity(
+    activity_kind: str,
+    subtype: str,
+    location: str,
+    npc_name: str
+) -> str:
+    """Fallback activity generation using async OpenAI client."""
+    try:
+        client = get_async_openai_client()
+        
+        messages = [
+            {
+                "role": "system",
+                "content": "You describe NPC activities in a narrative game. Return a JSON object with a 'description' field containing a brief, vivid description."
+            },
+            {
+                "role": "user",
+                "content": f"""Describe what {npc_name} is doing:
+Activity: {activity_kind} ({subtype})
+Location: {location}"""
+            }
+        ]
+        
+        response = await client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=messages,
+            temperature=0.75,
+            max_tokens=80,
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result.get("description", f"{npc_name} is {activity_kind} at {location}")
+        
+    except Exception as e:
+        logger.error(f"Fallback activity generation failed: {e}")
+        return f"{npc_name} is {activity_kind} at {location}"
 
 class ResourcePool:
     """Manages shared resources with limits to prevent overwhelming systems."""
@@ -466,6 +624,7 @@ async def execute_npc_action(
 ) -> ActionResult:
     """
     Execute the chosen NPC action with Nyx governance.
+    Updated to use fallback generation if agents aren't available.
     
     Args:
         action: The action to execute
@@ -519,18 +678,22 @@ async def execute_npc_action(
             ctx.context.record_decision(action.model_dump())
             
             try:
-                outcome_payload = json.dumps({
+                outcome_payload = {
                     "action_type": action.type,
                     "description": action.description,
                     "target": action.target,
                     "context": context
-                }, ensure_ascii=False)
+                }
 
-                outcome_result = await Runner.run(
-                    starting_agent=action_outcome_generator,
-                    input=outcome_payload
-                )
-                parsed = json.loads(outcome_result.output.strip())
+                # Use agent if available, otherwise fallback
+                if action_outcome_generator:
+                    outcome_result = await Runner.run(
+                        starting_agent=action_outcome_generator,
+                        input=json.dumps(outcome_payload, ensure_ascii=False)
+                    )
+                    parsed = json.loads(outcome_result.output.strip())
+                else:
+                    parsed = await _fallback_generate_outcome(outcome_payload)
 
                 outcome = parsed.get("outcome", f"{action.description}.")
                 emotional_impact = int(parsed.get("emotional_impact", 0))
@@ -538,64 +701,19 @@ async def execute_npc_action(
 
             except Exception as gpt_err:
                 # Fallback to a minimal deterministic line
-                logger.warning(f"Fallback outcome generation: {gpt_err}")
+                logger.warning(f"Outcome generation failed: {gpt_err}")
                 outcome = f"{action.description.capitalize()} succeeds."
                 emotional_impact = random.randint(-1, 1)
                 target_reactions = []
             
-            # Select template for the action type
-            action_type = action.type
-            templates = outcome_templates.get(action_type, ["NPC performs {action}"])
-            template = random.choice(templates)
-            
-            # Prepare format variables
-            format_vars = {
-                "action": action.description,
-                "target": action.target,
-                "topic": context.get("topic", "the current situation")
-            }
-            
-            # Format the outcome
-            outcome = template.format(**format_vars)
-            
-            # Determine emotional impact
-            base_emotional_impact = random.randint(-3, 3)
-            emotion_modifiers = {
-                "praise": 2,
-                "mock": -2,
-                "talk": 1,
-                "dominate": -1,
-                "support": 2,
-                "humiliate": -3
-            }
-            modifier = emotion_modifiers.get(action_type, 0)
-            emotional_impact = base_emotional_impact + modifier
-            
-            # Simulate target reactions
-            target_reactions = []
-            
-            # If action is directed at player or NPCs, simulate reaction
-            if action.target in ["player", "group"] or action.target.isdigit():
-                reaction_text = f"Reacts to {action.description}"
-                if emotional_impact > 2:
-                    reaction_text = f"Responds positively to {action.description}"
-                elif emotional_impact < -2:
-                    reaction_text = f"Responds negatively to {action.description}"
-                    
-                target_reactions.append({
-                    "entity": action.target,
-                    "reaction": reaction_text,
-                    "intensity": abs(emotional_impact) / 3.0  # 0.0-1.0 scale
-                })
-            
             # Create memory of the action if significant
-            if abs(emotional_impact) > 2 or action_type in ["dominate", "praise", "mock", "command"]:
+            if abs(emotional_impact) > 2 or action.type in ["dominate", "praise", "mock", "command"]:
                 memory_system = await ctx.context.get_memory_system()
                 
                 memory_text = f"I {action.description} resulting in {outcome}"
                 
                 # Determine tags
-                tags = [action_type, "action"]
+                tags = [action.type, "action"]
                 if emotional_impact > 2:
                     tags.append("positive_outcome")
                 elif emotional_impact < -2:
@@ -678,10 +796,11 @@ async def report_action_to_nyx(
 # Decision-related agents
 # -------------------------------------------------------
 
-decision_agent = Agent(
-    name="NPC Decision Agent",
-    handoff_description="Specialized agent for making NPC decisions",
-    instructions="""
+if openai_model:
+    decision_agent = Agent(
+        name="NPC Decision Agent",
+        handoff_description="Specialized agent for making NPC decisions",
+        instructions="""
     You are an AI decision-making engine for a non-player character (NPC) in an interactive narrative.
     
     Your role is to:
@@ -708,16 +827,20 @@ decision_agent = Agent(
     If the NPC is experiencing a trauma response or flashback, prioritize actions that align with this psychological state.
     If the NPC's mask integrity is low, occasionally allow their true nature to show through in their actions.
     """,
-    tools=[
-        get_npc_stats,
-        execute_npc_action
-    ]
-)
+        model=openai_model,
+        tools=[
+            get_npc_stats,
+            execute_npc_action
+        ]
+    )
+else:
+    decision_agent = None
 
 # Main NPC Agent
-npc_agent = Agent(
-    name="NPC Agent",
-    instructions="""
+if openai_model:
+    npc_agent = Agent(
+        name="NPC Agent",
+        instructions="""
     You are a non-player character (NPC) in an interactive narrative experience. Your responses should be in-character based on your personality, current emotional state, and memories.
     
     To maintain psychological realism, you should:
@@ -736,18 +859,21 @@ npc_agent = Agent(
     You should not make meta-commentary about the game or your own AI nature.
     Focus on realistic in-character responses that reflect your unique personality.
     """,
-    handoffs=[
-        handoff(
-            agent=decision_agent,
-            tool_name_override="on",
-            tool_description_override="Make a decision about what action to take"
-        )
-    ],
-    tools=[
-        get_npc_stats,
-        execute_npc_action
-    ]
-)
+        model=openai_model,
+        handoffs=[
+            handoff(
+                agent=decision_agent,
+                tool_name_override="on",
+                tool_description_override="Make a decision about what action to take"
+            )
+        ] if decision_agent else [],
+        tools=[
+            get_npc_stats,
+            execute_npc_action
+        ]
+    )
+else:
+    npc_agent = None
 
 # -------------------------------------------------------
 # Main NPC class utilizing Agents SDK
@@ -996,6 +1122,7 @@ class NPCAgent:
     async def make_decision(self, context: Dict[str, Any]) -> NPCAction:
         """
         Make a decision based on narrative stage with player.
+        Uses agents if available, otherwise fallback.
         """
         # Get narrative stage
         narrative_stage = await self.get_narrative_stage_with_player()
@@ -1035,6 +1162,100 @@ class NPCAgent:
         context["narrative_stage"] = narrative_stage
         context["behavior_modifiers"] = modifiers
         
+        try:
+            if decision_agent:
+                # Use the decision agent to make a decision
+                prompt = f"""
+                As NPC {self.npc_id}, analyze the current situation and decide on an appropriate action.
+                
+                Context: {json.dumps(context, indent=2)}
+                
+                Consider your personality traits, current emotional state, and the situation.
+                Choose an action that fits your character.
+                """
+                
+                # Run the decision agent
+                result = await Runner.run(
+                    starting_agent=decision_agent,
+                    input=prompt,
+                    context=RunContextWrapper(self.context)
+                )
+                
+                # Extract the action from the result
+                if hasattr(result, 'final_output') and isinstance(result.final_output, NPCAction):
+                    return result.final_output
+            
+            # Fallback decision making using centralized integration
+            return await self._fallback_make_decision(context)
+                
+        except Exception as e:
+            logger.error(f"Error making decision: {e}")
+            # Return safe default action
+            return NPCAction(
+                type="observe",
+                description="pauses momentarily",
+                target="environment",
+                weight=0.3
+            )
+            
+    async def _fallback_make_decision(self, context: Dict[str, Any]) -> NPCAction:
+        """Fallback decision making using async OpenAI client."""
+        try:
+            client = get_async_openai_client()
+            
+            # Get NPC stats from context
+            stats = self.context.current_stats or {}
+            
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are an NPC decision engine. Return only valid JSON for the action."
+                },
+                {
+                    "role": "user",
+                    "content": f"""You are NPC {self.npc_id} ({stats.get('npc_name', 'Unknown')}) making a decision.
+            
+Your traits:
+- Dominance: {stats.get('dominance', 50)}
+- Cruelty: {stats.get('cruelty', 50)}
+- Current emotion: {context.get('emotional_state', {}).get('current_emotion', 'neutral')}
+
+Context: {json.dumps(context, indent=2)}
+
+Generate a single action as JSON with these fields:
+- type: action type (observe, talk, mock, dominate, support, etc.)
+- description: what the NPC does (max 50 words)
+- target: who/what the action targets
+- weight: importance 0.0-1.0"""
+                }
+            ]
+            
+            response = await client.chat.completions.create(
+                model="gpt-4.1-nano",
+                messages=messages,
+                temperature=0.5,
+                max_tokens=200,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse response
+            action_data = json.loads(response.choices[0].message.content)
+            return NPCAction(
+                type=action_data.get("type", "observe"),
+                description=action_data.get("description", "observes quietly"),
+                target=action_data.get("target", "environment"),
+                weight=float(action_data.get("weight", 0.5))
+            )
+                
+        except Exception as e:
+            logger.error(f"Fallback decision failed: {e}")
+            return NPCAction(
+                type="observe",
+                description="waits quietly",
+                target="environment",
+                weight=0.3
+            )
+    
     async def _process_lore_change(self, lore_change: Dict[str, Any]) -> Dict[str, Any]:
         """Process a lore change and update NPC state."""
         from lore.core.lore_system import LoreSystem
@@ -1437,86 +1658,6 @@ class NPCAgent:
         
         return result
 
-    
-    async def perceive_environment(self, context: Dict[str, Any] = None) -> NPCPerception:
-        """
-        Perceive the environment and retrieve relevant memories.
-        
-        Args:
-            context: Optional context information
-            
-        Returns:
-            NPCPerception object with environment and memory data
-        """
-        # In the future, this will call into perception.py module
-        # For now, return a minimal perception
-        environment = context or {}
-        
-        memory_system = await self.context.get_memory_system()
-        
-        # Get emotional state
-        emotional_state = await memory_system.get_npc_emotion(self.npc_id)
-        
-        # Create basic perception
-        perception = NPCPerception(
-            environment=environment,
-            emotional_state=emotional_state or {},
-            mask={"integrity": 100},  # Default mask integrity
-            time_context={"time_of_day": environment.get("time_of_day", "unknown")}
-        )
-        
-        return perception
-    
-    async def make_decision(self, context: Dict[str, Any]) -> NPCAction:
-        """
-        Make a decision about what action to take based on current context.
-        
-        Args:
-            context: Current context information
-            
-        Returns:
-            NPCAction to take
-        """
-        try:
-            # Use the decision agent to make a decision
-            prompt = f"""
-            As NPC {self.npc_id}, analyze the current situation and decide on an appropriate action.
-            
-            Context: {json.dumps(context, indent=2)}
-            
-            Consider your personality traits, current emotional state, and the situation.
-            Choose an action that fits your character.
-            """
-            
-            # Run the decision agent
-            result = await Runner.run(
-                starting_agent=decision_agent,
-                input=prompt,
-                context=RunContextWrapper(self.context)
-            )
-            
-            # Extract the action from the result
-            if hasattr(result, 'final_output') and isinstance(result.final_output, NPCAction):
-                return result.final_output
-            else:
-                # Default action if decision fails
-                return NPCAction(
-                    type="observe",
-                    description="observes the situation carefully",
-                    target="environment",
-                    weight=0.5
-                )
-                
-        except Exception as e:
-            logger.error(f"Error making decision: {e}")
-            # Return safe default action
-            return NPCAction(
-                type="observe",
-                description="pauses momentarily",
-                target="environment",
-                weight=0.3
-            )
-
     async def process_player_action(
         self,
         player_action: Dict[str, Any],
@@ -1765,6 +1906,10 @@ class NPCAgent:
             logger.error(f"Error getting NPC location: {e}")
             return "unknown"
 
+    async def _get_decision_engine(self):
+        """Get the decision engine for this NPC."""
+        # For now, return self as we have the make_decision method
+        return self
 
     async def _execute_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute an NPC action."""
@@ -1901,7 +2046,6 @@ class NPCAgent:
             logger.error(f"Error getting nearby NPCs: {e}")
             return []
 
-
     async def _get_relationship(self, target_npc_id: int) -> Dict[str, Any]:
         """Get relationship data between this NPC and target NPC."""
         try:
@@ -1954,25 +2098,34 @@ class NPCAgent:
         relationship: Dict[str, Any],
         context: Dict[str, Any]
     ) -> str:
-        """Generate interaction detail via LLM instead of static template."""
+        """Generate interaction detail via LLM with fallback."""
         try:
-            payload = json.dumps({
-                "interaction_type": interaction_type,
-                "actor_name": self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}"),
-                "target_name": target_npc["npc_name"],
-                "relationship_state": relationship or {},
-                "location": context.get("location", "unknown")
-            }, ensure_ascii=False)
+            if interaction_detail_generator:
+                payload = json.dumps({
+                    "interaction_type": interaction_type,
+                    "actor_name": self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}"),
+                    "target_name": target_npc["npc_name"],
+                    "relationship_state": relationship or {},
+                    "location": context.get("location", "unknown")
+                }, ensure_ascii=False)
 
-            result = await Runner.run(
-                starting_agent=interaction_detail_generator,
-                input=payload
-            )
-            return json.loads(result.output.strip())["details"]
+                result = await Runner.run(
+                    starting_agent=interaction_detail_generator,
+                    input=payload
+                )
+                return json.loads(result.output.strip())["details"]
+            else:
+                # Use fallback
+                return await _fallback_generate_interaction_details(
+                    interaction_type,
+                    self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}"),
+                    target_npc["npc_name"],
+                    relationship or {},
+                    context.get("location", "unknown")
+                )
 
         except Exception as e:
             logger.error(f"Interaction-detail generation failed: {e}")
-            # Fallback
             return f"{interaction_type.replace('_',' ')} with {target_npc['npc_name']}"
             
     def _calculate_relationship_changes(self, interaction: Dict[str, Any]) -> Dict[str, Any]:
@@ -2035,22 +2188,22 @@ class NPCAgent:
         except Exception as e:
             logger.error(f"Error updating relationship in db: {e}")
 
-    async def _get_decision_engine(self):
-        """Get the decision engine for this NPC."""
-        # For now, return self as we have the make_decision method
-        return self
-
     async def _generate_work_activity(self, work_type: str, location: str) -> Dict[str, Any]:
-        """LLM-based work activity description."""
+        """LLM-based work activity description with fallback."""
         try:
-            payload = json.dumps({
-                "activity_kind": "work",
-                "subtype": work_type,
-                "location": location,
-                "npc_name": self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}")
-            })
-            res = await Runner.run(activity_generator, payload)
-            desc = json.loads(res.output.strip())["description"]
+            npc_name = self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}")
+            
+            if activity_generator:
+                payload = json.dumps({
+                    "activity_kind": "work",
+                    "subtype": work_type,
+                    "location": location,
+                    "npc_name": npc_name
+                })
+                res = await Runner.run(activity_generator, payload)
+                desc = json.loads(res.output.strip())["description"]
+            else:
+                desc = await _fallback_generate_activity("work", work_type, location, npc_name)
         except Exception as e:
             logger.warning(f"Work activity fallback: {e}")
             desc = f"working at {location}"
@@ -2062,16 +2215,21 @@ class NPCAgent:
         }
 
     async def _generate_relaxation_activity(self, relax_type: str, location: str) -> Dict[str, Any]:
-        """LLM-based relaxation activity description."""
+        """LLM-based relaxation activity description with fallback."""
         try:
-            payload = json.dumps({
-                "activity_kind": "relax",
-                "subtype": relax_type,
-                "location": location,
-                "npc_name": self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}")
-            })
-            res = await Runner.run(activity_generator, payload)
-            desc = json.loads(res.output.strip())["description"]
+            npc_name = self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}")
+            
+            if activity_generator:
+                payload = json.dumps({
+                    "activity_kind": "relax",
+                    "subtype": relax_type,
+                    "location": location,
+                    "npc_name": npc_name
+                })
+                res = await Runner.run(activity_generator, payload)
+                desc = json.loads(res.output.strip())["description"]
+            else:
+                desc = await _fallback_generate_activity("relax", relax_type, location, npc_name)
         except Exception as e:
             logger.warning(f"Relax activity fallback: {e}")
             desc = f"relaxing at {location}"
@@ -2081,6 +2239,7 @@ class NPCAgent:
             "description": desc,
             "duration": random.randint(15, 60)
         }
+        
     async def _update_work_stats(self, work_activity: Dict[str, Any]) -> None:
         """Update NPC stats based on work activity."""
         # Work can affect intensity and other stats
@@ -2276,3 +2435,23 @@ class NPCAgent:
         except Exception as e:
             logger.error(f"Error calculating memory importance: {e}")
             return 0.5
+
+    async def _get_npc_data(self, npc_id: int) -> Dict[str, Any]:
+        """Get NPC data from database."""
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        SELECT * FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                    """, (npc_id, self.user_id, self.conversation_id))
+                    
+                    row = await cursor.fetchone()
+                    if row:
+                        # Convert row to dict
+                        columns = [desc[0] for desc in cursor.description]
+                        return dict(zip(columns, row))
+                    return {}
+        except Exception as e:
+            logger.error(f"Error getting NPC data: {e}")
+            return {}
