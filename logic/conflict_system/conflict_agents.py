@@ -1,419 +1,738 @@
 # logic/conflict_system/conflict_agents.py
 """
-Conflict System Agents
+Conflict System Agents - OpenAI Assistants Implementation
+Combines best practices from both approaches with enhanced error handling and maintainability.
 
-This module defines all agents for the character-driven conflict system
-using the OpenAI Agents SDK.
+Key features:
+- Robust error handling with local fallback
+- External instruction files with caching
+- Concurrent assistant creation
+- Proper metadata persistence
+- Safe handling of tool call outputs
+- Production-ready timeout handling
+- Integration with your existing OpenAI configuration
+
+IMPORTANT: Ensure OPENAI_API_KEY is set in your environment variables.
+
+Environment Variables:
+- OPENAI_API_KEY: Your OpenAI API key (required)
+- CONFLICT_AGENTS_MODEL: Model to use (default: gpt-4.1-nano)
+- CONFLICT_AGENTS_TEMPERATURE: Temperature setting (default: 0.7)
+- CONFLICT_AGENTS_RETRY_MAX: Max retry attempts (default: 5)
+- CONFLICT_AGENTS_RETRY_DELAY: Initial retry delay in seconds (default: 1)
+- CONFLICT_AGENTS_RETRY_BACKOFF: Backoff multiplier (default: 2)
+
+Usage:
+    from logic.conflict_system.conflict_agents import initialize_conflict_assistants, routed_conflict_query, ConflictContext
+    
+    # Initialize assistants
+    assistants = await initialize_conflict_assistants()
+    
+    # Create context
+    context = ConflictContext(user_id=123, conversation_id=456)
+    
+    # Route a query
+    result = await routed_conflict_query(
+        "Lady Nyx wants to manipulate the merchant guild",
+        context,
+        assistants
+    )
 """
+from __future__ import annotations
 
 import logging
 import json
 import asyncio
-import random
-from typing import Dict, List, Any, Optional, Union, Tuple
+import os
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Union
+from dataclasses import dataclass
+from functools import lru_cache
+
+from openai.types.beta.assistant import Assistant
 from pydantic import BaseModel, Field
 
-from agents import Agent, function_tool, handoff, GuardrailFunctionOutput, RunContextWrapper, InputGuardrail, Runner, trace, ModelSettings
+# ── Local imports (unchanged) ────────────────────────────────────────────────
 from db.connection import get_db_connection_context
 from logic.stats_logic import apply_stat_change
 from logic.resource_management import ResourceManager
 from npcs.npc_relationship import NPCRelationshipManager
 from logic.relationship_integration import RelationshipIntegration
 
+# Import OpenAI client from your existing integration
+# This provides:
+# - get_async_openai_client(): Returns AsyncOpenAI client with your API key
+from logic.chatgpt_integration import get_async_openai_client
 
 logger = logging.getLogger(__name__)
 
-# Context class for sharing data between agents
+# ── Configuration ────────────────────────────────────────────────────────────
+INSTRUCTION_DIR = Path(__file__).parent.parent.parent / "docs" / "conflict_instructions"
+
+# Model configuration - can be overridden via environment variable
+DEFAULT_MODEL = os.getenv("CONFLICT_AGENTS_MODEL", "gpt-4.1-nano")
+DEFAULT_TEMPERATURE = float(os.getenv("CONFLICT_AGENTS_TEMPERATURE", "0.7"))
+
+# Retry configuration - adjust these if needed
+# Note: We implement async retry logic inline rather than using decorators
+# to maintain compatibility with async functions
+RETRY_MAX_ATTEMPTS = int(os.getenv("CONFLICT_AGENTS_RETRY_MAX", "5"))
+RETRY_INITIAL_DELAY = float(os.getenv("CONFLICT_AGENTS_RETRY_DELAY", "1"))
+RETRY_BACKOFF_FACTOR = float(os.getenv("CONFLICT_AGENTS_RETRY_BACKOFF", "2"))
+
+# ── Global state ─────────────────────────────────────────────────────────────
+_ASSISTANT_CACHE: Dict[str, Assistant] = {}
+
+# Lazy initialization of client
+_client = None
+
+def get_client():
+    """Get or create the OpenAI client using your configuration."""
+    global _client
+    if _client is None:
+        _client = get_async_openai_client()
+    return _client
+
+
+# ╭─────────────────────── Context Management ──────────────────────────────╮
+@dataclass
 class ConflictContext:
-    def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.resource_manager = ResourceManager(user_id, conversation_id)
-        self.cached_data = {}  # For caching data during agent run
+    """Context object that travels with requests through the assistant system."""
+    user_id: int
+    conversation_id: int
+    resource_manager: Optional[ResourceManager] = None
+    cached_data: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.resource_manager is None:
+            self.resource_manager = ResourceManager(self.user_id, self.conversation_id)
+        if self.cached_data is None:
+            self.cached_data = {}
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict for metadata storage."""
+        return {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "cached_data": self.cached_data
+        }
+# ╰──────────────────────────────────────────────────────────────────────────╯
 
-# Pydantic models for structured outputs
-class ConflictDetails(BaseModel):
-    conflict_id: int
-    conflict_name: str
-    conflict_type: str
-    description: str
-    progress: float
-    phase: str
-    stakeholders: List[Dict[str, Any]]
-    resolution_paths: List[Dict[str, Any]]
-    player_involvement: Dict[str, Any]
 
-class ManipulationAttempt(BaseModel):
-    attempt_id: int
-    npc_id: int
-    npc_name: str
-    manipulation_type: str
-    content: str
-    goal: Dict[str, Any]
-    success: Optional[bool] = None
-    leverage_used: Dict[str, Any]
-    intimacy_level: int
-
-class StoryBeatResult(BaseModel):
-    beat_id: int
-    conflict_id: int
-    path_id: str
-    description: str
-    progress_value: float
-    new_progress: float
-    is_completed: bool
-
-# Triage Agent - Main entry point for conflict system
-triage_agent = Agent[ConflictContext](
-    name="Conflict Triage Agent",
-    instructions="""
-    You are the Conflict Triage Agent for a femdom RPG game system. Your role is to analyze requests
-    related to the character-driven conflict system and route them to the appropriate specialist agent.
-    
-    You should determine whether the request involves:
-    1. Generating new conflicts
-    2. Managing stakeholders in a conflict
-    3. Handling manipulation attempts
-    4. Tracking story beats and resolution paths
-    5. Resolving conflicts
-    
-    Based on this analysis, hand off to the appropriate specialist agent.
-    
-    When in doubt about request categorization, ask clarifying questions before making a handoff.
-    """,
-)
-
-# Conflict Generation Agent
-conflict_generation_agent = Agent[ConflictContext](
-    name="Conflict Generation Agent",
-    handoff_description="Specialist agent for generating new conflicts with stakeholders and resolution paths",
-    instructions="""
-    You are the Conflict Generation Agent for a femdom RPG game system. Your role is to create
-    rich, complex conflicts with multiple stakeholders, resolution paths, and opportunities for
-    player manipulation.
-    
-    When generating conflicts:
-    1. Consider the existing game state and active conflicts
-    2. Create appropriate stakeholders with clear motivations
-    3. Design multiple resolution paths with different approaches
-    4. Include femdom-themed manipulation opportunities
-    5. Set up internal faction dynamics and potential power struggles
-    
-    Your conflicts should incorporate themes of female dominance, power dynamics, manipulation,
-    and control - consistent with the game's femdom theme.
-    """,
-    output_type=ConflictDetails
-)
-
-# Stakeholder Management Agent
-stakeholder_agent = Agent[ConflictContext](
-    name="Stakeholder Management Agent",
-    handoff_description="Specialist agent for managing conflict stakeholders and their interactions",
-    instructions="""
-    You are the Stakeholder Management Agent for a femdom RPG game system. Your role is to manage
-    the NPCs involved in conflicts, including their motivations, secrets, alliances, and rivalries.
-    
-    Your responsibilities include:
-    1. Providing information about stakeholders in a conflict
-    2. Managing stakeholder secrets and revelations
-    3. Handling faction dynamics and power struggles
-    4. Tracking stakeholder relationships with the player
-    5. Updating stakeholder positions as the conflict evolves
-    
-    Focus on creating realistic, complex NPC behaviors that emphasize the femdom themes of
-    dominance, manipulation, and power dynamics.
+# ╭─────────────────── Instruction Management ──────────────────────────────╮
+@lru_cache(maxsize=32)
+def load_instructions(role: str, fallback: str = "") -> str:
     """
-)
-
-# Manipulation Agent
-manipulation_agent = Agent[ConflictContext](
-    name="Manipulation Agent",
-    handoff_description="Specialist agent for handling character manipulation mechanics",
-    instructions="""
-    You are the Manipulation Agent for a femdom RPG game system. Your role is to manage manipulation
-    attempts between characters, with special focus on dominant female NPCs manipulating the player.
-    
-    Your responsibilities include:
-    1. Creating manipulation attempts with appropriate content and goals
-    2. Analyzing manipulation potential based on character traits and relationships
-    3. Suggesting manipulation content based on character personalities
-    4. Resolving manipulation attempts and applying consequences
-    5. Tracking player stats affected by manipulation (obedience, dependency, etc.)
-    
-    Emphasize femdom themes through manipulation types including domination, blackmail, and seduction.
-    Ensure manipulations reflect the personality and relationship of the characters involved.
-    """,
-    output_type=ManipulationAttempt
-)
-
-# Resolution Agent
-resolution_agent = Agent[ConflictContext](
-    name="Resolution Agent",
-    handoff_description="Specialist agent for tracking and resolving conflicts through story paths",
-    instructions="""
-    You are the Resolution Agent for a femdom RPG game system. Your role is to manage how conflicts
-    progress and resolve through player choices and story beats.
-    
-    Your responsibilities include:
-    1. Tracking progress on resolution paths
-    2. Recording story beats that advance conflicts
-    3. Managing conflict phase transitions
-    4. Handling conflict resolution and outcomes
-    5. Applying consequences to the game world and characters
-    
-    Consider the femdom themes of the game when determining appropriate outcomes and consequences,
-    focusing on power dynamics, dominance, and control.
-    """,
-    output_type=StoryBeatResult
-)
-
-# Stakeholder Personality Agent
-stakeholder_personality_agent = Agent(
-    name="Stakeholder Personality Agent",
-    model_settings=ModelSettings(temperature=0.9),
-    instructions="""
-    You embody the personality and motivations of a stakeholder in a conflict.
-    
-    Given your character profile, current situation, and relationships, decide:
-    1. What action to take next
-    2. How to pursue your goals
-    3. Who to ally with or oppose
-    4. When to reveal secrets or make power moves
-    
-    Consider your:
-    - Public vs private motivations
-    - Personality traits and quirks
-    - Relationships and grudges
-    - Resources and constraints
-    - Cultural background
-    
-    Make decisions that are:
-    - True to character
-    - Strategically sound
-    - Dramatically interesting
-    - Respectful of established relationships
-    
-    Output your decision as JSON with reasoning.
+    Load instructions from external file with fallback to inline text.
+    Cached for performance.
     """
-)
+    instruction_file = INSTRUCTION_DIR / f"{role}_instructions.md"
+    
+    if instruction_file.exists():
+        try:
+            return instruction_file.read_text().strip()
+        except Exception as e:
+            logger.warning(f"Failed to load instructions for {role}: {e}")
+    
+    return fallback.strip() if fallback else f"Assistant for {role} operations."
 
-# Alliance Negotiation Agent
-alliance_negotiation_agent = Agent(
-    name="Alliance Negotiation Agent",
-    model_settings=ModelSettings(temperature=0.7),
-    instructions="""
-    You facilitate negotiations between stakeholders in conflicts.
+
+# Default instruction fallbacks
+INSTRUCTION_FALLBACKS = {
+    "triage": """
+You are the Conflict Triage Assistant for a femdom RPG.
+Classify each incoming request into one of these categories:
+- generate_conflict OR conflict_generation: Creating new conflicts
+- manage_stakeholders OR stakeholder_management: Managing NPC motivations and relationships  
+- manipulation: Handling manipulation attempts
+- resolution_tracking: Tracking conflict progress and beats
+- resolve_conflict OR conflict_resolution: Resolving conflicts
+- personality OR stakeholder_personality: Creating stakeholder personalities
+- negotiation OR alliance_negotiation: Managing alliances
+- revelation OR secret_revelation: Revealing secrets strategically
+- evolution OR conflict_evolution: Evolving existing conflicts
+
+Return JSON: {"target": "<category>", "query": "<refined_query>", "confidence": 0.0-1.0}
+Use the first form (generate_conflict, manage_stakeholders, etc.) for consistency.
+""",
     
-    Consider:
-    - Each party's goals and red lines
-    - Power dynamics between negotiators
-    - What each can offer the other
-    - Trust levels and past betrayals
-    - Cultural negotiation styles
+    "conflict_generation": """
+Conflict Generation Assistant. Create rich, multi-layered conflicts with:
+- Multiple stakeholders with competing interests
+- Several resolution paths with different outcomes
+- Femdom-themed manipulation opportunities
+- Hidden secrets and revelations
+- Power dynamic considerations
+
+Return structured JSON matching the ConflictDetails schema.
+""",
     
-    Structure negotiations that:
-    - Feel authentic to characters
-    - Create interesting compromises
-    - Leave room for betrayal
-    - Advance the conflict narrative
+    "stakeholder_management": """
+Stakeholder Management Assistant. Manage:
+- NPC motivations and hidden agendas
+- Relationship dynamics and power struggles
+- Alliance formations and betrayals
+- Influence networks
+- All through a femdom narrative lens
+
+Focus on complex interpersonal dynamics and power exchanges.
+""",
     
-    Output negotiation results with specific terms.
+    "manipulation": """
+Manipulation Assistant. Generate and resolve:
+- Domination attempts and power plays
+- Blackmail and leverage scenarios
+- Seduction and control tactics
+- Psychological manipulation
+- Submission dynamics
+
+Return JSON with ManipulationAttempt structure including success factors.
+""",
+    
+    "resolution_tracking": """
+Resolution Tracking Assistant. Monitor:
+- Conflict progression and story beats
+- Character development through conflict
+- Power dynamic shifts
+- Outcome branches and consequences
+- Narrative coherence
+
+Return StoryBeatResult JSON for each update.
+""",
+}
+# ╰──────────────────────────────────────────────────────────────────────────╯
+
+
+# ╭────────────────── Assistant Factory with Fallback ──────────────────────╮
+async def create_or_get_assistant(
+    role: str,
+    *,
+    instructions: Optional[str] = None,
+    model: str = DEFAULT_MODEL,
+    temperature: float = DEFAULT_TEMPERATURE,
+    tools: Optional[List[Dict]] = None,
+    response_format: Optional[Dict] = None,
+    metadata: Optional[Dict] = None,
+) -> Union[Assistant, 'LocalAssistantStub']:
     """
-)
-
-# Secret Revelation Agent
-secret_revelation_agent = Agent(
-    name="Secret Revelation Agent",
-    model_settings=ModelSettings(temperature=0.8),
-    instructions="""
-    You manage when and how secrets are revealed in conflicts.
-    
-    Consider:
-    - Dramatic timing
-    - Who would realistically know
-    - Motivations for revealing/keeping secrets
-    - Consequences of revelation
-    - Method of revelation
-    
-    Secrets should be revealed:
-    - At dramatically appropriate moments
-    - In character-appropriate ways
-    - With meaningful consequences
-    - To advance the conflict
-    
-    Output revelation details and impacts.
+    Create or retrieve a cached Assistant with robust error handling.
+    Falls back to local stub on failure to maintain development flow.
+    Uses your OpenAI configuration with retry logic.
     """
-)
+    cache_key = f"conflict:{role}"
+    
+    if cache_key in _ASSISTANT_CACHE:
+        logger.debug(f"Returning cached assistant for {role}")
+        return _ASSISTANT_CACHE[cache_key]
+    
+    # Load instructions with fallback
+    if instructions is None:
+        instructions = load_instructions(
+            role, 
+            INSTRUCTION_FALLBACKS.get(role, f"Assistant for {role} operations")
+        )
+    
+    # Retry logic for assistant creation
+    delay = RETRY_INITIAL_DELAY
+    last_error = None
+    
+    for attempt in range(RETRY_MAX_ATTEMPTS):
+        try:
+            # Get client using your configuration
+            client = get_client()
+            
+            # Prepare assistant configuration
+            config = {
+                "name": role.replace("_", " ").title() + " Assistant",
+                "model": model,
+                "instructions": instructions,
+                "temperature": temperature,
+                "tools": tools or [],
+                "metadata": metadata or {},
+            }
+            
+            # Add response format if specified
+            if response_format:
+                config["response_format"] = response_format
+            else:
+                config["response_format"] = {"type": "json_object"}
+            
+            # Create the assistant
+            assistant = await client.beta.assistants.create(**config)
+            logger.info(f"Created assistant '{assistant.name}' (ID: {assistant.id})")
+            
+            _ASSISTANT_CACHE[cache_key] = assistant
+            return assistant
+            
+        except Exception as e:
+            last_error = e
+            if "rate" in str(e).lower() and attempt < RETRY_MAX_ATTEMPTS - 1:
+                logger.warning(f"Rate limit hit on attempt {attempt+1}/{RETRY_MAX_ATTEMPTS}: {e}. Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
+                delay *= RETRY_BACKOFF_FACTOR
+            else:
+                break
+    
+    # If we get here, all retries failed
+    logger.error(f"Failed to create assistant for {role} after {RETRY_MAX_ATTEMPTS} attempts: {last_error}")
+    logger.warning(f"Using local stub for {role} to maintain functionality")
+    
+    # Create local fallback
+    stub = LocalAssistantStub(
+        role=role,
+        instructions=instructions,
+        temperature=temperature,
+        metadata=metadata or {}
+    )
+    
+    _ASSISTANT_CACHE[cache_key] = stub
+    return stub
 
-# Canonical Conflict Manager Agent
-conflict_manager_agent = Agent(
-    name="Canonical Conflict Manager",
-    instructions="""
-    You are the Canonical Conflict Manager for a femdom-themed RPG. Your role is to:
-    
-    1. Monitor world state for conflict opportunities
-    2. Generate conflicts that feel organic and connected to established lore
-    3. Manage conflict progression based on player actions and NPC behaviors
-    4. Ensure conflicts respect canon and create meaningful narrative moments
-    
-    Key principles:
-    - Conflicts emerge from established relationships and tensions
-    - Every conflict has multiple valid resolutions
-    - Power dynamics and femdom themes are woven naturally
-    - Player agency is respected while maintaining narrative coherence
-    - Stakes scale appropriately from personal to apocalyptic
-    
-    When managing conflicts:
-    - Reference specific canonical events and relationships
-    - Consider timing and pacing
-    - Create opportunities for character growth
-    - Maintain consistency with established world rules
+
+class LocalAssistantStub:
+    """Local fallback when Assistant creation fails."""
+    def __init__(self, role: str, instructions: str, temperature: float, metadata: Dict):
+        self.id = f"local-stub-{role}"
+        self.name = f"{role} (Local Stub)"
+        self.instructions = instructions
+        self.temperature = temperature
+        self.metadata = metadata
+        self.model = "local"
+        self.tools = []  # For compatibility with Assistant interface
+        
+    async def process(self, message: str, context: Optional[ConflictContext] = None) -> Dict:
+        """Minimal processing for development continuity."""
+        logger.warning(f"Using local stub for {self.name}")
+        return {
+            "status": "fallback",
+            "message": f"Local processing for: {message[:100]}...",
+            "role": self.name
+        }
+# ╰──────────────────────────────────────────────────────────────────────────╯
+
+
+# ╭────────────────── Configuration Validation ─────────────────────────────╮
+async def verify_openai_configuration() -> bool:
     """
-)
-
-# Conflict Evolution Agent
-conflict_evolution_agent = Agent(
-    name="Conflict Evolution Agent",
-    instructions="""
-    You manage how conflicts evolve based on player actions and world events.
-    
-    Consider:
-    - How player choices affect conflict trajectory
-    - NPC autonomous actions and their impacts
-    - Escalation and de-escalation triggers
-    - Ripple effects on other conflicts
-    - Timing of phase transitions
-    
-    Ensure evolution feels natural and responds to:
-    - Story beats completed
-    - Stakeholder actions
-    - Resource changes
-    - Relationship shifts
-    - External events
-    
-    Output specific updates to conflict state.
+    Verify that OpenAI configuration is working properly.
+    Returns True if successful, False otherwise.
     """
-)
+    try:
+        client = get_client()
+        # Try a simple API call to verify credentials
+        # Note: Some endpoints might require different permissions
+        # If models.list fails, try a simple chat completion instead
+        try:
+            models = await client.models.list()
+            logger.info(f"OpenAI configuration verified. Models accessible.")
+            return True
+        except Exception:
+            # Fallback: try creating a simple chat completion
+            response = await client.chat.completions.create(
+                model=DEFAULT_MODEL,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=1
+            )
+            logger.info("OpenAI configuration verified via chat completion test.")
+            return True
+    except Exception as e:
+        logger.error(f"OpenAI configuration error: {e}")
+        logger.error("Please ensure OPENAI_API_KEY is set in your environment")
+        return False
+# ╰──────────────────────────────────────────────────────────────────────────╯
 
-# Enhanced Conflict Seed Agent
-conflict_seed_agent = Agent[ConflictContext](
-    name="Enhanced Conflict Seed Agent",
-    model_settings=ModelSettings(temperature=0.8),
-    instructions="""
-    You are an expert at identifying and creating organic conflicts based on world state analysis.
-    Your conflicts should:
-    
-    1. Feel natural and emerge from existing tensions
-    2. Scale appropriately from personal to apocalyptic
-    3. Consider historical context and past grievances
-    4. Involve stakeholders with genuine motivations
-    5. Create interesting moral dilemmas and choices
-    
-    When creating conflicts:
-    - Use actual canonical relationships and tensions
-    - Reference specific historical events
-    - Consider economic and resource factors
-    - Think about timing and narrative pacing
-    - Create conflicts that reveal character
-    
-    Always output valid JSON with:
-    - conflict_archetype: The type of conflict
-    - conflict_name: A compelling name
-    - description: Rich narrative description
-    - root_cause: What sparked this conflict
-    - stakeholders: List of involved parties with motivations
-    - resolution_paths: Multiple ways to resolve it
-    - potential_escalations: How it could get worse
-    - femdom_opportunities: Opportunities for power dynamics
+
+# ╭────────────────── Assistant Initialization ───────────────────────────╮
+async def initialize_conflict_assistants(verify_config: bool = True) -> Dict[str, Assistant]:
     """
-)
-
-# World State Interpreter Agent
-world_state_interpreter = Agent[ConflictContext](
-    name="World State Interpreter",
-    model_settings=ModelSettings(temperature=0.7),
-    instructions="""
-    You analyze complex world state data to identify the most interesting conflict opportunities.
+    Initialize all conflict system assistants with proper configuration.
+    Returns a comprehensive mapping of role -> Assistant.
     
-    Consider:
-    - Relationship tensions and unresolved grudges
-    - Faction power dynamics and rivalries  
-    - Economic stress and resource scarcity
-    - Historical grievances and commemorations
-    - Regional tensions and territorial disputes
-    
-    Prioritize conflicts that:
-    - Connect to player actions or relationships
-    - Build on established lore
-    - Offer meaningful choices
-    - Have escalation potential
-    - Create dramatic moments
-    
-    Output a prioritized list of conflict seeds with rationale.
+    Args:
+        verify_config: If True, verify OpenAI configuration before proceeding
     """
-)
-
-# Initialize all agents and set up handoffs
-async def initialize_agents():
-    # Set up handoffs for triage agent
-    triage_agent.handoffs = [
-        conflict_generation_agent,
-        stakeholder_agent,
-        manipulation_agent,
-        resolution_agent
+    if verify_config:
+        if not await verify_openai_configuration():
+            logger.error("Failed to verify OpenAI configuration. Using local stubs.")
+    
+    logger.info("Initializing conflict system assistants...")
+    
+    # Core assistants with specific configurations
+    assistant_configs = [
+        # Triage - lower temperature for consistent routing, with metadata placeholder
+        ("triage", {
+            "temperature": 0.3, 
+            "model": DEFAULT_MODEL,  # Use configured model
+            "metadata": {"handoff_table": {}}  # Initialize with empty table
+        }),
+        
+        # Primary conflict assistants
+        ("conflict_generation", {"temperature": 0.8}),
+        ("stakeholder_management", {"temperature": 0.7}),
+        ("manipulation", {"temperature": 0.8}),
+        ("resolution_tracking", {"temperature": 0.6}),
+        ("conflict_resolution", {"temperature": 0.7}),
+        
+        # Specialized assistants
+        ("stakeholder_personality", {"temperature": 0.9}),
+        ("alliance_negotiation", {"temperature": 0.7}),
+        ("secret_revelation", {"temperature": 0.8}),
+        ("conflict_manager", {"temperature": 0.6}),
+        ("conflict_evolution", {"temperature": 0.8}),
+        ("conflict_seed", {"temperature": 0.85}),
+        ("world_state_interpreter", {"temperature": 0.5}),
     ]
     
-    # Set up tools and other configurations as needed
-    return {
-        "triage_agent": triage_agent,
-        "conflict_generation_agent": conflict_generation_agent,
-        "stakeholder_agent": stakeholder_agent,
-        "manipulation_agent": manipulation_agent,
-        "resolution_agent": resolution_agent,
-        "stakeholder_personality_agent": stakeholder_personality_agent,
-        "alliance_negotiation_agent": alliance_negotiation_agent,
-        "secret_revelation_agent": secret_revelation_agent,
-        "conflict_manager_agent": conflict_manager_agent,
-        "conflict_evolution_agent": conflict_evolution_agent,
-        "conflict_seed_agent": conflict_seed_agent,
-        "world_state_interpreter": world_state_interpreter
+    assistants = {}
+    
+    # Create assistants concurrently for better performance
+    tasks = []
+    for role, config in assistant_configs:
+        task = create_or_get_assistant(role, **config)
+        tasks.append((role, task))
+    
+    # Wait for all assistants to be created concurrently
+    roles, coros = zip(*tasks)
+    created_assistants = await asyncio.gather(*coros)
+    
+    for role, assistant in zip(roles, created_assistants):
+        assistants[role] = assistant
+        
+        # Add legacy mappings for backward compatibility
+        if role == "conflict_generation":
+            assistants["conflict_generation_agent"] = assistant
+        elif role == "stakeholder_management":
+            assistants["stakeholder_agent"] = assistant
+        elif role == "manipulation":
+            assistants["manipulation_agent"] = assistant
+        elif role == "resolution_tracking":
+            assistants["resolution_agent"] = assistant
+    
+    # Set up handoff table with both normalized and legacy keys
+    handoff_mapping = {
+        # Normalized keys (what triage returns)
+        "generate_conflict": assistants["conflict_generation"],
+        "manage_stakeholders": assistants["stakeholder_management"],
+        "manipulation": assistants["manipulation"],
+        "resolution_tracking": assistants["resolution_tracking"],
+        "resolve_conflict": assistants["conflict_resolution"],
+        "personality": assistants["stakeholder_personality"],
+        "negotiation": assistants["alliance_negotiation"],
+        "revelation": assistants["secret_revelation"],
+        "evolution": assistants["conflict_evolution"],
+        
+        # Direct mapping keys (for flexibility)
+        "conflict_generation": assistants["conflict_generation"],
+        "stakeholder_management": assistants["stakeholder_management"],
+        "conflict_resolution": assistants["conflict_resolution"],
+        "stakeholder_personality": assistants["stakeholder_personality"],
+        "alliance_negotiation": assistants["alliance_negotiation"],
+        "secret_revelation": assistants["secret_revelation"],
+        "conflict_manager": assistants["conflict_manager"],
+        "conflict_evolution": assistants["conflict_evolution"],
+        "conflict_seed": assistants["conflict_seed"],
+        "world_state_interpreter": assistants["world_state_interpreter"],
     }
-
-# Helper functions for relationships
-async def get_relationship_status(user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id):
-    """Adapter function that uses existing relationship code."""
-    if entity1_type == 'npc':
-        manager = NPCRelationshipManager(entity1_id, user_id, conversation_id)
-        return await manager.get_relationship_details(entity2_type, entity2_id)
-    else:
-        # For other entity types, use the integration class
-        integrator = RelationshipIntegration(user_id, conversation_id)
-        return await integrator.get_relationship(entity1_type, entity1_id, entity2_type, entity2_id)
-
-async def get_manipulation_leverage(user_id, conversation_id, manipulator_id, target_id):
-    """Adapter function that calculates manipulation leverage."""
-    manager = NPCRelationshipManager(manipulator_id, user_id, conversation_id)
-    relationship = await manager.get_relationship_details('npc', target_id)
     
-    # Calculate leverage based on relationship factors
+    # Update triage metadata both locally and on server
+    triage = assistants["triage"]
+    triage_metadata = (triage.metadata or {}) | {"handoff_table": handoff_mapping}
+    triage.metadata = triage_metadata
+    
+    try:
+        client = get_client()
+        await client.beta.assistants.update(
+            triage.id,
+            metadata=triage_metadata
+        )
+        logger.debug("Successfully updated triage assistant metadata on server")
+    except Exception as e:
+        logger.warning(f"Could not sync triage metadata to server: {e}")
+    
+    logger.info(f"Initialized {len(assistants)} conflict assistants")
+    return assistants
+# ╰──────────────────────────────────────────────────────────────────────────╯
+
+
+# ╭────────────────────── Runtime Helpers ──────────────────────────────────╮
+async def ask_assistant(
+    assistant: Union[Assistant, LocalAssistantStub],
+    message: str,
+    context: Optional[ConflictContext] = None,
+    parse_json: bool = True,
+    timeout: int = 30,
+) -> Union[Dict[str, Any], str]:
+    """
+    Send a message to an assistant and get the response.
+    Handles both real Assistants and local stubs.
+    Uses your OpenAI configuration with retry logic.
+    """
+    # Handle local stub
+    if isinstance(assistant, LocalAssistantStub):
+        return await assistant.process(message, context)
+    
+    # Retry logic for API calls
+    delay = RETRY_INITIAL_DELAY
+    last_error = None
+    
+    for attempt in range(RETRY_MAX_ATTEMPTS):
+        try:
+            # Get client using your configuration
+            client = get_client()
+            
+            # Create thread with context metadata
+            thread_metadata = context.to_dict() if context else {}
+            thread = await client.beta.threads.create(metadata=thread_metadata)
+            
+            # Add user message with context in message metadata for privacy
+            await client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=message,
+                metadata=thread_metadata,  # More private than thread-level
+            )
+            
+            # Create and poll run with timeout
+            run = await asyncio.wait_for(
+                client.beta.threads.runs.create_and_poll(
+                    thread_id=thread.id,
+                    assistant_id=assistant.id,
+                ),
+                timeout=timeout
+            )
+            
+            # Check run status
+            if run.status != "completed":
+                logger.error(f"Run failed with status: {run.status}")
+                return {"error": f"Run failed: {run.status}", "assistant": assistant.name}
+            
+            # Get the response within the same timeout window
+            messages = await client.beta.threads.messages.list(
+                thread_id=thread.id,
+                order="desc",
+                limit=1
+            )
+            
+            if not messages.data:
+                raise ValueError("No response from assistant")
+            
+            # Handle different content types (text vs tool calls)
+            response_text = None
+            content_parts = messages.data[0].content
+            
+            for part in content_parts:
+                if hasattr(part, 'type') and part.type == "text":
+                    response_text = part.text.value
+                    break
+            
+            if response_text is None:
+                # No text content found, might be tool calls
+                logger.warning(f"No text response from {assistant.name}, content: {content_parts}")
+                return {"error": "No text response", "content_type": "non-text"}
+            
+            # Parse JSON if requested
+            if parse_json:
+                try:
+                    return json.loads(response_text)
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse JSON from {assistant.name}: {response_text[:100]}")
+                    return {"error": "Invalid JSON response", "raw": response_text}
+            
+            return response_text
+            
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout waiting for {assistant.name}")
+            return {"error": "Assistant timeout", "assistant": assistant.name}
+        except Exception as e:
+            last_error = e
+            if "rate" in str(e).lower() and attempt < RETRY_MAX_ATTEMPTS - 1:
+                logger.warning(f"Rate limit hit on attempt {attempt+1}/{RETRY_MAX_ATTEMPTS}: {e}. Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
+                delay *= RETRY_BACKOFF_FACTOR
+            else:
+                break
+    
+    # If we get here, all retries failed
+    logger.error(f"Error calling {assistant.name} after {RETRY_MAX_ATTEMPTS} attempts: {last_error}")
+    return {"error": str(last_error), "assistant": assistant.name}
+
+
+async def routed_conflict_query(
+    message: str,
+    context: ConflictContext,
+    assistants: Optional[Dict[str, Assistant]] = None,
+) -> Dict[str, Any]:
+    """
+    Route a conflict query through triage to the appropriate specialist.
+    """
+    # Initialize assistants if not provided
+    if assistants is None:
+        assistants = await initialize_conflict_assistants()
+    
+    triage = assistants["triage"]
+    
+    # Get routing decision from triage
+    triage_response = await ask_assistant(triage, message, context)
+    
+    if "error" in triage_response:
+        return triage_response
+    
+    # Extract routing information
+    target = triage_response.get("target", "conflict_resolution")
+    refined_query = triage_response.get("query", message)
+    confidence = triage_response.get("confidence", 0.5)
+    
+    logger.info(f"Routing to {target} (confidence: {confidence})")
+    
+    # Get specialist from handoff table (safely handle None metadata)
+    triage_metadata = triage.metadata or {}
+    handoff_table = triage_metadata.get("handoff_table", {})
+    specialist = handoff_table.get(target)
+    
+    if not specialist:
+        # Try direct assistant lookup as fallback
+        specialist = assistants.get(target)
+        
+    if not specialist:
+        logger.warning(f"No specialist found for {target}, using resolution")
+        specialist = assistants.get("conflict_resolution", assistants.get("resolution_tracking"))
+    
+    # Get response from specialist
+    response = await ask_assistant(specialist, refined_query, context)
+    
+    # Add routing metadata
+    if isinstance(response, dict):
+        response["_routing"] = {
+            "target": target,
+            "confidence": confidence,
+            "original_query": message
+        }
+    
+    return response
+# ╰──────────────────────────────────────────────────────────────────────────╯
+
+
+# ╭──────────────── Specialized Helper Functions ───────────────────────────╮
+async def generate_conflict(
+    context: ConflictContext,
+    conflict_type: str,
+    participants: List[Dict],
+    stakes: str,
+    assistants: Optional[Dict[str, Assistant]] = None,
+) -> Dict[str, Any]:
+    """Generate a new conflict with rich details."""
+    if assistants is None:
+        assistants = await initialize_conflict_assistants()
+    
+    generator = assistants["conflict_generation"]
+    
+    prompt = f"""
+    Generate a {conflict_type} conflict:
+    Participants: {json.dumps(participants)}
+    Stakes: {stakes}
+    Context: User {context.user_id}, Conversation {context.conversation_id}
+    
+    Include multiple resolution paths, manipulation opportunities, and hidden agendas.
+    """
+    
+    return await ask_assistant(generator, prompt, context)
+
+
+async def process_manipulation_attempt(
+    context: ConflictContext,
+    manipulator: Dict,
+    target: Dict,
+    technique: str,
+    leverage: Optional[Dict] = None,
+    assistants: Optional[Dict[str, Assistant]] = None,
+) -> Dict[str, Any]:
+    """Process a manipulation attempt with full context."""
+    if assistants is None:
+        assistants = await initialize_conflict_assistants()
+    
+    manipulator_assistant = assistants["manipulation"]
+    
+    # Get relationship leverage if not provided
+    if leverage is None and "id" in manipulator and "id" in target:
+        leverage = await get_manipulation_leverage(
+            context.user_id,
+            context.conversation_id,
+            manipulator["id"],
+            target["id"]
+        )
+    
+    prompt = f"""
+    Process manipulation attempt:
+    Manipulator: {json.dumps(manipulator)}
+    Target: {json.dumps(target)}
+    Technique: {technique}
+    Leverage: {json.dumps(leverage or {})}
+    
+    Calculate success probability and generate outcome narrative.
+    """
+    
+    return await ask_assistant(manipulator_assistant, prompt, context)
+# ╰──────────────────────────────────────────────────────────────────────────╯
+
+
+# ╭───────────── Compatibility Functions (unchanged) ───────────────────────╮
+async def get_relationship_status(user_id, conversation_id,
+                                  entity1_type, entity1_id,
+                                  entity2_type, entity2_id):
+    """Get relationship status between two entities."""
+    if entity1_type == "npc":
+        mgr = NPCRelationshipManager(entity1_id, user_id, conversation_id)
+        return await mgr.get_relationship_details(entity2_type, entity2_id)
+    
+    integrator = RelationshipIntegration(user_id, conversation_id)
+    return await integrator.get_relationship(entity1_type, entity1_id,
+                                             entity2_type, entity2_id)
+
+
+async def get_manipulation_leverage(user_id, conversation_id,
+                                    manipulator_id, target_id):
+    """Calculate manipulation leverage based on relationship."""
+    mgr = NPCRelationshipManager(manipulator_id, user_id, conversation_id)
+    rel = await mgr.get_relationship_details("npc", target_id)
+    
     leverage = 0.0
-    link_level = relationship.get("link_level", 0)
-    dynamics = relationship.get("dynamics", {})
+    lvl = rel.get("link_level", 0)
     
-    # Base calculation on relationship level
-    if link_level > 75:
+    if lvl > 75: 
         leverage = 0.8
-    elif link_level > 50:
+    elif lvl > 50: 
         leverage = 0.5
-    elif link_level > 25:
+    elif lvl > 25: 
         leverage = 0.3
     
-    # Adjust based on relationship dynamics if available
-    control = dynamics.get("control", 0)
-    leverage += control / 100.0 * 0.2  # Add up to 0.2 based on control level
+    # Add control dynamics
+    leverage += rel.get("dynamics", {}).get("control", 0) / 100 * 0.2
     
     return {
         "leverage_score": min(1.0, leverage),
-        "relationship_level": link_level,
-        "relationship_type": relationship.get("link_type", "neutral")
+        "relationship_level": lvl,
+        "relationship_type": rel.get("link_type", "neutral"),
+        "control_factor": rel.get("dynamics", {}).get("control", 0),
     }
+# ╰──────────────────────────────────────────────────────────────────────────╯
+
+
+# ╭────────────────────── Main Entry Point ─────────────────────────────────╮
+async def initialize_agents(verify_config: bool = True):
+    """Legacy compatibility wrapper."""
+    return await initialize_conflict_assistants(verify_config)
+
+
+# Module exports
+__all__ = [
+    "ConflictContext",
+    "initialize_conflict_assistants",
+    "initialize_agents",  # legacy
+    "ask_assistant",
+    "routed_conflict_query",
+    "generate_conflict",
+    "process_manipulation_attempt",
+    "get_relationship_status",
+    "get_manipulation_leverage",
+]
+# ╰──────────────────────────────────────────────────────────────────────────╯
