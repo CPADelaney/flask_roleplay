@@ -88,7 +88,7 @@ class LocationModel(BaseModel):
     controlling_faction: Optional[str] = Field(None, description="Faction in control")
     notable_features: List[str] = Field(..., description="Distinctive aspects")
     hidden_secrets: Optional[List[str]] = Field(None, description="Hidden elements")
-    strategic_importance: Optional[str] = Field(None, description="Tactical or resource value")
+    strategic_importance: int = Field(default=5, ge=1, le=10, description="Strategic value (1-10)")
 
 
 # Using RootModel for Pydantic v2 compatibility
