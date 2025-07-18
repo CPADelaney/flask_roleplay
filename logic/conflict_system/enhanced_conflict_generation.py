@@ -14,7 +14,11 @@ from collections import defaultdict
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 from lore.core import canon
-from logic.conflict_system.conflict_agents import ConflictContext, conflict_seed_agent, world_state_interpreter
+from logic.conflict_system.conflict_agents import (
+    ConflictContext, 
+    initialize_conflict_assistants,
+    ask_assistant
+)
 from embedding.vector_store import generate_embedding
 from logic.relationship_integration import RelationshipIntegration
 
@@ -84,6 +88,13 @@ class WorldStateAnalyzer:
             "user_id": user_id,
             "conversation_id": conversation_id
         })
+        self._assistants = None  # Lazy initialization
+    
+    async def _get_assistants(self):
+        """Get or initialize assistants"""
+        if self._assistants is None:
+            self._assistants = await initialize_conflict_assistants()
+        return self._assistants
     
     async def analyze_conflict_potential(self) -> Dict[str, Any]:
         """Analyze world state for conflict opportunities"""
@@ -307,6 +318,13 @@ class OrganicConflictGenerator:
         self.conversation_id = conversation_id
         self.analyzer = WorldStateAnalyzer(user_id, conversation_id)
         self.context = ConflictContext(user_id, conversation_id)
+        self._assistants = None  # Lazy initialization
+        
+    async def _get_assistants(self):
+        """Get or initialize assistants"""
+        if self._assistants is None:
+            self._assistants = await initialize_conflict_assistants()
+        return self._assistants
         
     async def generate_contextual_conflict(self, 
                                          preferred_scale: Optional[str] = None,
@@ -337,11 +355,16 @@ class OrganicConflictGenerator:
         Consider all factors and suggest the most dramatically appropriate conflict.
         """
         
-        interpretation = await Runner.run(
-            world_state_interpreter,
+        # Initialize assistants if not already done
+        assistants = await self._get_assistants()
+        
+        interpretation_result = await ask_assistant(
+            assistants["world_state_interpreter"],
             interpretation_prompt,
-            context=self.context
+            self.context
         )
+        # Extract the actual interpretation text
+        interpretation = interpretation_result if isinstance(interpretation_result, str) else str(interpretation_result)
         
         # Determine appropriate archetype
         if force_archetype:
@@ -353,7 +376,7 @@ class OrganicConflictGenerator:
         conflict_data = await self._generate_conflict_from_archetype(
             archetype, 
             world_state,
-            interpretation.final_output
+            interpretation
         )
         
         # Enrich with canonical connections
@@ -440,17 +463,24 @@ class OrganicConflictGenerator:
         - Have clear resolution paths
         - Include femdom power dynamics where appropriate
         
-        Generate a complete conflict structure.
+        Generate a complete conflict structure with JSON format including:
+        - conflict_name
+        - description
+        - stakeholders (array with npc_name, role, faction_name, public_motivation, private_motivation, desired_outcome)
+        - resolution_paths (array with path_id, name, description, approach_type, difficulty, requirements, stakeholders_involved, key_challenges)
         """
         
-        result = await Runner.run(
-            conflict_seed_agent,
+        # Initialize assistants if not already done
+        assistants = await self._get_assistants()
+            
+        result = await ask_assistant(
+            assistants["conflict_seed"],
             generation_prompt,
-            context=self.context
+            self.context
         )
         
         # Parse and structure the result
-        conflict_data = json.loads(result.final_output)
+        conflict_data = result if isinstance(result, dict) else json.loads(result)
         
         # Add archetype metadata
         conflict_data.update({
