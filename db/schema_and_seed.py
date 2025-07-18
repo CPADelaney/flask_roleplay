@@ -2508,6 +2508,124 @@ async def create_all_tables():
                 ADD CONSTRAINT fk_localhistories_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 ADD CONSTRAINT fk_localhistories_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
                 ''',
+'''
+                ALTER TABLE Locations 
+                    ALTER COLUMN notable_features TYPE JSONB USING to_jsonb(notable_features),
+                    ALTER COLUMN hidden_aspects TYPE JSONB USING to_jsonb(hidden_aspects),
+                    ALTER COLUMN access_restrictions TYPE JSONB USING to_jsonb(access_restrictions),
+                    ALTER COLUMN local_customs TYPE JSONB USING to_jsonb(local_customs);
+                ''',
+                '''
+                ALTER TABLE Factions 
+                    ALTER COLUMN values TYPE JSONB USING to_jsonb(values),
+                    ALTER COLUMN goals TYPE JSONB USING to_jsonb(goals),
+                    ALTER COLUMN membership_requirements TYPE JSONB USING to_jsonb(membership_requirements),
+                    ALTER COLUMN rivals TYPE JSONB USING to_jsonb(rivals),
+                    ALTER COLUMN allies TYPE JSONB USING to_jsonb(allies),
+                    ALTER COLUMN secret_activities TYPE JSONB USING to_jsonb(secret_activities),
+                    ALTER COLUMN recruitment_methods TYPE JSONB USING to_jsonb(recruitment_methods);
+                ''',
+                '''
+                ALTER TABLE Nations 
+                    ALTER COLUMN major_resources TYPE JSONB USING to_jsonb(major_resources),
+                    ALTER COLUMN major_cities TYPE JSONB USING to_jsonb(major_cities),
+                    ALTER COLUMN cultural_traits TYPE JSONB USING to_jsonb(cultural_traits),
+                    ALTER COLUMN neighboring_nations TYPE JSONB USING to_jsonb(neighboring_nations);
+                ''',
+                '''
+                ALTER TABLE NationalConflicts 
+                    ALTER COLUMN involved_nations TYPE JSONB USING to_jsonb(involved_nations),
+                    ALTER COLUMN recent_developments TYPE JSONB USING to_jsonb(recent_developments);
+                ''',
+                '''
+                ALTER TABLE CulturalElements 
+                    ALTER COLUMN practiced_by TYPE JSONB USING to_jsonb(practiced_by);
+                ''',
+                '''
+                ALTER TABLE CulinaryTraditions 
+                    ALTER COLUMN ingredients TYPE JSONB USING to_jsonb(ingredients),
+                    ALTER COLUMN adopted_by TYPE JSONB USING to_jsonb(adopted_by);
+                ''',
+                '''
+                ALTER TABLE SocialCustoms 
+                    ALTER COLUMN adopted_by TYPE JSONB USING to_jsonb(adopted_by);
+                ''',
+                '''
+                ALTER TABLE GeographicRegions 
+                    ALTER COLUMN resources TYPE JSONB USING to_jsonb(resources),
+                    ALTER COLUMN major_settlements TYPE JSONB USING to_jsonb(major_settlements),
+                    ALTER COLUMN cultural_traits TYPE JSONB USING to_jsonb(cultural_traits),
+                    ALTER COLUMN dangers TYPE JSONB USING to_jsonb(dangers),
+                    ALTER COLUMN terrain_features TYPE JSONB USING to_jsonb(terrain_features);
+                ''',
+                '''
+                ALTER TABLE PoliticalEntities 
+                    ALTER COLUMN internal_conflicts TYPE JSONB USING to_jsonb(internal_conflicts);
+                ''',
+                '''
+                ALTER TABLE BorderDisputes 
+                    ALTER COLUMN female_leaders_involved TYPE JSONB USING to_jsonb(female_leaders_involved);
+                ''',
+                '''
+                ALTER TABLE UrbanMyths 
+                    ALTER COLUMN regions_known TYPE JSONB USING to_jsonb(regions_known),
+                    ALTER COLUMN themes TYPE JSONB USING to_jsonb(themes),
+                    ALTER COLUMN matriarchal_elements TYPE JSONB USING to_jsonb(matriarchal_elements);
+                ''',
+                '''
+                ALTER TABLE LocalHistories 
+                    ALTER COLUMN notable_figures TYPE JSONB USING to_jsonb(notable_figures),
+                    ALTER COLUMN connected_myths TYPE JSONB USING to_jsonb(connected_myths),
+                    ALTER COLUMN related_landmarks TYPE JSONB USING to_jsonb(related_landmarks);
+                ''',
+                '''
+                ALTER TABLE Landmarks 
+                    ALTER COLUMN legends TYPE JSONB USING to_jsonb(legends),
+                    ALTER COLUMN connected_histories TYPE JSONB USING to_jsonb(connected_histories);
+                ''',
+                '''
+                ALTER TABLE HistoricalEvents 
+                    ALTER COLUMN involved_entities TYPE JSONB USING to_jsonb(involved_entities),
+                    ALTER COLUMN consequences TYPE JSONB USING to_jsonb(consequences),
+                    ALTER COLUMN disputed_facts TYPE JSONB USING to_jsonb(disputed_facts),
+                    ALTER COLUMN commemorations TYPE JSONB USING to_jsonb(commemorations),
+                    ALTER COLUMN primary_sources TYPE JSONB USING to_jsonb(primary_sources);
+                ''',
+                '''
+                ALTER TABLE NotableFigures 
+                    ALTER COLUMN faction_affiliations TYPE JSONB USING to_jsonb(faction_affiliations),
+                    ALTER COLUMN achievements TYPE JSONB USING to_jsonb(achievements),
+                    ALTER COLUMN failures TYPE JSONB USING to_jsonb(failures),
+                    ALTER COLUMN personality_traits TYPE JSONB USING to_jsonb(personality_traits),
+                    ALTER COLUMN hidden_aspects TYPE JSONB USING to_jsonb(hidden_aspects),
+                    ALTER COLUMN influence_areas TYPE JSONB USING to_jsonb(influence_areas),
+                    ALTER COLUMN controversial_actions TYPE JSONB USING to_jsonb(controversial_actions),
+                    ALTER COLUMN relationships TYPE JSONB USING to_jsonb(relationships);
+                ''',
+                '''
+                ALTER TABLE CanonicalEvents 
+                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                ''',
+                '''
+                ALTER TABLE nyx_brain_checkpoints 
+                    ALTER COLUMN merged_from TYPE JSONB USING to_jsonb(merged_from);
+                ''',
+                '''
+                ALTER TABLE nyx1_scene_templates 
+                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                ''',
+                '''
+                ALTER TABLE unified_memories 
+                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                ''',
+                '''
+                ALTER TABLE NPCMemories 
+                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                ''',
+                '''
+                ALTER TABLE WorldLore 
+                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                ''',
             ]  # End of sql_commands list
 
             # Execute commands sequentially
