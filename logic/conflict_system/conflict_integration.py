@@ -18,9 +18,11 @@ from logic.conflict_system.enhanced_conflict_generation import (
     OrganicConflictGenerator, generate_organic_conflict, analyze_conflict_pressure
 )
 from logic.conflict_system.conflict_agents import (
-    triage_agent, conflict_generation_agent, stakeholder_agent,
-    manipulation_agent, resolution_agent, ConflictContext, initialize_agents,
-    conflict_manager_agent, conflict_evolution_agent
+    ConflictContext, 
+    initialize_conflict_assistants,
+    initialize_agents,  # legacy alias
+    ask_assistant,
+    routed_conflict_query
 )
 from logic.conflict_system.conflict_tools import (
     get_active_conflicts, get_conflict_details, get_conflict_stakeholders,
@@ -450,24 +452,27 @@ class ConflictSystemIntegration:
             })
     
             conflict_context = ConflictContext(self.user_id, self.conversation_id)
-            generation_result = await Runner.run(
-                self.agents["conflict_generation_agent"],
+            
+            # Use ask_assistant instead of Runner.run
+            result = await ask_assistant(
+                self.agents["conflict_generation"],  # Note: no "_agent" suffix
                 json.dumps(enhanced_data),
-                context=conflict_context,
+                conflict_context
             )
-            result = getattr(generation_result, 'final_output', generation_result)
     
             # Stakeholders
             stakeholder_data = {
-                "conflict_id": result.get("conflict_id", getattr(result, 'conflict_id', None)),
+                "conflict_id": result.get("conflict_id"),
                 "conflict_details": result.get("conflict_details", {}),
                 "existing_npcs": enhanced_data.get("existing_npcs", []),
                 "required_roles": enhanced_data.get("required_roles", []),
                 "story_context": story_context
             }
-            stakeholder_result = await Runner.run(
-                self.agents["stakeholder_agent"],
-                json.dumps(stakeholder_data), context=conflict_context
+            
+            stakeholder_result = await ask_assistant(
+                self.agents["stakeholder_management"],  # Note: changed from "stakeholder_agent"
+                json.dumps(stakeholder_data), 
+                conflict_context
             )
     
             # Lore event update
@@ -499,7 +504,7 @@ class ConflictSystemIntegration:
                 "success": True,
                 "conflict_id": result.get("conflict_id"),
                 "conflict_details": result.get("conflict_details"),
-                "stakeholders": stakeholder_result.final_output.get("stakeholders", []),
+                "stakeholders": stakeholder_result.get("stakeholders", []),
                 "player_involvement": result.get("player_involvement"),
                 "story_context": story_context
             }
@@ -582,14 +587,16 @@ class ConflictSystemIntegration:
         """
         
         context = ConflictContext(self.user_id, self.conversation_id)
-        result = await Runner.run(
-            conflict_manager_agent,
+        
+        # Use ask_assistant instead of Runner.run
+        result = await ask_assistant(
+            self.agents["conflict_manager"],
             decision_prompt,
-            context=context
+            context
         )
         
         try:
-            decision = json.loads(result.final_output)
+            decision = result if isinstance(result, dict) else json.loads(result)
             return decision if decision["should_generate"] else False
         except:
             return False
@@ -792,13 +799,15 @@ class ConflictSystemIntegration:
             """
             
             context = ConflictContext(self.user_id, self.conversation_id)
-            evolution = await Runner.run(
-                conflict_evolution_agent,
+            
+            # Use ask_assistant instead of Runner.run
+            evolution = await ask_assistant(
+                self.agents["conflict_evolution"],
                 evolution_prompt,
-                context=context
+                context
             )
             
-            updates = json.loads(evolution.final_output)
+            updates = evolution if isinstance(evolution, dict) else json.loads(evolution)
             
             results = {
                 "conflict_id": conflict_id,
@@ -1028,12 +1037,13 @@ class ConflictSystemIntegration:
             })
 
             conflict_context = ConflictContext(self.user_id, self.conversation_id)
-            resolution_result = await Runner.run(
-                self.agents["resolution_agent"],
+            
+            # Use ask_assistant instead of Runner.run
+            result = await ask_assistant(
+                self.agents["resolution_tracking"],  # Note: changed from "resolution_agent"
                 json.dumps(enhanced_data),
-                context=conflict_context,
+                conflict_context
             )
-            result = getattr(resolution_result, 'final_output', resolution_result)
 
             await self.lore_system.handle_narrative_event(
                 self.run_ctx,
@@ -1075,12 +1085,13 @@ class ConflictSystemIntegration:
         await self.initialize()
         try:
             conflict_context = ConflictContext(self.user_id, self.conversation_id)
-            stakeholder_result = await Runner.run(
-                self.agents["stakeholder_agent"], 
+            
+            # Use ask_assistant instead of Runner.run
+            result = await ask_assistant(
+                self.agents["stakeholder_management"],  # Note: changed from "stakeholder_agent"
                 json.dumps(stakeholder_data),
-                context=conflict_context
+                conflict_context
             )
-            result = getattr(stakeholder_result, 'final_output', stakeholder_result)
             
             if self.memory_manager:
                 stakeholder_changes = []
@@ -1123,12 +1134,13 @@ class ConflictSystemIntegration:
         await self.initialize()
         try:
             conflict_context = ConflictContext(self.user_id, self.conversation_id)
-            manipulation_result = await Runner.run(
-                self.agents["manipulation_agent"],
+            
+            # Use ask_assistant instead of Runner.run
+            result = await ask_assistant(
+                self.agents["manipulation"],  # Note: changed from "manipulation_agent"
                 json.dumps(manipulation_data),
-                context=conflict_context
+                conflict_context
             )
-            result = getattr(manipulation_result, 'final_output', manipulation_result)
             
             if self.memory_manager:
                 await self.memory_manager.add_memory(
