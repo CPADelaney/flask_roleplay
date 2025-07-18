@@ -12,8 +12,11 @@ from datetime import datetime, timedelta
 from contextvars import ContextVar
 from functools import wraps
 from enum import Enum
+import importlib
 import importlib.resources
 from collections import defaultdict
+from openai import AsyncOpenAI
+from openai.types.beta.assistant import Assistant
 
 # Import metrics (assuming prometheus_client is available)
 try:
@@ -580,6 +583,7 @@ class NyxUnifiedGovernor(
       9. Temporal consistency enforcement
       10. User preference integration
     """
+    _assistants: dict[str, Assistant] = {}
     
     def __init__(self, user_id: int, conversation_id: int, player_name: Optional[str] = None):
         self.user_id = user_id
