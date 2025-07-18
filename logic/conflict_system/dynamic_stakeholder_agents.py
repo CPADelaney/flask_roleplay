@@ -16,7 +16,9 @@ from lore.core import canon
 from logic.relationship_integration import RelationshipIntegration
 from npcs.npc_relationship import NPCRelationshipManager
 from logic.conflict_system.conflict_agents import (
-    stakeholder_personality_agent, alliance_negotiation_agent, secret_revelation_agent
+    ConflictContext,
+    initialize_conflict_assistants,
+    ask_assistant
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,14 @@ class StakeholderAutonomySystem:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.relationship_integration = RelationshipIntegration(user_id, conversation_id)
+        self.context = ConflictContext(user_id, conversation_id)
+        self._assistants = None  # Lazy initialization
+    
+    async def _get_assistants(self):
+        """Get or initialize assistants"""
+        if self._assistants is None:
+            self._assistants = await initialize_conflict_assistants()
+        return self._assistants
         
     async def process_stakeholder_turn(self, conflict_id: int) -> List[Dict[str, Any]]:
         """Process autonomous actions for all stakeholders in a conflict"""
@@ -146,19 +156,22 @@ class StakeholderAutonomySystem:
         }}
         """
         
-        result = await Runner.run(
-            stakeholder_personality_agent,
+        # Get assistants and use stakeholder personality agent
+        assistants = await self._get_assistants()
+        result = await ask_assistant(
+            assistants["stakeholder_personality"],
             decision_prompt,
-            RunContextWrapper({"user_id": self.user_id, "conversation_id": self.conversation_id})
+            self.context
         )
         
         try:
-            action = json.loads(result.final_output)
+            # Handle both dict and string responses
+            action = result if isinstance(result, dict) else json.loads(result)
             action['stakeholder_id'] = stakeholder['npc_id']
             action['stakeholder_name'] = stakeholder['npc_name']
             return action
         except:
-            logger.error(f"Failed to parse stakeholder action: {result.final_output}")
+            logger.error(f"Failed to parse stakeholder action: {result}")
             return None
     
     async def _get_stakeholder_relationships(self, npc_id: int,
@@ -359,15 +372,26 @@ class StakeholderAutonomySystem:
             3. What is the final agreement (if any)?
             
             Consider personality traits and power dynamics.
+            
+            Output JSON:
+            {{
+                "accepted": true/false,
+                "reason": "explanation",
+                "agreement": "terms if accepted",
+                "counter_demands": ["list of demands"]
+            }}
             """
             
-            negotiation_result = await Runner.run(
-                alliance_negotiation_agent,
+            # Get assistants and use alliance negotiation agent
+            assistants = await self._get_assistants()
+            negotiation_result = await ask_assistant(
+                assistants["alliance_negotiation"],
                 negotiation_prompt,
-                RunContextWrapper({"user_id": self.user_id, "conversation_id": self.conversation_id})
+                self.context
             )
             
-            result_data = json.loads(negotiation_result.final_output)
+            # Parse result
+            result_data = negotiation_result if isinstance(negotiation_result, dict) else json.loads(negotiation_result)
             
             if result_data['accepted']:
                 # Update stakeholder stances
@@ -404,6 +428,15 @@ class StakeholderAutonomySystem:
                         'parties': [stakeholder['npc_id'], target_id]
                     }]
                 }
+    
+    async def _execute_alliance_formation(self, action: Dict[str, Any],
+                                        stakeholder: Dict[str, Any],
+                                        conflict_id: int) -> Dict[str, Any]:
+        """Execute alliance formation (similar to negotiation but focused on alliance)"""
+        # For now, redirect to negotiation with alliance-specific details
+        action['details'] = action.get('details', {})
+        action['details']['offer'] = 'Alliance and mutual support'
+        return await self._execute_negotiation(action, stakeholder, conflict_id)
     
     async def _execute_secret_revelation(self, action: Dict[str, Any],
                                        stakeholder: Dict[str, Any],
@@ -450,15 +483,27 @@ class StakeholderAutonomySystem:
             2. How to reveal it (public announcement, private threat, etc.)
             3. Who to reveal it to
             4. Expected impact
+            
+            Output JSON:
+            {{
+                "reveal": true/false,
+                "secret_id": "id if revealing",
+                "method": "public/private/threat",
+                "revealed_to": ["list of recipients or 'all'"],
+                "impact": "expected impact description"
+            }}
             """
             
-            revelation_result = await Runner.run(
-                secret_revelation_agent,
+            # Get assistants and use secret revelation agent
+            assistants = await self._get_assistants()
+            revelation_result = await ask_assistant(
+                assistants["secret_revelation"],
                 revelation_prompt,
-                RunContextWrapper({"user_id": self.user_id, "conversation_id": self.conversation_id})
+                self.context
             )
             
-            result_data = json.loads(revelation_result.final_output)
+            # Parse result
+            result_data = revelation_result if isinstance(revelation_result, dict) else json.loads(revelation_result)
             
             if result_data.get('reveal'):
                 secret_id = result_data['secret_id']
