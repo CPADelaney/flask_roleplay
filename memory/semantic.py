@@ -8,7 +8,6 @@ from typing import Dict, Any, List, Optional, Union, Set
 import asyncio
 
 # Import the OpenAI helper functions from chatgpt_integration
-from logic.chatgpt_integration import get_async_openai_client, get_openai_client
 
 from .connection import with_transaction, TransactionContext
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
@@ -157,6 +156,7 @@ class SemanticMemoryManager:
         abstraction_level: float,
     ) -> str:
         """Create a semantic abstraction (minimal/moderate/high) via OpenAI API."""
+        from logic.chatgpt_integration import get_async_openai_client, get_openai_client
         client = get_async_openai_client()
         level = (
             "minimal" if abstraction_level < 0.3
@@ -332,6 +332,7 @@ class SemanticMemoryManager:
         topic: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Extract a pattern from a cluster of Memory objects."""
+        from logic.chatgpt_integration import get_async_openai_client, get_openai_client
         client = get_async_openai_client()
     
         memories_text = "\n".join(f"- {m.text}" for m in cluster)
@@ -687,6 +688,7 @@ class SemanticMemoryManager:
         variation_type: str,
     ) -> str:
         """Counterfactual variation (alternative/opposite/exaggeration) via OpenAI API."""
+        from logic.chatgpt_integration import get_async_openai_client, get_openai_client
         client = get_async_openai_client()
     
         description = {
@@ -860,6 +862,7 @@ class SemanticMemoryManager:
         """
         Extract 2-3 related topics from memory_text via the OpenAI API.
         """
+        from logic.chatgpt_integration import get_async_openai_client, get_openai_client
         client = get_async_openai_client()
     
         mem_block = _safe_block(memory_text)
