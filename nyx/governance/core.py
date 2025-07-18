@@ -959,6 +959,99 @@ class NyxUnifiedGovernor(
         
         return game_state
 
+    async def create_agent(
+        self,
+        agent_type: str,
+        agent_id: str,
+        *,
+        use_openai_sdk: bool = True,
+        **kwargs,
+    ) -> Any:
+        """
+        Create / register an agent.
+
+        * If `use_openai_sdk` (default) → create or fetch an **Assistant** object
+          via the OpenAI Agent SDK.
+        * Otherwise fall back to dynamic Python-class instantiation (your old path).
+
+        kwargs are passed straight through to `client.beta.assistants.create`
+        so you can specify **model**, **instructions**, **tools**, etc.
+        """
+        logger.info("Creating agent via SDK=%s, type=%s, id=%s",
+                    use_openai_sdk, agent_type, agent_id)
+
+        # ────────────────────────────────────────────────────────────────────
+        # 1) SDK branch  ─────────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────────
+        if use_openai_sdk:
+            # return cached instance if we already created it this run
+            if agent_id in self._assistants:
+                return self._assistants[agent_id]
+
+            # sensible defaults you can override in **kwargs
+            sdk_defaults = dict(
+                name          = f"{agent_type}:{agent_id}",
+                model         = "gpt-4o-mini",
+                instructions  = f"You are the {agent_type} agent.",
+                tools         = [],          # e.g. [{"type":"code_interpreter"}]
+            )
+            sdk_defaults.update(kwargs)
+
+            try:
+                assistant: Assistant = await client.beta.assistants.create(**sdk_defaults)
+                self._assistants[agent_id] = assistant
+                logger.info("Assistant %s created (id=%s)", assistant.name, assistant.id)
+                return assistant
+
+            except Exception as e:
+                logger.error("OpenAI Assistant creation failed: %s", e, exc_info=True)
+                raise AgentRegistrationError(
+                    f"Failed to create Assistant {agent_type}/{agent_id}: {e}"
+                ) from e
+
+        # ────────────────────────────────────────────────────────────────────
+        # 2) Legacy Python-class branch  (unchanged logic, trimmed) ─────────
+        # ────────────────────────────────────────────────────────────────────
+        try:
+            agent_class_map = {
+                "resolution":  "logic.conflict_system.conflict_agents.resolution_agent",
+                "stakeholder": "logic.conflict_system.conflict_agents.stakeholder_agent",
+                "strategy":    "logic.conflict_system.conflict_agents.manipulation_agent",
+                "conflict_manager": "logic.conflict_system.conflict_agents.conflict_manager_agent",
+                "npc":   "npcs.npc_agent.NPCAgent",
+                "story": "story_agent.story_director_agent.StoryDirector",
+                "narrative": "agents.narrative_crafter.NarrativeCrafterAgent",
+                "scene": "agents.scene_manager.SceneManagerAgent",
+                "memory": "agents.memory_manager.MemoryManagerAgent",
+            }
+
+            module_path = agent_class_map.get(agent_type) or \
+                          f"agents.{agent_type}_agent.{agent_type.title()}Agent"
+
+            module_name, class_name = module_path.rsplit(".", 1)
+            module      = importlib.import_module(module_name)
+            agent_class = getattr(module, class_name)
+
+            instance = agent_class(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                **kwargs,
+            )
+
+            # optional async initialise
+            if hasattr(instance, "initialize") and callable(instance.initialize):
+                await instance.initialize()
+
+            # register however your framework expects
+            await self.register_agent(agent_type, agent_id, instance)
+            return instance
+
+        except Exception as e:
+            logger.error("Python-agent creation failed: %s", e, exc_info=True)
+            raise AgentRegistrationError(
+                f"Failed to create agent {agent_type}/{agent_id}: {e}"
+            ) from e
+
     async def register_agent(self, *args, **kwargs):
         """
         Register an agent via queue to avoid lock contention.
