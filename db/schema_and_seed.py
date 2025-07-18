@@ -1604,7 +1604,7 @@ async def create_all_tables():
                     status TEXT NOT NULL DEFAULT 'In Progress',
                     progress_detail TEXT,
                     quest_giver TEXT,
-                    reward TEXT,
+                    reward JSONB DEFAULT '[]',
                     embedding vector(384),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -2625,6 +2625,10 @@ async def create_all_tables():
                 '''
                 ALTER TABLE WorldLore 
                     ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                ''',
+                '''
+                ALTER TABLE Quests
+                    ALTER COLUMN reward TYPE JSONB USING to_jsonb(tags);
                 ''',
             ]  # End of sql_commands list
 
