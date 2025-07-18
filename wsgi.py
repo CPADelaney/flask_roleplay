@@ -3,6 +3,7 @@
 import os
 import logging
 from dotenv import load_dotenv
+import config_startup
 # Removed unused Quart imports directly here as app comes from main
 # from quart import Quart, render_template, session, request, jsonify, redirect
 # import socketio
