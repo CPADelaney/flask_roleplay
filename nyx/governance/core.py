@@ -15,8 +15,10 @@ from enum import Enum
 import importlib
 import importlib.resources
 from collections import defaultdict
-from openai import AsyncOpenAI
-from openai.types.beta.assistant import Assistant
+
+# Remove direct OpenAI import - use chatgpt_integration instead
+# from openai import AsyncOpenAI
+# from openai.types.beta.assistant import Assistant
 
 # Import metrics (assuming prometheus_client is available)
 try:
@@ -54,6 +56,17 @@ from .constants import DirectiveType, DirectivePriority, AgentType
 # Other imports
 from utils.caching import CACHE_TTL
 from db.connection import get_db_connection_context
+
+# Import LLM access from chatgpt_integration
+from logic.chatgpt_integration import get_async_openai_client
+
+# Try to import Assistant type for type hints
+try:
+    from openai.types.beta.assistant import Assistant
+    ASSISTANT_TYPE_AVAILABLE = True
+except ImportError:
+    ASSISTANT_TYPE_AVAILABLE = False
+    Assistant = Any  # Fallback type
 
 # Pydantic for validation
 try:
@@ -584,6 +597,7 @@ class NyxUnifiedGovernor(
       10. User preference integration
     """
     _assistants: dict[str, Assistant] = {}
+    _openai_client = None  # Cached client instance
     
     def __init__(self, user_id: int, conversation_id: int, player_name: Optional[str] = None):
         self.user_id = user_id
@@ -963,6 +977,12 @@ class NyxUnifiedGovernor(
         
         return game_state
 
+    async def _get_openai_client(self):
+        """Get or create the OpenAI client using chatgpt_integration."""
+        if self._openai_client is None:
+            self._openai_client = get_async_openai_client()
+        return self._openai_client
+
     async def create_agent(
         self,
         agent_type: str,
@@ -975,7 +995,7 @@ class NyxUnifiedGovernor(
         Create / register an agent.
 
         * If `use_openai_sdk` (default) → create or fetch an **Assistant** object
-          via the OpenAI Agent SDK.
+          via the OpenAI Agent SDK using chatgpt_integration.
         * Otherwise fall back to dynamic Python-class instantiation (your old path).
 
         kwargs are passed straight through to `client.beta.assistants.create`
@@ -1002,6 +1022,9 @@ class NyxUnifiedGovernor(
             sdk_defaults.update(kwargs)
 
             try:
+                # Get OpenAI client from chatgpt_integration
+                client = await self._get_openai_client()
+                
                 assistant: Assistant = await client.beta.assistants.create(**sdk_defaults)
                 self._assistants[agent_id] = assistant
                 logger.info("Assistant %s created (id=%s)", assistant.name, assistant.id)
