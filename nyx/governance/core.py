@@ -991,7 +991,7 @@ class NyxUnifiedGovernor(
             # sensible defaults you can override in **kwargs
             sdk_defaults = dict(
                 name          = f"{agent_type}:{agent_id}",
-                model         = "gpt-4o-mini",
+                model         = "gpt-4.1-nano",
                 instructions  = f"You are the {agent_type} agent.",
                 tools         = [],          # e.g. [{"type":"code_interpreter"}]
             )
