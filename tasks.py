@@ -1,6 +1,7 @@
 # tasks.py
 
 import os
+import config_startup 
 import json
 import logging
 import asyncio
