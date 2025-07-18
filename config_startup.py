@@ -10,4 +10,4 @@ if not api_key:
     raise RuntimeError("OPENAI_API_KEY missing")
 
 set_default_openai_key(api_key)    # <— global for the SDK
-set_default_openai_api("chat_completions")   # optional
+set_default_openai_api("chat_responses")   # optional
