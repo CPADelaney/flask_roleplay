@@ -8,7 +8,6 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 import asyncio
 import openai
 import numpy as np
-from logic.chatgpt_integration import get_openai_client
 
 from .connection import with_transaction, TransactionContext
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
@@ -501,6 +500,7 @@ class MemoryInterferenceManager:
         """
         Blend two memories via Responses API.
         """
+        from logic.chatgpt_integration import get_openai_client
         client = get_openai_client()
     
         prompt = f"""
@@ -528,6 +528,7 @@ class MemoryInterferenceManager:
         """
         Build a single false memory that *confuses the order* of two memories.
         """
+        from logic.chatgpt_integration import get_openai_client
         client = get_openai_client()
     
         prompt = f"""
@@ -568,6 +569,7 @@ class MemoryInterferenceManager:
         """
         Produce a blended memory, favouring the higher-weighted source.
         """
+        from logic.chatgpt_integration import get_openai_client
         client = get_openai_client()
     
         prompt = f"""
@@ -603,6 +605,7 @@ class MemoryInterferenceManager:
         """
         Generic “blend two memories” helper using the Responses API.
         """
+        from logic.chatgpt_integration import get_openai_client
         client = get_openai_client()
     
         prompt = f"""
