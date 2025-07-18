@@ -260,10 +260,10 @@ async def create_all_tables():
                     economic_importance TEXT DEFAULT 'moderate',
                     strategic_value INTEGER DEFAULT 5,
                     population_density TEXT DEFAULT 'moderate',
-                    notable_features TEXT[] DEFAULT '{}',
-                    hidden_aspects TEXT[] DEFAULT '{}',
-                    access_restrictions TEXT[] DEFAULT '{}',
-                    local_customs TEXT[] DEFAULT '{}',
+                    notable_features JSONB DEFAULT '[]',  -- Changed from TEXT[]
+                    hidden_aspects JSONB DEFAULT '[]',    -- Changed from TEXT[]
+                    access_restrictions JSONB DEFAULT '[]', -- Changed from TEXT[]
+                    local_customs JSONB DEFAULT '[]',     -- Changed from TEXT[]
                     open_hours JSONB,
                     embedding vector(384),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -335,7 +335,7 @@ async def create_all_tables():
                     is_active BOOLEAN DEFAULT FALSE,
                     role TEXT,
                     embedding vector(384),
-                    personality_patterns JSONB DEFAULT '[]'::jsonb,
+                    personality_patterns JSONB DEFAULT '[]',::jsonb,
                     trauma_triggers JSONB,
                     flashback_triggers JSONB,
                     revelation_plan JSONB,
@@ -625,7 +625,7 @@ async def create_all_tables():
                     npc_id INT NOT NULL,
                     memory_text TEXT NOT NULL,
                     timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    tags TEXT[],
+                    tags JSONB DEFAULT '[]',
                     emotional_intensity INT DEFAULT 0,
                     times_recalled INT DEFAULT 0,
                     last_recalled TIMESTAMP,
@@ -669,7 +669,7 @@ async def create_all_tables():
                     memory_type TEXT NOT NULL DEFAULT 'observation',
                     significance INTEGER NOT NULL DEFAULT 3,
                     emotional_intensity INTEGER NOT NULL DEFAULT 0,
-                    tags TEXT[] DEFAULT '{}',
+                    tags JSONB DEFAULT '[]',
                     embedding VECTOR(384),
                     metadata JSONB,
                     timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -843,20 +843,20 @@ async def create_all_tables():
                     name TEXT NOT NULL,
                     type TEXT DEFAULT 'community' CHECK (type IN ('political', 'community', 'social', 'hobby', 'educational', 'professional', 'religious', 'criminal')),
                     description TEXT,
-                    values TEXT[],
-                    goals TEXT[],
+                    values JSONB DEFAULT '[]',           -- Changed from TEXT[]
+                    goals JSONB DEFAULT '[]',            -- Changed from TEXT[]
                     hierarchy TEXT DEFAULT 'informal',
-                    resources TEXT[],
+                    resources JSONB DEFAULT '[]',        -- Changed from TEXT[]
                     territory TEXT,
                     meeting_schedule TEXT,
-                    membership_requirements TEXT[],
-                    rivals INTEGER[],
-                    allies INTEGER[],
+                    membership_requirements JSONB DEFAULT '[]', -- Changed from TEXT[]
+                    rivals JSONB DEFAULT '[]',           -- Changed from INTEGER[]
+                    allies JSONB DEFAULT '[]',           -- Changed from INTEGER[]
                     public_reputation TEXT DEFAULT 'neutral',
-                    secret_activities TEXT[],
+                    secret_activities JSONB DEFAULT '[]', -- Changed from TEXT[]
                     power_level INTEGER DEFAULT 3 CHECK (power_level BETWEEN 1 AND 10),
                     influence_scope TEXT DEFAULT 'local' CHECK (influence_scope IN ('personal', 'local', 'regional', 'national', 'global')),
-                    recruitment_methods TEXT[],
+                    recruitment_methods JSONB DEFAULT '[]', -- Changed from TEXT[]
                     leadership_structure JSONB,
                     founding_story TEXT,
                     embedding VECTOR(384),
@@ -902,11 +902,11 @@ async def create_all_tables():
                     relative_power INTEGER DEFAULT 5,
                     matriarchy_level INTEGER DEFAULT 5,
                     population_scale TEXT,
-                    major_resources TEXT[],
-                    major_cities TEXT[],
-                    cultural_traits TEXT[],
+                    major_resources JSONB DEFAULT '[]',
+                    major_cities JSONB DEFAULT '[]',
+                    cultural_traits JSONB DEFAULT '[]',
+                    neighboring_nations JSONB DEFAULT '[]',
                     notable_features TEXT,
-                    neighboring_nations TEXT[],
                     embedding vector(384)
                 );
                 ''',
@@ -927,14 +927,14 @@ async def create_all_tables():
                     severity INTEGER DEFAULT 5,
                     status TEXT DEFAULT 'active',
                     start_date TEXT,
-                    involved_nations INTEGER[],
+                    involved_nations JSONB DEFAULT '[]',
                     primary_aggressor INTEGER,
                     primary_defender INTEGER,
                     current_casualties TEXT,
                     economic_impact TEXT,
                     diplomatic_consequences TEXT,
                     public_opinion JSONB,
-                    recent_developments TEXT[],
+                    recent_developments JSONB DEFAULT '[]',
                     potential_resolution TEXT,
                     embedding vector(384)
                 );
@@ -949,7 +949,7 @@ async def create_all_tables():
                     name TEXT NOT NULL,
                     element_type TEXT NOT NULL,
                     description TEXT,
-                    practiced_by TEXT[],
+                    practiced_by JSONB DEFAULT '[]',
                     significance INTEGER DEFAULT 5,
                     historical_origin TEXT,
                     embedding vector(384)
@@ -965,10 +965,10 @@ async def create_all_tables():
                     name TEXT NOT NULL,
                     nation_origin INTEGER,
                     description TEXT,
-                    ingredients TEXT[],
+                    ingredients JSONB DEFAULT '[]',
                     preparation TEXT,
                     cultural_significance TEXT,
-                    adopted_by INTEGER[],
+                    adopted_by JSONB DEFAULT '[]',
                     embedding vector(384)
                 );
                 ''',
@@ -984,7 +984,7 @@ async def create_all_tables():
                     description TEXT,
                     context TEXT DEFAULT 'social',
                     formality_level TEXT DEFAULT 'medium',
-                    adopted_by INTEGER[],
+                    adopted_by JSONB DEFAULT '[]',
                     adoption_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     embedding vector(384)
                 );
@@ -1002,7 +1002,7 @@ async def create_all_tables():
                     source_type VARCHAR(50) NOT NULL,
                     source_id INTEGER NOT NULL,
                     significance INTEGER DEFAULT 5,
-                    tags JSONB DEFAULT '[]'::jsonb,
+                    tags JSONB DEFAULT '[]',::jsonb,
                     metadata JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -1052,13 +1052,13 @@ async def create_all_tables():
                     region_type TEXT NOT NULL,
                     description TEXT,
                     climate TEXT,
-                    resources TEXT[],
+                    resources JSONB DEFAULT '[]',
                     governing_faction TEXT,
                     population_density TEXT,
-                    major_settlements TEXT[],
-                    cultural_traits TEXT[],
-                    dangers TEXT[],
-                    terrain_features TEXT[],
+                    major_settlements JSONB DEFAULT '[]',
+                    cultural_traits JSONB DEFAULT '[]',
+                    dangers JSONB DEFAULT '[]',
+                    terrain_features JSONB DEFAULT '[]',
                     defensive_characteristics TEXT,
                     strategic_value INTEGER DEFAULT 5,
                     matriarchal_influence INTEGER DEFAULT 5,
@@ -1086,7 +1086,7 @@ async def create_all_tables():
                     relations JSONB,
                     military_strength INTEGER DEFAULT 5,
                     diplomatic_stance TEXT,
-                    internal_conflicts TEXT[],
+                    internal_conflicts JSONB DEFAULT '[]',
                     power_centers JSONB,
                     embedding vector(384)
                 );
@@ -1130,7 +1130,7 @@ async def create_all_tables():
                     status TEXT DEFAULT 'active',
                     resolution_attempts JSONB,
                     strategic_implications TEXT,
-                    female_leaders_involved TEXT[],
+                    female_leaders_involved JSONB DEFAULT '[]',
                     gender_dynamics TEXT,
                     embedding vector(384)
                 );
@@ -1148,10 +1148,10 @@ async def create_all_tables():
                     origin_event TEXT,
                     believability INTEGER DEFAULT 6,
                     spread_rate INTEGER DEFAULT 5,
-                    regions_known TEXT[],
+                    regions_known JSONB DEFAULT '[]',
                     narrative_style TEXT DEFAULT 'folklore',
-                    themes TEXT[],
-                    matriarchal_elements TEXT[],
+                    themes JSONB DEFAULT '[]',
+                    matriarchal_elements JSONB DEFAULT '[]',
                     embedding vector(384)
                 );
                 ''',
@@ -1168,11 +1168,11 @@ async def create_all_tables():
                     date_description TEXT,
                     significance INTEGER DEFAULT 5,
                     impact_type TEXT,
-                    notable_figures TEXT[],
+                    notable_figures JSONB DEFAULT '[]',
                     current_relevance TEXT,
                     commemoration TEXT,
-                    connected_myths TEXT[],
-                    related_landmarks TEXT[],
+                    connected_myths JSONB DEFAULT '[]',
+                    related_landmarks JSONB DEFAULT '[]',
                     narrative_category TEXT,
                     embedding vector(384)
                 );
@@ -1191,8 +1191,8 @@ async def create_all_tables():
                     historical_significance TEXT,
                     current_use TEXT,
                     controlled_by TEXT,
-                    legends TEXT[],
-                    connected_histories TEXT[],
+                    legends JSONB DEFAULT '[]',
+                    connected_histories JSONB DEFAULT '[]',
                     architectural_style TEXT,
                     symbolic_meaning TEXT,
                     matriarchal_significance TEXT DEFAULT 'moderate',
@@ -1213,13 +1213,13 @@ async def create_all_tables():
                     date_description TEXT,
                     event_type TEXT DEFAULT 'political',
                     significance INTEGER DEFAULT 5,
-                    involved_entities TEXT[],
+                    involved_entities JSONB DEFAULT '[]',
                     location TEXT,
-                    consequences TEXT[],
+                    consequences JSONB DEFAULT '[]',
                     cultural_impact TEXT DEFAULT 'moderate',
-                    disputed_facts TEXT[],
-                    commemorations TEXT[],
-                    primary_sources TEXT[],
+                    disputed_facts JSONB DEFAULT '[]',
+                    commemorations JSONB DEFAULT '[]',
+                    primary_sources JSONB DEFAULT '[]',
                     embedding vector(384),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -1239,16 +1239,16 @@ async def create_all_tables():
                     description TEXT,
                     birth_date TEXT,
                     death_date TEXT,
-                    faction_affiliations TEXT[],
-                    achievements TEXT[],
-                    failures TEXT[],
-                    personality_traits TEXT[],
+                    faction_affiliations JSONB DEFAULT '[]',
+                    achievements JSONB DEFAULT '[]',
+                    failures JSONB DEFAULT '[]',
+                    personality_traits JSONB DEFAULT '[]',
                     public_image TEXT DEFAULT 'neutral',
-                    hidden_aspects TEXT[],
-                    influence_areas TEXT[],
+                    hidden_aspects JSONB DEFAULT '[]',
+                    influence_areas JSONB DEFAULT '[]',
                     legacy TEXT,
-                    controversial_actions TEXT[],
-                    relationships TEXT[],
+                    controversial_actions JSONB DEFAULT '[]',
+                    relationships JSONB DEFAULT '[]',
                     current_status TEXT DEFAULT 'active',
                     reputation INTEGER DEFAULT 50,
                     significance INTEGER DEFAULT 5,
@@ -1640,7 +1640,7 @@ async def create_all_tables():
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
                     event_text TEXT NOT NULL,
-                    tags TEXT[] DEFAULT '{}',
+                    tags JSONB DEFAULT '[]',
                     significance INTEGER DEFAULT 5 CHECK (significance BETWEEN 1 AND 10),
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1704,7 +1704,7 @@ async def create_all_tables():
                     checkpoint_time TIMESTAMP NOT NULL DEFAULT now(),
                     event TEXT,
                     serialized_state JSONB NOT NULL,
-                    merged_from TEXT[],
+                    merged_from JSONB DEFAULT '[]',
                     notes TEXT,
                     UNIQUE(nyx_id, instance_id, checkpoint_time)
                 );
@@ -1770,7 +1770,7 @@ async def create_all_tables():
                     realization_level INTEGER DEFAULT 0,
                     last_revelation TIMESTAMP,
                     stage_entered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    stage_history JSONB DEFAULT '[]'::jsonb,
+                    stage_history JSONB DEFAULT '[]',::jsonb,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                     FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
@@ -1818,7 +1818,7 @@ async def create_all_tables():
                     source_type VARCHAR(50) NOT NULL,
                     source_id INTEGER NOT NULL,
                     significance INTEGER DEFAULT 5,
-                    tags JSONB DEFAULT '[]'::jsonb,
+                    tags JSONB DEFAULT '[]',::jsonb,
                     metadata JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -1967,7 +1967,7 @@ async def create_all_tables():
                     prompt_template TEXT NOT NULL,
                     intensity_level INTEGER DEFAULT 5,
                     active BOOLEAN DEFAULT TRUE,
-                    tags TEXT[],
+                    tags JSONB DEFAULT '[]',
                     created_at TIMESTAMP DEFAULT now()
                 );
                 ''',
@@ -2261,7 +2261,7 @@ async def create_all_tables():
                     category TEXT NOT NULL,
                     description TEXT NOT NULL,
                     significance INTEGER DEFAULT 5 CHECK (significance BETWEEN 1 AND 10),
-                    tags TEXT[] DEFAULT '{}',
+                    tags JSONB DEFAULT '[]',              -- Changed from TEXT[]
                     metadata JSONB DEFAULT '{}',
                     embedding vector(384),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -2487,6 +2487,26 @@ async def create_all_tables():
                 '''
                 ALTER TABLE nyx_brain_events 
                     ALTER COLUMN event_time TYPE TIMESTAMP;
+                ''',
+                '''
+                ALTER TABLE CulturalElements 
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
+                ''',
+                '''
+                ALTER TABLE CulturalElements 
+                ADD CONSTRAINT fk_culturalelements_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                ADD CONSTRAINT fk_culturalelements_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                ''',
+                '''
+                ALTER TABLE LocalHistories 
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
+                ''',
+                '''
+                ALTER TABLE LocalHistories 
+                ADD CONSTRAINT fk_localhistories_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                ADD CONSTRAINT fk_localhistories_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
                 ''',
             ]  # End of sql_commands list
 
