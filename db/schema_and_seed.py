@@ -845,7 +845,7 @@ async def create_all_tables():
                     description TEXT,
                     values JSONB DEFAULT '[]',           -- Changed from TEXT[]
                     goals JSONB DEFAULT '[]',            -- Changed from TEXT[]
-                    hierarchy TEXT DEFAULT 'informal',
+                    hierarchy_type TEXT DEFAULT 'informal',
                     resources JSONB DEFAULT '[]',        -- Changed from TEXT[]
                     territory TEXT,
                     meeting_schedule TEXT,
@@ -2629,6 +2629,10 @@ async def create_all_tables():
                 '''
                 ALTER TABLE Quests
                     ALTER COLUMN reward TYPE JSONB USING to_jsonb(tags);
+                ''',
+                '''
+                ALTER TABLE Factions
+                    ADD COLUMN IF NOT EXISTS hierarchy_type TYPE TEXT DEFAULT NULL;
                 ''',
             ]  # End of sql_commands list
 
