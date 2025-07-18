@@ -1177,7 +1177,7 @@ class FactionGenerator(BaseGenerator):
                     faction_id = await conn.fetchval("""
                         INSERT INTO Factions (
                             user_id, conversation_id, name, type, description,
-                            values, goals, hierarchy, resources, territory,
+                            values, goals, hierarchy_type, resources, territory,
                             meeting_schedule, membership_requirements, 
                             public_reputation, secret_activities, power_level,
                             influence_scope, recruitment_methods, leadership_structure,
