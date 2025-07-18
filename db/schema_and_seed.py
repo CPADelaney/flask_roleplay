@@ -633,6 +633,7 @@ async def create_all_tables():
                     memory_type TEXT DEFAULT 'observation',
                     associated_entities JSONB DEFAULT '{}'::jsonb,
                     is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
+                    is_archived BOOLEAN DEFAULT FALSE,
                     significance INT NOT NULL DEFAULT 3,
                     status VARCHAR(20) NOT NULL DEFAULT 'active',
                     FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
@@ -646,6 +647,11 @@ async def create_all_tables():
                 CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx
                 ON NPCMemories
                 USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_npc_memories_archived 
+                ON NPCMemories(is_archived) 
+                WHERE is_archived = FALSE;
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS NPCMemoryAssociations (
@@ -677,6 +683,7 @@ async def create_all_tables():
                     last_recalled TIMESTAMP,
                     status TEXT NOT NULL DEFAULT 'active',
                     is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
+                    is_archived BOOLEAN DEFAULT FALSE,
                     relevance_score FLOAT DEFAULT 0.0,
                     last_context_update TIMESTAMP
                 );
@@ -684,6 +691,11 @@ async def create_all_tables():
                 '''
                 CREATE INDEX IF NOT EXISTS idx_unified_memories_entity
                 ON unified_memories(entity_type, entity_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_unified_memories_archived 
+                ON unified_memories(is_archived) 
+                WHERE is_archived = FALSE;
                 ''',
                 '''
                 CREATE INDEX IF NOT EXISTS idx_unified_memories_user_conv
@@ -2634,6 +2646,14 @@ async def create_all_tables():
                 ALTER TABLE Factions
                     ADD COLUMN IF NOT EXISTS hierarchy_type TYPE TEXT DEFAULT NULL;
                 ''',
+                '''
+                ALTER TABLE unified_memories 
+                ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE;
+                ''',
+                '''
+                ALTER TABLE NPCMemories 
+                ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE;
+                ''',              
             ]  # End of sql_commands list
 
             # Execute commands sequentially
