@@ -10,8 +10,6 @@ from os import getenv
 from difflib import get_close_matches
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from logic.chatgpt_integration import get_openai_client
-
 from .connection import with_transaction
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
 
@@ -279,6 +277,7 @@ class EmotionalMemoryManager:
         model = model or getenv("EMOTION_ANALYSIS_MODEL", "gpt-4.1-nano")
     
         try:
+            from logic.chatgpt_integration import get_openai_client
             client = get_openai_client()
     
             prompt = dedent(f"""
