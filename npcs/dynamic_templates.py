@@ -1,37 +1,7 @@
 # npcs/dynamic_templates.py
 """
 Dynamic, environment‑aware template helpers for NPC generation.
-
-This file centralises **all** the little hard‑coded tables and fallback text that used to live in
-*npcs/new_npc_creation.py*.
-Each helper below makes a **single GPT call** (cached) so data is:
-  • **tailored to the current campaign setting** (environment description, culture, genre,…)
-  • lightweight – only queried the first time it's needed thanks to async-aware caching
-  • resilient – each has a static fallback in case GPT is unavailable.
-
-────────────────────────────────────────────────────────────────────────────
-What changed in this revision
-────────────────────────────────────────────────────────────────────────────
-• **Fixed async caching** - Replaced functools.lru_cache with async_result_cache that properly caches results, not coroutines
-• **Enhanced cache robustness** - Using hash-based keys, hit/miss stats, and defensive programming
-• **Prompt injection hardening** - All user-provided text is wrapped in triple quotes via qblock helper
-• **Added missing imports** - Added Optional to imports
-• **Mask‑slippage triggers** now return *criteria* (no memory text). Each row gives a cue the **player
-  might notice** once the relevant stat crosses its threshold.
-• **Relationship ladders** include *progression* **and** *regression* blurbs, acknowledging that bonds
-  can strengthen or weaken over time.
-• Added `get_calendar_day_names` for custom day names per‑setting.
-• Helpers for beliefs, semantic topics, flashback triggers unchanged but kept for context.
-
-────────────────────────────────────────────────────────────────────────────
-Cache Inspection
-────────────────────────────────────────────────────────────────────────────
-Each cached function exposes cache management:
-  • function.cache_info() - Returns cache statistics (hits, misses, size, maxsize)
-  • function.cache_clear() - Clears the cache and resets statistics
-
-Example:
-  get_mask_slippage_triggers.cache_info()  # "CacheInfo(hits=5, misses=2, size=2, maxsize=64)"
+Updated to use centralized ChatGPT integration.
 """
 
 from __future__ import annotations
@@ -42,7 +12,9 @@ import hashlib
 import json
 import logging
 from typing import Any, Dict, List, TypedDict, Optional
-from openai import AsyncOpenAI
+
+# Import from centralized integration
+from logic.chatgpt_integration import generate_text_completion
 
 logger = logging.getLogger(__name__)
 
@@ -116,19 +88,10 @@ def async_result_cache(maxsize: int = 128):
         wrapper.cache_info = lambda: f"CacheInfo(hits={hits}, misses={misses}, size={len(cache)}, maxsize={maxsize})"
         return wrapper
     return decorator
-        
+
 # ───────────────────────────────────────────────────────────────────────────
-# GPT wrapper
+# GPT wrapper using centralized integration
 # ───────────────────────────────────────────────────────────────────────────
-
-_client: AsyncOpenAI | None = None
-
-def get_openai_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI()
-    return _client
-
 
 def _strip_json_fences(text: str) -> str:
     """
@@ -153,20 +116,10 @@ async def _gpt_json(
     max_output_tokens: int = 640,
 ) -> Any:
     """
-    Call the OpenAI Responses API and return parsed JSON.
-
-    We *hint* JSON format via instructions; the Responses API currently
-    has no `response_format=` kwarg (unlike legacy chat.completions),
-    so we enforce in prompt + parse defensively.
-
-    Retries up to 3x on error (network / parse / API). Raises RuntimeError if all fail.
+    Call the ChatGPT integration and return parsed JSON.
+    Uses the centralized integration instead of direct OpenAI calls.
     """
-    client = get_openai_client()
-    if client is None:
-        raise RuntimeError("OpenAI client unavailable – falling back")
-
-    # Strengthen the system guidance to produce valid JSON.
-    # (We append the instruction if caller didn't already mention JSON.)
+    # Strengthen the system guidance to produce valid JSON
     if "json" not in system.lower():
         system = (
             system.rstrip()
@@ -175,22 +128,17 @@ async def _gpt_json(
     if "json" not in user.lower():
         user = user.rstrip() + "\nReturn ONLY valid JSON (object or array)."
 
-    instructions = system
-    input_text = user
-
     last_err: Optional[Exception] = None
     for attempt in range(3):
         try:
-            resp = await client.responses.create(
-                model=model,
-                instructions=instructions,
-                input=input_text,
-                max_output_tokens=max_output_tokens,
+            # Use centralized integration
+            raw_text = await generate_text_completion(
+                system_prompt=system,
+                user_prompt=user,
+                temperature=0.3,
+                max_tokens=max_output_tokens,
+                task_type="abstraction"  # Use low temperature for structured output
             )
-
-            raw_text = getattr(resp, "output_text", None)
-            if raw_text is None:
-                raise ValueError("No output_text in response.")
 
             # First parse try
             try:
@@ -207,15 +155,15 @@ async def _gpt_json(
                     f"Model output not valid JSON (after strip). Text starts: {stripped[:120]!r}"
                 ) from parse_err
 
-        except Exception as e:  # catch all; we retry
+        except Exception as e:
             last_err = e
-            logger.warning("OpenAI JSON call failed (%s/3): %s", attempt + 1, e)
+            logger.warning("ChatGPT JSON call failed (%s/3): %s", attempt + 1, e)
             await asyncio.sleep(1.5 * (attempt + 1))
 
-    raise RuntimeError(f"OpenAI JSON call failed after 3 attempts: {last_err}")
+    raise RuntimeError(f"ChatGPT JSON call failed after 3 attempts: {last_err}")
 
 # ───────────────────────────────────────────────────────────────────────────
-# 1. Mask‑slippage criteria (viewer‑aware)
+# All the template functions remain the same, they already use _gpt_json
 # ───────────────────────────────────────────────────────────────────────────
 
 class SlippageRow(TypedDict):
@@ -254,6 +202,7 @@ Return JSON array.
         {"threshold": 75, "cue": "predatory_gaze", "description": "Eyes sharpen, weighing the player's reactions."},
         {"threshold": 90, "cue": "open_assertion", "description": "Stops pretending; expects immediate obedience."},
     ]
+
 # ───────────────────────────────────────────────────────────────────────────
 # 2. Relationship stage ladder with regression notes
 # ───────────────────────────────────────────────────────────────────────────
