@@ -80,7 +80,7 @@ async def get_embedding(text: str) -> np.ndarray:
         # In a production implementation, you would call an actual embedding service
         # For this example, we'll simulate with a basic embedding approach
         
-        from nyx.llm_integration import get_text_embedding
+        from logic.chatgpt_integration import get_text_embedding
         
         # Get embedding from LLM service
         embedding = await get_text_embedding(text)
