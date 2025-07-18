@@ -4,8 +4,10 @@ import json
 import logging
 import functools
 import time 
+import asyncio
 import openai
 from typing import Dict, List, Any, Optional, Union
+import numpy as np
 from db.connection import get_db_connection_context
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
@@ -16,6 +18,14 @@ from nyx.nyx_agent_sdk import process_user_input as nyx_process_input
 from nyx.nyx_agent_sdk import NyxContext
 from memory.memory_nyx_integration import get_memory_nyx_bridge
 
+# Try to import prepare_context if available
+try:
+    from nyx.core.orchestrator import prepare_context
+    PREPARE_CONTEXT_AVAILABLE = True
+except ImportError:
+    PREPARE_CONTEXT_AVAILABLE = False
+    logging.info("prepare_context not available, will use direct prompts")
+
 # Try to import image prompting functions if available
 try:
     from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
@@ -23,6 +33,15 @@ try:
 except ImportError:
     IMAGE_PROMPTING_AVAILABLE = False
     logging.info("Image prompting module not available, using standard prompts")
+
+# Temperature settings for different task types
+TEMPERATURE_SETTINGS = {
+    "decision": 0.7,
+    "reflection": 0.5,
+    "abstraction": 0.4,
+    "introspection": 0.6,
+    "memory": 0.3
+}
 
 # Use your full schema, but add a "narrative" field at the top.
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
@@ -423,6 +442,14 @@ def get_openai_client():
         raise RuntimeError("OPENAI_API_KEY not found in environment")
     openai.api_key = api_key
     return openai
+
+def get_async_openai_client():
+    """Get an async OpenAI client for use with await."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not found in environment")
+    from openai import AsyncOpenAI
+    return AsyncOpenAI(api_key=api_key)
 
 async def build_message_history(conversation_id: int, aggregator_text: str, user_input: str, limit: int = 15):
     """
@@ -866,10 +893,340 @@ except ImportError:
     def get_agents_openai_model():
         raise RuntimeError("Agents SDK is not installed")
 
-def get_async_openai_client():
-    """Get an async OpenAI client for use with await."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not found in environment")
-    from openai import AsyncOpenAI
-    return AsyncOpenAI(api_key=api_key)
+
+# ===========================================
+# Migrated Functions from llm_integration.py
+# ===========================================
+
+async def generate_text_completion(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float | None = None,
+    max_tokens: int = 1000,
+    stop_sequences: List[str] | None = None,
+    task_type: str = "decision",
+) -> str:
+    """
+    Generate text completion using the centralized ChatGPT integration.
+    """
+    temperature = temperature if temperature is not None else \
+                  TEMPERATURE_SETTINGS.get(task_type, 0.7)
+
+    # Use prepare_context if available
+    if PREPARE_CONTEXT_AVAILABLE:
+        system_prompt = await prepare_context(system_prompt, user_prompt)
+    
+    # Build messages for the chat completion
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    
+    # Use the centralized function - note it expects conversation_id and aggregator_text
+    # We'll use dummy values for these since they're required by the function signature
+    response_data = await get_chatgpt_response(
+        conversation_id=0,  # Dummy value for this use case
+        aggregator_text=system_prompt,  # Use system prompt as aggregator
+        user_input=user_prompt,
+        reflection_enabled=False,  # Disable reflection for simple completions
+        use_nyx_integration=False  # Don't use full Nyx integration
+    )
+    
+    # Extract the response text
+    if response_data.get("type") == "text":
+        return response_data.get("response", "").strip()
+    elif response_data.get("type") == "function_call":
+        # If we got a function call, extract narrative from the args
+        args = response_data.get("function_args", {})
+        return args.get("narrative", "").strip()
+    
+    return "I'm having trouble processing your request right now."
+
+
+async def get_text_embedding(text: str, model: str = "text-embedding-3-small", dimensions: Optional[int] = None) -> List[float]:
+    """
+    Get embedding vector for text using OpenAI's latest embedding models.
+    """
+    try:
+        # Get async client from centralized module
+        client = get_async_openai_client()
+        
+        # Validate model choice
+        valid_models = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
+        if model not in valid_models:
+            logging.warning(f"Invalid model {model}, using text-embedding-3-small")
+            model = "text-embedding-3-small"
+        
+        # Check dimensions parameter
+        max_dimensions = {
+            "text-embedding-3-small": 1536,
+            "text-embedding-3-large": 3072,
+            "text-embedding-ada-002": 1536
+        }
+        
+        if dimensions:
+            if dimensions > max_dimensions[model]:
+                logging.warning(f"Requested dimensions {dimensions} exceeds max {max_dimensions[model]} for {model}")
+                dimensions = None
+            elif dimensions < 1:
+                logging.warning(f"Invalid dimensions {dimensions}, must be positive")
+                dimensions = None
+        
+        # Clean and validate text
+        text = text.replace("\n", " ").strip()
+        if not text:
+            logging.warning("Empty text provided for embedding, returning zero vector")
+            return [0.0] * (dimensions or max_dimensions[model])
+        
+        # Truncate if too long (simplified version)
+        max_chars = 32000  # ~8000 tokens
+        if len(text) > max_chars:
+            logging.warning(f"Text too long ({len(text)} chars), truncating to {max_chars} chars")
+            text = text[:max_chars] + "..."
+        
+        # Build request parameters
+        params = {
+            "model": model,
+            "input": text,
+            "encoding_format": "float"
+        }
+        
+        if dimensions:
+            params["dimensions"] = dimensions
+        
+        # Make request with retries
+        for attempt in range(3):
+            try:
+                response = await client.embeddings.create(**params)
+                
+                # Extract embedding
+                embedding = response.data[0].embedding
+                
+                # Ensure all values are floats
+                return list(map(float, embedding))
+                
+            except Exception as e:
+                if attempt < 2:
+                    wait_time = 2 ** (attempt + 1)
+                    logging.warning(f"Embedding error on attempt {attempt + 1}, retrying in {wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logging.error(f"Failed to get embedding after retries: {e}")
+                    raise
+        
+    except Exception as e:
+        logging.error(f"Error getting text embedding: {e}")
+        
+        # Return zero vector with appropriate dimensions
+        default_dims = 1536
+        if model == "text-embedding-3-large" and not dimensions:
+            default_dims = 3072
+        elif dimensions:
+            default_dims = dimensions
+            
+        return [0.0] * default_dims
+
+
+async def create_semantic_abstraction(memory_text: str) -> str:
+    """Create a semantic abstraction from a specific memory."""
+    prompt = f"""
+    Convert this specific observation into a general insight or pattern:
+    
+    Observation: {memory_text}
+    
+    Create a concise semantic memory that:
+    1. Extracts the general principle or pattern from this specific event
+    2. Forms a higher-level abstraction that could apply to similar situations
+    3. Phrases it as a generalized insight rather than a specific event
+    4. Keeps it under 50 words
+    
+    Example transformation:
+    Observation: "Chase hesitated when Monica asked him about his past, changing the subject quickly."
+    Semantic abstraction: "Chase appears uncomfortable discussing his past and employs deflection when questioned about it."
+    """
+    
+    try:
+        return await generate_text_completion(
+            system_prompt="You are an AI that extracts semantic meaning from specific observations.",
+            user_prompt=prompt,
+            temperature=0.4,
+            max_tokens=100,
+            task_type="abstraction"
+        )
+    except Exception as e:
+        logging.error(f"Error creating semantic abstraction: {e}")
+        words = memory_text.split()
+        if len(words) > 15:
+            return " ".join(words[:15]) + "... [Pattern detected]"
+        return memory_text + " [Pattern detected]"
+
+
+async def generate_reflection(
+    memory_texts: List[str],
+    topic: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Generate a reflection based on memories and optional topic.
+    
+    Args:
+        memory_texts: List of memory texts to reflect on
+        topic: Optional topic to focus the reflection
+        context: Optional additional context
+        
+    Returns:
+        Generated reflection
+    """
+    # Format memories for the prompt
+    memories_formatted = "\n".join([f"- {text}" for text in memory_texts])
+    
+    topic_str = f' about "{topic}"' if topic else ""
+    
+    prompt = f"""
+    As Nyx, create a thoughtful reflection{topic_str} based on these memories:
+    
+    {memories_formatted}
+    
+    Your reflection should:
+    1. Identify patterns, themes, or insights
+    2. Express an appropriate level of confidence based on the memories
+    3. Use first-person perspective ("I")
+    4. Be concise but insightful (100-200 words)
+    5. Maintain your confident, dominant personality
+    """
+    
+    # Add context information if provided
+    if context:
+        context_str = "\n\nAdditional context:\n"
+        for key, value in context.items():
+            context_str += f"{key}: {value}\n"
+        prompt += context_str
+    
+    try:
+        return await generate_text_completion(
+            system_prompt="You are Nyx, reflecting on your memories and observations.",
+            user_prompt=prompt,
+            temperature=0.5,
+            max_tokens=300,
+            task_type="reflection"
+        )
+    except Exception as e:
+        logging.error(f"Error generating reflection: {e}")
+        # Return a simple reflection as fallback
+        if memory_texts:
+            return f"Based on what I've observed, {memory_texts[0]} This seems to be a pattern worth noting."
+        return "I don't have enough memories to form a meaningful reflection at this time."
+
+
+async def analyze_preferences(text: str) -> Dict[str, Any]:
+    """
+    Analyze text for user preferences and interests.
+    
+    Args:
+        text: Text to analyze
+        
+    Returns:
+        Dictionary of detected preferences
+    """
+    prompt = f"""
+    Analyze the following text for potential user preferences, interests, or behaviors:
+    
+    "{text}"
+    
+    Extract:
+    1. Explicit preferences/interests (directly stated)
+    2. Implicit preferences/interests (implied)
+    3. Behavioral patterns or tendencies
+    4. Emotional responses or triggers
+    
+    Format your response as a JSON object with these categories.
+    """
+    
+    try:
+        response = await generate_text_completion(
+            system_prompt="You are an AI that specializes in analyzing preferences and behavior patterns from text.",
+            user_prompt=prompt,
+            temperature=0.3,
+            max_tokens=400,
+            task_type="abstraction"
+        )
+        
+        # Try to parse the response as JSON
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            # If not valid JSON, extract sections manually
+            result = {
+                "explicit_preferences": [],
+                "implicit_preferences": [],
+                "behavioral_patterns": [],
+                "emotional_responses": []
+            }
+            
+            current_section = None
+            for line in response.split("\n"):
+                line = line.strip()
+                
+                if "explicit preferences" in line.lower():
+                    current_section = "explicit_preferences"
+                elif "implicit preferences" in line.lower():
+                    current_section = "implicit_preferences"
+                elif "behavioral patterns" in line.lower():
+                    current_section = "behavioral_patterns"
+                elif "emotional responses" in line.lower():
+                    current_section = "emotional_responses"
+                elif current_section and line.startswith("-"):
+                    item = line[1:].strip()
+                    if item and current_section in result:
+                        result[current_section].append(item)
+            
+            return result
+            
+    except Exception as e:
+        logging.error(f"Error analyzing preferences: {e}")
+        return {
+            "explicit_preferences": [],
+            "implicit_preferences": [],
+            "behavioral_patterns": [],
+            "emotional_responses": [],
+            "error": str(e)
+        }
+
+
+async def generate_embedding(text: str) -> List[float]:
+    """
+    Generate an embedding vector for text using OpenAI's API.
+    Legacy wrapper that calls get_text_embedding.
+    
+    Args:
+        text: Text to generate embedding for
+        
+    Returns:
+        Embedding vector as list of floats
+    """
+    return await get_text_embedding(text, model="text-embedding-3-small")
+
+
+def cosine_similarity(a: List[float], b: List[float]) -> float:
+    """
+    Calculate cosine similarity between two vectors.
+    
+    Args:
+        a: First vector
+        b: Second vector
+        
+    Returns:
+        Cosine similarity between -1 and 1
+    """
+    a_arr = np.array(a)
+    b_arr = np.array(b)
+    
+    # Handle zero vectors
+    norm_a = np.linalg.norm(a_arr)
+    norm_b = np.linalg.norm(b_arr)
+    
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    
+    # Compute cosine similarity
+    return np.dot(a_arr, b_arr) / (norm_a * norm_b)
