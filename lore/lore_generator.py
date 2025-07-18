@@ -1309,36 +1309,56 @@ class FactionGenerator(BaseGenerator):
         """Store a location in the database."""
         try:
             async with get_db_connection_context() as conn:
-                    # Generate embedding
-                    embedding_text = f"{location_data['name']} {location_data['description']}"
-                    embedding = await generate_embedding(embedding_text)
-                    
-                    # Insert location
-                    location_id = await conn.fetchval("""
-                        INSERT INTO Locations (
-                            user_id, conversation_id, location_name, description,
-                            location_type, parent_location, cultural_significance,
-                            economic_importance, strategic_value, population_density,
-                            notable_features, hidden_aspects, access_restrictions,
-                            local_customs, embedding
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                        RETURNING id
-                    """,
-                        self.user_id, self.conversation_id,
-                        location_data.get('name'),
-                        location_data.get('description'),
-                        location_data.get('type', 'settlement'),
-                        location_data.get('parent_location'),
-                        location_data.get('cultural_significance', 'moderate'),
-                        location_data.get('economic_importance', 'moderate'),
-                        location_data.get('strategic_importance', 5),  # mapped from strategic_importance
-                        location_data.get('population_density', 'moderate'),
-                        location_data.get('notable_features', []),
-                        location_data.get('hidden_secrets', []),  # mapped to hidden_aspects
-                        location_data.get('access_restrictions', []),
-                        location_data.get('local_customs', []),
-                        embedding
-                    )
+                # Generate embedding
+                embedding_text = f"{location_data['name']} {location_data['description']}"
+                embedding = await generate_embedding(embedding_text)
+                
+                # Parse strategic_importance to ensure it's an integer
+                strategic_value = location_data.get('strategic_importance', 5)
+                if isinstance(strategic_value, str):
+                    # Try to extract a number from the string or use default
+                    try:
+                        # Look for a number in the string
+                        import re
+                        numbers = re.findall(r'\d+', strategic_value)
+                        if numbers:
+                            strategic_value = int(numbers[0])
+                            # Ensure it's within valid range (1-10)
+                            strategic_value = max(1, min(10, strategic_value))
+                        else:
+                            # Default to 5 if no number found
+                            strategic_value = 5
+                    except:
+                        strategic_value = 5
+                elif not isinstance(strategic_value, int):
+                    strategic_value = 5
+                
+                # Insert location
+                location_id = await conn.fetchval("""
+                    INSERT INTO Locations (
+                        user_id, conversation_id, location_name, description,
+                        location_type, parent_location, cultural_significance,
+                        economic_importance, strategic_value, population_density,
+                        notable_features, hidden_aspects, access_restrictions,
+                        local_customs, embedding
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    RETURNING id
+                """,
+                    self.user_id, self.conversation_id,
+                    location_data.get('name'),
+                    location_data.get('description'),
+                    location_data.get('type', 'settlement'),
+                    location_data.get('parent_location'),
+                    location_data.get('cultural_significance', 'moderate'),
+                    location_data.get('economic_importance', 'moderate'),
+                    strategic_value,  # Now guaranteed to be an integer
+                    location_data.get('population_density', 'moderate'),
+                    location_data.get('notable_features', []),
+                    location_data.get('hidden_secrets', []),  # mapped to hidden_aspects
+                    location_data.get('access_restrictions', []),
+                    location_data.get('local_customs', []),
+                    embedding
+                )
                     
                     logger.info(f"Stored location '{location_data['name']}' with id {location_id}")
                     return location_id
@@ -2125,7 +2145,9 @@ def get_locations_agent():
             "You generate 5-8 significant locations. Return JSON as "
             'an OBJECT: {"locations": [{...}, ...]}. '
             "Fields: name, description, type, controlling_faction, notable_features, "
-            "hidden_secrets, strategic_importance. No extra text outside the JSON.\n\n"
+            "hidden_secrets, strategic_importance (INTEGER 1-10). \n"
+            "IMPORTANT: strategic_importance must be a number between 1 and 10, NOT a text description.\n"
+            "No extra text outside the JSON.\n\n"
             "Always respect directives from the Nyx governance system and check permissions "
             "before performing any actions."
         ),
