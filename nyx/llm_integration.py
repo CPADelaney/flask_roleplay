@@ -5,24 +5,24 @@ import logging
 import json
 import asyncio
 from typing import Dict, List, Any, Optional
-import openai
 import numpy as np
 
-
+from logic.chatgpt_integration import (
+    get_openai_client, 
+    get_async_openai_client,
+    get_chatgpt_response
+)
 from nyx.core.orchestrator import prepare_context
 
 logger = logging.getLogger(__name__)
 
-# Configure API key from environment variable
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# Temperature settings for different tasks
+# Temperature settings remain the same
 TEMPERATURE_SETTINGS = {
-    "decision": 0.7,       # More creative for responses
-    "reflection": 0.5,     # Balanced for reflections
-    "abstraction": 0.4,    # More deterministic for abstractions
-    "introspection": 0.6,  # Slightly creative for introspection
-    "memory": 0.3          # Very deterministic for memory operations
+    "decision": 0.7,
+    "reflection": 0.5,
+    "abstraction": 0.4,
+    "introspection": 0.6,
+    "memory": 0.3
 }
 
 async def generate_text_completion(
@@ -34,44 +34,125 @@ async def generate_text_completion(
     task_type: str = "decision",
 ) -> str:
     """
-    Single-shot completion via Responses API with back-off.
+    Generate text completion using the centralized ChatGPT integration.
     """
     temperature = temperature if temperature is not None else \
                   TEMPERATURE_SETTINGS.get(task_type, 0.7)
 
     system_prompt = await prepare_context(system_prompt, user_prompt)
-    client = get_openai_client()
-
-    for attempt in range(3):
-        try:
-            resp = await client.responses.create(
-                model="gpt-4.1-nano",
-                instructions=system_prompt,     # “system”
-                input=user_prompt,              # “user”
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stop=stop_sequences,
-            )
-            return resp.output_text.strip()
-        except client.error.RateLimitError:
-            wait = 2 ** attempt
-            logger.warning("Rate limit – retrying in %ss", wait)
-            await asyncio.sleep(wait)
-
-    logger.error("Exceeded retries for text completion.")
+    
+    # Build messages for the chat completion
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    
+    # Use the centralized function - note it expects conversation_id and aggregator_text
+    # We'll use dummy values for these since they're required by the function signature
+    response_data = await get_chatgpt_response(
+        conversation_id=0,  # Dummy value for this use case
+        aggregator_text=system_prompt,  # Use system prompt as aggregator
+        user_input=user_prompt,
+        reflection_enabled=False,  # Disable reflection for simple completions
+        use_nyx_integration=False  # Don't use full Nyx integration
+    )
+    
+    # Extract the response text
+    if response_data.get("type") == "text":
+        return response_data.get("response", "").strip()
+    elif response_data.get("type") == "function_call":
+        # If we got a function call, extract narrative from the args
+        args = response_data.get("function_args", {})
+        return args.get("narrative", "").strip()
+    
     return "I'm having trouble processing your request right now."
 
-
-async def create_semantic_abstraction(memory_text: str) -> str:
+async def get_text_embedding(text: str, model: str = "text-embedding-3-small", dimensions: Optional[int] = None) -> List[float]:
     """
-    Create a semantic abstraction from a specific memory.
-    
-    Args:
-        memory_text: The memory text to abstract
+    Get embedding vector for text using OpenAI's latest embedding models.
+    """
+    try:
+        # Get async client from centralized module
+        client = get_async_openai_client()
         
-    Returns:
-        Abstract version of the memory
-    """
+        # Validate model choice
+        valid_models = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
+        if model not in valid_models:
+            logger.warning(f"Invalid model {model}, using text-embedding-3-small")
+            model = "text-embedding-3-small"
+        
+        # Check dimensions parameter
+        max_dimensions = {
+            "text-embedding-3-small": 1536,
+            "text-embedding-3-large": 3072,
+            "text-embedding-ada-002": 1536
+        }
+        
+        if dimensions:
+            if dimensions > max_dimensions[model]:
+                logger.warning(f"Requested dimensions {dimensions} exceeds max {max_dimensions[model]} for {model}")
+                dimensions = None
+            elif dimensions < 1:
+                logger.warning(f"Invalid dimensions {dimensions}, must be positive")
+                dimensions = None
+        
+        # Clean and validate text
+        text = text.replace("\n", " ").strip()
+        if not text:
+            logger.warning("Empty text provided for embedding, returning zero vector")
+            return [0.0] * (dimensions or max_dimensions[model])
+        
+        # Truncate if too long (simplified version)
+        max_chars = 32000  # ~8000 tokens
+        if len(text) > max_chars:
+            logger.warning(f"Text too long ({len(text)} chars), truncating to {max_chars} chars")
+            text = text[:max_chars] + "..."
+        
+        # Build request parameters
+        params = {
+            "model": model,
+            "input": text,
+            "encoding_format": "float"
+        }
+        
+        if dimensions:
+            params["dimensions"] = dimensions
+        
+        # Make request with retries
+        for attempt in range(3):
+            try:
+                response = await client.embeddings.create(**params)
+                
+                # Extract embedding
+                embedding = response.data[0].embedding
+                
+                # Ensure all values are floats
+                return list(map(float, embedding))
+                
+            except Exception as e:
+                if attempt < 2:
+                    wait_time = 2 ** (attempt + 1)
+                    logger.warning(f"Embedding error on attempt {attempt + 1}, retrying in {wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to get embedding after retries: {e}")
+                    raise
+        
+    except Exception as e:
+        logger.error(f"Error getting text embedding: {e}")
+        
+        # Return zero vector with appropriate dimensions
+        default_dims = 1536
+        if model == "text-embedding-3-large" and not dimensions:
+            default_dims = 3072
+        elif dimensions:
+            default_dims = dimensions
+            
+        return [0.0] * default_dims
+
+# Keep other helper functions as-is
+async def create_semantic_abstraction(memory_text: str) -> str:
+    """Create a semantic abstraction from a specific memory."""
     prompt = f"""
     Convert this specific observation into a general insight or pattern:
     
@@ -98,10 +179,8 @@ async def create_semantic_abstraction(memory_text: str) -> str:
         )
     except Exception as e:
         logger.error(f"Error creating semantic abstraction: {e}")
-        # Create a simple fallback abstraction
         words = memory_text.split()
         if len(words) > 15:
-            # Just take first portion and add "..." for simple fallback
             return " ".join(words[:15]) + "... [Pattern detected]"
         return memory_text + " [Pattern detected]"
 
