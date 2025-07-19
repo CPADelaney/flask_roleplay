@@ -1007,9 +1007,10 @@ def create_story_director_agent():
         specialized_agents = initialize_specialized_agents()
     except ImportError as e:
         logger.error(f"Failed to import tools or specialized agents: {e}", exc_info=True)
-        conflict_tools, resource_tools, narrative_tools, context_tools = [], [], [], [], []
+        conflict_tools, resource_tools, narrative_tools, context_tools = [], [], [], []
         specialized_agents = {}
 
+    # Build the tools list properly
     all_tools = [
         get_story_state,
         update_resource,
@@ -1017,10 +1018,6 @@ def create_story_director_agent():
         monitor_conflicts,
         evolve_conflict_from_event,
         trigger_conflict_event,
-        conflict_tools,
-        resource_tools,
-        narrative_tools,
-        context_tools,
         check_for_conflict_opportunity,
         generate_conflict,
         evolve_conflict,
@@ -1028,7 +1025,18 @@ def create_story_director_agent():
         progress_npc_narrative,
         generate_conflict_beat,
     ]
-
+    
+    # Extend with the tool lists instead of appending them
+    if conflict_tools:
+        all_tools.extend(conflict_tools)
+    if resource_tools:
+        all_tools.extend(resource_tools)
+    if narrative_tools:
+        all_tools.extend(narrative_tools)
+    if context_tools:
+        all_tools.extend(context_tools)
+    
+    # Filter out None values
     all_tools = [tool for tool in all_tools if tool is not None]
 
     agent = Agent(
