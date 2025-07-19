@@ -419,16 +419,31 @@ class ConflictSystemIntegration:
     )
     async def generate_conflict(
         self, 
-        conflict_data_or_type: Union[Dict[str, Any], str, None] = None
+        conflict_data_or_type: Union[Dict[str, Any], str, None] = None,
+        ctx: Optional[RunContextWrapper] = None  # Add this parameter
     ) -> Dict[str, Any]:
         """Generate a new conflict with stakeholders and resolution paths"""
         await self.initialize()
         try:
+            # Extract user_id and conversation_id from the context if provided by decorator
+            if ctx and hasattr(ctx, 'context'):
+                if isinstance(ctx.context, dict):
+                    user_id = ctx.context.get('user_id', self.user_id)
+                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
+                else:
+                    # Handle case where context has attributes
+                    user_id = getattr(ctx.context, 'user_id', self.user_id)
+                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
+            else:
+                # Fall back to instance attributes
+                user_id = self.user_id
+                conversation_id = self.conversation_id
+                
             # Ensure we have proper context
-            if not hasattr(self, 'user_id') or not hasattr(self, 'conversation_id'):
+            if not user_id or not conversation_id:
                 logger.error(f"Missing user_id or conversation_id in ConflictSystemIntegration")
                 return {"success": False, "error": "Missing user or conversation context"}
-                
+                    
             # Handle string (conflict_type) or None input
             if conflict_data_or_type is None or isinstance(conflict_data_or_type, str):
                 # Use the enhanced conflict generator
@@ -451,7 +466,7 @@ class ConflictSystemIntegration:
                 "lore_context": story_context.get("lore_context")
             })
     
-            conflict_context = ConflictContext(self.user_id, self.conversation_id)
+            conflict_context = ConflictContext(user_id, conversation_id)
             
             # Use ask_assistant instead of Runner.run
             result = await ask_assistant(
