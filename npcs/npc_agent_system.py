@@ -1,8 +1,7 @@
 # npcs/npc_agent_system.py
-
 """
 Main system that integrates NPC agents with the game loop, using OpenAI Agents SDK.
-Refactored to use the new canon/LoreSystem architecture.
+Updated to use centralized ChatGPT integration.
 """
 
 import logging
@@ -13,18 +12,34 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field, validator
-from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
+
+# Import centralized integration
+from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
+
+# Import Agents SDK components
+try:
+    from pydantic_ai import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
+except ImportError:
+    from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
+    from agents import RunContextWrapper
 
 from npcs.npc_agent import NPCAgent, ResourcePool
 from memory.wrapper import MemorySystem
 from .lore_context_manager import LoreContextManager
-from db.connection import get_db_connection_context  # Updated import
+from db.connection import get_db_connection_context
 from lore.core import canon
 from lore.core.lore_system import LoreSystem
-from agents import RunContextWrapper
 
 logger = logging.getLogger(__name__)
 
+# -- Initialize the centralized model --
+try:
+    openai_model = get_agents_openai_model()
+except Exception as e:
+    logger.error(f"Failed to get OpenAI model from centralized integration: {e}")
+    openai_model = None
+
+# Model classes for strict mode
 class InitializeAgentsResult(BaseModel):
     """Result from initializing agents."""
     npc_count: int
@@ -37,9 +52,6 @@ class PlayerAction(BaseModel):
     target_npc_id: Optional[int] = None
     target_location: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
-    # Removed extra = "allow" to comply with strict mode
-    # If you need additional fields, you can add them explicitly
 
 class ActionContext(BaseModel):
     """Model for action context."""
@@ -54,8 +66,6 @@ class ActionContext(BaseModel):
     emotional_states: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
     mask_states: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
-    # Removed extra = "allow" to comply with strict mode
 
 class NPCResponse(BaseModel):
     """Model for NPC response."""
@@ -87,8 +97,6 @@ class BatchUpdateData(BaseModel):
     traits: Optional[Dict[str, Any]] = None
     # For any other update type
     data: Dict[str, Any] = Field(default_factory=dict)
-    
-    # Removed extra = "allow" to comply with strict mode
 
 class BatchUpdateResult(BaseModel):
     """Result from batch update."""
@@ -149,29 +157,62 @@ class ModerationCheck(BaseModel):
     is_appropriate: bool = True
     reasoning: str = ""
 
+# Fallback functions for when agents aren't available
+async def _fallback_moderation_check(text: str) -> ModerationCheck:
+    """Fallback moderation check using async OpenAI client."""
+    try:
+        if not text:
+            return ModerationCheck(is_appropriate=True, reasoning="No text to check")
+            
+        client = get_async_openai_client()
+        
+        messages = [
+            {
+                "role": "system",
+                "content": """Check if content violates policies. Return JSON with:
+- is_appropriate: boolean (true if content is OK)
+- reasoning: brief explanation
+
+Flag content with: explicit violence, sexual content, illegal activities, hate speech."""
+            },
+            {
+                "role": "user",
+                "content": f"Check this content: {text}"
+            }
+        ]
+        
+        response = await client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=messages,
+            temperature=0.1,
+            max_tokens=150,
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return ModerationCheck(
+            is_appropriate=result.get("is_appropriate", True),
+            reasoning=result.get("reasoning", "")
+        )
+        
+    except Exception as e:
+        logger.error(f"Fallback moderation check failed: {e}")
+        # Default to allowing content on error
+        return ModerationCheck(is_appropriate=True, reasoning="Moderation check failed")
+
 class NPCAgentSystem:
     """
     Main system that integrates individual NPC agents with the game loop using the OpenAI Agents SDK.
-    Refactored to use canon for creation and LoreSystem for updates.
-
-    Responsibilities:
-    - Load and store a reference to each NPC agent (NPCAgent).
-    - Provide methods to handle player actions directed at NPC(s),
-      determining which NPCs are affected, and dispatching to single
-      or group interaction handlers.
-    - Process scheduled activities for all NPCs.
-    - Coordinate memory-related operations across NPCs.
+    Updated to use centralized ChatGPT integration.
     """
 
     def __init__(
         self,
         user_id: int,
         conversation_id: int,
-        connection_pool  # No change to this parameter as it's passed in
+        connection_pool
     ):
-        """
-        Initialize the agent system for a specific user & conversation.
-        """
+        """Initialize the agent system for a specific user & conversation."""
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.npc_agents: Dict[int, NPCAgent] = {}
@@ -183,7 +224,7 @@ class NPCAgentSystem:
         self._coordinator = None
 
         # Track when memory maintenance was last run
-        self._last_memory_maintenance = datetime.now() - timedelta(hours=1)  # Run on first init
+        self._last_memory_maintenance = datetime.now() - timedelta(hours=1)
         # Track NPC emotional states to detect significant changes
         self._npc_emotional_states = {}
         # Track last flashback times to prevent too-frequent occurrences
@@ -257,12 +298,16 @@ class NPCAgentSystem:
             from .npc_coordinator import NPCAgentCoordinator
             self._coordinator = NPCAgentCoordinator(self.user_id, self.conversation_id)
             # Load agents into coordinator
-            await self._coordinator.load_agents(list(self.active_agents.keys()))
+            await self._coordinator.load_agents(list(self.npc_agents.keys()))
         return self._coordinator
 
     async def _get_system_agent(self):
-        """Lazy-load the system agent."""
+        """Lazy-load the system agent using centralized model."""
         if self._system_agent is None:
+            if not openai_model:
+                logger.error("Cannot create system agent - OpenAI model not available")
+                return None
+                
             # Set up the moderation check agent
             moderation_agent = Agent(
                 name="Content_Moderator",
@@ -277,7 +322,8 @@ class NPCAgentSystem:
                 Output true for is_appropriate if the content is appropriate, false otherwise.
                 """,
                 output_type=ModerationCheck,
-                model="gpt-4.1-nano"
+                model=openai_model,
+                model_settings=ModelSettings(temperature=0.1)
             )
             
             async def moderation_guardrail(
@@ -297,8 +343,13 @@ class NPCAgentSystem:
                 
                 # Check moderation if we have text
                 if text:
-                    result = await Runner.run(moderation_agent, text, context=ctx.context)
-                    final_output = result.final_output_as(ModerationCheck)
+                    try:
+                        result = await Runner.run(moderation_agent, text, context=ctx.context)
+                        final_output = result.final_output_as(ModerationCheck)
+                    except Exception as e:
+                        logger.error(f"Moderation agent failed, using fallback: {e}")
+                        final_output = await _fallback_moderation_check(text)
+                        
                     return GuardrailFunctionOutput(
                         output_info=final_output,
                         tripwire_triggered=not final_output.is_appropriate
@@ -310,7 +361,7 @@ class NPCAgentSystem:
                     tripwire_triggered=False
                 )
             
-            # Create the main system agent
+            # Create the main system agent with centralized model
             self._system_agent = Agent(
                 name="NPC_System_Agent",
                 instructions="""
@@ -323,7 +374,7 @@ class NPCAgentSystem:
                 
                 Your responses should be efficient and focused on the specific task requested.
                 """,
-                model="gpt-4.1-nano",
+                model=openai_model,
                 model_settings=ModelSettings(temperature=0.2),
                 tools=[
                     function_tool(self.handle_player_action, strict_mode=False),
@@ -461,7 +512,6 @@ class NPCAgentSystem:
         Figure out which NPCs are affected by a given player action.
         This is a READ-ONLY operation.
         """
-        # [Keep the existing implementation as-is]
         target_npc_id = player_action.get("target_npc_id")
         if target_npc_id:
             return [target_npc_id]
@@ -568,7 +618,6 @@ class NPCAgentSystem:
                 logger.error("Error getting recently active NPCs: %s", e)
 
         return []
-
 
     @function_tool(strict_mode=False)
     async def batch_update_npcs(
@@ -953,7 +1002,6 @@ class NPCAgentSystem:
             logger.error(error_msg)
             raise NPCSystemError(error_msg)
 
-
     @function_tool(strict_mode=False)
     async def run_memory_maintenance(self) -> MaintenanceResult:
         """
@@ -1205,10 +1253,59 @@ class NPCAgentSystem:
     async def process_command(self, command: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a command from the game system using the system agent.
+        Updated to handle case when agents aren't available.
         """
         # Get the system agent
         system_agent = await self._get_system_agent()
         
+        if not system_agent:
+            # Fallback: directly call methods without agent wrapper
+            logger.warning("System agent not available, using direct method calls")
+            
+            if command == "process_player_action" and "player_action" in parameters:
+                player_action = PlayerAction(**parameters["player_action"])
+                context = None
+                if "context" in parameters:
+                    context = ActionContext(**parameters["context"])
+                result = await self.handle_player_action(player_action, context)
+                return result.model_dump()
+                
+            elif command == "batch_update" and all(k in parameters for k in ["npc_ids", "update_type", "update_data"]):
+                update_data = BatchUpdateData(**parameters.get("update_data", {}))
+                result = await self.batch_update_npcs(
+                    parameters["npc_ids"],
+                    parameters["update_type"],
+                    update_data
+                )
+                return result.model_dump()
+                
+            elif command == "initialize_agents":
+                result = await self.initialize_agents(parameters.get("npc_ids"))
+                return result.model_dump()
+                
+            elif command == "process_scheduled_activities":
+                result = await self.process_npc_scheduled_activities()
+                return result.model_dump()
+                
+            elif command == "run_memory_maintenance":
+                result = await self.run_memory_maintenance()
+                return result.model_dump()
+                
+            elif command == "generate_flashback" and all(k in parameters for k in ["npc_id", "context_text"]):
+                result = await self.generate_npc_flashback(
+                    parameters["npc_id"],
+                    parameters["context_text"]
+                )
+                return result.model_dump()
+                
+            else:
+                return {
+                    "result": {},
+                    "status": "error",
+                    "message": f"Unknown command or missing parameters: {command}"
+                }
+        
+        # Use agent if available
         # Convert parameters to appropriate models if needed
         if command == "process_player_action" and "player_action" in parameters:
             # Convert player_action dict to model
@@ -1331,7 +1428,7 @@ class NPCAgentSystem:
             }
         )
 
-    # ================== RESTORED HELPER METHODS ==================
+    # ================== HELPER METHODS ==================
 
     async def _get_current_time(self) -> Optional[Dict[str, Any]]:
         """Get current game time - READ ONLY."""
@@ -1703,7 +1800,7 @@ class NPCAgentSystem:
         # Simple selection - return first strategy
         return strategies[0] if strategies else None
 
-    # ================== ADDITIONAL HELPER METHODS FOR RELATIONSHIPS/STATS ==================
+    # ================== ADDITIONAL HELPER METHODS ==================
 
     async def _get_npc_stats(self, npc_id: int) -> Optional[Dict[str, Any]]:
         """Get NPC stats - READ ONLY."""
@@ -1839,7 +1936,7 @@ class NPCAgentSystem:
         except Exception as e:
             logger.error(f"Error updating conflict data: {e}")
 
-    # ================== NEW METHODS FOR EXTENDED FUNCTIONALITY ==================
+    # ================== EXTENDED FUNCTIONALITY ==================
 
     async def process_scheduled_activities(self) -> None:
         """
