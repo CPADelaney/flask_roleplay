@@ -2,7 +2,7 @@
 
 """
 NPC interaction handler for managing interactions between NPCs and players.
-Refactored from npc_handler_agent.py.
+Refactored to use centralized ChatGPT integration with async OpenAI client.
 """
 
 import logging
@@ -11,18 +11,52 @@ import asyncio
 import random
 from typing import List, Dict, Any, Optional
 import os
+import openai
 
-from agents import Agent, Runner, function_tool, RunContextWrapper
 from pydantic import BaseModel, Field
-
-
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from logic.activities_logic import get_all_activities, filter_activities_for_npc
 from npcs.npc_learning_adaptation import NPCLearningAdaptation, NPCLearningManager
 
+# Import centralized LLM functions
+from logic.chatgpt_integration import get_chatgpt_response, get_async_openai_client, TEMPERATURE_SETTINGS
+
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
+logger = logging.getLogger(__name__)
+
+# -------------------------------------------------------
+# Utility function for OpenAI calls with retry
+# -------------------------------------------------------
+
+async def call_openai_with_retry(client, **kwargs):
+    """
+    Call OpenAI API with retry logic for rate limits.
+    """
+    max_retries = 5
+    initial_delay = 1
+    backoff_factor = 2
+    
+    for attempt in range(max_retries):
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except openai.RateLimitError as e:
+            if attempt < max_retries - 1:
+                delay = initial_delay * (backoff_factor ** attempt)
+                logger.warning(f"Rate limit hit on attempt {attempt+1}/{max_retries}: {e}. Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
+            else:
+                raise
+        except Exception as e:
+            logger.error(f"Error calling OpenAI API: {e}")
+            raise
+    
+    raise Exception("Max retries exceeded")
+
+# -------------------------------------------------------
+# Pydantic Models
+# -------------------------------------------------------
 
 class NPCInteractionInput(BaseModel):
     npc_id: int
@@ -53,30 +87,6 @@ class NPCHandler:
         
         # Initialize the learning manager for handling multiple NPCs
         self.learning_manager = NPCLearningManager(user_id, conversation_id)
-        
-        # Initialize agent for handling NPC interactions
-        self.interaction_agent = Agent(
-            name="InteractionHandler",
-            instructions="""
-            You generate realistic NPC responses to player interactions in a roleplaying game with subtle femdom elements.
-            
-            Each response should:
-            - Match the NPC's personality and stats (dominance, cruelty, etc.)
-            - Be appropriate to the context and location
-            - Incorporate subtle hints of control when appropriate
-            - Consider the NPC's history with the player
-            - Possibly suggest stat changes based on the interaction
-            
-            The responses should maintain a balance between mundane everyday interactions and 
-            subtle power dynamics, with control elements hidden beneath friendly facades.
-            """,
-            output_type=NPCInteractionOutput,
-            tools=[
-                function_tool(self.get_npc_details),
-                function_tool(self.get_npc_memory),
-                function_tool(self.get_relationship_details)
-            ]
-        )
 
     async def handle_interaction(
         self,
@@ -86,13 +96,13 @@ class NPCHandler:
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Handle an interaction between the player and an NPC.
+        Handle an interaction between the player and an NPC using centralized ChatGPT.
         
         Args:
             npc_id: ID of the NPC
-            interaction_type: Type of interaction (e.g., "standard_interaction", "defiant_response", etc.)
+            interaction_type: Type of interaction
             player_input: Player's input text
-            context: Additional context for the interaction (optional)
+            context: Additional context for the interaction
             
         Returns:
             Dictionary with the NPC's response
@@ -106,69 +116,305 @@ class NPCHandler:
         # Get player relationship
         relationship = await self.get_relationship_details("npc", npc_id, "player", 0)
         
-        # Create prompt for the interaction handler
-        context_str = json.dumps(context) if context else "{}"
-        memories_str = json.dumps(memories)
-        relationship_str = json.dumps(relationship)
-        
-        prompt = f"""
-        Generate a response for {npc_details['npc_name']} to the player's input:
-        
-        "{player_input}"
-        
-        NPC Details:
-        {json.dumps(npc_details, indent=2)}
-        
-        Recent memories:
-        {memories_str}
-        
-        Relationship with player:
-        {relationship_str}
-        
-        Interaction type: {interaction_type}
-        Additional context: {context_str}
-        
-        Generate a response that:
-        - Is consistent with the NPC's personality and stats
-        - Considers their memories and relationship with the player
-        - Fits the interaction type and context
-        - Includes subtle elements of control when appropriate
-        - Suggests any relevant stat changes
-        
-        The response should maintain a balance between mundane interaction
-        and subtle power dynamics appropriate to the NPC's character.
-        """
-        
-        # Run the interaction handler
-        result = await Runner.run(
-            self.interaction_agent,
-            prompt
+        # Build the response using centralized ChatGPT with function calling
+        result = await self._generate_npc_response_with_gpt(
+            npc_id=npc_id,
+            npc_details=npc_details,
+            player_input=player_input,
+            interaction_type=interaction_type,
+            memories=memories,
+            relationship=relationship,
+            context=context or {}
         )
         
-        response = result.final_output
+        # Process the result
+        if result.get("type") == "function_call" and result.get("function_name") == "apply_universal_update":
+            # Extract response from function args
+            function_args = result.get("function_args", {})
+            narrative = function_args.get("narrative", "")
+            
+            # Check for stat changes in character_stat_updates
+            stat_updates = function_args.get("character_stat_updates", {})
+            stat_changes = {}
+            if stat_updates and "stats" in stat_updates:
+                # Convert to simple stat changes (deltas would need to be calculated)
+                # For now, we'll just note which stats were mentioned
+                for stat, value in stat_updates["stats"].items():
+                    if stat in ["dominance", "cruelty", "closeness", "trust", "respect", "intensity"]:
+                        # This is a simplified approach - in reality you'd calculate deltas
+                        stat_changes[stat] = 0
+            
+            response_data = {
+                "npc_id": npc_id,
+                "npc_name": npc_details.get("npc_name", f"NPC_{npc_id}"),
+                "response": narrative,
+                "stat_changes": stat_changes,
+                "memory_created": bool(function_args.get("npc_updates", [])) or bool(function_args.get("journal_updates", []))
+            }
+        else:
+            # Fallback to text response
+            response_text = result.get("response", "I don't know how to respond to that.")
+            response_data = {
+                "npc_id": npc_id,
+                "npc_name": npc_details.get("npc_name", f"NPC_{npc_id}"),
+                "response": response_text,
+                "stat_changes": {},
+                "memory_created": False
+            }
         
         # Store the interaction in memory if it's significant
-        if response.memory_created:
+        if response_data["memory_created"] or len(player_input) > 50:
             await self._store_interaction_memory(
                 npc_id, 
                 player_input, 
-                response.response
+                response_data["response"]
             )
         
         # Apply stat changes if any
-        if response.stat_changes:
-            await self._apply_stat_changes(npc_id, response.stat_changes)
+        if response_data["stat_changes"]:
+            await self._apply_stat_changes(npc_id, response_data["stat_changes"])
         
-        # INTEGRATION: Record interaction with the learning adaptation system
+        # Record interaction with the learning adaptation system
         await self._record_interaction_for_learning(
             npc_id,
             interaction_type,
             player_input,
-            response.response,
+            response_data["response"],
             context
         )
         
-        return response.dict()
+        return response_data
+
+    async def _generate_npc_response_with_gpt(
+        self,
+        npc_id: int,
+        npc_details: Dict[str, Any],
+        player_input: str,
+        interaction_type: str,
+        memories: List[Dict[str, Any]],
+        relationship: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Generate NPC response using centralized ChatGPT integration.
+        """
+        # Build aggregator text with NPC context
+        aggregator_text = f"""Current NPC Context:
+
+NPC: {npc_details['npc_name']} (ID: {npc_id})
+Personality Stats:
+- Dominance: {npc_details.get('dominance', 50)}
+- Cruelty: {npc_details.get('cruelty', 50)}
+- Closeness: {npc_details.get('closeness', 50)}
+- Trust: {npc_details.get('trust', 50)}
+- Respect: {npc_details.get('respect', 50)}
+- Intensity: {npc_details.get('intensity', 50)}
+
+Personality Traits: {', '.join(npc_details.get('personality_traits', []))}
+Current Location: {npc_details.get('current_location', 'unknown')}
+
+Relationship with Player:
+- Type: {relationship.get('link_type', 'neutral')}
+- Level: {relationship.get('link_level', 0)}
+- Stage: {relationship.get('relationship_stage', 'strangers')}
+
+Recent Memories:
+"""
+        
+        # Add top 3 memories
+        for i, memory in enumerate(memories[:3]):
+            aggregator_text += f"- {memory.get('memory_text', 'Unknown memory')}\n"
+        
+        aggregator_text += f"\nInteraction Type: {interaction_type}"
+        
+        if context:
+            aggregator_text += f"\nAdditional Context: {json.dumps(context, indent=2)}"
+        
+        aggregator_text += """
+
+Instructions:
+Generate a response that:
+- Is consistent with the NPC's personality and stats
+- Considers their memories and relationship with the player
+- Fits the interaction type and context
+- Includes subtle elements of control when appropriate (based on dominance)
+- Maintains psychological realism
+
+The response should maintain a balance between mundane interaction and subtle power dynamics.
+"""
+        
+        # Call centralized ChatGPT with the universal update function
+        result = await get_chatgpt_response(
+            conversation_id=self.conversation_id,
+            aggregator_text=aggregator_text,
+            user_input=f"{npc_details['npc_name']} responds to: \"{player_input}\"",
+            reflection_enabled=False,
+            use_nyx_integration=False
+        )
+        
+        return result
+
+    async def generate_npc_npc_interaction(
+        self,
+        npc1_id: int,
+        npc2_id: int,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate an interaction between two NPCs using async OpenAI client.
+        
+        Args:
+            npc1_id: ID of the first NPC
+            npc2_id: ID of the second NPC
+            context: Additional context
+            
+        Returns:
+            Dictionary with interaction details
+        """
+        # Get details for both NPCs
+        npc1 = await self.get_npc_details(npc1_id)
+        npc2 = await self.get_npc_details(npc2_id)
+        
+        # Get their relationship
+        relationship = await self.get_relationship_details("npc", npc1_id, "npc", npc2_id)
+        
+        # Get async OpenAI client
+        client = get_async_openai_client()
+        
+        # Build messages
+        messages = [
+            {
+                "role": "system",
+                "content": f"""You are simulating a conversation between two NPCs in a roleplay game.
+
+NPC 1: {npc1['npc_name']}
+- Dominance: {npc1.get('dominance', 50)}
+- Personality: {', '.join(npc1.get('personality_traits', []))}
+
+NPC 2: {npc2['npc_name']}
+- Dominance: {npc2.get('dominance', 50)}
+- Personality: {', '.join(npc2.get('personality_traits', []))}
+
+Their Relationship:
+- Type: {relationship.get('link_type', 'neutral')}
+- Level: {relationship.get('link_level', 0)}
+
+Generate a brief, natural interaction between them that reflects their personalities and relationship.
+The interaction should be 2-4 exchanges (back and forth).
+Include subtle power dynamics if appropriate based on their dominance levels."""
+            },
+            {
+                "role": "user",
+                "content": f"Generate a short conversation between {npc1['npc_name']} and {npc2['npc_name']}"
+                          + (f" in the context of: {json.dumps(context)}" if context else "")
+            }
+        ]
+        
+        try:
+            # Use appropriate temperature for dialogue
+            temperature = TEMPERATURE_SETTINGS.get("decision", 0.7) + 0.1
+            
+            response = await call_openai_with_retry(
+                client,
+                model="gpt-4.1-nano",
+                messages=messages,
+                temperature=temperature,
+                max_tokens=300
+            )
+            
+            interaction_text = response.choices[0].message.content
+            
+            return {
+                "npc1_id": npc1_id,
+                "npc1_name": npc1['npc_name'],
+                "npc2_id": npc2_id,
+                "npc2_name": npc2['npc_name'],
+                "interaction": interaction_text,
+                "success": True
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating NPC-NPC interaction: {e}")
+            return {
+                "npc1_id": npc1_id,
+                "npc2_id": npc2_id,
+                "interaction": f"{npc1['npc_name']} and {npc2['npc_name']} exchange brief greetings.",
+                "success": False,
+                "error": str(e)
+            }
+
+    async def generate_npc_activity_response(
+        self,
+        npc_id: int,
+        activity_type: str,
+        activity_context: Dict[str, Any]
+    ) -> str:
+        """
+        Generate an NPC's response to an activity using GPT.
+        
+        Args:
+            npc_id: ID of the NPC
+            activity_type: Type of activity
+            activity_context: Context about the activity
+            
+        Returns:
+            Generated response text
+        """
+        # Get NPC details
+        npc_details = await self.get_npc_details(npc_id)
+        
+        # Get async OpenAI client
+        client = get_async_openai_client()
+        
+        # Build prompt based on activity type
+        activity_descriptions = {
+            "training": "is undergoing training or conditioning",
+            "punishment": "is experiencing consequences for their actions",
+            "reward": "is being rewarded",
+            "task": "is performing a task",
+            "social": "is in a social situation"
+        }
+        
+        activity_desc = activity_descriptions.get(activity_type, "is engaged in an activity")
+        
+        messages = [
+            {
+                "role": "system",
+                "content": f"""You are generating an NPC's internal thoughts and reactions.
+
+NPC: {npc_details['npc_name']}
+- Dominance: {npc_details.get('dominance', 50)}
+- Trust: {npc_details.get('trust', 50)}
+- Personality: {', '.join(npc_details.get('personality_traits', []))}
+
+The NPC {activity_desc}.
+
+Generate their internal thoughts or reactions (1-2 sentences).
+Consider their personality and how they would respond to this situation.
+Include subtle psychological elements if appropriate."""
+            },
+            {
+                "role": "user",
+                "content": f"Context: {json.dumps(activity_context)}\n\nGenerate {npc_details['npc_name']}'s internal response."
+            }
+        ]
+        
+        try:
+            temperature = TEMPERATURE_SETTINGS.get("reflection", 0.5)
+            
+            response = await call_openai_with_retry(
+                client,
+                model="gpt-4.1-nano",
+                messages=messages,
+                temperature=temperature,
+                max_tokens=100
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            logger.error(f"Error generating activity response: {e}")
+            return f"{npc_details['npc_name']} continues with the {activity_type}."
 
     async def _store_interaction_memory(self, npc_id: int, player_input: str, response: str) -> None:
         """
@@ -775,54 +1021,44 @@ class NPCHandler:
             # Process interactions for NPCs at the same location
             for location, npcs in location_npcs.items():
                 if len(npcs) >= 2:
-                    # Randomly select some NPC pairs for interaction
+                    # Use GPT to generate more dynamic interactions
                     for _ in range(min(3, len(npcs))):
                         npc1, npc2 = random.sample(npcs, 2)
                         
-                        # Create memories of their interaction using canon
-                        interaction_text1 = f"Interacted with {npc2['npc_name']} at {location} during {time_of_day}."
-                        interaction_text2 = f"Interacted with {npc1['npc_name']} at {location} during {time_of_day}."
-                        
-                        # Create memory entries through canon
-                        await canon.create_journal_entry(
-                            ctx, conn,
-                            entry_type="npc_interaction",
-                            entry_text=interaction_text1,
-                            tags=["interaction", "npc", f"npc_{npc1['npc_id']}", f"with_npc_{npc2['npc_id']}"],
-                            importance=0.3,
-                            metadata={
-                                "entity_type": "npc",
-                                "entity_id": npc1["npc_id"],
-                                "target_npc_id": npc2["npc_id"],
-                                "location": location,
-                                "time_of_day": time_of_day
-                            }
+                        # Generate interaction using GPT
+                        interaction_result = await self.generate_npc_npc_interaction(
+                            npc1['npc_id'],
+                            npc2['npc_id'],
+                            {"location": location, "time_of_day": time_of_day}
                         )
                         
-                        await canon.create_journal_entry(
-                            ctx, conn,
-                            entry_type="npc_interaction",
-                            entry_text=interaction_text2,
-                            tags=["interaction", "npc", f"npc_{npc2['npc_id']}", f"with_npc_{npc1['npc_id']}"],
-                            importance=0.3,
-                            metadata={
-                                "entity_type": "npc",
-                                "entity_id": npc2["npc_id"],
-                                "target_npc_id": npc1["npc_id"],
+                        if interaction_result.get('success'):
+                            # Store the generated interaction as memories
+                            interaction_text = interaction_result['interaction']
+                            
+                            # Create memories based on the generated interaction
+                            await self._store_interaction_memory(
+                                npc1['npc_id'],
+                                f"Interaction with {npc2['npc_name']}",
+                                interaction_text
+                            )
+                            
+                            await self._store_interaction_memory(
+                                npc2['npc_id'],
+                                f"Interaction with {npc1['npc_name']}",
+                                interaction_text
+                            )
+                            
+                            # Update relationship using canon system
+                            await self._update_npc_relationship_canonical(ctx, conn, npc1["npc_id"], npc2["npc_id"])
+                            
+                            results.append({
+                                "type": "interaction",
+                                "npc1": npc1["npc_name"],
+                                "npc2": npc2["npc_name"],
                                 "location": location,
-                                "time_of_day": time_of_day
-                            }
-                        )
-                        
-                        # Update relationship using canon system
-                        await self._update_npc_relationship_canonical(ctx, conn, npc1["npc_id"], npc2["npc_id"])
-                        
-                        results.append({
-                            "type": "interaction",
-                            "npc1": npc1["npc_name"],
-                            "npc2": npc2["npc_name"],
-                            "location": location
-                        })
+                                "interaction": interaction_text
+                            })
             
             return {
                 "year": year,
@@ -833,11 +1069,11 @@ class NPCHandler:
                 "results": results
             }
             
-        except Exception as e:  # This line should align with 'try:'
+        except Exception as e:
             logger.error(f"Error processing daily activities: {e}")
             return {"error": str(e), "results": []}
 
-    async def _update_npc_relationship(self, ctx, conn, npc1_id: int, npc2_id: int) -> None:
+    async def _update_npc_relationship_canonical(self, ctx, conn, npc1_id: int, npc2_id: int) -> None:
         """
         Update the relationship between two NPCs using the canon system.
         
