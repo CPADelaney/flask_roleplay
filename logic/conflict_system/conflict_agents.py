@@ -108,6 +108,28 @@ class ConflictContext:
             self.resource_manager = ResourceManager(self.user_id, self.conversation_id)
         if self.cached_data is None:
             self.cached_data = {}
+
+    def stringify_metadata(metadata: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Convert all metadata values to strings for OpenAI API compatibility.
+        OpenAI requires all metadata values to be strings.
+        """
+        if not metadata:
+            return {}
+        
+        result = {}
+        for key, value in metadata.items():
+            if isinstance(value, (dict, list)):
+                # For complex types, JSON serialize them
+                result[key] = json.dumps(value)
+            elif value is None:
+                result[key] = "null"
+            elif isinstance(value, bool):
+                result[key] = str(value).lower()
+            else:
+                result[key] = str(value)
+        
+        return result
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for metadata storage."""
@@ -248,7 +270,7 @@ async def create_or_get_assistant(
                 "instructions": instructions,
                 "temperature": temperature,
                 "tools": tools or [],
-                "metadata": metadata or {},
+                "metadata": stringify_metadata(metadata or {}),  # Use the helper
             }
             
             # Add response format if specified
@@ -437,13 +459,19 @@ async def initialize_conflict_assistants(verify_config: bool = True) -> Dict[str
     # Update triage metadata both locally and on server
     triage = assistants["triage"]
     triage_metadata = (triage.metadata or {}) | {"handoff_table": handoff_mapping}
-    triage.metadata = triage_metadata
+    triage.metadata = {"handoff_table": handoff_table}
+    
+    # Only send string metadata to API
+    api_metadata = stringify_metadata({
+        "role": "triage",
+        "updated_at": datetime.utcnow().isoformat()
+    })
     
     try:
         client = get_client()
         await client.beta.assistants.update(
             triage.id,
-            metadata=triage_metadata
+            metadata=api_metadata
         )
         logger.debug("Successfully updated triage assistant metadata on server")
     except Exception as e:
@@ -481,7 +509,7 @@ async def ask_assistant(
             client = get_client()
             
             # Create thread with context metadata
-            thread_metadata = context.to_dict() if context else {}
+            thread_metadata = stringify_metadata(context.to_dict() if context else {})
             thread = await client.beta.threads.create(metadata=thread_metadata)
             
             # Add user message with context in message metadata for privacy
@@ -489,7 +517,7 @@ async def ask_assistant(
                 thread_id=thread.id,
                 role="user",
                 content=message,
-                metadata=thread_metadata,  # More private than thread-level
+                metadata=thread_metadata,  # Already stringified
             )
             
             # Create and poll run with timeout
