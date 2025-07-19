@@ -458,13 +458,14 @@ async def initialize_conflict_assistants(verify_config: bool = True) -> Dict[str
     
     # Update triage metadata both locally and on server
     triage = assistants["triage"]
+    # Store the actual Assistant objects locally for runtime use
     triage_metadata = (triage.metadata or {}) | {"handoff_table": handoff_mapping}
-    triage.metadata = {"handoff_table": handoff_table}
+    triage.metadata = triage_metadata  # Fix: was using undefined 'handoff_table'
     
-    # Only send string metadata to API
     api_metadata = stringify_metadata({
         "role": "triage",
         "updated_at": datetime.utcnow().isoformat()
+        # Don't include handoff_table here as it contains non-serializable Assistant objects
     })
     
     try:
