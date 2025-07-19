@@ -1006,10 +1006,19 @@ class ContextService:
         if use_delta and source_version is not None:
             # For demonstration, let's just store a partial delta
             delta_context = await self.context_manager._get_context(source_version)
-            context["is_delta"] = delta_context.get("is_incremental", False)
-            if "delta_context" in delta_context:
-                context["delta_changes"] = delta_context["delta_context"]
-            context["version"] = delta_context["version"]
+            
+            # Convert to dict if it's a Pydantic model
+            if hasattr(delta_context, 'dict'):
+                delta_context_dict = delta_context.dict()
+            elif hasattr(delta_context, 'model_dump'):
+                delta_context_dict = delta_context.model_dump()
+            else:
+                delta_context_dict = delta_context
+                
+            context["is_delta"] = delta_context_dict.get("is_incremental", False)
+            if "delta_context" in delta_context_dict:
+                context["delta_changes"] = delta_context_dict["delta_context"]
+            context["version"] = delta_context_dict.get("version", self.context_manager.version)
         else:
             context["version"] = self.context_manager.version
         
