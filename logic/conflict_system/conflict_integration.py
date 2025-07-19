@@ -526,24 +526,36 @@ class ConflictSystemIntegration:
         except Exception as e:
             logger.error(f"Error generating conflict: {str(e)}", exc_info=True)
             return {"success": False, "message": str(e)}
-
+    
     @with_governance(
         agent_type=AgentType.CONFLICT_ANALYST,
         action_type="monitor_and_generate",
         action_description="Monitoring world state and generating conflicts"
     )
-    async def monitor_and_generate_conflicts(self) -> Dict[str, Any]:
+    async def monitor_and_generate_conflicts(self, ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         """Monitor world state and generate conflicts when appropriate"""
         await self.initialize()
         
         try:
-            ctx = RunContextWrapper({
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
-            })
-            pressure_analysis = await analyze_conflict_pressure(ctx)
+            # Extract user_id and conversation_id from the context if provided by decorator
+            if ctx and hasattr(ctx, 'context'):
+                if isinstance(ctx.context, dict):
+                    user_id = ctx.context.get('user_id', self.user_id)
+                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
+                else:
+                    user_id = getattr(ctx.context, 'user_id', self.user_id)
+                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
+            else:
+                user_id = self.user_id
+                conversation_id = self.conversation_id
             
-            active_conflicts = await get_active_conflicts(ctx)
+            run_ctx = RunContextWrapper({
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })
+            pressure_analysis = await analyze_conflict_pressure(run_ctx)
+            
+            active_conflicts = await get_active_conflicts(run_ctx)
             
             should_generate = await self._should_generate_conflict(
                 pressure_analysis, 
@@ -776,22 +788,35 @@ class ConflictSystemIntegration:
     )
     async def evolve_conflict(self, conflict_id: int, 
                             event_type: str,
-                            event_data: Dict[str, Any]) -> Dict[str, Any]:
+                            event_data: Dict[str, Any],
+                            ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         """Evolve a conflict based on events"""
         await self.initialize()
         
         try:
-            ctx = RunContextWrapper({
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
+            # Extract user_id and conversation_id from the context if provided by decorator
+            if ctx and hasattr(ctx, 'context'):
+                if isinstance(ctx.context, dict):
+                    user_id = ctx.context.get('user_id', self.user_id)
+                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
+                else:
+                    user_id = getattr(ctx.context, 'user_id', self.user_id)
+                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
+            else:
+                user_id = self.user_id
+                conversation_id = self.conversation_id
+            
+            run_ctx = RunContextWrapper({
+                "user_id": user_id,
+                "conversation_id": conversation_id
             })
             
-            conflict = await get_conflict_details(ctx, conflict_id)
+            conflict = await get_conflict_details(run_ctx, conflict_id)
             if not conflict:
                 return {"error": "Conflict not found"}
             
-            stakeholders = await get_conflict_stakeholders(ctx, conflict_id)
-            player_involvement = await get_player_involvement(ctx, conflict_id)
+            stakeholders = await get_conflict_stakeholders(run_ctx, conflict_id)
+            player_involvement = await get_player_involvement(run_ctx, conflict_id)
             
             evolution_prompt = f"""
             A {event_type} event has occurred in the conflict:
@@ -813,7 +838,7 @@ class ConflictSystemIntegration:
             Output specific updates as JSON.
             """
             
-            context = ConflictContext(self.user_id, self.conversation_id)
+            context = ConflictContext(user_id, conversation_id)
             
             # Use ask_assistant instead of Runner.run
             evolution = await ask_assistant(
@@ -832,7 +857,7 @@ class ConflictSystemIntegration:
             
             if "progress_change" in updates:
                 progress_result = await update_conflict_progress(
-                    ctx, conflict_id, updates["progress_change"]
+                    run_ctx, conflict_id, updates["progress_change"]
                 )
                 results["updates_applied"].append({
                     "type": "progress",
@@ -871,8 +896,8 @@ class ConflictSystemIntegration:
             
             async with get_db_connection_context() as conn:
                 ctx_obj = type("ctx", (), {
-                    "user_id": self.user_id,
-                    "conversation_id": self.conversation_id
+                    "user_id": user_id,
+                    "conversation_id": conversation_id
                 })()
                 
                 await canon.log_canonical_event(
@@ -965,14 +990,27 @@ class ConflictSystemIntegration:
     )
     async def handle_story_beat(self, conflict_id: int, path_id: str,
                                beat_description: str,
-                               involved_npcs: List[int]) -> Dict[str, Any]:
+                               involved_npcs: List[int],
+                               ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         """Handle a story beat in a conflict"""
         await self.initialize()
         
         try:
-            ctx = RunContextWrapper({
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
+            # Extract user_id and conversation_id from the context if provided by decorator
+            if ctx and hasattr(ctx, 'context'):
+                if isinstance(ctx.context, dict):
+                    user_id = ctx.context.get('user_id', self.user_id)
+                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
+                else:
+                    user_id = getattr(ctx.context, 'user_id', self.user_id)
+                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
+            else:
+                user_id = self.user_id
+                conversation_id = self.conversation_id
+            
+            run_ctx = RunContextWrapper({
+                "user_id": user_id,
+                "conversation_id": conversation_id
             })
             
             progress_value = await self._calculate_beat_progress(
@@ -980,7 +1018,7 @@ class ConflictSystemIntegration:
             )
             
             result = await track_story_beat(
-                ctx, conflict_id, path_id, beat_description,
+                run_ctx, conflict_id, path_id, beat_description,
                 involved_npcs, progress_value
             )
             
@@ -998,6 +1036,7 @@ class ConflictSystemIntegration:
         except Exception as e:
             logger.error(f"Error handling story beat: {e}", exc_info=True)
             return {"error": str(e)}
+
 
     async def _calculate_beat_progress(self, conflict_id: int, 
                                      path_id: str,
@@ -1040,9 +1079,21 @@ class ConflictSystemIntegration:
         action_type="resolve_conflict",
         action_description="Resolve an existing conflict"
     )
-    async def resolve_conflict(self, resolution_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def resolve_conflict(self, resolution_data: Dict[str, Any], ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         await self.initialize()
         try:
+            # Extract user_id and conversation_id from the context if provided by decorator
+            if ctx and hasattr(ctx, 'context'):
+                if isinstance(ctx.context, dict):
+                    user_id = ctx.context.get('user_id', self.user_id)
+                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
+                else:
+                    user_id = getattr(ctx.context, 'user_id', self.user_id)
+                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
+            else:
+                user_id = self.user_id
+                conversation_id = self.conversation_id
+                
             story_context = await self._get_story_context()
             enhanced_data = dict(resolution_data)
             enhanced_data.update({
@@ -1050,16 +1101,16 @@ class ConflictSystemIntegration:
                 "active_npcs": story_context.get("active_npcs"),
                 "lore_context": story_context.get("lore_context")
             })
-
-            conflict_context = ConflictContext(self.user_id, self.conversation_id)
+    
+            conflict_context = ConflictContext(user_id, conversation_id)
             
             # Use ask_assistant instead of Runner.run
             result = await ask_assistant(
-                self.agents["resolution_tracking"],  # Note: changed from "resolution_agent"
+                self.agents["resolution_tracking"],
                 json.dumps(enhanced_data),
                 conflict_context
             )
-
+    
             await self.lore_system.handle_narrative_event(
                 self.run_ctx,
                 f"Conflict resolved: {result.get('description', '')}",
@@ -1080,7 +1131,7 @@ class ConflictSystemIntegration:
                         "impact_level": "medium"
                     }
                 )
-
+    
             return {
                 "success": True,
                 "conflict_id": enhanced_data.get("conflict_id"),
@@ -1091,19 +1142,32 @@ class ConflictSystemIntegration:
             logger.error(f"Error resolving conflict: {str(e)}", exc_info=True)
             return {"success": False, "message": str(e)}
 
+
     @with_governance(
         agent_type=AgentType.CONFLICT_ANALYST,
         action_type="update_stakeholders",
         action_description="Update conflict stakeholders"
     )
-    async def update_stakeholders(self, stakeholder_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_stakeholders(self, stakeholder_data: Dict[str, Any], ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         await self.initialize()
         try:
-            conflict_context = ConflictContext(self.user_id, self.conversation_id)
+            # Extract user_id and conversation_id from the context if provided by decorator
+            if ctx and hasattr(ctx, 'context'):
+                if isinstance(ctx.context, dict):
+                    user_id = ctx.context.get('user_id', self.user_id)
+                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
+                else:
+                    user_id = getattr(ctx.context, 'user_id', self.user_id)
+                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
+            else:
+                user_id = self.user_id
+                conversation_id = self.conversation_id
+                
+            conflict_context = ConflictContext(user_id, conversation_id)
             
             # Use ask_assistant instead of Runner.run
             result = await ask_assistant(
-                self.agents["stakeholder_management"],  # Note: changed from "stakeholder_agent"
+                self.agents["stakeholder_management"],
                 json.dumps(stakeholder_data),
                 conflict_context
             )
@@ -1145,14 +1209,26 @@ class ConflictSystemIntegration:
         action_type="manage_manipulation",
         action_description="Manage NPC manipulation attempts"
     )
-    async def manage_manipulation(self, manipulation_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def manage_manipulation(self, manipulation_data: Dict[str, Any], ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         await self.initialize()
         try:
-            conflict_context = ConflictContext(self.user_id, self.conversation_id)
+            # Extract user_id and conversation_id from the context if provided by decorator
+            if ctx and hasattr(ctx, 'context'):
+                if isinstance(ctx.context, dict):
+                    user_id = ctx.context.get('user_id', self.user_id)
+                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
+                else:
+                    user_id = getattr(ctx.context, 'user_id', self.user_id)
+                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
+            else:
+                user_id = self.user_id
+                conversation_id = self.conversation_id
+                
+            conflict_context = ConflictContext(user_id, conversation_id)
             
             # Use ask_assistant instead of Runner.run
             result = await ask_assistant(
-                self.agents["manipulation"],  # Note: changed from "manipulation_agent"
+                self.agents["manipulation"],
                 json.dumps(manipulation_data),
                 conflict_context
             )
@@ -1177,7 +1253,7 @@ class ConflictSystemIntegration:
         except Exception as e:
             logger.error(f"Error managing manipulation: {str(e)}", exc_info=True)
             return {"success": False, "message": str(e)}
-
+        
     async def get_conflicts_with_context(self, query: str = None) -> List[Dict[str, Any]]:
         """Get conflicts using vector search for relevance"""
         try:
