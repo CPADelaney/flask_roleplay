@@ -983,101 +983,146 @@ class NyxUnifiedGovernor(
             self._openai_client = get_async_openai_client()
         return self._openai_client
 
-    async def create_agent(
-        self,
-        agent_type: str,
-        agent_id: str,
-        *,
-        use_openai_sdk: bool = True,
-        **kwargs,
-    ) -> Any:
-        """
-        Create / register an agent.
-
-        * If `use_openai_sdk` (default) → create or fetch an **Assistant** object
-          via the OpenAI Agent SDK using chatgpt_integration.
-        * Otherwise fall back to dynamic Python-class instantiation (your old path).
-
-        kwargs are passed straight through to `client.beta.assistants.create`
-        so you can specify **model**, **instructions**, **tools**, etc.
-        """
-        logger.info("Creating agent via SDK=%s, type=%s, id=%s",
-                    use_openai_sdk, agent_type, agent_id)
-
-        # ────────────────────────────────────────────────────────────────────
-        # 1) SDK branch  ─────────────────────────────────────────────────────
-        # ────────────────────────────────────────────────────────────────────
-        if use_openai_sdk:
-            # return cached instance if we already created it this run
-            if agent_id in self._assistants:
-                return self._assistants[agent_id]
-
-            # sensible defaults you can override in **kwargs
-            sdk_defaults = dict(
-                name          = f"{agent_type}:{agent_id}",
-                model         = "gpt-4.1-nano",
-                instructions  = f"You are the {agent_type} agent.",
-                tools         = [],          # e.g. [{"type":"code_interpreter"}]
-            )
-            sdk_defaults.update(kwargs)
-
-            try:
-                # Get OpenAI client from chatgpt_integration
-                client = await self._get_openai_client()
+    def _migrate_legacy_kwargs(self, kwargs: dict) -> None:
+            """
+            Mutate kwargs in-place:
+              • convert deprecated 'capabilities' to new 'tools' format
+              • remove unknown keys but log them once
+            """
+            caps = kwargs.pop("capabilities", None)
+            if caps:
+                tools = kwargs.setdefault("tools", [])
                 
-                assistant: Assistant = await client.beta.assistants.create(**sdk_defaults)
-                self._assistants[agent_id] = assistant
-                logger.info("Assistant %s created (id=%s)", assistant.name, assistant.id)
-                return assistant
-
-            except Exception as e:
-                logger.error("OpenAI Assistant creation failed: %s", e, exc_info=True)
-                raise AgentRegistrationError(
-                    f"Failed to create Assistant {agent_type}/{agent_id}: {e}"
-                ) from e
-
-        # ────────────────────────────────────────────────────────────────────
-        # 2) Legacy Python-class branch  (unchanged logic, trimmed) ─────────
-        # ────────────────────────────────────────────────────────────────────
-        try:
-            agent_class_map = {
-                "resolution":  "logic.conflict_system.conflict_agents.resolution_agent",
-                "stakeholder": "logic.conflict_system.conflict_agents.stakeholder_agent",
-                "strategy":    "logic.conflict_system.conflict_agents.manipulation_agent",
-                "conflict_manager": "logic.conflict_system.conflict_agents.conflict_manager_agent",
-                "npc":   "npcs.npc_agent.NPCAgent",
-                "story": "story_agent.story_director_agent.StoryDirector",
-                "narrative": "agents.narrative_crafter.NarrativeCrafterAgent",
-                "scene": "agents.scene_manager.SceneManagerAgent",
-                "memory": "agents.memory_manager.MemoryManagerAgent",
-            }
-
-            module_path = agent_class_map.get(agent_type) or \
-                          f"agents.{agent_type}_agent.{agent_type.title()}Agent"
-
-            module_name, class_name = module_path.rsplit(".", 1)
-            module      = importlib.import_module(module_name)
-            agent_class = getattr(module, class_name)
-
-            instance = agent_class(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id,
-                **kwargs,
-            )
-
-            # optional async initialise
-            if hasattr(instance, "initialize") and callable(instance.initialize):
-                await instance.initialize()
-
-            # register however your framework expects
-            await self.register_agent(agent_type, agent_id, instance)
-            return instance
-
-        except Exception as e:
-            logger.error("Python-agent creation failed: %s", e, exc_info=True)
-            raise AgentRegistrationError(
-                f"Failed to create agent {agent_type}/{agent_id}: {e}"
-            ) from e
+                # Handle different capability formats
+                if caps.get("code_interpreter") is not None:
+                    tools.append({"type": "code_interpreter"})
+                    
+                if caps.get("retrieval") is not None:
+                    tools.append({"type": "file_search"})
+                    
+                # v1 sometimes used "function": {...} (single function)
+                if caps.get("function"):
+                    tools.append({"type": "function", "function": caps["function"]})
+                    
+                # or "functions": [...] (array of functions)
+                for f in caps.get("functions", []):
+                    tools.append({"type": "function", "function": f})
+                    
+                logger.warning(
+                    "create_agent: converted legacy 'capabilities' kwarg to %d tool(s)",
+                    len(tools)
+                )
+    
+            # Log & drop any keys the OpenAI SDK won't recognise
+            unknown = set(kwargs) - VALID_OPENAI_PARAMS
+            if unknown:
+                logger.warning(
+                    "create_agent: ignoring unsupported kwargs: %s",
+                    ", ".join(sorted(unknown))
+                )
+                for k in unknown:
+                    kwargs.pop(k, None)
+    
+        async def create_agent(
+            self,
+            agent_type: str,
+            agent_id: str,
+            *,
+            use_openai_sdk: bool = True,
+            **kwargs,
+        ) -> Any:
+            """
+            Create / register an agent.
+    
+            * If `use_openai_sdk` (default) → create or fetch an **Assistant** object
+              via the OpenAI Agent SDK using chatgpt_integration.
+            * Otherwise fall back to dynamic Python-class instantiation (your old path).
+    
+            kwargs are passed through to `client.beta.assistants.create`
+            after filtering to only valid parameters.
+            """
+            logger.info("Creating agent via SDK=%s, type=%s, id=%s",
+                        use_openai_sdk, agent_type, agent_id)
+    
+            # ────────────────────────────────────────────────────────────────────
+            # 1) SDK branch  ─────────────────────────────────────────────────────
+            # ────────────────────────────────────────────────────────────────────
+            if use_openai_sdk:
+                # return cached instance if we already created it this run
+                if agent_id in self._assistants:
+                    return self._assistants[agent_id]
+    
+                # return cached instance if we already created it this run
+                if agent_id in self._assistants:
+                    return self._assistants[agent_id]
+    
+                sdk_defaults = {
+                    "name": f"{agent_type}:{agent_id}",
+                    "model": "gpt-4.1-nano",  # Match the default from conflict_agents.py
+                    "instructions": f"You are the {agent_type} agent.",
+                    "tools": [],   # will be filled by kwargs or migration
+                }
+                
+                # Track which defaults we're using for logging
+                using_default_model = "model" not in kwargs
+                using_default_tools = "tools" not in kwargs and "capabilities" not in kwargs
+    
+                # 1) merge kwargs, migrate, then filter
+                sdk_defaults.update(kwargs)
+                self._migrate_legacy_kwargs(sdk_defaults)  # migrate and filter
+                
+                # Warn about defaults being used
+                if using_default_model:
+                    logger.warning(
+                        "create_agent: no model specified for %s/%s, using default: %s",
+                        agent_type, agent_id, sdk_defaults["model"]
+                    )
+                
+                if using_default_tools and not sdk_defaults.get("tools"):
+                    logger.info(
+                        "create_agent: no tools specified for %s/%s; creating chat-only assistant",
+                        agent_type, agent_id
+                    )
+    
+                try:
+                    # Get OpenAI client from chatgpt_integration
+                    client = await self._get_openai_client()
+                    
+                    assistant: Assistant = await client.beta.assistants.create(**sdk_defaults)
+                    self._assistants[agent_id] = assistant
+                    
+                    # Store custom (non-SDK) params AFTER migration/stripping
+                    assistant._custom_params = {k: v for k, v in sdk_defaults.items() 
+                                              if k not in VALID_OPENAI_PARAMS}
+                        
+                    logger.info("Assistant %s created (id=%s)", assistant.name, assistant.id)
+                    return assistant
+    
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    error_type = type(e).__name__
+                    
+                    # Try to categorize the error based on error message or type
+                    if "bad request" in error_msg or "invalid" in error_msg or "400" in error_msg:
+                        logger.error("Assistant creation failed (bad request): %s", e, exc_info=True)
+                        raise AgentRegistrationError(
+                            f"Assistant creation failed (bad request - check parameters): {e}"
+                        ) from e
+                    elif "unauthorized" in error_msg or "api key" in error_msg or "401" in error_msg:
+                        logger.error("Assistant creation failed (auth): %s", e, exc_info=True)
+                        raise AgentRegistrationError(
+                            f"Assistant creation failed (authentication issue): {e}"
+                        ) from e
+                    elif "rate limit" in error_msg or "429" in error_msg:
+                        logger.error("Assistant creation failed (rate limit): %s", e, exc_info=True)
+                        raise AgentRegistrationError(
+                            f"Assistant creation failed (rate limit exceeded): {e}"
+                        ) from e
+                    else:
+                        logger.error("OpenAI Assistant creation failed: %s", e, exc_info=True)
+                        raise AgentRegistrationError(
+                            f"Failed to create Assistant {agent_type}/{agent_id}: {e}"
+                        ) from e
 
     async def register_agent(self, *args, **kwargs):
         """
