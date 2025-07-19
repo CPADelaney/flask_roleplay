@@ -5,6 +5,7 @@ import logging
 import functools
 import time 
 import asyncio
+import threading
 import openai
 from typing import Dict, List, Any, Optional, Union
 import numpy as np
@@ -435,20 +436,214 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     }
 }
 
+
+import threading
+from typing import Optional, Dict, Any
+
+
+class OpenAIClientManager:
+    """
+    Centralized manager for OpenAI client access.
+    Provides both sync and async clients through a single interface.
+    Thread-safe singleton with robust configuration management.
+    """
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                # Double-check locking pattern
+                if cls._instance is None:
+                    cls._instance = super(OpenAIClientManager, cls).__new__(cls)
+        return cls._instance
+    
+    def __init__(self):
+        # Ensure __init__ only runs once
+        if hasattr(self, '_initialized'):
+            return
+        
+        self._initialized = True
+        self._sync_client = None
+        self._async_client = None
+        self._config = self._load_config()
+        self._client_lock = threading.Lock()
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """Load OpenAI configuration from environment."""
+        config = {
+            'api_key': os.getenv("OPENAI_API_KEY"),
+            'organization': os.getenv("OPENAI_ORGANIZATION"),
+            'base_url': os.getenv("OPENAI_BASE_URL"),
+            'timeout': int(os.getenv("OPENAI_TIMEOUT", "600")),
+            'max_retries': int(os.getenv("OPENAI_MAX_RETRIES", "2")),
+            'default_model': os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-nano")
+        }
+        
+        if not config['api_key']:
+            raise RuntimeError("OPENAI_API_KEY not found in environment")
+        
+        # Set global API key for backwards compatibility
+        openai.api_key = config['api_key']
+        if config['organization']:
+            openai.organization = config['organization']
+            
+        return config
+    
+    @property
+    def sync_client(self):
+        """Get or create thread-safe synchronous OpenAI client."""
+        if self._sync_client is None:
+            with self._client_lock:
+                if self._sync_client is None:
+                    # Configure the global openai module
+                    openai.api_key = self._config['api_key']
+                    if self._config['organization']:
+                        openai.organization = self._config['organization']
+                    self._sync_client = openai
+        return self._sync_client
+    
+    @property
+    def async_client(self):
+        """Get or create thread-safe asynchronous OpenAI client."""
+        if self._async_client is None:
+            with self._client_lock:
+                if self._async_client is None:
+                    from openai import AsyncOpenAI
+                    
+                    # Build client configuration
+                    client_config = {
+                        'api_key': self._config['api_key'],
+                        'timeout': self._config['timeout'],
+                        'max_retries': self._config['max_retries']
+                    }
+                    
+                    if self._config['organization']:
+                        client_config['organization'] = self._config['organization']
+                    if self._config['base_url']:
+                        client_config['base_url'] = self._config['base_url']
+                    
+                    self._async_client = AsyncOpenAI(**client_config)
+        return self._async_client
+    
+    def get_agents_model(self, model: Optional[str] = None):
+        """
+        Get OpenAI model for agents SDK if available.
+        
+        Args:
+            model: Optional model name override
+        """
+        try:
+            from pydantic_ai.models.openai import OpenAIResponsesModel
+            return OpenAIResponsesModel(
+                model=model or self._config['default_model'],
+                openai_client=self.async_client
+            )
+        except ImportError:
+            raise RuntimeError("Agents SDK is not installed")
+    
+    def reset_clients(self):
+        """Reset all clients, forcing recreation on next access."""
+        with self._client_lock:
+            self._sync_client = None
+            self._async_client = None
+            self._config = self._load_config()
+            logging.info("OpenAI clients reset")
+    
+    def update_config(self, **kwargs):
+        """
+        Update configuration and reset clients.
+        
+        Args:
+            api_key: New API key
+            organization: New organization ID
+            base_url: New base URL
+            timeout: New timeout in seconds
+            max_retries: New max retries
+            default_model: New default model
+        """
+        with self._client_lock:
+            # Update config
+            for key, value in kwargs.items():
+                if key in self._config and value is not None:
+                    self._config[key] = value
+            
+            # Reset clients to use new config
+            self._sync_client = None
+            self._async_client = None
+            
+            # Update global settings
+            if 'api_key' in kwargs:
+                openai.api_key = kwargs['api_key']
+            if 'organization' in kwargs:
+                openai.organization = kwargs['organization']
+                
+            logging.info(f"OpenAI configuration updated: {list(kwargs.keys())}")
+    
+    @property
+    def config(self) -> Dict[str, Any]:
+        """Get current configuration (read-only)."""
+        return self._config.copy()
+    
+    def health_check(self) -> Dict[str, Any]:
+        """Check if clients can be created and basic config is valid."""
+        health = {
+            'config_valid': bool(self._config.get('api_key')),
+            'sync_client_ready': self._sync_client is not None,
+            'async_client_ready': self._async_client is not None,
+            'default_model': self._config.get('default_model')
+        }
+        
+        try:
+            # Try to access clients to ensure they can be created
+            _ = self.sync_client
+            _ = self.async_client
+            health['clients_accessible'] = True
+        except Exception as e:
+            health['clients_accessible'] = False
+            health['error'] = str(e)
+            
+        return health
+
+
+# Create singleton instance
+_client_manager = OpenAIClientManager()
+
+
+# =====================================================
+# Backwards compatibility functions (deprecated)
+# =====================================================
+
 def get_openai_client():
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not found in environment")
-    openai.api_key = api_key
-    return openai
+    """
+    DEPRECATED: Use OpenAIClientManager instead.
+    Get synchronous OpenAI client for backwards compatibility.
+    """
+    logging.warning("get_openai_client() is deprecated. Use OpenAIClientManager().sync_client instead.")
+    return _client_manager.sync_client
+
 
 def get_async_openai_client():
-    """Get an async OpenAI client for use with await."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not found in environment")
-    from openai import AsyncOpenAI
-    return AsyncOpenAI(api_key=api_key)
+    """
+    DEPRECATED: Use OpenAIClientManager instead.
+    Get async OpenAI client for backwards compatibility.
+    """
+    logging.warning("get_async_openai_client() is deprecated. Use OpenAIClientManager().async_client instead.")
+    return _client_manager.async_client
+
+
+def get_agents_openai_model():
+    """
+    DEPRECATED: Use OpenAIClientManager instead.
+    Get agents SDK model for backwards compatibility.
+    """
+    logging.warning("get_agents_openai_model() is deprecated. Use OpenAIClientManager().get_agents_model() instead.")
+    return _client_manager.get_agents_model()
+
+
+# =====================================================
+# Core functions using the centralized client
+# =====================================================
 
 async def build_message_history(conversation_id: int, aggregator_text: str, user_input: str, limit: int = 15):
     """
@@ -487,6 +682,7 @@ async def build_message_history(conversation_id: int, aggregator_text: str, user
             {"role": "system", "content": aggregator_text},
             {"role": "user", "content": user_input}
         ]
+
 
 def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,)):
     def decorator_retry(func):
@@ -645,8 +841,8 @@ async def get_chatgpt_response(
     # Use image prompt if available, otherwise use regular SYSTEM_PROMPT
     primary_system_prompt = image_prompt if image_prompt else SYSTEM_PROMPT
 
-    # Create the OpenAI client
-    openai_client = get_openai_client()
+    # Get client from centralized manager
+    openai_client = _client_manager.sync_client
 
     # If reflection is OFF, do the single-step call as before
     if not reflection_enabled:
@@ -870,32 +1066,9 @@ def _ensure_default_scene_data(parsed_args: dict) -> None:
             "reason": ""
         }
 
-# Import agents SDK components if available
-try:
-    from pydantic_ai import Agent, ModelSettings, Runner, function_tool, RunContextWrapper
-    from pydantic_ai.models.openai import OpenAIResponsesModel
-    
-    def get_agents_openai_model() -> OpenAIResponsesModel:
-        """
-        Return a new Agents SDK Model instance for agent-based workflows.
-        """
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY not found in environment")
-        
-        return OpenAIResponsesModel(
-            model="gpt-4.1-nano",
-            openai_client=openai.AsyncOpenAI(api_key=api_key)
-        )
-except ImportError:
-    logging.info("Agents SDK not available")
-    
-    def get_agents_openai_model():
-        raise RuntimeError("Agents SDK is not installed")
-
 
 # ===========================================
-# Migrated Functions from llm_integration.py
+# Utility functions using centralized client
 # ===========================================
 
 async def generate_text_completion(
@@ -922,25 +1095,24 @@ async def generate_text_completion(
         {"role": "user", "content": user_prompt}
     ]
     
-    # Use the centralized function - note it expects conversation_id and aggregator_text
-    # We'll use dummy values for these since they're required by the function signature
-    response_data = await get_chatgpt_response(
-        conversation_id=0,  # Dummy value for this use case
-        aggregator_text=system_prompt,  # Use system prompt as aggregator
-        user_input=user_prompt,
-        reflection_enabled=False,  # Disable reflection for simple completions
-        use_nyx_integration=False  # Don't use full Nyx integration
-    )
+    # Use the async client directly for simple completions
+    client = _client_manager.async_client
     
-    # Extract the response text
-    if response_data.get("type") == "text":
-        return response_data.get("response", "").strip()
-    elif response_data.get("type") == "function_call":
-        # If we got a function call, extract narrative from the args
-        args = response_data.get("function_args", {})
-        return args.get("narrative", "").strip()
-    
-    return "I'm having trouble processing your request right now."
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stop=stop_sequences,
+            frequency_penalty=0.0
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        logging.error(f"Error in generate_text_completion: {e}")
+        return "I'm having trouble processing your request right now."
 
 
 async def get_text_embedding(text: str, model: str = "text-embedding-3-small", dimensions: Optional[int] = None) -> List[float]:
@@ -948,8 +1120,8 @@ async def get_text_embedding(text: str, model: str = "text-embedding-3-small", d
     Get embedding vector for text using OpenAI's latest embedding models.
     """
     try:
-        # Get async client from centralized module
-        client = get_async_openai_client()
+        # Get async client from centralized manager
+        client = _client_manager.async_client
         
         # Validate model choice
         valid_models = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
