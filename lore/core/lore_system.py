@@ -536,6 +536,75 @@ class LoreSystem:
         except Exception as e:
             logger.error(f"Error comparing relationships: {e}")
             return False
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="handle_narrative_event",
+        action_description="Handling narrative event: {event_description}",
+        id_from_context=lambda ctx: "lore_system"
+    )
+    async def handle_narrative_event(
+        self, 
+        ctx,
+        event_description: str,
+        affected_lore_ids: List[str] = None,
+        resolution_type: str = "standard",
+        impact_level: str = "medium"
+    ) -> Dict[str, Any]:
+        """
+        Handle impacts of a narrative event on the world lore.
+        
+        Args:
+            ctx: Governance context
+            event_description: Description of the event that occurred
+            affected_lore_ids: Optional list of specifically affected lore IDs
+            resolution_type: Type of resolution (standard, conflict_generation, etc.)
+            impact_level: Impact level (low, medium, high)
+            
+        Returns:
+            Dictionary with update results
+        """
+        await self.ensure_initialized()
+        
+        try:
+            # Log the event
+            logger.info(f"Handling narrative event: {event_description[:100]}...")
+            
+            # Use the generator to evolve lore based on the event
+            if hasattr(self, 'generator') and self.generator:
+                evolution_result = await self.generator.evolve_lore_with_event(event_description)
+            else:
+                evolution_result = {
+                    "status": "no_evolution",
+                    "message": "Lore generator not available"
+                }
+            
+            # Create canonical event log
+            async with get_db_connection_context() as conn:
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    event_description,
+                    tags=["narrative_event", resolution_type, impact_level],
+                    significance=7 if impact_level == "high" else 5 if impact_level == "medium" else 3
+                )
+            
+            # Return results
+            return {
+                "success": True,
+                "event": event_description,
+                "evolution_result": evolution_result,
+                "affected_lore_ids": affected_lore_ids or [],
+                "resolution_type": resolution_type,
+                "impact_level": impact_level
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling narrative event: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "event": event_description
+            }
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
