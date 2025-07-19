@@ -8,6 +8,7 @@ Refactored from logic/npc_agents/decision_engine.py and behavior_evolution.py.
 import logging
 import json
 import asyncio
+import asyncpg
 import random
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Union
@@ -20,7 +21,39 @@ from memory.wrapper import MemorySystem
 from memory.core import MemoryType, MemorySignificance
 from npcs.npc_behavior import BehaviorEvolution
 
+# Import centralized LLM functions
+from logic.chatgpt_integration import get_async_openai_client, get_chatgpt_response, TEMPERATURE_SETTINGS
+import openai
+
 logger = logging.getLogger(__name__)
+
+# -------------------------------------------------------
+# Utility function for OpenAI calls with retry
+# -------------------------------------------------------
+
+async def call_openai_with_retry(client, **kwargs):
+    """
+    Call OpenAI API with retry logic for rate limits.
+    """
+    max_retries = 5
+    initial_delay = 1
+    backoff_factor = 2
+    
+    for attempt in range(max_retries):
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except openai.RateLimitError as e:
+            if attempt < max_retries - 1:
+                delay = initial_delay * (backoff_factor ** attempt)
+                logger.warning(f"Rate limit hit on attempt {attempt+1}/{max_retries}: {e}. Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
+            else:
+                raise
+        except Exception as e:
+            logger.error(f"Error calling OpenAI API: {e}")
+            raise
+    
+    raise Exception("Max retries exceeded")
 
 # -------------------------------------------------------
 # Pydantic models for tool inputs/outputs
@@ -138,32 +171,8 @@ class DecisionContext:
             self.decision_log = self.decision_log[-20:]
 
 # -------------------------------------------------------
-# GPT-based Action Generation
+# GPT-based Action Generation (Refactored)
 # -------------------------------------------------------
-
-gpt_action_agent = Agent(
-    name="NPC GPT Action Generator",
-    instructions="""
-    You are a creative system that, given an NPC's personality (dominance, cruelty, etc.), 
-    emotional state, memories, and environment context, proposes a list of 3-6 possible 
-    actions the NPC might take. Each action should be realistic, psychologically consistent, 
-    and reflect the NPC's character.
-
-    Output format (JSON):
-    {
-      "actions": [
-        {
-          "type": "string",
-          "description": "string - short textual description",
-          "target": "string - e.g. 'player', 'environment', or NPC ID',
-          "stats_influenced": {...}  # optional
-        },
-        ...
-      ]
-    }
-    """,
-    model="gpt-4.1-nano"
-)
 
 async def generate_dynamic_actions_with_gpt(
     npc_data: Dict[str, Any], 
@@ -171,51 +180,124 @@ async def generate_dynamic_actions_with_gpt(
     top_n: int = 6
 ) -> List[Dict[str, Any]]:
     """
-    Calls GPT to generate candidate actions for the NPC, 
-    based on their stats, emotions, relationships, and environment.
+    Calls GPT to generate candidate actions for the NPC using centralized integration.
     
     Args:
         npc_data: NPCStats dict (dominance, cruelty, npc_name, etc.)
         perception: The dictionary from perceive_environment 
-                    (with emotional_state, relevant_memories, relationships, etc.)
         top_n: Max number of actions to keep from GPT output
 
     Returns:
         A list of action dicts
     """
     with function_span("generate_dynamic_actions_with_gpt"):
-        # Prepare prompt
-        prompt_context = {
-            "npc_data": npc_data,
-            "perception": perception
-        }
-        prompt_str = json.dumps(prompt_context, indent=2)
+        # Get async OpenAI client
+        client = get_async_openai_client()
+        
+        # Build messages
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a creative system that generates possible actions for NPCs in a roleplay game.
+        
+Given an NPC's personality stats, emotional state, memories, and environment, propose 3-6 possible actions.
+Each action should be realistic, psychologically consistent, and reflect the NPC's character.
 
-        # Run the GPT Action agent
+Output a JSON object with this exact structure:
+{
+  "actions": [
+    {
+      "type": "string (e.g., 'talk', 'command', 'observe')",
+      "description": "string - short textual description",
+      "target": "string - e.g. 'player', 'environment', or NPC ID",
+      "stats_influenced": {"stat_name": value_change}
+    }
+  ]
+}
+
+Consider:
+- The NPC's dominance and cruelty levels
+- Their current emotional state and intensity
+- Recent memories and relationships
+- The current environment/location
+- Subtle femdom dynamics when appropriate"""
+            },
+            {
+                "role": "user",
+                "content": f"""Generate actions for {npc_data.get('npc_name', 'Unknown NPC')}:
+
+NPC Stats:
+- Dominance: {npc_data.get('dominance', 50)}
+- Cruelty: {npc_data.get('cruelty', 50)}
+- Trust: {npc_data.get('trust', 50)}
+- Personality traits: {json.dumps(npc_data.get('personality_traits', []))}
+
+Current Perception:
+- Location: {perception.get('environment', {}).get('location', 'unknown')}
+- Emotional state: {perception.get('emotional_state', {}).get('current_emotion', {}).get('primary', {}).get('name', 'neutral')}
+- Emotion intensity: {perception.get('emotional_state', {}).get('current_emotion', {}).get('primary', {}).get('intensity', 0.5)}
+- Recent memories: {len(perception.get('relevant_memories', []))} relevant memories
+- Relationships: {json.dumps(list(perception.get('relationships', {}).keys()))}
+
+Generate appropriate actions for this NPC."""
+            }
+        ]
+
         try:
-            result = await Runner.run(gpt_action_agent, prompt_str)
-            raw_output = result.final_output
-
-            # Attempt to parse as JSON
-            parsed = {}
-            try:
-                parsed = json.loads(raw_output)
-            except json.JSONDecodeError:
-                # If GPT doesn't return valid JSON, fallback
-                parsed = {"actions": []}
-
-            actions = parsed.get("actions", [])
-            if not isinstance(actions, list):
-                actions = []
+            # Use centralized client with appropriate temperature
+            temperature = TEMPERATURE_SETTINGS.get("decision", 0.7)
             
+            response = await call_openai_with_retry(
+                client,
+                model="gpt-4.1-nano",
+                messages=messages,
+                temperature=temperature,
+                max_tokens=1000,
+                response_format={"type": "json_object"}  # Force JSON response
+            )
+
+            # Extract response content
+            content = response.choices[0].message.content
+
+            # Parse JSON response
+            try:
+                parsed = json.loads(content)
+                actions = parsed.get("actions", [])
+                if not isinstance(actions, list):
+                    actions = []
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse GPT action response as JSON")
+                # Try to extract actions from text
+                actions = []
+                # Simple fallback parsing could go here
+
             # Limit to top_n
             actions = actions[:top_n]
-
-            return actions
+            
+            # Validate and clean actions
+            valid_actions = []
+            for action in actions:
+                if isinstance(action, dict) and "type" in action and "description" in action:
+                    # Ensure required fields
+                    if "target" not in action:
+                        action["target"] = "player"
+                    if "stats_influenced" not in action:
+                        action["stats_influenced"] = {}
+                    valid_actions.append(action)
+            
+            return valid_actions
 
         except Exception as e:
             logger.error(f"Error generating GPT actions: {e}")
-            return []
+            # Return fallback actions
+            return [
+                {
+                    "type": "observe",
+                    "description": "Observe the situation carefully",
+                    "target": "environment",
+                    "stats_influenced": {}
+                }
+            ]
 
 # -------------------------------------------------------
 # Tool Functions for Decision Making
@@ -983,6 +1065,69 @@ async def update_behavior_evolution(
         )
         
         return adjustments
+
+@function_tool(strict_mode=False)
+async def generate_decision_narrative(
+    ctx: RunContextWrapper[DecisionContext],
+    chosen_action: NPCAction,
+    npc_data: NPCStats,
+    perception: NPCPerception
+) -> str:
+    """
+    Generate a narrative description of the NPC's decision using GPT.
+    
+    Args:
+        chosen_action: The chosen action
+        npc_data: NPC stats
+        perception: NPC perception
+    """
+    with function_span("generate_decision_narrative"):
+        # Get async OpenAI client
+        client = get_async_openai_client()
+        
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a narrative writer for an interactive roleplay game.
+        
+Given an NPC's chosen action and context, write a brief narrative description (1-2 sentences) 
+that captures their internal decision-making process. Include subtle hints about their personality
+and motivations without being too explicit.
+
+Focus on psychological realism and subtle power dynamics when appropriate."""
+            },
+            {
+                "role": "user",
+                "content": f"""{npc_data.npc_name} has decided to: {chosen_action.description}
+
+Context:
+- Action type: {chosen_action.type}
+- Target: {chosen_action.target}
+- Dominance level: {npc_data.dominance}
+- Current emotion: {perception.emotional_state.get('current_emotion', {}).get('primary', {}).get('name', 'neutral')}
+
+Write a brief internal narrative for this decision."""
+            }
+        ]
+
+        try:
+            # Use appropriate temperature for narrative generation
+            temperature = TEMPERATURE_SETTINGS.get("decision", 0.7)
+            
+            response = await call_openai_with_retry(
+                client,
+                model="gpt-4.1-nano",
+                messages=messages,
+                temperature=temperature + 0.1,  # Slightly higher for more creative narratives
+                max_tokens=150
+            )
+            
+            narrative = response.choices[0].message.content
+            return narrative.strip()
+            
+        except Exception as e:
+            logger.error(f"Error generating decision narrative: {e}")
+            return f"{npc_data.npc_name} decides to {chosen_action.description}."
 
 # -------------------------------------------------------
 # Helper Functions for Memory Bias & Scoring
@@ -1824,7 +1969,8 @@ decision_engine_agent = Agent(
         select_action,
         generate_flashback_action,
         enhance_dominance_context,
-        update_behavior_evolution
+        update_behavior_evolution,
+        generate_decision_narrative
     ],
     output_type=NPCAction
 )
