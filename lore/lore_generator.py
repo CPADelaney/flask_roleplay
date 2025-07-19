@@ -1143,73 +1143,83 @@ class FactionGenerator(BaseGenerator):
         """Store a faction in the database."""
         try:
             async with get_db_connection_context() as conn:
-                    # Check if faction already exists
-                    existing = await conn.fetchval("""
-                        SELECT id FROM Factions 
-                        WHERE user_id = $1 AND conversation_id = $2 AND name = $3
-                    """, self.user_id, self.conversation_id, faction_data.get('name'))
-                    
-                    if existing:
-                        logger.info(f"Faction '{faction_data['name']}' already exists with id {existing}")
-                        return existing
-                    
-                    # Generate embedding for faction
-                    embedding_text = f"{faction_data['name']} {faction_data['description']}"
-                    embedding = await generate_embedding(embedding_text)
-                    
-                    # Insert faction
-                    faction_id = await conn.fetchval("""
-                        INSERT INTO Factions (
-                            user_id, conversation_id, name, type, description,
-                            values, goals, hierarchy_type, resources, territory,
-                            meeting_schedule, membership_requirements, 
-                            public_reputation, secret_activities, power_level,
-                            influence_scope, recruitment_methods, leadership_structure,
-                            founding_story, embedding, created_at
-                        ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                            $13, $14, $15, $16, $17, $18, $19, $20, NOW()
-                        ) RETURNING id
-                    """, 
-                        self.user_id, self.conversation_id,
-                        faction_data.get('name'),
-                        faction_data.get('type', 'organization'),
-                        faction_data.get('description'),
-                        faction_data.get('values', []),
-                        faction_data.get('goals', []),
-                        faction_data.get('hierarchy_type', 'formal'),
-                        faction_data.get('resources', []),
-                        faction_data.get('headquarters'),  # Using headquarters as territory
-                        faction_data.get('meeting_schedule'),
-                        faction_data.get('membership_requirements', []),
-                        faction_data.get('public_reputation', 'neutral'),
-                        faction_data.get('secret_activities', []),
-                        faction_data.get('power_level', 5),
-                        faction_data.get('influence_scope', 'local'),
-                        faction_data.get('recruitment_methods', []),
-                        json.dumps(faction_data.get('leadership_structure', {})),
-                        faction_data.get('founding_story', f"Founded as a {faction_data.get('type', 'organization')}."),
-                        embedding
-                    )
-                    
-                    # Handle allies and rivals relationships
-                    if faction_data.get('allies'):
-                        await conn.execute("""
-                            UPDATE Factions SET allies = $1 WHERE id = $2
-                        """, faction_data['allies'], faction_id)
-                    
-                    if faction_data.get('rivals'):
-                        await conn.execute("""
-                            UPDATE Factions SET rivals = $1 WHERE id = $2
-                        """, faction_data['rivals'], faction_id)
-                    
-                    logger.info(f"Stored faction '{faction_data['name']}' with id {faction_id}")
-                    return faction_id
-                    
+                # Check if faction already exists
+                existing = await conn.fetchval("""
+                    SELECT id FROM Factions 
+                    WHERE user_id = $1 AND conversation_id = $2 AND name = $3
+                """, self.user_id, self.conversation_id, faction_data.get('name'))
+                
+                if existing:
+                    logger.info(f"Faction '{faction_data['name']}' already exists with id {existing}")
+                    return existing
+                
+                # Generate embedding for faction
+                embedding_text = f"{faction_data['name']} {faction_data['description']}"
+                embedding = await generate_embedding(embedding_text)
+                
+                # Convert lists to JSON for JSONB columns
+                values_json = json.dumps(faction_data.get('values', []))
+                goals_json = json.dumps(faction_data.get('goals', []))
+                resources_json = json.dumps(faction_data.get('resources', []))
+                membership_req_json = json.dumps(faction_data.get('membership_requirements', []))
+                secret_activities_json = json.dumps(faction_data.get('secret_activities', []))
+                recruitment_methods_json = json.dumps(faction_data.get('recruitment_methods', []))
+                
+                # Insert faction
+                faction_id = await conn.fetchval("""
+                    INSERT INTO Factions (
+                        user_id, conversation_id, name, type, description,
+                        values, goals, hierarchy_type, resources, territory,
+                        meeting_schedule, membership_requirements, 
+                        public_reputation, secret_activities, power_level,
+                        influence_scope, recruitment_methods, leadership_structure,
+                        founding_story, embedding, created_at
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, $14, $15, $16, $17, $18, $19, $20, NOW()
+                    ) RETURNING id
+                """, 
+                    self.user_id, self.conversation_id,
+                    faction_data.get('name'),
+                    faction_data.get('type', 'organization'),
+                    faction_data.get('description'),
+                    values_json,  # JSONB column
+                    goals_json,  # JSONB column
+                    faction_data.get('hierarchy_type', 'formal'),  # Include hierarchy_type
+                    resources_json,  # JSONB column
+                    faction_data.get('headquarters'),  # Using headquarters as territory
+                    faction_data.get('meeting_schedule'),
+                    membership_req_json,  # JSONB column
+                    faction_data.get('public_reputation', 'neutral'),
+                    secret_activities_json,  # JSONB column
+                    faction_data.get('power_level', 5),
+                    faction_data.get('influence_scope', 'local'),
+                    recruitment_methods_json,  # JSONB column
+                    json.dumps(faction_data.get('leadership_structure', {})),  # JSONB column
+                    faction_data.get('founding_story', f"Founded as a {faction_data.get('type', 'organization')}."),
+                    embedding
+                )
+                
+                # Handle allies and rivals relationships
+                if faction_data.get('allies'):
+                    allies_json = json.dumps(faction_data['allies'])
+                    await conn.execute("""
+                        UPDATE Factions SET allies = $1 WHERE id = $2
+                    """, allies_json, faction_id)
+                
+                if faction_data.get('rivals'):
+                    rivals_json = json.dumps(faction_data['rivals'])
+                    await conn.execute("""
+                        UPDATE Factions SET rivals = $1 WHERE id = $2
+                    """, rivals_json, faction_id)
+                
+                logger.info(f"Stored faction '{faction_data['name']}' with id {faction_id}")
+                return faction_id
+                
         except Exception as e:
             logger.error(f"Error storing faction: {e}")
             return 0
-    
+        
     async def _store_cultural_element(self, element_data: Dict[str, Any]) -> int:
         """Store a cultural element in the database."""
         try:
