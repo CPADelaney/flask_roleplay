@@ -5,11 +5,10 @@ These functions provide easy ways for other parts of the game to interact with c
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 from agents import RunContextWrapper, function_tool
 from db.connection import get_db_connection_context
-from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from logic.conflict_system.enhanced_conflict_generation import (
     generate_organic_conflict, analyze_conflict_pressure
 )
@@ -20,14 +19,21 @@ from logic.conflict_system.conflict_tools import (
     get_active_conflicts, get_conflict_details, track_story_beat
 )
 
+# Lazy import to avoid circular dependency
+if TYPE_CHECKING:
+    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+
 logger = logging.getLogger(__name__)
 
 # Global conflict system instances
-conflict_systems: Dict[str, ConflictSystemIntegration] = {}
+conflict_systems: Dict[str, Any] = {}  # Changed from ConflictSystemIntegration to Any
 
 
-async def ensure_conflict_system(user_id: int, conversation_id: int) -> ConflictSystemIntegration:
+async def ensure_conflict_system(user_id: int, conversation_id: int):
     """Ensure conflict system is initialized for user/conversation"""
+    # Lazy import to avoid circular dependency
+    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+    
     key = f"{user_id}:{conversation_id}"
     
     if key not in conflict_systems:
