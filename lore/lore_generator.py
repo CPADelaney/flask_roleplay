@@ -1157,13 +1157,8 @@ class FactionGenerator(BaseGenerator):
                 embedding_text = f"{faction_data['name']} {faction_data['description']}"
                 embedding = await generate_embedding(embedding_text)
                 
-                # Convert lists to JSON for JSONB columns
-                values_json = json.dumps(faction_data.get('values', []))
-                goals_json = json.dumps(faction_data.get('goals', []))
-                resources_json = json.dumps(faction_data.get('resources', []))
-                membership_req_json = json.dumps(faction_data.get('membership_requirements', []))
-                secret_activities_json = json.dumps(faction_data.get('secret_activities', []))
-                recruitment_methods_json = json.dumps(faction_data.get('recruitment_methods', []))
+                # Don't convert lists to JSON - pass them directly as arrays
+                # PostgreSQL will handle the array conversion
                 
                 # Insert faction
                 faction_id = await conn.fetchval("""
@@ -1183,35 +1178,33 @@ class FactionGenerator(BaseGenerator):
                     faction_data.get('name'),
                     faction_data.get('type', 'organization'),
                     faction_data.get('description'),
-                    values_json,  # JSONB column
-                    goals_json,  # JSONB column
-                    faction_data.get('hierarchy_type', 'formal'),  # Include hierarchy_type
-                    resources_json,  # JSONB column
+                    faction_data.get('values', []),  # Pass list directly
+                    faction_data.get('goals', []),   # Pass list directly
+                    faction_data.get('hierarchy_type', 'formal'),
+                    faction_data.get('resources', []),  # Pass list directly
                     faction_data.get('headquarters'),  # Using headquarters as territory
                     faction_data.get('meeting_schedule'),
-                    membership_req_json,  # JSONB column
+                    faction_data.get('membership_requirements', []),  # Pass list directly
                     faction_data.get('public_reputation', 'neutral'),
-                    secret_activities_json,  # JSONB column
+                    faction_data.get('secret_activities', []),  # Pass list directly
                     faction_data.get('power_level', 5),
                     faction_data.get('influence_scope', 'local'),
-                    recruitment_methods_json,  # JSONB column
-                    json.dumps(faction_data.get('leadership_structure', {})),  # JSONB column
+                    faction_data.get('recruitment_methods', []),  # Pass list directly
+                    json.dumps(faction_data.get('leadership_structure', {})),  # Only this is JSONB
                     faction_data.get('founding_story', f"Founded as a {faction_data.get('type', 'organization')}."),
                     embedding
                 )
                 
                 # Handle allies and rivals relationships
                 if faction_data.get('allies'):
-                    allies_json = json.dumps(faction_data['allies'])
                     await conn.execute("""
                         UPDATE Factions SET allies = $1 WHERE id = $2
-                    """, allies_json, faction_id)
+                    """, faction_data['allies'], faction_id)  # Pass list directly
                 
                 if faction_data.get('rivals'):
-                    rivals_json = json.dumps(faction_data['rivals'])
                     await conn.execute("""
                         UPDATE Factions SET rivals = $1 WHERE id = $2
-                    """, rivals_json, faction_id)
+                    """, faction_data['rivals'], faction_id)  # Pass list directly
                 
                 logger.info(f"Stored faction '{faction_data['name']}' with id {faction_id}")
                 return faction_id
@@ -1228,6 +1221,11 @@ class FactionGenerator(BaseGenerator):
                 embedding_text = f"{element_data['name']} {element_data['description']}"
                 embedding = await generate_embedding(embedding_text)
                 
+                # Ensure practiced_by is a list
+                practiced_by = element_data.get('practiced_by', [])
+                if isinstance(practiced_by, str):
+                    practiced_by = [practiced_by]
+                
                 # Insert cultural element
                 element_id = await conn.fetchval("""
                     INSERT INTO CulturalElements (
@@ -1241,7 +1239,7 @@ class FactionGenerator(BaseGenerator):
                     element_data.get('name'),
                     element_data.get('type', 'tradition'),
                     element_data.get('description'),
-                    element_data.get('practiced_by', []),  # Pass list directly for array column
+                    practiced_by,  # Pass list directly
                     element_data.get('significance', 5),
                     element_data.get('historical_origin', ''),
                     embedding
