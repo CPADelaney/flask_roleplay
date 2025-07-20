@@ -59,19 +59,16 @@ _DEFAULT_PERS_MODEL = os.getenv("OPENAI_PERS_MODEL", "gpt-4.1-nano")
 _DEFAULT_STATS_MODEL = os.getenv("OPENAI_STATS_MODEL", "gpt-4.1-nano")
 _DEFAULT_ARCH_MODEL  = os.getenv("OPENAI_ARCH_MODEL", "gpt-4.1-nano")
 
+
 async def _responses_json_call(
     *,
     model: str,
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0.7,
-    max_output_tokens: int | None = None,
-    response_format: dict | None = None,       # <- allow dict, not str
+    max_output_tokens: int | None = None
 ) -> str:
-    """
-    Call the Responses API and return *raw text* (or JSON dumped to text)
-    extracted from the response.
-    """
+
     client = get_async_openai_client()
 
     # ---- build request ---------------------------------------------
@@ -117,6 +114,7 @@ async def _responses_json_call(
             f"_responses_json_call failed (model={model}): {e}", exc_info=True
         )
         raise
+
 def _json_first_obj(text: str) -> dict | None:
     """
     Attempt to parse the *first* JSON object found in `text`.
@@ -1448,7 +1446,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
-                response_format={"type": "json_object"},   # <‑‑ ADD THIS
+                
             )
 
             name = _coerce_name(
@@ -1543,7 +1541,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
-                response_format={"type": "json_object"},   # <‑‑ ADD THIS
+                
             )
 
             data = _json_first_obj(raw_txt) or {}
@@ -1606,7 +1604,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
-                response_format={"type": "json_object"},   # <‑‑ ADD THIS
+                
             )
             data = _json_first_obj(raw_txt) or {}
             return _coerce_personality(data)
@@ -1668,7 +1666,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
-                response_format={"type": "json_object"},   # <‑‑ ADD THIS
+                
             )
             data = _json_first_obj(raw_txt) or {}
             return _coerce_stats(data)
@@ -1736,7 +1734,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
-                response_format={"type": "json_object"},   # <‑‑ ADD THIS
+                
             )
             data = _json_first_obj(raw_txt) or {}
             return _coerce_archetype(data, provided_names=archetype_names)
@@ -1841,7 +1839,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
-                response_format={"type": "json_object"},   # <‑‑ ADD THIS
+                
             )
             data = _json_first_obj(raw_txt) or {}
             return _coerce_schedule(data, day_names=day_names)
