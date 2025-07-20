@@ -1301,12 +1301,14 @@ class MemoryManager:
         await self.initialize()
         
         request = MemoryAddRequest(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
             content=content,
             memory_type=memory_type,
             importance=importance,
             tags=tags or [],
             metadata=metadata or MemoryMetadata(),
-            store_vector=store_vector
+            store_vector=store_vector,
         )
         
         return await self._add_memory(request)
