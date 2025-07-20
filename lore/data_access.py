@@ -33,9 +33,7 @@ class BaseDataAccess:
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.db = None
         self.initialized = False
-        self._connection_pool = None
         
     async def initialize(self) -> bool:
         """
@@ -48,34 +46,19 @@ class BaseDataAccess:
             return True
             
         try:
-            # Initialize database connection
+            # Test database connection
             async with get_db_connection_context() as conn:
+                await conn.fetchval("SELECT 1")
                 self.initialized = True
                 return True
         except Exception as e:
             logger.error(f"Error initializing {self.__class__.__name__}: {e}")
             return False
     
-    async def get_connection_pool(self):
-        """Get the database connection pool."""
-        if not self._connection_pool:
-            # Initialize connection pool
-            self._connection_pool = await asyncpg.create_pool(
-                host=os.getenv("DB_HOST", "localhost"),
-                port=os.getenv("DB_PORT", "5432"),
-                user=os.getenv("DB_USER", "postgres"),
-                password=os.getenv("DB_PASS", "postgres"),
-                database=os.getenv("DB_NAME", "gamedb")
-            )
-        return self._connection_pool
-    
     async def cleanup(self):
         """Clean up resources."""
-        try:
-            if self._connection_pool:
-                await self._connection_pool.close()
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+        # Nothing to clean up since we're using the shared pool
+        pass
     
     async def add_user_conversation_filters(self, query: str, params: List[Any]) -> Tuple[str, List[Any]]:
         """
@@ -156,8 +139,7 @@ class NPCDataAccess(BaseDataAccess):
             query += " LIMIT 1"
             
             # Execute query
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(query, *params)
                     
                 if not row:
@@ -205,8 +187,7 @@ class NPCDataAccess(BaseDataAccess):
             query, params = await self.add_user_conversation_filters(query, params)
             
             # Execute query
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch(query, *params)
                 return [dict(row) for row in rows]
                     
@@ -244,8 +225,7 @@ class NPCDataAccess(BaseDataAccess):
                 "cultural_norms_followed": []
             }
             
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 # Get nationality
                 query = """
                     SELECT n.* FROM Nations n
@@ -441,8 +421,7 @@ class LocationDataAccess(BaseDataAccess):
             query += " LIMIT 1"
             
             # Execute query
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(query, *params)
                 
                 if not row:
@@ -492,8 +471,7 @@ class LocationDataAccess(BaseDataAccess):
                 WHERE location_id = $1
             """
             
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 lore = await conn.fetchrow(query, location_id)
                 
                 if lore:
@@ -535,8 +513,7 @@ class LocationDataAccess(BaseDataAccess):
                 AND lc.connection_type = 'practiced_at'
             """
             
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch(
                     query, 
                     location_id, 
@@ -603,8 +580,7 @@ class LocationDataAccess(BaseDataAccess):
                 AND (lc.connection_type = 'controls' OR lc.connection_type = 'influences')
             """
             
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch(
                     query, 
                     location_id, 
@@ -644,8 +620,7 @@ class LocationDataAccess(BaseDataAccess):
                 LIMIT 1
             """
             
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(query, location_id)
                 
                 if not row:
@@ -656,6 +631,35 @@ class LocationDataAccess(BaseDataAccess):
         except Exception as e:
             logger.error(f"Error getting environmental conditions: {e}")
             return {}
+    
+    async def get_comprehensive_location_context(self, location_id: int) -> Dict[str, Any]:
+        """
+        Get comprehensive context for a location including all related data.
+        
+        Args:
+            location_id: ID of the location
+            
+        Returns:
+            Dictionary with comprehensive location context
+        """
+        # Get basic location with lore
+        location = await self.get_location_with_lore(location_id)
+        
+        # Get cultural context
+        cultural = await self.get_cultural_context_for_location(location_id)
+        
+        # Get political context
+        political = await self.get_political_context_for_location(location_id)
+        
+        # Get environmental conditions
+        environment = await self.get_environmental_conditions(location_id)
+        
+        return {
+            "location": location,
+            "cultural_context": cultural,
+            "political_context": political,
+            "environmental_conditions": environment
+        }
 
 
 class FactionDataAccess(BaseDataAccess):
@@ -685,8 +689,7 @@ class FactionDataAccess(BaseDataAccess):
             query, params = await self.add_user_conversation_filters(query, params)
             
             # Execute query
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(query, *params)
                 
                 if not row:
@@ -706,6 +709,55 @@ class FactionDataAccess(BaseDataAccess):
                     
         except Exception as e:
             logger.error(f"Error getting faction details: {e}")
+            return {}
+    
+    async def get_faction_by_name(self, faction_name: str) -> Dict[str, Any]:
+        """
+        Get faction details by name.
+        
+        Args:
+            faction_name: Name of the faction
+            
+        Returns:
+            Faction details
+        """
+        if not self.initialized:
+            await self.initialize()
+            
+        try:
+            query = """
+                SELECT * FROM Factions
+                WHERE name = $1
+            """
+            params = [faction_name]
+            
+            # Add user/conversation filters
+            query, params = await self.add_user_conversation_filters(query, params)
+            
+            # Add limit
+            query += " LIMIT 1"
+            
+            # Execute query
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(query, *params)
+                
+                if not row:
+                    return {}
+                    
+                faction_data = dict(row)
+                
+                # Parse JSON arrays
+                for field in ["values", "goals", "rivals", "allies"]:
+                    if field in faction_data and isinstance(faction_data[field], str):
+                        try:
+                            faction_data[field] = json.loads(faction_data[field])
+                        except json.JSONDecodeError:
+                            faction_data[field] = []
+                
+                return faction_data
+                    
+        except Exception as e:
+            logger.error(f"Error getting faction by name: {e}")
             return {}
     
     async def get_faction_relationships(self, faction_id: int) -> List[Dict[str, Any]]:
@@ -751,8 +803,7 @@ class FactionDataAccess(BaseDataAccess):
             reverse_query, reverse_params = await self.add_user_conversation_filters(reverse_query, reverse_params)
             
             # Execute queries
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch(query, *params)
                 reverse_rows = await conn.fetch(reverse_query, *reverse_params)
                 
@@ -804,8 +855,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
                     last_accessed = NOW()
             """
             
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 await conn.execute(
                     query,
                     self.user_id,
@@ -850,8 +900,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
             query, params = await self.add_user_conversation_filters(query, params)
             
             # Execute query
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch(query, *params)
                 
                 knowledge_items = []
@@ -943,8 +992,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
             query, params = await self.add_user_conversation_filters(query, params)
             
             # Execute query
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(query, *params)
                 
                 if not row:
@@ -987,8 +1035,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
             
             all_results = []
             
-            connection_pool = await self.get_connection_pool()
-            async with connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 # Search each lore type
                 for lore_type in search_types:
                     if lore_type == "Factions":
@@ -999,7 +1046,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
                         columns = "id, name, category, description"
                     elif lore_type == "CulturalElements":
                         table = "CulturalElements"
-                        columns = "id, name, type, description"
+                        columns = "id, name, element_type as type, description"
                     elif lore_type == "HistoricalEvents":
                         table = "HistoricalEvents"
                         columns = "id, name, date_description, description"
@@ -1029,7 +1076,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
                             continue
                             
                         # Calculate similarity
-                        similarity = compute_similarity(query_embedding, item["embedding"])
+                        similarity = await compute_similarity(query_embedding, item["embedding"])
                         
                         # Only include if above threshold
                         if similarity >= min_relevance:
@@ -1103,7 +1150,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
                         continue
                 
                 # Calculate similarity
-                similarity = compute_similarity(query_embedding, lore_item["embedding"])
+                similarity = await compute_similarity(query_embedding, lore_item["embedding"])
                 
                 # Add to results
                 lore_with_knowledge = {
