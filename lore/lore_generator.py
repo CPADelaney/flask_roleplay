@@ -1221,10 +1221,13 @@ class FactionGenerator(BaseGenerator):
                 embedding_text = f"{element_data['name']} {element_data['description']}"
                 embedding = await generate_embedding(embedding_text)
                 
-                # Ensure practiced_by is a list
+                # Ensure practiced_by is properly formatted
                 practiced_by = element_data.get('practiced_by', [])
                 if isinstance(practiced_by, str):
                     practiced_by = [practiced_by]
+                
+                # Convert list to JSON string for JSONB column
+                practiced_by_json = json.dumps(practiced_by)
                 
                 # Insert cultural element
                 element_id = await conn.fetchval("""
@@ -1239,7 +1242,7 @@ class FactionGenerator(BaseGenerator):
                     element_data.get('name'),
                     element_data.get('type', 'tradition'),
                     element_data.get('description'),
-                    practiced_by,  # Pass list directly
+                    practiced_by_json,  # Pass as JSON string
                     element_data.get('significance', 5),
                     element_data.get('historical_origin', ''),
                     embedding
@@ -1260,8 +1263,15 @@ class FactionGenerator(BaseGenerator):
                 embedding_text = f"{event_data['name']} {event_data['description']}"
                 embedding = await generate_embedding(embedding_text)
                 
-                # Extract participating factions
+                # Extract participating factions and convert to JSON
                 participating_factions = event_data.get('participating_factions', [])
+                involved_entities_json = json.dumps(participating_factions)
+                
+                # Convert other lists to JSON strings
+                consequences_json = json.dumps(event_data.get('consequences', []))
+                disputed_facts_json = json.dumps(event_data.get('disputed_facts', []))
+                commemorations_json = json.dumps(event_data.get('commemorations', []))
+                primary_sources_json = json.dumps(event_data.get('primary_sources', []))
                 
                 # Insert historical event
                 event_id = await conn.fetchval("""
@@ -1280,13 +1290,13 @@ class FactionGenerator(BaseGenerator):
                     event_data.get('date_description', 'Unknown date'),
                     event_data.get('event_type', 'political'),
                     event_data.get('significance', 5),
-                    participating_factions,  # Pass list directly for array column
+                    involved_entities_json,  # Pass as JSON string
                     event_data.get('location'),
-                    event_data.get('consequences', []),  # Pass list directly
+                    consequences_json,  # Pass as JSON string
                     event_data.get('cultural_impact', 'moderate'),
-                    event_data.get('disputed_facts', []),  # Pass list directly
-                    event_data.get('commemorations', []),  # Pass list directly
-                    event_data.get('primary_sources', []),  # Pass list directly
+                    disputed_facts_json,  # Pass as JSON string
+                    commemorations_json,  # Pass as JSON string
+                    primary_sources_json,  # Pass as JSON string
                     embedding
                 )
                 
@@ -1375,6 +1385,10 @@ class FactionGenerator(BaseGenerator):
                 
                 if table_exists:
                     # Use LocationLore table if it exists
+                    # Convert lists to JSON strings
+                    hidden_secrets_json = json.dumps(hidden_secrets)
+                    local_legends_json = json.dumps(local_legends)
+                    
                     lore_id = await conn.fetchval("""
                         INSERT INTO LocationLore (
                             user_id, conversation_id, location_id,
@@ -1384,7 +1398,7 @@ class FactionGenerator(BaseGenerator):
                         RETURNING id
                     """,
                         self.user_id, self.conversation_id, location_id,
-                        founding_story, hidden_secrets, local_legends,
+                        founding_story, hidden_secrets_json, local_legends_json,
                         historical_significance
                     )
                 else:
@@ -1392,6 +1406,10 @@ class FactionGenerator(BaseGenerator):
                     # Generate embedding for the history
                     embedding_text = f"{founding_story} {historical_significance}"
                     embedding = await generate_embedding(embedding_text)
+                    
+                    # Convert lists to JSON strings for JSONB columns
+                    connected_myths_json = json.dumps(local_legends)
+                    related_landmarks_json = json.dumps([])
                     
                     lore_id = await conn.fetchval("""
                         INSERT INTO LocalHistories (
@@ -1408,8 +1426,8 @@ class FactionGenerator(BaseGenerator):
                         "At the founding",
                         8,  # High significance for founding story
                         "foundational",
-                        local_legends,  # Pass list directly for array column
-                        [],  # related_landmarks - pass empty list
+                        connected_myths_json,  # Pass as JSON string
+                        related_landmarks_json,  # Pass as JSON string
                         "origin",
                         embedding
                     )
