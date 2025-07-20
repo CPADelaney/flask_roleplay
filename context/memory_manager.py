@@ -1294,6 +1294,60 @@ class MemoryManager:
             logger.error(f"Error checking memory inclusion: {e}")
             return False
 
+    async def add_memory(self, content: str, memory_type: str, importance: float = 0.5, 
+                        tags: List[str] = None, metadata: Dict[str, Any] = None,
+                        store_vector: bool = True) -> MemoryAddResult:
+        """Public method to add a memory"""
+        await self.initialize()
+        
+        request = MemoryAddRequest(
+            content=content,
+            memory_type=memory_type,
+            importance=importance,
+            tags=tags or [],
+            metadata=metadata or MemoryMetadata(),
+            store_vector=store_vector
+        )
+        
+        return await self._add_memory(request)
+    
+    async def search_memories(self, query_text: str, memory_types: List[str] = None,
+                             tags: List[str] = None, limit: int = 5,
+                             use_vector: bool = True) -> MemorySearchResult:
+        """Public method to search memories"""
+        await self.initialize()
+        
+        request = MemorySearchRequest(
+            query_text=query_text,
+            memory_types=memory_types or [],
+            tags=tags or [],
+            limit=limit,
+            use_vector=use_vector
+        )
+        
+        return await self._search_memories(request)
+    
+    async def get_memory(self, memory_id: str) -> Optional[MemoryModel]:
+        """Public method to get a memory by ID"""
+        await self.initialize()
+        
+        mem = await self._get_memory(memory_id)
+        return MemoryModel.from_memory(mem) if mem else None
+    
+    async def get_recent_memories(self, days: int = 3, memory_types: List[str] = None,
+                                 limit: int = 10) -> List[MemoryModel]:
+        """Public method to get recent memories"""
+        await self.initialize()
+        
+        mems = await self._get_recent_memories(days, memory_types, limit)
+        return [MemoryModel.from_memory(m) for m in mems]
+    
+    async def run_maintenance(self) -> Dict[str, Any]:
+        """Public method to run maintenance"""
+        await self.initialize()
+        
+        return await self._run_maintenance()
+
     async def close(self):
         """Perform cleanup if necessary."""
         logger.info(f"Closing MemoryManager for {self.user_id}:{self.conversation_id}.")
