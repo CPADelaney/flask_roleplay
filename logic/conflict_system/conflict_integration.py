@@ -159,21 +159,41 @@ class ConflictSystemIntegration:
         • Guarantees we return (user_id, conversation_id, wrapper)
         """
         if ctx is None:
+            if self.user_id is None or self.conversation_id is None:
+                raise ValueError(
+                    f"Cannot normalize context: ctx is None and instance has no user_id/conversation_id. "
+                    f"self.user_id={self.user_id}, self.conversation_id={self.conversation_id}"
+                )
             wrapper = RunContextWrapper(
                 {"user_id": self.user_id, "conversation_id": self.conversation_id}
             )
             return self.user_id, self.conversation_id, wrapper
-
+    
         # Decorator sometimes gives a raw dict
         if isinstance(ctx, dict):
             uid = ctx.get("user_id", self.user_id)
             cid = ctx.get("conversation_id", self.conversation_id)
+            
+            # Validate we have valid IDs
+            if uid is None or cid is None:
+                raise ValueError(
+                    f"Cannot normalize context: Missing user_id or conversation_id. "
+                    f"ctx={ctx}, self.user_id={self.user_id}, self.conversation_id={self.conversation_id}"
+                )
+            
             wrapper = RunContextWrapper({"user_id": uid, "conversation_id": cid})
             return uid, cid, wrapper
-
+    
         # Otherwise it should already be a wrapper
         uid = getattr(ctx.context, "user_id", self.user_id)
         cid = getattr(ctx.context, "conversation_id", self.conversation_id)
+        
+        if uid is None or cid is None:
+            raise ValueError(
+                f"Cannot normalize context: Missing user_id or conversation_id from wrapper. "
+                f"wrapper.context={getattr(ctx, 'context', None)}"
+            )
+        
         return uid, cid, ctx  # ctx is already a wrapper
 
     @staticmethod
