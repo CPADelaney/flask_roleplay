@@ -355,47 +355,48 @@ class StoryDirectorContext:
 
     async def handle_action_directive(self, directive: dict) -> dict:
         """Handle an action directive from Nyx"""
-        instruction = directive.get("instruction", "")
-        logging.info(f"[StoryDirector] Processing action directive: {instruction}")
-    
-        if "generate conflict" in instruction.lower():
-            if not self.conflict_manager:
-                logger.error("Conflict manager not available.")
-                return {"result": "error", "message": "Conflict manager not initialized"}
-            
-            params = directive.get("parameters", {})
-            conflict_type = params.get("conflict_type", "standard")
-            
-            # Ensure the conflict manager is properly initialized
-            if not hasattr(self.conflict_manager, 'user_id') or not hasattr(self.conflict_manager, 'conversation_id'):
-                # Re-initialize if needed
-                from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-                self.conflict_manager = await ConflictSystemIntegration.get_instance(
-                    self.user_id, 
-                    self.conversation_id
-                )
-            
-            # Create a proper context for the call
-            conflict_ctx = RunContextWrapper({
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
-            })
-            
-            # Pass the context
-            result = await self.conflict_manager.generate_conflict(conflict_type, ctx=conflict_ctx)
+        try:
+            instruction = directive.get("instruction", "")
+            logging.info(f"[StoryDirector] Processing action directive: {instruction}")
+        
+            if "generate conflict" in instruction.lower():
+                if not self.conflict_manager:
+                    logger.error("Conflict manager not available.")
+                    return {"result": "error", "message": "Conflict manager not initialized"}
                 
-            if result and result.get("conflict_id"):
-                from lore.core import canon
-                async with get_db_connection_context() as conn:
-                    await canon.log_canonical_event(
-                        ctx, conn,
-                        f"Generated new {conflict_type} conflict: {result.get('conflict_name', 'Unknown')}",
-                        tags=["conflict", "generation", conflict_type],
-                        significance=7
+                params = directive.get("parameters", {})
+                conflict_type = params.get("conflict_type", "standard")
+                
+                # Ensure the conflict manager is properly initialized
+                if not hasattr(self.conflict_manager, 'user_id') or not hasattr(self.conflict_manager, 'conversation_id'):
+                    # Re-initialize if needed
+                    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+                    self.conflict_manager = await ConflictSystemIntegration.get_instance(
+                        self.user_id, 
+                        self.conversation_id
                     )
-            
-            return {"result": "conflict_generated", "data": result}
-
+                
+                # Create a proper context for the call
+                conflict_ctx = RunContextWrapper({
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })
+                
+                # Pass the context
+                result = await self.conflict_manager.generate_conflict(conflict_type, ctx=conflict_ctx)
+                    
+                if result and result.get("conflict_id"):
+                    from lore.core import canon
+                    async with get_db_connection_context() as conn:
+                        await canon.log_canonical_event(
+                            ctx, conn,
+                            f"Generated new {conflict_type} conflict: {result.get('conflict_name', 'Unknown')}",
+                            tags=["conflict", "generation", conflict_type],
+                            significance=7
+                        )
+                
+                return {"result": "conflict_generated", "data": result}
+    
             elif "advance narrative" in instruction.lower():
                 params = directive.get("parameters", {})
                 target_stage = params.get("target_stage")
@@ -406,12 +407,16 @@ class StoryDirectorContext:
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                 
                 ctx = RunContextWrapper(context={
-                    'user_id': self.directive_handler.user_id,
-                    'conversation_id': self.directive_handler.conversation_id
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id
                 })
                 
                 try:
-                    from logic.npc_narrative_progression import progress_npc_narrative_stage, NPC_NARRATIVE_STAGES
+                    from logic.npc_narrative_progression import (
+                        progress_npc_narrative_stage, 
+                        get_npc_narrative_stage,
+                        NPC_NARRATIVE_STAGES
+                    )
                     from logic.narrative_events import get_relationship_overview
                     
                     # Find the target stage
