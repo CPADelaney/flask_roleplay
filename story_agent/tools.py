@@ -489,7 +489,7 @@ class ChoiceOption(BaseModel):
 class Requirement(BaseModel):
     """A single prerequisite for a ritual."""
     name: str
-    value: Any
+    value: Union[str, int, float, bool]  # Use concrete types
 
     
 
@@ -533,11 +533,20 @@ class RelationshipRitual(BaseModel):
 
     
 
+class FactionImpact(BaseModel):
+    """Impact on a faction from an event."""
+    faction_name: str
+    impact_type: Literal["power_shift", "resource_loss", "reputation_change", "member_loss", "territory_change"]
+    impact_value: Union[int, float]  # Numeric impact value
+    description: Optional[str] = None
+    
+    
+
 class TriggerEventData(BaseModel):
     """Payload passed to trigger_conflict_event."""
     description: str
     involved_npcs: List[int] = Field(default_factory=list)
-    faction_impacts: Optional[List[Requirement]] = None
+    faction_impacts: Optional[List[FactionImpact]] = None  # Updated
     severity: int = Field(5, ge=1, le=10)
 
     
