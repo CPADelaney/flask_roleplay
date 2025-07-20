@@ -53,6 +53,10 @@ class ConflictSystemIntegration:
     _instances: Dict[str, 'ConflictSystemIntegration'] = {}
 
     def __init__(self, user_id: int, conversation_id: int):
+        # Step 2: Add validation
+        if user_id is None or conversation_id is None:
+            raise ValueError("ConflictSystemIntegration needs valid user & conversation IDs.")
+            
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.agent_id = "conflict_manager"
@@ -145,6 +149,32 @@ class ConflictSystemIntegration:
                 self.is_initialized = True
                 
         return self
+
+    # Step 1: Add helper method
+    def _normalize_ctx(
+        self, ctx: Optional[Union[RunContextWrapper, dict]]
+    ) -> tuple[int, int, RunContextWrapper]:
+        """
+        • Accepts whatever the decorator passes – dict *or* RunContextWrapper *or* None
+        • Guarantees we return (user_id, conversation_id, wrapper)
+        """
+        if ctx is None:
+            wrapper = RunContextWrapper(
+                {"user_id": self.user_id, "conversation_id": self.conversation_id}
+            )
+            return self.user_id, self.conversation_id, wrapper
+
+        # Decorator sometimes gives a raw dict
+        if isinstance(ctx, dict):
+            uid = ctx.get("user_id", self.user_id)
+            cid = ctx.get("conversation_id", self.conversation_id)
+            wrapper = RunContextWrapper({"user_id": uid, "conversation_id": cid})
+            return uid, cid, wrapper
+
+        # Otherwise it should already be a wrapper
+        uid = getattr(ctx.context, "user_id", self.user_id)
+        cid = getattr(ctx.context, "conversation_id", self.conversation_id)
+        return uid, cid, ctx  # ctx is already a wrapper
 
     @staticmethod
     async def get_lore_system(user_id: int, conversation_id: int):
@@ -420,29 +450,13 @@ class ConflictSystemIntegration:
     async def generate_conflict(
         self, 
         conflict_data_or_type: Union[Dict[str, Any], str, None] = None,
-        ctx: Optional[RunContextWrapper] = None  # Add this parameter
+        ctx: Optional[RunContextWrapper] = None
     ) -> Dict[str, Any]:
         """Generate a new conflict with stakeholders and resolution paths"""
         await self.initialize()
         try:
-            # Extract user_id and conversation_id from the context if provided by decorator
-            if ctx and hasattr(ctx, 'context'):
-                if isinstance(ctx.context, dict):
-                    user_id = ctx.context.get('user_id', self.user_id)
-                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
-                else:
-                    # Handle case where context has attributes
-                    user_id = getattr(ctx.context, 'user_id', self.user_id)
-                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
-            else:
-                # Fall back to instance attributes
-                user_id = self.user_id
-                conversation_id = self.conversation_id
-                
-            # Ensure we have proper context
-            if not user_id or not conversation_id:
-                logger.error(f"Missing user_id or conversation_id in ConflictSystemIntegration")
-                return {"success": False, "error": "Missing user or conversation context"}
+            # Step 3: Replace extraction code
+            user_id, conversation_id, ctx = self._normalize_ctx(ctx)
                     
             # Handle string (conflict_type) or None input
             if conflict_data_or_type is None or isinstance(conflict_data_or_type, str):
@@ -492,7 +506,7 @@ class ConflictSystemIntegration:
     
             # Lore event update
             await self.lore_system.handle_narrative_event(
-                self.run_ctx,
+                ctx,
                 f"New conflict generated: {result.get('conflict_name', '')}",
                 affected_lore_ids=result.get('affected_lore_ids', []),
                 resolution_type="conflict_generation",
@@ -537,25 +551,12 @@ class ConflictSystemIntegration:
         await self.initialize()
         
         try:
-            # Extract user_id and conversation_id from the context if provided by decorator
-            if ctx and hasattr(ctx, 'context'):
-                if isinstance(ctx.context, dict):
-                    user_id = ctx.context.get('user_id', self.user_id)
-                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
-                else:
-                    user_id = getattr(ctx.context, 'user_id', self.user_id)
-                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
-            else:
-                user_id = self.user_id
-                conversation_id = self.conversation_id
+            # Step 3: Replace extraction code
+            user_id, conversation_id, ctx = self._normalize_ctx(ctx)
             
-            run_ctx = RunContextWrapper({
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
-            pressure_analysis = await analyze_conflict_pressure(run_ctx)
+            pressure_analysis = await analyze_conflict_pressure(ctx)
             
-            active_conflicts = await get_active_conflicts(run_ctx)
+            active_conflicts = await get_active_conflicts(ctx)
             
             should_generate = await self._should_generate_conflict(
                 pressure_analysis, 
@@ -794,29 +795,15 @@ class ConflictSystemIntegration:
         await self.initialize()
         
         try:
-            # Extract user_id and conversation_id from the context if provided by decorator
-            if ctx and hasattr(ctx, 'context'):
-                if isinstance(ctx.context, dict):
-                    user_id = ctx.context.get('user_id', self.user_id)
-                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
-                else:
-                    user_id = getattr(ctx.context, 'user_id', self.user_id)
-                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
-            else:
-                user_id = self.user_id
-                conversation_id = self.conversation_id
+            # Step 3: Replace extraction code
+            user_id, conversation_id, ctx = self._normalize_ctx(ctx)
             
-            run_ctx = RunContextWrapper({
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
-            
-            conflict = await get_conflict_details(run_ctx, conflict_id)
+            conflict = await get_conflict_details(ctx, conflict_id)
             if not conflict:
                 return {"error": "Conflict not found"}
             
-            stakeholders = await get_conflict_stakeholders(run_ctx, conflict_id)
-            player_involvement = await get_player_involvement(run_ctx, conflict_id)
+            stakeholders = await get_conflict_stakeholders(ctx, conflict_id)
+            player_involvement = await get_player_involvement(ctx, conflict_id)
             
             evolution_prompt = f"""
             A {event_type} event has occurred in the conflict:
@@ -857,7 +844,7 @@ class ConflictSystemIntegration:
             
             if "progress_change" in updates:
                 progress_result = await update_conflict_progress(
-                    run_ctx, conflict_id, updates["progress_change"]
+                    ctx, conflict_id, updates["progress_change"]
                 )
                 results["updates_applied"].append({
                     "type": "progress",
@@ -996,29 +983,15 @@ class ConflictSystemIntegration:
         await self.initialize()
         
         try:
-            # Extract user_id and conversation_id from the context if provided by decorator
-            if ctx and hasattr(ctx, 'context'):
-                if isinstance(ctx.context, dict):
-                    user_id = ctx.context.get('user_id', self.user_id)
-                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
-                else:
-                    user_id = getattr(ctx.context, 'user_id', self.user_id)
-                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
-            else:
-                user_id = self.user_id
-                conversation_id = self.conversation_id
-            
-            run_ctx = RunContextWrapper({
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
+            # Step 3: Replace extraction code
+            user_id, conversation_id, ctx = self._normalize_ctx(ctx)
             
             progress_value = await self._calculate_beat_progress(
                 conflict_id, path_id, beat_description
             )
             
             result = await track_story_beat(
-                run_ctx, conflict_id, path_id, beat_description,
+                ctx, conflict_id, path_id, beat_description,
                 involved_npcs, progress_value
             )
             
@@ -1082,17 +1055,8 @@ class ConflictSystemIntegration:
     async def resolve_conflict(self, resolution_data: Dict[str, Any], ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         await self.initialize()
         try:
-            # Extract user_id and conversation_id from the context if provided by decorator
-            if ctx and hasattr(ctx, 'context'):
-                if isinstance(ctx.context, dict):
-                    user_id = ctx.context.get('user_id', self.user_id)
-                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
-                else:
-                    user_id = getattr(ctx.context, 'user_id', self.user_id)
-                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
-            else:
-                user_id = self.user_id
-                conversation_id = self.conversation_id
+            # Step 3: Replace extraction code
+            user_id, conversation_id, ctx = self._normalize_ctx(ctx)
                 
             story_context = await self._get_story_context()
             enhanced_data = dict(resolution_data)
@@ -1112,7 +1076,7 @@ class ConflictSystemIntegration:
             )
     
             await self.lore_system.handle_narrative_event(
-                self.run_ctx,
+                ctx,
                 f"Conflict resolved: {result.get('description', '')}",
                 affected_lore_ids=result.get('affected_lore_ids', []),
                 resolution_type=enhanced_data.get("resolution_type", "standard"),
@@ -1151,17 +1115,8 @@ class ConflictSystemIntegration:
     async def update_stakeholders(self, stakeholder_data: Dict[str, Any], ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         await self.initialize()
         try:
-            # Extract user_id and conversation_id from the context if provided by decorator
-            if ctx and hasattr(ctx, 'context'):
-                if isinstance(ctx.context, dict):
-                    user_id = ctx.context.get('user_id', self.user_id)
-                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
-                else:
-                    user_id = getattr(ctx.context, 'user_id', self.user_id)
-                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
-            else:
-                user_id = self.user_id
-                conversation_id = self.conversation_id
+            # Step 3: Replace extraction code
+            user_id, conversation_id, ctx = self._normalize_ctx(ctx)
                 
             conflict_context = ConflictContext(user_id, conversation_id)
             
@@ -1212,17 +1167,8 @@ class ConflictSystemIntegration:
     async def manage_manipulation(self, manipulation_data: Dict[str, Any], ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
         await self.initialize()
         try:
-            # Extract user_id and conversation_id from the context if provided by decorator
-            if ctx and hasattr(ctx, 'context'):
-                if isinstance(ctx.context, dict):
-                    user_id = ctx.context.get('user_id', self.user_id)
-                    conversation_id = ctx.context.get('conversation_id', self.conversation_id)
-                else:
-                    user_id = getattr(ctx.context, 'user_id', self.user_id)
-                    conversation_id = getattr(ctx.context, 'conversation_id', self.conversation_id)
-            else:
-                user_id = self.user_id
-                conversation_id = self.conversation_id
+            # Step 3: Replace extraction code
+            user_id, conversation_id, ctx = self._normalize_ctx(ctx)
                 
             conflict_context = ConflictContext(user_id, conversation_id)
             
