@@ -1157,8 +1157,13 @@ class FactionGenerator(BaseGenerator):
                 embedding_text = f"{faction_data['name']} {faction_data['description']}"
                 embedding = await generate_embedding(embedding_text)
                 
-                # Don't convert lists to JSON - pass them directly as arrays
-                # PostgreSQL will handle the array conversion
+                # Convert lists to JSON strings for JSONB columns
+                values_json = json.dumps(faction_data.get('values', []))
+                goals_json = json.dumps(faction_data.get('goals', []))
+                resources_json = json.dumps(faction_data.get('resources', []))
+                membership_requirements_json = json.dumps(faction_data.get('membership_requirements', []))
+                secret_activities_json = json.dumps(faction_data.get('secret_activities', []))
+                recruitment_methods_json = json.dumps(faction_data.get('recruitment_methods', []))
                 
                 # Insert faction
                 faction_id = await conn.fetchval("""
@@ -1178,33 +1183,35 @@ class FactionGenerator(BaseGenerator):
                     faction_data.get('name'),
                     faction_data.get('type', 'organization'),
                     faction_data.get('description'),
-                    faction_data.get('values', []),  # Pass list directly
-                    faction_data.get('goals', []),   # Pass list directly
+                    values_json,  # Pass as JSON string
+                    goals_json,   # Pass as JSON string
                     faction_data.get('hierarchy_type', 'formal'),
-                    faction_data.get('resources', []),  # Pass list directly
+                    resources_json,  # Pass as JSON string
                     faction_data.get('headquarters'),  # Using headquarters as territory
                     faction_data.get('meeting_schedule'),
-                    faction_data.get('membership_requirements', []),  # Pass list directly
+                    membership_requirements_json,  # Pass as JSON string
                     faction_data.get('public_reputation', 'neutral'),
-                    faction_data.get('secret_activities', []),  # Pass list directly
+                    secret_activities_json,  # Pass as JSON string
                     faction_data.get('power_level', 5),
                     faction_data.get('influence_scope', 'local'),
-                    faction_data.get('recruitment_methods', []),  # Pass list directly
-                    json.dumps(faction_data.get('leadership_structure', {})),  # Only this is JSONB
+                    recruitment_methods_json,  # Pass as JSON string
+                    json.dumps(faction_data.get('leadership_structure', {})),  # Already JSONB
                     faction_data.get('founding_story', f"Founded as a {faction_data.get('type', 'organization')}."),
                     embedding
                 )
                 
                 # Handle allies and rivals relationships
                 if faction_data.get('allies'):
+                    allies_json = json.dumps(faction_data['allies'])
                     await conn.execute("""
                         UPDATE Factions SET allies = $1 WHERE id = $2
-                    """, faction_data['allies'], faction_id)  # Pass list directly
+                    """, allies_json, faction_id)  # Pass as JSON string
                 
                 if faction_data.get('rivals'):
+                    rivals_json = json.dumps(faction_data['rivals'])
                     await conn.execute("""
                         UPDATE Factions SET rivals = $1 WHERE id = $2
-                    """, faction_data['rivals'], faction_id)  # Pass list directly
+                    """, rivals_json, faction_id)  # Pass as JSON string
                 
                 logger.info(f"Stored faction '{faction_data['name']}' with id {faction_id}")
                 return faction_id
