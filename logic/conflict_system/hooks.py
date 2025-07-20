@@ -6,9 +6,10 @@ These functions provide easy ways for other parts of the game to interact with c
 
 import logging
 from typing import Dict, List, Any, Optional
-from agents import RunContextWrapper
-from db.connection import get_db_connection_context
 
+from agents import RunContextWrapper, function_tool
+from db.connection import get_db_connection_context
+from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from logic.conflict_system.enhanced_conflict_generation import (
     generate_organic_conflict, analyze_conflict_pressure
 )
@@ -22,21 +23,24 @@ from logic.conflict_system.conflict_tools import (
 logger = logging.getLogger(__name__)
 
 # Global conflict system instances
-conflict_systems = {}
+conflict_systems: Dict[str, ConflictSystemIntegration] = {}
 
-async def ensure_conflict_system(user_id: int, conversation_id: int):
+
+async def ensure_conflict_system(user_id: int, conversation_id: int) -> ConflictSystemIntegration:
     """Ensure conflict system is initialized for user/conversation"""
     key = f"{user_id}:{conversation_id}"
     
-    if key not in _conflict_systems:
+    if key not in conflict_systems:
         system = ConflictSystemIntegration(user_id, conversation_id)
         await system.initialize()
-        _conflict_systems[key] = system
+        conflict_systems[key] = system
         
-    return _conflict_systems[key]
+    return conflict_systems[key]
+
 
 # ===== SIMPLE HOOKS FOR COMMON OPERATIONS =====
 
+@function_tool
 async def check_and_generate_conflict(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
     Check if a new conflict should be generated and create it if appropriate.
@@ -54,6 +58,8 @@ async def check_and_generate_conflict(user_id: int, conversation_id: int) -> Opt
         logger.error(f"Error checking/generating conflict: {e}")
         return None
 
+
+@function_tool
 async def get_player_conflicts(user_id: int, conversation_id: int) -> List[Dict[str, Any]]:
     """
     Get all active conflicts the player is involved in.
@@ -77,10 +83,15 @@ async def get_player_conflicts(user_id: int, conversation_id: int) -> List[Dict[
         logger.error(f"Error getting player conflicts: {e}")
         return []
 
-async def advance_conflict_story(user_id: int, conversation_id: int,
-                               conflict_id: int,
-                               event_description: str,
-                               involved_npcs: Optional[List[int]] = None) -> Dict[str, Any]:
+
+@function_tool
+async def advance_conflict_story(
+    user_id: int, 
+    conversation_id: int,
+    conflict_id: int,
+    event_description: str,
+    involved_npcs: Optional[List[int]] = None
+) -> Dict[str, Any]:
     """
     Advance a conflict's story based on player action or event.
     
@@ -118,10 +129,15 @@ async def advance_conflict_story(user_id: int, conversation_id: int,
         logger.error(f"Error advancing conflict story: {e}")
         return {"success": False, "error": str(e)}
 
-async def trigger_conflict_from_event(user_id: int, conversation_id: int,
-                                    event_type: str,
-                                    event_data: Dict[str, Any],
-                                    preferred_scale: Optional[str] = None) -> Optional[Dict[str, Any]]:
+
+@function_tool
+async def trigger_conflict_from_event(
+    user_id: int, 
+    conversation_id: int,
+    event_type: str,
+    event_data: Dict[str, Any],
+    preferred_scale: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     Trigger conflict generation from a specific game event.
     
@@ -159,8 +175,13 @@ async def trigger_conflict_from_event(user_id: int, conversation_id: int,
         logger.error(f"Error triggering conflict from event: {e}")
         return None
 
-async def get_conflict_summary(user_id: int, conversation_id: int,
-                             conflict_id: int) -> Dict[str, Any]:
+
+@function_tool
+async def get_conflict_summary(
+    user_id: int, 
+    conversation_id: int,
+    conflict_id: int
+) -> Dict[str, Any]:
     """
     Get a summary of a conflict suitable for display.
     
@@ -210,10 +231,15 @@ async def get_conflict_summary(user_id: int, conversation_id: int,
         logger.error(f"Error getting conflict summary: {e}")
         return {"error": str(e)}
 
-async def resolve_conflict_path(user_id: int, conversation_id: int,
-                              conflict_id: int,
-                              path_id: str,
-                              final_action: str) -> Dict[str, Any]:
+
+@function_tool
+async def resolve_conflict_path(
+    user_id: int, 
+    conversation_id: int,
+    conflict_id: int,
+    path_id: str,
+    final_action: str
+) -> Dict[str, Any]:
     """
     Complete a resolution path for a conflict.
     
@@ -251,11 +277,17 @@ async def resolve_conflict_path(user_id: int, conversation_id: int,
         logger.error(f"Error resolving conflict path: {e}")
         return {"success": False, "error": str(e)}
 
+
 # ===== EVENT HANDLERS FOR GAME SYSTEMS =====
 
-async def on_npc_relationship_change(user_id: int, conversation_id: int,
-                                   npc1_id: int, npc2_id: int,
-                                   old_level: int, new_level: int):
+async def on_npc_relationship_change(
+    user_id: int, 
+    conversation_id: int,
+    npc1_id: int, 
+    npc2_id: int,
+    old_level: int, 
+    new_level: int
+):
     """
     Handle NPC relationship changes that might trigger conflicts.
     
@@ -274,9 +306,13 @@ async def on_npc_relationship_change(user_id: int, conversation_id: int,
             preferred_scale="personal"
         )
 
-async def on_faction_power_shift(user_id: int, conversation_id: int,
-                               faction_name: str,
-                               power_change: int):
+
+async def on_faction_power_shift(
+    user_id: int, 
+    conversation_id: int,
+    faction_name: str,
+    power_change: int
+):
     """
     Handle faction power changes that might trigger conflicts.
     
@@ -295,9 +331,13 @@ async def on_faction_power_shift(user_id: int, conversation_id: int,
             preferred_scale="local"
         )
 
-async def on_resource_crisis(user_id: int, conversation_id: int,
-                           resource_type: str,
-                           severity: str):
+
+async def on_resource_crisis(
+    user_id: int, 
+    conversation_id: int,
+    resource_type: str,
+    severity: str
+):
     """
     Handle resource crises that might trigger conflicts.
     
@@ -315,9 +355,13 @@ async def on_resource_crisis(user_id: int, conversation_id: int,
             preferred_scale="regional"
         )
 
-async def on_player_major_action(user_id: int, conversation_id: int,
-                               action_type: str,
-                               action_data: Dict[str, Any]):
+
+async def on_player_major_action(
+    user_id: int, 
+    conversation_id: int,
+    action_type: str,
+    action_data: Dict[str, Any]
+):
     """
     Handle major player actions that affect conflicts.
     
@@ -337,8 +381,12 @@ async def on_player_major_action(user_id: int, conversation_id: int,
                 action_data.get('involved_npcs', [])
             )
 
-def _action_affects_conflict(action_type: str, action_data: Dict[str, Any],
-                           conflict: Dict[str, Any]) -> bool:
+
+def _action_affects_conflict(
+    action_type: str, 
+    action_data: Dict[str, Any],
+    conflict: Dict[str, Any]
+) -> bool:
     """Determine if a player action affects a conflict"""
     # Check if action involves conflict stakeholders
     action_npcs = set(action_data.get('involved_npcs', []))
@@ -356,8 +404,10 @@ def _action_affects_conflict(action_type: str, action_data: Dict[str, Any],
     
     return relevant_actions.get(action_type, False)
 
+
 # ===== CONVENIENCE FUNCTIONS =====
 
+@function_tool
 async def get_world_tension_level(user_id: int, conversation_id: int) -> str:
     """
     Get a simple description of current world tension.
@@ -384,8 +434,13 @@ async def get_world_tension_level(user_id: int, conversation_id: int) -> str:
         logger.error(f"Error getting world tension: {e}")
         return "unknown"
 
-async def suggest_conflict_action(user_id: int, conversation_id: int,
-                                conflict_id: int) -> Dict[str, Any]:
+
+@function_tool
+async def suggest_conflict_action(
+    user_id: int, 
+    conversation_id: int,
+    conflict_id: int
+) -> Dict[str, Any]:
     """
     Get AI suggestion for best player action in a conflict.
     
@@ -398,21 +453,58 @@ async def suggest_conflict_action(user_id: int, conversation_id: int,
         
         conflict = await get_conflict_details(ctx, conflict_id)
         
-        # Use system's agents to analyze
-        # This is a simplified version - you could make this more sophisticated
-        suggestion = {
-            "action": "Investigate key stakeholders",
-            "reasoning": "Understanding motivations will reveal optimal path",
-            "alternatives": [
-                "Support the underdog faction",
-                "Remain neutral and profit",
-                "Expose everyone's secrets"
-            ]
+        if not conflict:
+            return {"error": "Conflict not found"}
+        
+        # Analyze conflict state for suggestions
+        phase = conflict.get('phase', 'escalation')
+        player_role = conflict.get('player_involvement', {}).get('involvement_level', 'none')
+        
+        suggestions = {
+            "action": "",
+            "reasoning": "",
+            "alternatives": []
         }
         
-        return suggestion
+        # Phase-based suggestions
+        if phase == "escalation":
+            if player_role == "none":
+                suggestions["action"] = "Investigate key stakeholders to understand motivations"
+                suggestions["reasoning"] = "Understanding the conflict before committing allows for better strategic positioning"
+                suggestions["alternatives"] = [
+                    "Choose a faction to support early for maximum influence",
+                    "Remain neutral and offer mediation services",
+                    "Exploit the chaos for personal gain"
+                ]
+            else:
+                suggestions["action"] = "Strengthen your position with your chosen faction"
+                suggestions["reasoning"] = "Early support builds trust and unlocks faction-specific resources"
+                suggestions["alternatives"] = [
+                    "Secretly support multiple factions",
+                    "Work to de-escalate tensions",
+                    "Gather compromising information on all parties"
+                ]
+        
+        elif phase == "confrontation":
+            suggestions["action"] = "Focus on the most viable resolution path"
+            suggestions["reasoning"] = "The conflict is reaching its peak - decisive action is needed"
+            suggestions["alternatives"] = [
+                "Switch sides for maximum advantage",
+                "Force a stalemate to maintain the status quo",
+                "Expose hidden agendas to change the game"
+            ]
+        
+        elif phase == "aftermath":
+            suggestions["action"] = "Secure your gains and manage consequences"
+            suggestions["reasoning"] = "The conflict is resolving - focus on the new order"
+            suggestions["alternatives"] = [
+                "Help rebuild and gain gratitude",
+                "Eliminate remaining opposition",
+                "Position yourself for the next conflict"
+            ]
+        
+        return suggestions
         
     except Exception as e:
         logger.error(f"Error suggesting conflict action: {e}")
         return {"error": str(e)}
-
