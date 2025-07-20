@@ -7,6 +7,7 @@ These functions provide easy ways for other parts of the game to interact with c
 import logging
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
+from pydantic import BaseModel, Field, ConfigDict
 from agents import RunContextWrapper, function_tool
 from db.connection import get_db_connection_context
 from logic.conflict_system.enhanced_conflict_generation import (
@@ -24,6 +25,32 @@ if TYPE_CHECKING:
     from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 
 logger = logging.getLogger(__name__)
+
+
+# Pydantic model for strict schema validation
+class EventData(BaseModel):
+    """Data structure for events that can trigger conflicts"""
+    description: str = Field(..., description="What happened that might trigger a conflict")
+    
+    # NPC-related fields (for relationship conflicts)
+    npc1: Optional[int] = Field(None, description="First NPC ID (for relationship events)")
+    npc2: Optional[int] = Field(None, description="Second NPC ID (for relationship events)")
+    
+    # Faction-related fields
+    faction: Optional[str] = Field(None, description="Faction name involved in the event")
+    change: Optional[int] = Field(None, description="Power/influence change amount")
+    
+    # Resource-related fields
+    resource: Optional[str] = Field(None, description="Type of resource (for crisis events)")
+    severity: Optional[str] = Field(None, description="Severity level of the crisis")
+    
+    # Additional context
+    location: Optional[str] = Field(None, description="Where the event occurred")
+    involved_npcs: Optional[List[int]] = Field(default_factory=list, description="List of all involved NPC IDs")
+    
+    # Enforce strict schema - no additional properties allowed
+    model_config = ConfigDict(extra="forbid")
+
 
 # Global conflict system instances
 conflict_systems: Dict[str, Any] = {}  # Changed from ConflictSystemIntegration to Any
@@ -141,7 +168,7 @@ async def trigger_conflict_from_event(
     user_id: int, 
     conversation_id: int,
     event_type: str,
-    event_data: Dict[str, Any],
+    event_data: EventData,
     preferred_scale: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
@@ -167,7 +194,7 @@ async def trigger_conflict_from_event(
                 VALUES ($1, $2, $3, $4, $5)
             """,
             user_id, conversation_id,
-            f"{event_type}: {event_data.get('description', 'Event occurred')}",
+            f"{event_type}: {event_data.description}",
             [event_type, 'trigger'], 7
             )
         
@@ -301,14 +328,15 @@ async def on_npc_relationship_change(
     """
     # Major negative shift might trigger conflict
     if old_level > 0 and new_level < -50:
+        event_data = EventData(
+            description="Relationship deteriorated into hostility",
+            npc1=npc1_id,
+            npc2=npc2_id
+        )
         await trigger_conflict_from_event(
             user_id, conversation_id,
             "relationship_breakdown",
-            {
-                "npc1": npc1_id,
-                "npc2": npc2_id,
-                "description": "Relationship deteriorated into hostility"
-            },
+            event_data,
             preferred_scale="personal"
         )
 
@@ -326,14 +354,15 @@ async def on_faction_power_shift(
     """
     # Major power shifts might trigger conflicts
     if abs(power_change) > 5:
+        event_data = EventData(
+            description=f"{faction_name} {'gained' if power_change > 0 else 'lost'} significant power",
+            faction=faction_name,
+            change=power_change
+        )
         await trigger_conflict_from_event(
             user_id, conversation_id,
             "faction_power_shift",
-            {
-                "faction": faction_name,
-                "change": power_change,
-                "description": f"{faction_name} {'gained' if power_change > 0 else 'lost'} significant power"
-            },
+            event_data,
             preferred_scale="local"
         )
 
@@ -350,14 +379,15 @@ async def on_resource_crisis(
     Called by resource system when scarcity detected.
     """
     if severity in ["critical", "severe"]:
+        event_data = EventData(
+            description=f"{severity.capitalize()} {resource_type} shortage",
+            resource=resource_type,
+            severity=severity
+        )
         await trigger_conflict_from_event(
             user_id, conversation_id,
             "resource_crisis",
-            {
-                "resource": resource_type,
-                "severity": severity,
-                "description": f"{severity.capitalize()} {resource_type} shortage"
-            },
+            event_data,
             preferred_scale="regional"
         )
 
