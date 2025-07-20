@@ -17,11 +17,8 @@ from pydantic import BaseModel, Field, validator
 from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
 
 # Import Agents SDK components
-try:
-    from pydantic_ai import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
-except ImportError:
-    from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
-    from agents import RunContextWrapper
+from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
+from agents import RunContextWrapper
 
 from npcs.npc_agent import NPCAgent, ResourcePool
 from memory.wrapper import MemorySystem
