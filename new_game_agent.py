@@ -1235,12 +1235,21 @@ class NewGameAgent:
             # Use get_instance instead of direct instantiation
             conflict_integration = await ConflictSystemIntegration.get_instance(user_id, conversation_id)
             
-            # No need to pass context - the integration already has user_id and conversation_id
-            initial_conflict = await conflict_integration.generate_conflict({
-                "conflict_type": "major",
-                "intensity": "medium",
-                "player_involvement": "indirect"
+            # Create a proper context for the call
+            conflict_ctx = RunContextWrapper({
+                "user_id": user_id,
+                "conversation_id": conversation_id
             })
+            
+            # Pass the context when calling generate_conflict
+            initial_conflict = await conflict_integration.generate_conflict(
+                {
+                    "conflict_type": "major",
+                    "intensity": "medium",
+                    "player_involvement": "indirect"
+                },
+                ctx=conflict_ctx  # Add this parameter
+            )
             conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
         except Exception as e:
             logging.error(f"Error generating initial conflict: {e}")
