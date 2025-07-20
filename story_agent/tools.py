@@ -17,7 +17,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple, Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 # Agent SDK imports
-from agents import Agent, function_tool, RunContextWrapper, Runner, ModelSettings
+from agents import Agent, function_tool, FunctionTool, RunContextWrapper, Runner, ModelSettings
 
 # Database imports
 from db.connection import get_db_connection_context
@@ -63,6 +63,22 @@ from context.context_config import get_config
 
 # Initialize logger
 logger = logging.getLogger(__name__)
+
+def _ensure_tool(obj):
+    """
+    If obj is already a FunctionTool, return it unchanged.
+    Otherwise wrap it with @function_tool so the framework can find .name, .arguments, etc.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, FunctionTool):
+        return obj
+    if callable(obj):
+        # Wrap the function with @function_tool decorator
+        return function_tool(obj)
+    # If it's not callable or a FunctionTool, log warning and return None
+    logger.warning(f"Object {obj} is not a valid tool - skipping")
+    return None
 
 # Type alias for context
 ContextType = Any
@@ -4266,16 +4282,7 @@ async def get_player_journal_entries(
 
 # ===== TOOL LISTS FOR EXPORT =====
 
-dialogue_tools = [
-    detect_dialogue_mode,
-    generate_dialogue_exchange,
-    exit_dialogue_mode,
-    get_dialogue_suggestions,
-    analyze_dialogue_flow
-]
-
-# Context management tools
-context_tools = [
+context_tools = [t for t in map(_ensure_tool, [
     get_optimized_context,
     retrieve_relevant_memories,
     store_narrative_memory,
@@ -4283,10 +4290,10 @@ context_tools = [
     get_summarized_narrative_context,
     get_available_npcs,
     get_npc_details
-]
+]) if t is not None]
 
 # NPC narrative tools
-npc_narrative_tools = [
+npc_narrative_tools = [t for t in map(_ensure_tool, [
     get_npc_narrative_overview,
     check_all_npc_revelations,
     generate_dynamic_personal_revelation,
@@ -4294,26 +4301,35 @@ npc_narrative_tools = [
     check_relationship_milestones,
     generate_stage_contrast_moment,
     get_npc_stage
-]
+]) if t is not None]
+
+# Dialogue tools
+dialogue_tools = [t for t in map(_ensure_tool, [
+    detect_dialogue_mode,
+    generate_dialogue_exchange,
+    exit_dialogue_mode,
+    get_dialogue_suggestions,
+    analyze_dialogue_flow
+]) if t is not None]
 
 # Activity tools
-activity_tools = [
+activity_tools = [t for t in map(_ensure_tool, [
     analyze_activity,
     get_filtered_activities,
     generate_activity_suggestion,
     suggest_stage_appropriate_activity
-]
+]) if t is not None]
 
 # Relationship tools
-relationship_tools = [
+relationship_tools = [t for t in map(_ensure_tool, [
     check_relationship_events,
     apply_crossroads_choice,
     check_npc_relationship,
     update_relationship_dimensions,
-]
+]) if t is not None]
 
 # Conflict management tools
-conflict_tools = [
+conflict_tools = [t for t in map(_ensure_tool, [
     analyze_conflict_potential,
     generate_conflict_from_analysis,
     analyze_npc_manipulation_potential,
@@ -4323,25 +4339,25 @@ conflict_tools = [
     suggest_potential_manipulation,
     analyze_manipulation_opportunities,
     generate_conflict_beat
-]
+]) if t is not None]
 
 # Resource management tools
-resource_tools = [
+resource_tools = [t for t in map(_ensure_tool, [
     check_resources,
     commit_resources_to_conflict,
     get_player_resources,
     apply_activity_effects,
     get_resource_history
-]
+]) if t is not None]
 
 # Narrative element tools (now includes dialogue tools)
-narrative_tools = [
+narrative_tools = [t for t in map(_ensure_tool, [
     generate_personal_revelation,
     generate_dream_sequence,
     check_relationship_events,
     add_moment_of_clarity,
     get_player_journal_entries
-] + npc_narrative_tools + dialogue_tools  # Add dialogue tools here
+]) if t is not None] + npc_narrative_tools + dialogue_tools  # These are already wrapped
 
 # All tools combined
 all_tools = (
@@ -4350,18 +4366,5 @@ all_tools = (
     relationship_tools +
     conflict_tools +
     resource_tools +
-    narrative_tools  # This now includes dialogue_tools
+    narrative_tools  # This now includes dialogue_tools and npc_narrative_tools
 )
-
-# Export for easy access
-__all__ = [
-    'context_tools',
-    'activity_tools', 
-    'relationship_tools',
-    'conflict_tools',
-    'resource_tools',
-    'narrative_tools',
-    'npc_narrative_tools',
-    'dialogue_tools',  # Add this
-    'all_tools'
-]
