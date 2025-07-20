@@ -5,7 +5,7 @@ from __future__ import annotations
 Pydantic models for context data using the OpenAI Agents SDK
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Dict, List, Any, Optional, Union
 
 # Base metadata models
@@ -21,18 +21,30 @@ class BaseMetadata(BaseModel):
 
 # Specific metadata models
 class MemoryMetadata(BaseMetadata):
-    """Metadata specific to memories"""
+    """Metadata specific to memories."""
+
+    # ---- existing fields --------------------------------------------------
     npc_id: Optional[str] = None
     location_id: Optional[str] = None
     quest_id: Optional[str] = None
     emotion: Optional[str] = None
     context_type: Optional[str] = None
     related_memories: Optional[List[str]] = None
-    
+
     # Consolidation metadata
     group_key: Optional[str] = None
     memory_count: Optional[int] = None
-    time_span: Optional['TimeSpanMetadata'] = None
+    time_span: Optional["TimeSpanMetadata"] = None     # forward‑ref is fine
+
+    # ---- NEW: conflict‑specific keys -------------------------------------
+    conflict_id:    Optional[int]  = None
+    conflict_name:  Optional[str]  = None
+    conflict_type:  Optional[str]  = None
+    phase:          Optional[str]  = None
+    location:       Optional[str]  = None              # the log showed this too
+
+    # ---- NEW: allow any future ad‑hoc keys without blowing up ------------
+    model_config = ConfigDict(extra="allow")           # pydantic v2 way
 
 
 class TimeSpanMetadata(BaseModel):
