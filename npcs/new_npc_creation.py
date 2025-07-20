@@ -66,7 +66,8 @@ async def _responses_json_call(
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0.7,
-    max_output_tokens: int | None = None
+    max_output_tokens: int | None = None,
+    response_format: dict | None = None,   # <- restore, default None
 ) -> str:
 
     client = get_async_openai_client()
