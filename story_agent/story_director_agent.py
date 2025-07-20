@@ -384,18 +384,18 @@ class StoryDirectorContext:
             # Pass the context
             result = await self.conflict_manager.generate_conflict(conflict_type, ctx=conflict_ctx)
                 
-                if result and result.get("conflict_id"):
-                    from lore.core import canon
-                    async with get_db_connection_context() as conn:
-                        await canon.log_canonical_event(
-                            ctx, conn,
-                            f"Generated new {conflict_type} conflict: {result.get('conflict_name', 'Unknown')}",
-                            tags=["conflict", "generation", conflict_type],
-                            significance=7
-                        )
-                
-                return {"result": "conflict_generated", "data": result}
-    
+            if result and result.get("conflict_id"):
+                from lore.core import canon
+                async with get_db_connection_context() as conn:
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"Generated new {conflict_type} conflict: {result.get('conflict_name', 'Unknown')}",
+                        tags=["conflict", "generation", conflict_type],
+                        significance=7
+                    )
+            
+            return {"result": "conflict_generated", "data": result}
+
             elif "advance narrative" in instruction.lower():
                 params = directive.get("parameters", {})
                 target_stage = params.get("target_stage")
