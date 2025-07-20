@@ -2645,6 +2645,7 @@ async def create_all_tables():
                 '''
                 ALTER TABLE Factions
                     ADD COLUMN IF NOT EXISTS hierarchy_type TEXT DEFAULT 'informal';
+                    ADD COLUMN IF NOT EXISTS resources TYPE JSONB USING to_jsonb(tags);
                 ''',
                 '''
                 ALTER TABLE unified_memories 
