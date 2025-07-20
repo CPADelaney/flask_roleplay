@@ -15,18 +15,15 @@ import psutil
 import gc
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple, Union, TypedDict, Set
-from pydantic import BaseModel, Field, validator
 from collections import OrderedDict
+from pydantic import BaseModel, validator, Field
 
 # Import centralized integration functions
 from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
 
 # Import Agents SDK components
-try:
-    from pydantic_ai import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
-except ImportError:
-    from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
-    from agents.tracing import custom_span, generation_span, function_span
+from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
+from agents.tracing import custom_span, generation_span, function_span
 
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
@@ -1068,7 +1065,6 @@ class NPCAgent:
         )
         
         # Convert PerceptionResult to NPCPerception
-        from .npc_decisions import NPCPerception
         perception = NPCPerception(
             environment=result.environment,
             relevant_memories=result.relevant_memories,
@@ -1433,7 +1429,7 @@ Generate a single action as JSON with these fields:
             
         # Update relationships
         if impact["relationship_impacts"]:
-            await self._update_relationships(impact["relationship_impacts"])
+            await self._apply_relationship_impacts(impact["relationship_impacts"])
             
         # Update behavior
         if impact["behavior_changes"]:
@@ -1470,7 +1466,7 @@ Generate a single action as JSON with these fields:
         except Exception as e:
             logger.error(f"Error updating beliefs: {e}")
 
-    async def _update_relationships(self, relationship_impacts: List[Dict[str, Any]]):
+    async def _apply_relationship_impacts(self, relationship_impacts: List[Dict[str, Any]]):
         """Update NPC relationships based on lore changes."""
         try:
             async with get_db_connection_context() as conn:
@@ -1947,7 +1943,7 @@ Generate a single action as JSON with these fields:
             interaction = await self._generate_interaction(target_npc, context)
             
             # Update relationships
-            await self._update_relationships(target_npc, interaction)
+            await self._update_relationship_after_interaction(target_npc, interaction)
             
             return {
                 "status": "success",
@@ -2352,7 +2348,11 @@ Generate a single action as JSON with these fields:
             logger.error(f"Error generating interaction: {e}")
             return None
 
-    async def _update_relationships(self, target_npc: Dict[str, Any], interaction: Dict[str, Any]) -> None:
+    async def _update_relationship_after_interaction(
+        self,
+        target_npc: Dict[str, Any],
+        interaction: Dict[str, Any]
+    ) -> None:
         """Update relationships based on interaction."""
         try:
             # Calculate relationship changes
