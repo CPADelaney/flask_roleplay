@@ -2644,7 +2644,7 @@ async def create_all_tables():
                 ''',
                 '''
                 ALTER TABLE Factions
-                    ADD COLUMN IF NOT EXISTS hierarchy_type TYPE DEFAULT NULL;
+                    ADD COLUMN IF NOT EXISTS hierarchy_type TEXT DEFAULT 'informal';
                 ''',
                 '''
                 ALTER TABLE unified_memories 
