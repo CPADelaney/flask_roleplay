@@ -937,15 +937,9 @@ class MemoryManager:
             importance = self._calculate_group_importance(top_memories)
             
             # Create metadata with TimeSpanMetadata
-            time_span = TimeSpanMetadata(
-                start=min(m.created_at for m in group_list).isoformat(),
-                end=max(m.created_at for m in group_list).isoformat()
-            )
-            
             metadata = MemoryMetadata(
-                group_key=key,
-                memory_count=len(group_list),
-                time_span=time_span
+                context_type="consolidation_summary",
+                related_memories=[m.memory_id for m in group_list]
             )
             
             summary = Memory(
