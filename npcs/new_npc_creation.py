@@ -66,30 +66,57 @@ async def _responses_json_call(
     user_prompt: str,
     temperature: float = 0.7,
     max_output_tokens: int | None = None,
-    response_format: str | None = None,  # If OpenAI structured JSON schema used in future
+    response_format: dict | None = None,       # <- allow dict, not str
 ) -> str:
     """
-    Call Responses API and return *raw text* (string) extracted from the response.
+    Call the Responses API and return *raw text* (or JSON dumped to text)
+    extracted from the response.
     """
     client = get_async_openai_client()
-    try:
-        resp = await client.responses.create(
-            model=model,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=temperature,
-            max_output_tokens=max_output_tokens
-        )
-        txt = (resp.output_text or "").strip()
-        if not txt:
-            raise ValueError("Empty model response.")
-        return txt
-    except Exception as e:
-        logging.error(f"_responses_json_call failed (model={model}): {e}", exc_info=True)
-        raise
 
+    # ---- build request ---------------------------------------------
+    params = dict(
+        model=model,
+        input=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+    )
+    if response_format:
+        params["response_format"] = response_format
+
+    try:
+        resp = await client.responses.create(**params)
+
+        # ---- 1. modern structured output ----------------------------
+        if getattr(resp, "output_json", None):
+            return json.dumps(resp.output_json, ensure_ascii=False)
+
+        # ---- 2. classic free‑form text ------------------------------
+        if getattr(resp, "output_text", None):
+            txt = resp.output_text.strip()
+            if txt:
+                return txt
+
+        # ---- 3. tool /function call branch --------------------------
+        if getattr(resp, "tool_calls", None):
+            for tc in resp.tool_calls:
+                if tc.function and tc.function.arguments:
+                    return tc.function.arguments
+        if getattr(resp, "function_call", None):   # legacy chat style
+            fc = resp.function_call
+            if fc and fc.arguments:
+                return fc.arguments
+
+        raise ValueError("Empty model response.")
+
+    except Exception as e:
+        logging.error(
+            f"_responses_json_call failed (model={model}): {e}", exc_info=True
+        )
+        raise
 def _json_first_obj(text: str) -> dict | None:
     """
     Attempt to parse the *first* JSON object found in `text`.
@@ -1421,6 +1448,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
+                response_format={"type": "json_object"},   # <‑‑ ADD THIS
             )
 
             name = _coerce_name(
@@ -1515,6 +1543,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
+                response_format={"type": "json_object"},   # <‑‑ ADD THIS
             )
 
             data = _json_first_obj(raw_txt) or {}
@@ -1577,6 +1606,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
+                response_format={"type": "json_object"},   # <‑‑ ADD THIS
             )
             data = _json_first_obj(raw_txt) or {}
             return _coerce_personality(data)
@@ -1638,6 +1668,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
+                response_format={"type": "json_object"},   # <‑‑ ADD THIS
             )
             data = _json_first_obj(raw_txt) or {}
             return _coerce_stats(data)
@@ -1705,6 +1736,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
+                response_format={"type": "json_object"},   # <‑‑ ADD THIS
             )
             data = _json_first_obj(raw_txt) or {}
             return _coerce_archetype(data, provided_names=archetype_names)
@@ -1809,6 +1841,7 @@ class NPCCreationHandler:
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
+                response_format={"type": "json_object"},   # <‑‑ ADD THIS
             )
             data = _json_first_obj(raw_txt) or {}
             return _coerce_schedule(data, day_names=day_names)
