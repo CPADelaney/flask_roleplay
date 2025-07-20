@@ -3,19 +3,22 @@ import os
 import json
 import logging
 import functools
-import time 
 import asyncio
 import threading
+import warnings
 import openai
 from typing import Dict, List, Any, Optional, Union
 import numpy as np
+from openai._exceptions import APIStatusError
 from db.connection import get_db_connection_context
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
 
+# Configure module logger
+logger = logging.getLogger(__name__)
+
 # Nyx system imports
 from nyx.nyx_agent_sdk import process_user_input as nyx_process_input
-from nyx.nyx_agent_sdk import NyxContext
 from memory.memory_nyx_integration import get_memory_nyx_bridge
 
 # Try to import prepare_context if available
@@ -24,7 +27,7 @@ try:
     PREPARE_CONTEXT_AVAILABLE = True
 except ImportError:
     PREPARE_CONTEXT_AVAILABLE = False
-    logging.info("prepare_context not available, will use direct prompts")
+    logger.info("prepare_context not available, will use direct prompts")
 
 # Try to import image prompting functions if available
 try:
@@ -32,7 +35,7 @@ try:
     IMAGE_PROMPTING_AVAILABLE = True
 except ImportError:
     IMAGE_PROMPTING_AVAILABLE = False
-    logging.info("Image prompting module not available, using standard prompts")
+    logger.info("Image prompting module not available, using standard prompts")
 
 # Temperature settings for different task types
 TEMPERATURE_SETTINGS = {
@@ -477,7 +480,8 @@ class OpenAIClientManager:
             'base_url': os.getenv("OPENAI_BASE_URL"),
             'timeout': int(os.getenv("OPENAI_TIMEOUT", "600")),
             'max_retries': int(os.getenv("OPENAI_MAX_RETRIES", "2")),
-            'default_model': os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-nano")
+            'default_model': os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-nano"),
+            'default_responses_model': os.getenv("OPENAI_RESPONSES_MODEL", "gpt-4o-mini")
         }
         
         if not config['api_key']:
@@ -526,9 +530,17 @@ class OpenAIClientManager:
                     self._async_client = AsyncOpenAI(**client_config)
         return self._async_client
     
-    def get_agents_model(self, model: Optional[str] = None):
+    def get_assistants_client(self) -> "AsyncOpenAI":
+        """Get AsyncOpenAI client for Assistants API usage."""
+        return self.async_client
+    
+    def get_responses_client(self):
+        """Get AsyncOpenAI client for Responses API usage."""
+        return self.async_client
+    
+    def get_pydantic_responses_model(self, model: str | None = None):
         """
-        Get OpenAI model for agents SDK if available.
+        Get OpenAI model for pydantic-ai Responses SDK.
         
         Args:
             model: Optional model name override
@@ -540,7 +552,7 @@ class OpenAIClientManager:
                 openai_client=self.async_client
             )
         except ImportError:
-            raise RuntimeError("Agents SDK is not installed")
+            raise RuntimeError("pydantic-ai SDK is not installed")
     
     def reset_clients(self):
         """Reset all clients, forcing recreation on next access."""
@@ -548,37 +560,43 @@ class OpenAIClientManager:
             self._sync_client = None
             self._async_client = None
             self._config = self._load_config()
-            logging.info("OpenAI clients reset")
+            logger.info("OpenAI clients reset")
     
-    def update_config(self, **kwargs):
+    def update_config(self, **kwargs) -> None:
         """
-        Update configuration and reset clients.
-        
-        Args:
-            api_key: New API key
-            organization: New organization ID
-            base_url: New base URL
-            timeout: New timeout in seconds
-            max_retries: New max retries
-            default_model: New default model
+        Hot‑reload any subset of client config keys, then rebuild clients.
+    
+        Accepts: api_key • organization • base_url • timeout • max_retries •
+                 default_model • default_responses_model
         """
+        allowed = {
+            "api_key",
+            "organization",
+            "base_url",
+            "timeout",
+            "max_retries",
+            "default_model",
+            "default_responses_model",
+        }
+    
+        invalid = set(kwargs) - allowed
+        if invalid:
+            raise ValueError(f"Unknown OpenAI config keys: {', '.join(invalid)}")
+    
         with self._client_lock:
-            # Update config
-            for key, value in kwargs.items():
-                if key in self._config and value is not None:
-                    self._config[key] = value
-            
-            # Reset clients to use new config
+            self._config.update({k: v for k, v in kwargs.items() if v is not None})
+    
+            # refresh global module settings if they changed
+            if "api_key" in kwargs:
+                openai.api_key = kwargs["api_key"]
+            if "organization" in kwargs:
+                openai.organization = kwargs["organization"]
+    
+            # drop cached clients so they’ll be recreated lazily
             self._sync_client = None
             self._async_client = None
-            
-            # Update global settings
-            if 'api_key' in kwargs:
-                openai.api_key = kwargs['api_key']
-            if 'organization' in kwargs:
-                openai.organization = kwargs['organization']
-                
-            logging.info(f"OpenAI configuration updated: {list(kwargs.keys())}")
+    
+        logger.info("OpenAI configuration updated: %s", ", ".join(kwargs))
     
     @property
     def config(self) -> Dict[str, Any]:
@@ -619,7 +637,11 @@ def get_openai_client():
     DEPRECATED: Use OpenAIClientManager instead.
     Get synchronous OpenAI client for backwards compatibility.
     """
-    logging.warning("get_openai_client() is deprecated. Use OpenAIClientManager().sync_client instead.")
+    warnings.warn(
+        "get_openai_client() is deprecated. Use OpenAIClientManager().sync_client instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     return _client_manager.sync_client
 
 
@@ -628,7 +650,11 @@ def get_async_openai_client():
     DEPRECATED: Use OpenAIClientManager instead.
     Get async OpenAI client for backwards compatibility.
     """
-    logging.warning("get_async_openai_client() is deprecated. Use OpenAIClientManager().async_client instead.")
+    warnings.warn(
+        "get_async_openai_client() is deprecated. Use OpenAIClientManager().async_client instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     return _client_manager.async_client
 
 
@@ -637,13 +663,40 @@ def get_agents_openai_model():
     DEPRECATED: Use OpenAIClientManager instead.
     Get agents SDK model for backwards compatibility.
     """
-    logging.warning("get_agents_openai_model() is deprecated. Use OpenAIClientManager().get_agents_model() instead.")
-    return _client_manager.get_agents_model()
+    warnings.warn(
+        "get_agents_openai_model() is deprecated. Use OpenAIClientManager().get_pydantic_responses_model() instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    return _client_manager.get_pydantic_responses_model()
 
 
 # =====================================================
 # Core functions using the centralized client
 # =====================================================
+
+async def _safe_max_tokens(client, model: str, reserve: int = 256, hard_cap: int = 10000) -> int:
+    """
+    Safely calculate max tokens for a model.
+    
+    Args:
+        client: OpenAI async client
+        model: Model name
+        reserve: Tokens to reserve for prompt (default: 256)
+        hard_cap: Maximum tokens to return (default: 10000)
+        
+    Returns:
+        Safe max tokens value
+    """
+    try:
+        model_info = await client.models.retrieve(id=model)
+        context_window = getattr(model_info, "context_window", 8192)
+    except Exception as e:
+        logger.warning(f"Could not retrieve model info for {model}: {e}")
+        context_window = 8192
+    
+    return min(context_window - reserve, hard_cap)
+
 
 async def build_message_history(conversation_id: int, aggregator_text: str, user_input: str, limit: int = 15):
     """
@@ -675,7 +728,7 @@ async def build_message_history(conversation_id: int, aggregator_text: str, user
         messages.append({"role": "user", "content": user_input})
         return messages
     except Exception as e:
-        logging.error(f"Error building message history: {e}")
+        logger.error(f"Error building message history: {e}")
         # Return a minimal set of messages in case of error
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -684,21 +737,38 @@ async def build_message_history(conversation_id: int, aggregator_text: str, user
         ]
 
 
-def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,)):
-    def decorator_retry(func):
+def retry_with_backoff(
+    *,
+    max_retries: int = 5,
+    initial_delay: float = 1,
+    backoff_factor: float = 2,
+    exceptions: tuple[type[Exception], ...] = (
+        openai.RateLimitError,
+        openai.APIConnectionError,
+        APIStatusError,
+    ),
+):
+    """
+    Decorator for automatic exponential‑backoff retries on common OpenAI errors.
+    """
+    def decorator(func):
         @functools.wraps(func)
-        def wrapper_retry(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             delay = initial_delay
-            for attempt in range(max_retries):
+            for attempt in range(1, max_retries + 1):
                 try:
-                    return func(*args, **kwargs)
-                except exceptions as e:
-                    logging.warning(f"Rate limit hit on attempt {attempt+1}/{max_retries}: {e}. Retrying in {delay} seconds...")
-                    time.sleep(delay)
+                    return await func(*args, **kwargs)
+                except exceptions as exc:               # noqa: BLE001
+                    if attempt == max_retries:
+                        raise
+                    logger.warning(
+                        "OpenAI transient error (%s) on attempt %s/%s – retrying in %.1fs",
+                        type(exc).__name__, attempt, max_retries, delay,
+                    )
+                    await asyncio.sleep(delay)
                     delay *= backoff_factor
-            raise Exception("Max retries exceeded")
-        return wrapper_retry
-    return decorator_retry
+        return wrapper
+    return decorator
 
 
 @retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,))
@@ -731,7 +801,7 @@ async def get_chatgpt_response(
                 conversation_id
             )
             if not row:
-                logging.error(f"Conversation {conversation_id} not found")
+                logger.error(f"Conversation {conversation_id} not found")
                 return {
                     "type": "text",
                     "response": "Error: Conversation not found",
@@ -739,7 +809,7 @@ async def get_chatgpt_response(
                 }
             user_id = row['user_id']
     except Exception as e:
-        logging.error(f"Error getting user_id for conversation {conversation_id}: {e}")
+        logger.error(f"Error getting user_id for conversation {conversation_id}: {e}")
         return {
             "type": "text",
             "response": "Error: Database error",
@@ -820,10 +890,10 @@ async def get_chatgpt_response(
                 }
             else:
                 # Fall back to regular processing if Nyx fails
-                logging.warning(f"Nyx processing failed: {nyx_result.get('error')}, falling back to regular processing")
+                logger.warning(f"Nyx processing failed: {nyx_result.get('error')}, falling back to regular processing")
                 
         except Exception as e:
-            logging.error(f"Error in Nyx integration: {e}", exc_info=True)
+            logger.error(f"Error in Nyx integration: {e}", exc_info=True)
             # Fall back to regular processing
 
     # 2) Regular OpenAI processing (fallback or when Nyx is disabled)
@@ -833,27 +903,35 @@ async def get_chatgpt_response(
     if IMAGE_PROMPTING_AVAILABLE:
         try:
             image_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
-            logging.debug("Using image-aware system prompt")
+            logger.debug("Using image-aware system prompt")
+        except openai.BadRequestError as e:
+            # Model doesn't support vision
+            logger.info(f"Model doesn't support vision features: {e}")
+            image_prompt = None
         except Exception as e:
-            logging.info(f"Could not generate image prompt, using regular prompt: {e}")
+            logger.info(f"Could not generate image prompt, using regular prompt: {e}")
             image_prompt = None
     
     # Use image prompt if available, otherwise use regular SYSTEM_PROMPT
     primary_system_prompt = image_prompt if image_prompt else SYSTEM_PROMPT
 
-    # Get client from centralized manager
-    openai_client = _client_manager.sync_client
+    # Get async client from centralized manager
+    client = _client_manager.async_client
 
     # If reflection is OFF, do the single-step call as before
     if not reflection_enabled:
         # Build message history (past user & assistant messages), up to 15
         messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
 
-        response = openai_client.chat.completions.create(
-            model="gpt-4.1-nano",
+        # Get proper token limit for model
+        model = "gpt-4.1-nano"
+        max_tokens = await _safe_max_tokens(client, model)
+        
+        response = await client.chat.completions.create(
+            model=model,
             messages=messages,
             temperature=0.2,
-            max_tokens=10_000,
+            max_tokens=max_tokens,
             frequency_penalty=0.0,
             functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
             function_call={"name": "apply_universal_update"},
@@ -871,7 +949,7 @@ async def get_chatgpt_response(
             try:
                 parsed_args = safe_json_loads(cleaned_args)
             except Exception:
-                logging.exception("Error parsing function call arguments")
+                logger.exception("Error parsing function call arguments")
 
             # Optionally ensure scene_data...
             _ensure_default_scene_data(parsed_args)
@@ -919,7 +997,7 @@ DO NOT produce user-facing text here; only the JSON.
             }
         ]
 
-        reflection_response = openai_client.chat.completions.create(
+        reflection_response = await client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=reflection_messages,
             temperature=0.2,
@@ -941,7 +1019,7 @@ DO NOT produce user-facing text here; only the JSON.
             private_goals = reflection_data.get("private_goals", [])
             predicted_futures = reflection_data.get("predicted_futures", [])
         except Exception:
-            logging.warning("Reflection JSON parse failed. Storing raw text.")
+            logger.warning("Reflection JSON parse failed. Storing raw text.")
             reflection_notes = reflection_msg
 
         # Store reflection in memory system if available
@@ -959,7 +1037,7 @@ DO NOT produce user-facing text here; only the JSON.
                 }
             )
         except Exception as e:
-            logging.warning(f"Could not store reflection in memory: {e}")
+            logger.warning(f"Could not store reflection in memory: {e}")
 
         # Step B: Final (Public) Answer
         final_messages = [
@@ -975,11 +1053,15 @@ DO NOT produce user-facing text here; only the JSON.
             {"role": "user", "content": user_input}
         ]
 
-        final_response = openai_client.chat.completions.create(
-            model="gpt-4.1-nano",
+        # Get proper token limit for model
+        model = "gpt-4.1-nano"
+        max_tokens = await _safe_max_tokens(client, model)
+        
+        final_response = await client.chat.completions.create(
+            model=model,
             messages=final_messages,
             temperature=0.2,
-            max_tokens=10000,
+            max_tokens=max_tokens,
             frequency_penalty=0.0,
             functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
             function_call={"name": "apply_universal_update"}
@@ -995,7 +1077,7 @@ DO NOT produce user-facing text here; only the JSON.
             try:
                 parsed_args = safe_json_loads(cleaned_args)
             except Exception:
-                logging.exception("Error parsing function call arguments")
+                logger.exception("Error parsing function call arguments")
 
             _ensure_default_scene_data(parsed_args)
 
@@ -1017,7 +1099,7 @@ DO NOT produce user-facing text here; only the JSON.
 
 def _clean_function_args(fn_args_str: str) -> str:
     """Helper to remove code-block fences or truncated JSON."""
-    logging.debug("Raw function call arguments: %s", fn_args_str)
+    logger.debug("Raw function call arguments: %s", fn_args_str)
     if fn_args_str.startswith("```"):
         lines = fn_args_str.splitlines()
         if lines and lines[0].startswith("```"):
@@ -1025,7 +1107,7 @@ def _clean_function_args(fn_args_str: str) -> str:
         if lines and lines[-1].startswith("```"):
             lines = lines[:-1]
         fn_args_str = "\n".join(lines).strip()
-        logging.debug("Arguments after stripping markdown: %s", fn_args_str)
+        logger.debug("Arguments after stripping markdown: %s", fn_args_str)
 
     # Handle empty or malformed args
     if not fn_args_str.strip():
@@ -1033,8 +1115,15 @@ def _clean_function_args(fn_args_str: str) -> str:
     if not fn_args_str.endswith("}"):
         last_brace_index = fn_args_str.rfind("}")
         if last_brace_index != -1:
-            logging.warning("Function call arguments appear truncated. Truncating string at index %s", last_brace_index)
+            logger.warning("Function call arguments appear truncated. Truncating string at index %s", last_brace_index)
             fn_args_str = fn_args_str[:last_brace_index+1]
+    
+    # Validate JSON
+    try:
+        json.loads(fn_args_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Malformed JSON from model: {e}")
+    
     return fn_args_str
 
 
@@ -1099,19 +1188,22 @@ async def generate_text_completion(
     client = _client_manager.async_client
     
     try:
+        # Build extra parameters for stop sequences
+        extra_params = {"stop": stop_sequences} if stop_sequences else {}
+        
         response = await client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            stop=stop_sequences,
-            frequency_penalty=0.0
+            frequency_penalty=0.0,
+            **extra_params
         )
         
         return response.choices[0].message.content.strip()
         
     except Exception as e:
-        logging.error(f"Error in generate_text_completion: {e}")
+        logger.error(f"Error in generate_text_completion: {e}")
         return "I'm having trouble processing your request right now."
 
 
@@ -1120,13 +1212,13 @@ async def get_text_embedding(text: str, model: str = "text-embedding-3-small", d
     Get embedding vector for text using OpenAI's latest embedding models.
     """
     try:
-        # Get async client from centralized manager
+        # Get async client from centralized manager before retry loop
         client = _client_manager.async_client
         
         # Validate model choice
         valid_models = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
         if model not in valid_models:
-            logging.warning(f"Invalid model {model}, using text-embedding-3-small")
+            logger.warning(f"Invalid model {model}, using text-embedding-3-small")
             model = "text-embedding-3-small"
         
         # Check dimensions parameter
@@ -1138,22 +1230,22 @@ async def get_text_embedding(text: str, model: str = "text-embedding-3-small", d
         
         if dimensions:
             if dimensions > max_dimensions[model]:
-                logging.warning(f"Requested dimensions {dimensions} exceeds max {max_dimensions[model]} for {model}")
+                logger.warning(f"Requested dimensions {dimensions} exceeds max {max_dimensions[model]} for {model}")
                 dimensions = None
             elif dimensions < 1:
-                logging.warning(f"Invalid dimensions {dimensions}, must be positive")
+                logger.warning(f"Invalid dimensions {dimensions}, must be positive")
                 dimensions = None
         
         # Clean and validate text
         text = text.replace("\n", " ").strip()
         if not text:
-            logging.warning("Empty text provided for embedding, returning zero vector")
+            logger.warning("Empty text provided for embedding, returning zero vector")
             return [0.0] * (dimensions or max_dimensions[model])
         
         # Truncate if too long (simplified version)
         max_chars = 32000  # ~8000 tokens
         if len(text) > max_chars:
-            logging.warning(f"Text too long ({len(text)} chars), truncating to {max_chars} chars")
+            logger.warning(f"Text too long ({len(text)} chars), truncating to {max_chars} chars")
             text = text[:max_chars] + "..."
         
         # Build request parameters
@@ -1180,14 +1272,14 @@ async def get_text_embedding(text: str, model: str = "text-embedding-3-small", d
             except Exception as e:
                 if attempt < 2:
                     wait_time = 2 ** (attempt + 1)
-                    logging.warning(f"Embedding error on attempt {attempt + 1}, retrying in {wait_time}s: {e}")
+                    logger.warning(f"Embedding error on attempt {attempt + 1}, retrying in {wait_time}s: {e}")
                     await asyncio.sleep(wait_time)
                 else:
-                    logging.error(f"Failed to get embedding after retries: {e}")
+                    logger.error(f"Failed to get embedding after retries: {e}")
                     raise
         
     except Exception as e:
-        logging.error(f"Error getting text embedding: {e}")
+        logger.error(f"Error getting text embedding: {e}")
         
         # Return zero vector with appropriate dimensions
         default_dims = 1536
@@ -1226,7 +1318,7 @@ async def create_semantic_abstraction(memory_text: str) -> str:
             task_type="abstraction"
         )
     except Exception as e:
-        logging.error(f"Error creating semantic abstraction: {e}")
+        logger.error(f"Error creating semantic abstraction: {e}")
         words = memory_text.split()
         if len(words) > 15:
             return " ".join(words[:15]) + "... [Pattern detected]"
@@ -1283,7 +1375,7 @@ async def generate_reflection(
             task_type="reflection"
         )
     except Exception as e:
-        logging.error(f"Error generating reflection: {e}")
+        logger.error(f"Error generating reflection: {e}")
         # Return a simple reflection as fallback
         if memory_texts:
             return f"Based on what I've observed, {memory_texts[0]} This seems to be a pattern worth noting."
@@ -1355,7 +1447,7 @@ async def analyze_preferences(text: str) -> Dict[str, Any]:
             return result
             
     except Exception as e:
-        logging.error(f"Error analyzing preferences: {e}")
+        logger.error(f"Error analyzing preferences: {e}")
         return {
             "explicit_preferences": [],
             "implicit_preferences": [],
@@ -1402,3 +1494,38 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
     
     # Compute cosine similarity
     return np.dot(a_arr, b_arr) / (norm_a * norm_b)
+
+
+@retry_with_backoff()               # ← decorator now uses defaults
+async def _responses_json_call(
+    *,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    max_output_tokens: int = 1024,
+    temperature: float = 0.7,
+) -> dict[str, Any]:
+    """Call the *Responses* API and return parsed JSON (or raw text fallback)."""
+    client = _client_manager.get_responses_client()
+
+    resp = await client.responses.create(
+        model=model,
+        input=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+    )
+
+    # Accept both new (`output_text`) and legacy (`output`) attributes.
+    raw_text = getattr(resp, "output_text", None) or getattr(resp, "output", "")
+    raw_text = raw_text.strip()
+
+    if not raw_text:
+        raise ValueError("Responses API returned empty output_text")
+
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        return {"raw_response": raw_text}
