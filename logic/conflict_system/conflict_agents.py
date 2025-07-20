@@ -199,6 +199,7 @@ Stakeholder Management Assistant. Manage:
 - All through a femdom narrative lens
 
 Focus on complex interpersonal dynamics and power exchanges.
+Return your analysis and updates as JSON.
 """,
     
     "manipulation": """
