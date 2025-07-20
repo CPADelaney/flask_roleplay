@@ -47,6 +47,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 
 from openai.types.beta.assistant import Assistant
@@ -93,6 +94,28 @@ def get_client():
         _client = get_async_openai_client()
     return _client
 
+def stringify_metadata(metadata: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Convert all metadata values to strings for OpenAI API compatibility.
+    OpenAI requires all metadata values to be strings.
+    """
+    if not metadata:
+        return {}
+    
+    result = {}
+    for key, value in metadata.items():
+        if isinstance(value, (dict, list)):
+            # For complex types, JSON serialize them
+            result[key] = json.dumps(value)
+        elif value is None:
+            result[key] = "null"
+        elif isinstance(value, bool):
+            result[key] = str(value).lower()
+        else:
+            result[key] = str(value)
+    
+    return result
+
 
 # ╭─────────────────────── Context Management ──────────────────────────────╮
 @dataclass
@@ -108,28 +131,6 @@ class ConflictContext:
             self.resource_manager = ResourceManager(self.user_id, self.conversation_id)
         if self.cached_data is None:
             self.cached_data = {}
-
-    def stringify_metadata(metadata: Dict[str, Any]) -> Dict[str, str]:
-        """
-        Convert all metadata values to strings for OpenAI API compatibility.
-        OpenAI requires all metadata values to be strings.
-        """
-        if not metadata:
-            return {}
-        
-        result = {}
-        for key, value in metadata.items():
-            if isinstance(value, (dict, list)):
-                # For complex types, JSON serialize them
-                result[key] = json.dumps(value)
-            elif value is None:
-                result[key] = "null"
-            elif isinstance(value, bool):
-                result[key] = str(value).lower()
-            else:
-                result[key] = str(value)
-        
-        return result
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for metadata storage."""
