@@ -238,8 +238,8 @@ class ConflictSystemIntegration:
             try:
                 cls._npc_systems[key] = IntegratedNPCSystem(user_id, conversation_id)
                 # Only initialize if not already initialized
-                if not cls._npc_systems[key].initialized:
-                    await cls._npc_systems[key].initialize()
+                if not npc_system.initialized:  # <-- Change to .is_initialized
+                    await npc_system.initialize()
                 logger.info(f"Created new IntegratedNPCSystem for {key}")
             except Exception as e:
                 logger.error(f"Error creating NPC system: {e}")
