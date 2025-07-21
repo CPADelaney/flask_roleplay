@@ -1192,8 +1192,8 @@ class MasterCoordinationAgent:
                   trace_id=self.trace_id,
                   metadata={"user_id": user_id, "conversation_id": conversation_id}):
             # Load existing world state
-            world_data = await self.world_lore_manager.get_world_data(
-                RunContextWrapper(context=None), "main"
+            await self.world_lore_manager.get_world_data(
+                self.world_lore_manager.create_run_context(), "main"
             )
             
             # Initialize coordination memory
