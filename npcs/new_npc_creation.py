@@ -67,53 +67,70 @@ async def _responses_json_call(
     user_prompt: str,
     temperature: float = 0.7,
     max_output_tokens: int | None = None,
-    response_format: dict | None = None,   # <- restore, default None
+    response_format: dict | None = None,          # ➟ keep, default=None
+    previous_response_id: str | None = None,      # ➟ new, optional thread-continue
 ) -> str:
-
+    """
+    Wrapper for the new `client.responses.create()` endpoint.
+    Returns the best-effort STRING representation of whatever the
+    model produced: JSON (stringified), plain text, or arguments for a tool call.
+    """
     client = get_async_openai_client()
 
-    # ---- build request ---------------------------------------------
-    params = dict(
-        model=model,
-        input=[
+    params = {
+        "model": model,
+        "input": [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_prompt},
         ],
-        temperature=temperature,
-        max_output_tokens=max_output_tokens,
-    )
+        "temperature": temperature,
+        "max_output_tokens": max_output_tokens,
+    }
     if response_format:
-        params["response_format"] = response_format
+        params["response_format"] = response_format            # e.g. {"type":"json_object"}
+    if previous_response_id:
+        params["previous_response_id"] = previous_response_id  # thread continuity
 
     try:
         resp = await client.responses.create(**params)
 
-        # ---- 1. modern structured output ----------------------------
+        # ── 1️⃣  preferred: look at the generic output list ──────────────────
+        if getattr(resp, "output", None):            # SDK ≥1.14
+            for piece in resp.output:                # keep first usable
+                if piece.type == "output_json":
+                    # piece.json is already a Python dict
+                    return json.dumps(piece.json, ensure_ascii=False)
+                if piece.type == "output_text" and piece.text.strip():
+                    return piece.text.strip()
+
+        # ── 2️⃣  legacy shims kept by SDK for a while ────────────────────────
         if getattr(resp, "output_json", None):
             return json.dumps(resp.output_json, ensure_ascii=False)
-
-        # ---- 2. classic free‑form text ------------------------------
         if getattr(resp, "output_text", None):
             txt = resp.output_text.strip()
             if txt:
                 return txt
 
-        # ---- 3. tool /function call branch --------------------------
-        if getattr(resp, "tool_calls", None):
-            for tc in resp.tool_calls:
-                if tc.function and tc.function.arguments:
-                    return tc.function.arguments
-        if getattr(resp, "function_call", None):   # legacy chat style
-            fc = resp.function_call
-            if fc and fc.arguments:
-                return fc.arguments
+        # ── 3️⃣  tool / function calls ───────────────────────────────────────
+        for accessor in ("tool_calls", "function_call"):        # SDK exposes both
+            tc = getattr(resp, accessor, None)
+            if not tc:
+                continue
+            if isinstance(tc, list):                            # tool_calls
+                for call in tc:
+                    if getattr(call, "function", None):
+                        args = call.function.arguments
+                        if args:                                # args already dict
+                            return json.dumps(args, ensure_ascii=False)
+            else:                                               # single function_call
+                if getattr(tc, "arguments", None):
+                    return json.dumps(tc.arguments, ensure_ascii=False)
 
+        # ── 4️⃣  truly empty / error case ────────────────────────────────────
         raise ValueError("Empty model response.")
 
     except Exception as e:
-        logging.error(
-            f"_responses_json_call failed (model={model}): {e}", exc_info=True
-        )
+        logging.error(f"_responses_json_call failed (model={model}): {e}", exc_info=True)
         raise
 
 def _json_first_obj(text: str) -> dict | None:
