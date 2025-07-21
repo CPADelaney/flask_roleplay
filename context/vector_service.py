@@ -208,6 +208,43 @@ class VectorService:
             await self.initialize()
         return self.initialized and self.enabled
     
+    async def add_memory(self, memory_id: str, content: str, memory_type: str = "observation", 
+                         importance: float = 0.5, tags: Optional[List[str]] = None) -> bool:
+        """
+        Public method to add a memory to the vector database.
+        
+        Args:
+            memory_id: Unique identifier for the memory
+            content: Memory content text
+            memory_type: Type of memory
+            importance: Importance score (0-1)
+            tags: Optional list of tags
+            
+        Returns:
+            bool: Success status
+        """
+        if not await self.is_initialized():
+            return False
+        
+        future = asyncio.get_event_loop().create_future()
+        await self.batch_queue.put({
+            "operation": "add_memory",
+            "data": {
+                "memory_id": memory_id,
+                "content": content,
+                "memory_type": memory_type,
+                "importance": importance,
+                "tags": tags or []
+            },
+            "future": future
+        })
+        
+        try:
+            return await future
+        except Exception as e:
+            logger.error(f"Error in add_memory: {e}")
+            return False
+    
     async def close(self):
         """Close the vector service"""
         if self.batch_task:
