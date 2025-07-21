@@ -59,7 +59,7 @@ class AgentContext:
         Must be called from an async function after creating this context.
         """
         from nyx.integrate import get_central_governance
-        governance = await (self.user_id, self.conversation_id)
+        governance = await get_central_governance(self.user_id, self.conversation_id)  # FIXED
         self.directive_handler = DirectiveHandler(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
