@@ -598,20 +598,42 @@ class ConflictSystemIntegration:
                 impact_level="medium"
             )
             
-            # Create memory
+            # Create memory - only if we have a valid integer conflict_id
             if self.memory_manager:
+                # Extract the conflict_id - it might be a string or already an int
+                conflict_id_raw = result.get("conflict_id")
+                conflict_id = None
+                
+                # Try to parse as integer if it's a string
+                if isinstance(conflict_id_raw, str):
+                    # Check if it's a numeric string
+                    if conflict_id_raw.isdigit():
+                        conflict_id = int(conflict_id_raw)
+                    # Otherwise, don't include conflict_id in metadata
+                elif isinstance(conflict_id_raw, int):
+                    conflict_id = conflict_id_raw
+                
+                # Build metadata conditionally
+                metadata = {
+                    "conflict_name": result.get("conflict_name", ""),
+                    "conflict_type": result.get("conflict_type", ""),
+                    "phase": "brewing",
+                    "location": enhanced_data.get("location", "Unknown")
+                }
+                
+                # Only add conflict_id if it's a valid integer
+                if conflict_id is not None:
+                    metadata["conflict_id"] = conflict_id
+                else:
+                    # Store the string ID in a different field
+                    metadata["conflict_identifier"] = str(conflict_id_raw) if conflict_id_raw else None
+                
                 await self.memory_manager.add_memory(
                     content=f"New conflict generated: {result.get('conflict_name', '')}",
                     memory_type="conflict_generation",
                     importance=0.8,
                     tags=["conflict", "generation"],
-                    metadata={
-                        "conflict_id": result.get("conflict_id"),
-                        "conflict_name": result.get("conflict_name", ""),
-                        "conflict_type": result.get("conflict_type", ""),
-                        "phase": "brewing",
-                        "location": enhanced_data.get("location", "Unknown")
-                    }
+                    metadata=metadata
                 )
     
             return {
@@ -1169,16 +1191,31 @@ class ConflictSystemIntegration:
             )
             
             if self.memory_manager:
+                # Safely handle conflict_id which might be string or int
+                conflict_id_raw = enhanced_data.get("conflict_id")
+                conflict_id = None
+                
+                if isinstance(conflict_id_raw, str) and conflict_id_raw.isdigit():
+                    conflict_id = int(conflict_id_raw)
+                elif isinstance(conflict_id_raw, int):
+                    conflict_id = conflict_id_raw
+                
+                metadata = {
+                    "resolution_type": enhanced_data.get("resolution_type", "standard"),
+                    "impact_level": "medium"
+                }
+                
+                if conflict_id is not None:
+                    metadata["conflict_id"] = conflict_id
+                else:
+                    metadata["conflict_identifier"] = str(conflict_id_raw) if conflict_id_raw else None
+                
                 await self.memory_manager.add_memory(
                     content=f"Conflict resolved: {result.get('description', '')}",
                     memory_type="conflict_resolution",
                     importance=0.8, 
                     tags=["conflict", "resolution"],
-                    metadata={
-                        "conflict_id": enhanced_data.get("conflict_id"),
-                        "resolution_type": enhanced_data.get("resolution_type", "standard"),
-                        "impact_level": "medium"
-                    }
+                    metadata=metadata
                 )
     
             return {
@@ -1222,15 +1259,31 @@ class ConflictSystemIntegration:
                     stakeholder_changes.append(f"Updated: {', '.join([s.get('npc_name', 'Unknown') for s in result.get('updated_stakeholders', [])])}")
                 
                 changes_text = "; ".join(stakeholder_changes)
+                
+                # Safely handle conflict_id
+                conflict_id_raw = stakeholder_data.get("conflict_id")
+                conflict_id = None
+                
+                if isinstance(conflict_id_raw, str) and conflict_id_raw.isdigit():
+                    conflict_id = int(conflict_id_raw)
+                elif isinstance(conflict_id_raw, int):
+                    conflict_id = conflict_id_raw
+                
+                metadata = {
+                    "changes": stakeholder_changes
+                }
+                
+                if conflict_id is not None:
+                    metadata["conflict_id"] = conflict_id
+                else:
+                    metadata["conflict_identifier"] = str(conflict_id_raw) if conflict_id_raw else None
+                
                 await self.memory_manager.add_memory(
                     content=f"Updated stakeholders for conflict ID {stakeholder_data.get('conflict_id')}: {changes_text}",
                     memory_type="stakeholder_update",
                     importance=0.6,
                     tags=["conflict", "stakeholders"],
-                    metadata={
-                        "conflict_id": stakeholder_data.get("conflict_id"),
-                        "changes": stakeholder_changes
-                    }
+                    metadata=metadata
                 )
             
             return {
@@ -1243,7 +1296,6 @@ class ConflictSystemIntegration:
         except Exception as e:
             logger.error(f"Error updating conflict stakeholders: {str(e)}", exc_info=True)
             return {"success": False, "message": str(e)}
-
     @with_governance(
         agent_type=AgentType.CONFLICT_ANALYST,
         action_type="manage_manipulation",
