@@ -49,8 +49,9 @@ class ConflictSystemIntegration:
     """Unified integration of conflict system with Nyx governance and canonical systems"""
     _npc_systems: Dict[str, IntegratedNPCSystem] = {}
     _instances: Dict[str, 'ConflictSystemIntegration'] = {}
-    _registration_locks: Dict[str, asyncio.Lock] = {}  # Add lock dictionary
-    _registered_with_governance: Dict[str, bool] = {}  # Track registration status
+    _registration_locks: Dict[str, asyncio.Lock] = {}
+    _registered_with_governance: Dict[str, bool] = {}
+    _initialization_locks: Dict[str, asyncio.Lock] = {}  # Add this for init locks
 
     def __init__(self, user_id: int, conversation_id: int):
         # Step 2: Add validation
@@ -91,88 +92,81 @@ class ConflictSystemIntegration:
 
     @classmethod
     async def get_instance(cls, user_id: int, conversation_id: int) -> 'ConflictSystemIntegration':
-        """Get or create instance for user/conversation"""
+        """Get or create instance for user/conversation with proper locking"""
         key = f"{user_id}:{conversation_id}"
         
-        if key not in cls._instances:
-            instance = cls(user_id, conversation_id)
-            await instance.initialize()
-            cls._instances[key] = instance
+        # Create lock if it doesn't exist
+        if key not in cls._initialization_locks:
+            cls._initialization_locks[key] = asyncio.Lock()
+        
+        # Use the lock to ensure only one initialization happens
+        async with cls._initialization_locks[key]:
+            if key not in cls._instances:
+                instance = cls(user_id, conversation_id)
+                cls._instances[key] = instance
+                await instance.initialize()
             
         return cls._instances[key]
 
 
     async def initialize(self):
-        if not self.is_initialized:
-            logger.info(f"Initializing conflict system for user {self.user_id}")
+        """Initialize the conflict system (only runs once)"""
+        if self.is_initialized:
+            return self
             
-            # Check if we're already in an initialization chain
-            key = f"{self.user_id}:{self.conversation_id}"
-            init_key = f"conflict_init_{key}"
-            
-            if hasattr(self.__class__, '_initializing') and init_key in self.__class__._initializing:
-                logger.warning(f"Conflict system initialization already in progress for {key}")
-                # Wait for the other initialization to complete
-                await asyncio.sleep(0.5)
-                if self.is_initialized:
-                    return self
-                raise RuntimeError("Circular initialization detected in conflict system")
-            
-            # Track initialization
-            if not hasattr(self.__class__, '_initializing'):
-                self.__class__._initializing = set()
-            
-            self.__class__._initializing.add(init_key)
-            
-            try:
-                with trace(workflow_name="ConflictSystemInit", group_id=f"conflict_{self.conversation_id}"):
-                    # Initialize core components
-                    self.agents = await initialize_agents()
-                    self.agents = apply_guardrails(self.agents)
-                    
-                    self.lore_system = await self.get_lore_system(self.user_id, self.conversation_id)
-                    self.npc_system = await self.get_npc_system(self.user_id, self.conversation_id)
-                    
-                    # Initialize resolution system
-                    self.resolution_system = ConflictResolutionSystem(self.user_id, self.conversation_id)
-                    await self.resolution_system.initialize()
-                    
-                    # Initialize conflict generator
-                    self.conflict_generator = OrganicConflictGenerator(self.user_id, self.conversation_id)
-                    
-                    # Initialize stakeholder autonomy
-                    self.stakeholder_autonomy = StakeholderAutonomySystem(self.user_id, self.conversation_id)
-                    
-                    # Initialize player stats if needed
-                    from logic.narrative_events import initialize_player_stats
-                    await initialize_player_stats(self.user_id, self.conversation_id)
-                    
-                    # Initialize context-related systems
-                    self.context_service = await get_context_service(self.user_id, self.conversation_id)
-                    self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-                    self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
-    
-                    from story_agent.story_director_agent import (
-                        initialize_story_director
+        key = f"{self.user_id}:{self.conversation_id}"
+        
+        # Remove the old circular initialization detection code
+        # No need for _initializing set anymore
+        
+        try:
+            with trace(workflow_name="ConflictSystemInit", group_id=f"conflict_{self.conversation_id}"):
+                # Initialize core components
+                self.agents = await initialize_agents()
+                self.agents = apply_guardrails(self.agents)
+                
+                self.lore_system = await self.get_lore_system(self.user_id, self.conversation_id)
+                self.npc_system = await self.get_npc_system(self.user_id, self.conversation_id)
+                
+                # Initialize resolution system
+                self.resolution_system = ConflictResolutionSystem(self.user_id, self.conversation_id)
+                await self.resolution_system.initialize()
+                
+                # Initialize conflict generator
+                self.conflict_generator = OrganicConflictGenerator(self.user_id, self.conversation_id)
+                
+                # Initialize stakeholder autonomy
+                self.stakeholder_autonomy = StakeholderAutonomySystem(self.user_id, self.conversation_id)
+                
+                # Initialize player stats if needed
+                from logic.narrative_events import initialize_player_stats
+                await initialize_player_stats(self.user_id, self.conversation_id)
+                
+                # Initialize context-related systems
+                self.context_service = await get_context_service(self.user_id, self.conversation_id)
+                self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+                self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
+
+                from story_agent.story_director_agent import initialize_story_director
+                # Initialize story director (but prevent recursive init)
+                if not hasattr(self, '_story_director_initializing'):
+                    self._story_director_initializing = True
+                    self.story_director, self.story_director_context = await initialize_story_director(
+                        self.user_id, self.conversation_id
                     )
-                    # Initialize story director (but prevent recursive init)
-                    if not hasattr(self, '_story_director_initializing'):
-                        self._story_director_initializing = True
-                        self.story_director, self.story_director_context = await initialize_story_director(
-                            self.user_id, self.conversation_id
-                        )
-                        self._story_director_initializing = False
-                    
-                    self.story_context = await self._get_story_context()
-                    
-                    # Register with governance (with protection)
-                    await self._register_with_governance()
-                    
-                    self.is_initialized = True
-                    
-            finally:
-                # Remove from initializing set
-                self.__class__._initializing.discard(init_key)
+                    self._story_director_initializing = False
+                
+                self.story_context = await self._get_story_context()
+                
+                # Register with governance (with protection)
+                await self._register_with_governance()
+                
+                self.is_initialized = True
+                logger.info(f"Conflict system initialized successfully for {key}")
+                
+        except Exception as e:
+            logger.error(f"Error initializing conflict system: {e}", exc_info=True)
+            raise
             
         return self
 
