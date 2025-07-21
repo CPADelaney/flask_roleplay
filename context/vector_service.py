@@ -478,61 +478,82 @@ class VectorService:
             tags=tags,
             embedding=embedding
         )
-        
+    
     async def add_entity(
         self,
-        entity_type: str,
-        entity_id: str,
-        content: str,
-        embedding: Optional[List[float]] = None,
-        **metadata
+        entity_type: str,          # "npc", "location", "memory", "narrative"
+        entity_id: str,            # Unique identifier for this entity
+        content: str,              # Text content for embedding generation
+        embedding: Optional[List[float]] = None,  # Pre-computed embedding (optional)
+        **metadata                 # Any additional metadata as keyword arguments
     ) -> bool:
         """
-        Add an entity to the vector database
+        Add an entity to the vector database (generic method used by all entity types)
+        
+        This is the core method that handles:
+        1. Validation of entity type
+        2. Embedding generation (if not provided)
+        3. Metadata enrichment
+        4. Storage in the appropriate vector collection
         
         Args:
-            entity_type: Type of entity (npc, location, memory, etc.)
+            entity_type: Type of entity (must be in self.collections)
             entity_id: Unique ID for the entity
-            content: Text content for the entity
-            embedding: Optional pre-computed embedding
-            **metadata: Additional metadata for the entity
+            content: Text content for the entity (used for embedding if not provided)
+            embedding: Optional pre-computed embedding vector (384 dimensions)
+            **metadata: Additional metadata for the entity (varies by entity type)
             
         Returns:
-            Success status
+            bool: True if successfully added, False otherwise
+            
+        Example:
+            await add_entity(
+                entity_type="memory",
+                entity_id="mem_123",
+                content="The player discovered a hidden treasure",
+                importance=0.8,
+                tags=["treasure", "discovery"],
+                location="Dark Cave"
+            )
         """
-        # Check if entity type is supported
+        # Step 1: Validate entity type
         if entity_type not in self.collections:
             logger.error(f"Unsupported entity type: {entity_type}")
             return False
         
-        # Get collection name
+        # Step 2: Get the collection name for this entity type
         collection_name = self.collections[entity_type]
+        # e.g., "memory" -> "memory_embeddings"
         
-        # Generate embedding if not provided
-        if embedding is None and self.embedding_service:
-            try:
-                embedding = await self.embedding_service.get_embedding(content)
-            except Exception as e:
-                logger.error(f"Error generating embedding: {e}")
-                # Generate random embedding as fallback
+        # Step 3: Generate embedding if not provided
+        if embedding is None:
+            if self.embedding_service:
+                try:
+                    # Use the embedding service if available
+                    embedding = await self.embedding_service.get_embedding(content)
+                except Exception as e:
+                    logger.error(f"Error generating embedding: {e}")
+                    # Fallback: Generate random 384-dimensional embedding
+                    vec = list(np.random.normal(0, 1, 384))
+                    embedding = vec / np.linalg.norm(vec)
+            else:
+                # No embedding service, use random embedding
                 vec = list(np.random.normal(0, 1, 384))
                 embedding = vec / np.linalg.norm(vec)
-        elif embedding is None:
-            # Generate random embedding as fallback
-            vec = list(np.random.normal(0, 1, 384))
-            embedding = vec / np.linalg.norm(vec)
         
-        # Add user and conversation ID to metadata
+        # Step 4: Build complete metadata
+        # Always include these core fields
         full_metadata = {
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "content": content,
-            **metadata
+            "user_id": self.user_id,           # From class instance
+            "conversation_id": self.conversation_id,  # From class instance
+            "entity_type": entity_type,        # Type of entity
+            "entity_id": entity_id,            # Unique ID
+            "content": content,                # Original text content
+            **metadata                         # All additional metadata passed in
         }
         
-        # Store in vector database
+        # Step 5: Store in vector database
+        # The ID format is "{entity_type}_{entity_id}" for uniqueness
         return await self.vector_db.insert_vectors(
             collection_name=collection_name,
             ids=[f"{entity_type}_{entity_id}"],
