@@ -792,9 +792,13 @@ class WorldPoliticsManager(BaseLoreManager):
             group_id=self.trace_group_id,
             metadata={**self.trace_metadata, "count": count}
         ):
-            run_ctx = RunContextWrapper(context=ctx.context)
+            # Ensure we have a proper context - either use the provided one or create from self
+            if not hasattr(ctx, 'context') or ctx.context is None:
+                proper_ctx = self.create_run_context()
+            else:
+                proper_ctx = ctx
             
-            nations = await self.get_all_nations(run_ctx)
+            nations = await self.get_all_nations(proper_ctx)
             if len(nations) < 2:
                 return []
             
@@ -851,7 +855,12 @@ class WorldPoliticsManager(BaseLoreManager):
                         - potential_resolution
                         """
                         
-                        result = await Runner.run(conflict_agent, prompt, context=run_ctx.context)
+                        # Use proper context for Runner.run
+                        result = await Runner.run(
+                            conflict_agent, 
+                            prompt, 
+                            context=proper_ctx.context
+                        )
                         
                         try:
                             conflict_data = json.loads(result.final_output)
@@ -875,22 +884,44 @@ class WorldPoliticsManager(BaseLoreManager):
                                 "potential_resolution": conflict_data.get("potential_resolution", "TBD")
                             }
                             
-                            # Use canon to create conflict
+                            # Use canon to create conflict with proper context
                             conflict_id = await canon.find_or_create_conflict(
-                                ctx, conn, **conflict_data_package
+                                proper_ctx, conn, **conflict_data_package
                             )
                             
                             conflict_data["id"] = conflict_id
                             conflicts.append(conflict_data)
                             
-                            # Generate initial news
-                            await self._generate_conflict_news(run_ctx, conflict_id, conflict_data, nation_pair)
+                            # Generate initial news with proper context
+                            await self._generate_conflict_news(proper_ctx, conflict_id, conflict_data, nation_pair)
                             
                         except Exception as e:
                             logger.error(f"Error generating conflict: {e}")
             
+            # After conflicts are generated, update international relations
+            # This is where the original code had RunContextWrapper(context=None)
+            for conflict in conflicts:
+                if "involved_nations" in conflict and len(conflict["involved_nations"]) >= 2:
+                    nation1_id = conflict["involved_nations"][0]
+                    nation2_id = conflict["involved_nations"][1]
+                    
+                    # Determine relationship based on conflict
+                    relation_type = "hostile" if conflict.get("severity", 5) > 6 else "tense"
+                    quality = max(1, 5 - conflict.get("severity", 5) // 2)
+                    description = f"Relations affected by {conflict.get('name', 'ongoing conflict')}: {conflict.get('description', '')[:200]}..."
+                    
+                    # Use proper context instead of RunContextWrapper(context=None)
+                    await self.add_international_relation(
+                        proper_ctx,  # Use the proper context we created/validated at the start
+                        nation1_id=nation1_id,
+                        nation2_id=nation2_id,
+                        relationship_type=relation_type,
+                        relationship_quality=quality,
+                        description=description,
+                        notable_conflicts=[conflict.get('name', 'Unnamed Conflict')]
+                    )
+            
             return conflicts
-
 
     async def _generate_conflict_news(
         self,
