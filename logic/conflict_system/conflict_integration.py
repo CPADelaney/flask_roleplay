@@ -46,11 +46,11 @@ from context.vector_service import get_vector_service
 logger = logging.getLogger(__name__)
 
 class ConflictSystemIntegration:
-    """
-    Unified integration of conflict system with Nyx governance and canonical systems
-    """
+    """Unified integration of conflict system with Nyx governance and canonical systems"""
     _npc_systems: Dict[str, IntegratedNPCSystem] = {}
     _instances: Dict[str, 'ConflictSystemIntegration'] = {}
+    _registration_locks: Dict[str, asyncio.Lock] = {}  # Add lock dictionary
+    _registered_with_governance: Dict[str, bool] = {}  # Track registration status
 
     def __init__(self, user_id: int, conversation_id: int):
         # Step 2: Add validation
@@ -101,53 +101,79 @@ class ConflictSystemIntegration:
             
         return cls._instances[key]
 
+
     async def initialize(self):
         if not self.is_initialized:
             logger.info(f"Initializing conflict system for user {self.user_id}")
             
-            with trace(workflow_name="ConflictSystemInit", group_id=f"conflict_{self.conversation_id}"):
-                # Initialize core components
-                self.agents = await initialize_agents()
-                self.agents = apply_guardrails(self.agents)
-                
-                self.lore_system = await self.get_lore_system(self.user_id, self.conversation_id)
-                self.npc_system = await self.get_npc_system(self.user_id, self.conversation_id)
-                
-                # Initialize resolution system
-                self.resolution_system = ConflictResolutionSystem(self.user_id, self.conversation_id)
-                await self.resolution_system.initialize()
-                
-                # Initialize conflict generator
-                self.conflict_generator = OrganicConflictGenerator(self.user_id, self.conversation_id)
-                
-                # Initialize stakeholder autonomy
-                self.stakeholder_autonomy = StakeholderAutonomySystem(self.user_id, self.conversation_id)
-                
-                # Initialize player stats if needed
-                from logic.narrative_events import initialize_player_stats
-                await initialize_player_stats(self.user_id, self.conversation_id)
-                
-                # Initialize context-related systems
-                self.context_service = await get_context_service(self.user_id, self.conversation_id)
-                self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-                self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
-
-
-                from story_agent.story_director_agent import (
-                    initialize_story_director
-                )
-                # Initialize story director
-                self.story_director, self.story_director_context = await initialize_story_director(
-                    self.user_id, self.conversation_id
-                )
-                
-                self.story_context = await self._get_story_context()
-                
-                # Register with governance
-                await self._register_with_governance()
-                
-                self.is_initialized = True
-                
+            # Check if we're already in an initialization chain
+            key = f"{self.user_id}:{self.conversation_id}"
+            init_key = f"conflict_init_{key}"
+            
+            if hasattr(self.__class__, '_initializing') and init_key in self.__class__._initializing:
+                logger.warning(f"Conflict system initialization already in progress for {key}")
+                # Wait for the other initialization to complete
+                await asyncio.sleep(0.5)
+                if self.is_initialized:
+                    return self
+                raise RuntimeError("Circular initialization detected in conflict system")
+            
+            # Track initialization
+            if not hasattr(self.__class__, '_initializing'):
+                self.__class__._initializing = set()
+            
+            self.__class__._initializing.add(init_key)
+            
+            try:
+                with trace(workflow_name="ConflictSystemInit", group_id=f"conflict_{self.conversation_id}"):
+                    # Initialize core components
+                    self.agents = await initialize_agents()
+                    self.agents = apply_guardrails(self.agents)
+                    
+                    self.lore_system = await self.get_lore_system(self.user_id, self.conversation_id)
+                    self.npc_system = await self.get_npc_system(self.user_id, self.conversation_id)
+                    
+                    # Initialize resolution system
+                    self.resolution_system = ConflictResolutionSystem(self.user_id, self.conversation_id)
+                    await self.resolution_system.initialize()
+                    
+                    # Initialize conflict generator
+                    self.conflict_generator = OrganicConflictGenerator(self.user_id, self.conversation_id)
+                    
+                    # Initialize stakeholder autonomy
+                    self.stakeholder_autonomy = StakeholderAutonomySystem(self.user_id, self.conversation_id)
+                    
+                    # Initialize player stats if needed
+                    from logic.narrative_events import initialize_player_stats
+                    await initialize_player_stats(self.user_id, self.conversation_id)
+                    
+                    # Initialize context-related systems
+                    self.context_service = await get_context_service(self.user_id, self.conversation_id)
+                    self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+                    self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
+    
+                    from story_agent.story_director_agent import (
+                        initialize_story_director
+                    )
+                    # Initialize story director (but prevent recursive init)
+                    if not hasattr(self, '_story_director_initializing'):
+                        self._story_director_initializing = True
+                        self.story_director, self.story_director_context = await initialize_story_director(
+                            self.user_id, self.conversation_id
+                        )
+                        self._story_director_initializing = False
+                    
+                    self.story_context = await self._get_story_context()
+                    
+                    # Register with governance (with protection)
+                    await self._register_with_governance()
+                    
+                    self.is_initialized = True
+                    
+            finally:
+                # Remove from initializing set
+                self.__class__._initializing.discard(init_key)
+            
         return self
 
     # Step 1: Add helper method
@@ -211,30 +237,51 @@ class ConflictSystemIntegration:
             logger.info(f"Created new IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
         return cls._npc_systems[key]
 
+
     async def _register_with_governance(self):
         """Register with the central governance system"""
-        try:
-            governance = await get_central_governance(self.user_id, self.conversation_id)
+        key = f"{self.user_id}:{self.conversation_id}"
+        
+        # Check if already registered
+        if self._registered_with_governance.get(key, False):
+            logger.debug(f"Already registered with governance for {key}")
+            return
             
-            await governance.register_agent(
-                self.agent_id,
-                AgentType.CONFLICT_ANALYST,
-                self
-            )
+        # Get or create lock for this instance
+        if key not in self._registration_locks:
+            self._registration_locks[key] = asyncio.Lock()
             
-            # Issue monitoring directive
-            await governance.issue_directive(
-                agent_type=AgentType.CONFLICT_ANALYST,
-                agent_id=self.agent_id,
-                directive_type=DirectiveType.ACTION,
-                directive_data={
-                    "instruction": "Monitor world state for conflict opportunities",
-                    "scope": "continuous"
-                }
-            )
-            
-        except Exception as e:
-            logger.error(f"Error registering with governance: {e}")
+        async with self._registration_locks[key]:
+            # Double-check after acquiring lock
+            if self._registered_with_governance.get(key, False):
+                return
+                
+            try:
+                governance = await get_central_governance(self.user_id, self.conversation_id)
+                
+                await governance.register_agent(
+                    self.agent_id,
+                    AgentType.CONFLICT_ANALYST,
+                    self
+                )
+                
+                # Issue monitoring directive
+                await governance.issue_directive(
+                    agent_type=AgentType.CONFLICT_ANALYST,
+                    agent_id=self.agent_id,
+                    directive_type=DirectiveType.ACTION,
+                    directive_data={
+                        "instruction": "Monitor world state for conflict opportunities",
+                        "scope": "continuous"
+                    }
+                )
+                
+                # Mark as registered
+                self._registered_with_governance[key] = True
+                logger.info(f"Successfully registered conflict system with governance for {key}")
+                
+            except Exception as e:
+                logger.error(f"Error registering with governance: {e}")
 
     # Story context and data methods
     async def _get_story_context(self) -> Dict[str, Any]:
@@ -1339,10 +1386,12 @@ class ConflictSystemIntegration:
         try:
             logger.info(f"Registering conflict system integration for user={user_id}, conversation={conversation_id}")
             
+            # Get or create instance (with singleton pattern)
             instance = await cls.get_instance(user_id, conversation_id)
             
-            # Start monitoring if configured
+            # Check if we should auto-monitor
             if await instance._should_auto_monitor():
+                # Use create_task to avoid blocking
                 asyncio.create_task(instance._monitoring_loop())
             
             logger.info(f"Successfully registered conflict system integration for user={user_id}, conversation={conversation_id}")
