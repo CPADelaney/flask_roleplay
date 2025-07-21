@@ -218,17 +218,32 @@ class ConflictSystemIntegration:
 
     @staticmethod
     async def get_lore_system(user_id: int, conversation_id: int):
-        lore_system = await LoreSystem.get_instance(user_id, conversation_id)
-        await lore_system.initialize()
-        return lore_system
-
+        """Get lore system instance without circular dependency"""
+        try:
+            lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+            # Only initialize if not already initialized
+            if not lore_system.initialized:
+                await lore_system.initialize()
+            return lore_system
+        except Exception as e:
+            logger.error(f"Error getting lore system: {e}")
+            # Return a minimal stub if initialization fails
+            return None
+    
     @classmethod
     async def get_npc_system(cls, user_id: int, conversation_id: int):
+        """Get NPC system instance with proper caching"""
         key = f"{user_id}:{conversation_id}"
         if key not in cls._npc_systems:
-            cls._npc_systems[key] = IntegratedNPCSystem(user_id, conversation_id)
-            await cls._npc_systems[key].initialize()
-            logger.info(f"Created new IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
+            try:
+                cls._npc_systems[key] = IntegratedNPCSystem(user_id, conversation_id)
+                # Only initialize if not already initialized
+                if not cls._npc_systems[key].initialized:
+                    await cls._npc_systems[key].initialize()
+                logger.info(f"Created new IntegratedNPCSystem for {key}")
+            except Exception as e:
+                logger.error(f"Error creating NPC system: {e}")
+                return None
         return cls._npc_systems[key]
 
 
