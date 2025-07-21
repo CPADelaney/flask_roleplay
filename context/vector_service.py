@@ -478,39 +478,66 @@ class VectorService:
             tags=tags,
             embedding=embedding
         )
-    
-    async def _add_entity(self, data):
-        """Add an entity to the vector database."""
-        if not self.entity_manager:
-            await self.initialize()
-            if not self.entity_manager:
-                return False
         
-        entity_type = data.get("entity_type", "")
-        entity_id = data.get("entity_id", "")
-        content = data.get("content", "")
+    async def add_entity(
+        self,
+        entity_type: str,
+        entity_id: str,
+        content: str,
+        embedding: Optional[List[float]] = None,
+        **metadata
+    ) -> bool:
+        """
+        Add an entity to the vector database
         
-        # Create embedding text based on entity type
-        if entity_type == "npc":
-            embed_text = f"NPC: {data.get('name', '')}. {data.get('description', '')}"
-        elif entity_type == "location":
-            embed_text = f"Location: {data.get('name', '')}. {data.get('description', '')}"
-        else:
-            embed_text = content
+        Args:
+            entity_type: Type of entity (npc, location, memory, etc.)
+            entity_id: Unique ID for the entity
+            content: Text content for the entity
+            embedding: Optional pre-computed embedding
+            **metadata: Additional metadata for the entity
+            
+        Returns:
+            Success status
+        """
+        # Check if entity type is supported
+        if entity_type not in self.collections:
+            logger.error(f"Unsupported entity type: {entity_type}")
+            return False
         
-        # Get embedding
-        embedding = await self._get_embedding(embed_text)
+        # Get collection name
+        collection_name = self.collections[entity_type]
         
-        return await self.entity_manager.add_entity(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            content=content,
-            embedding=embedding,
-            **{
-                k: v
-                for k, v in data.items()
-                if k not in ["entity_type", "entity_id", "content"]
-            }
+        # Generate embedding if not provided
+        if embedding is None and self.embedding_service:
+            try:
+                embedding = await self.embedding_service.get_embedding(content)
+            except Exception as e:
+                logger.error(f"Error generating embedding: {e}")
+                # Generate random embedding as fallback
+                vec = list(np.random.normal(0, 1, 384))
+                embedding = vec / np.linalg.norm(vec)
+        elif embedding is None:
+            # Generate random embedding as fallback
+            vec = list(np.random.normal(0, 1, 384))
+            embedding = vec / np.linalg.norm(vec)
+        
+        # Add user and conversation ID to metadata
+        full_metadata = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "content": content,
+            **metadata
+        }
+        
+        # Store in vector database
+        return await self.vector_db.insert_vectors(
+            collection_name=collection_name,
+            ids=[f"{entity_type}_{entity_id}"],
+            vectors=[embedding],
+            metadata=[full_metadata]
         )
     
     async def _get_context_for_input(
