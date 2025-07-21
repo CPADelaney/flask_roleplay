@@ -72,94 +72,125 @@ logger = logging.getLogger(__name__)
 _GOVERNANCE_CACHE: Dict[Tuple[int, int], NyxUnifiedGovernor] = {}
 _GOVERNANCE_INIT_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 
-async def get_central_governance(user_id: int, conversation_id: int, player_name: Optional[str] = None) -> NyxUnifiedGovernor:
+_governance_instances: Dict[str, Any] = {}
+_governance_locks: Dict[str, asyncio.Lock] = {}
+_initialization_in_progress: Dict[str, bool] = {}
+_global_lock = asyncio.Lock()  # Global lock for creating per-instance locks
+
+async def get_central_governance(user_id: int, conversation_id: int) -> Any:
     """
     Get or create the central governance instance for a user/conversation.
     
+    This function ensures:
+    1. Only one governance instance exists per user/conversation
+    2. No recursive initialization loops
+    3. Thread-safe initialization
+    
     Args:
-        user_id: The user ID
-        conversation_id: The conversation ID
-        player_name: Optional player name. If not provided:
-                    - Will check database for existing player
-                    - Falls back to 'Chase' for new games
-    
+        user_id: User ID
+        conversation_id: Conversation ID
+        
     Returns:
-        Initialized NyxUnifiedGovernor instance
+        NyxGovernanceSystem instance
+        
+    Raises:
+        RuntimeError: If circular initialization is detected
     """
-    cache_key = (user_id, conversation_id)
+    key = f"{user_id}:{conversation_id}"
     
-    # Check cache first
-    if cache_key in _GOVERNANCE_CACHE:
-        return _GOVERNANCE_CACHE[cache_key]
+    # Fast path - already initialized and not in progress
+    if key in _governance_instances and not _initialization_in_progress.get(key, False):
+        return _governance_instances[key]
     
-    # Get or create lock for this cache key
-    if cache_key not in _GOVERNANCE_INIT_LOCKS:
-        _GOVERNANCE_INIT_LOCKS[cache_key] = asyncio.Lock()
+    # Get or create lock for this specific instance
+    async with _global_lock:
+        if key not in _governance_locks:
+            _governance_locks[key] = asyncio.Lock()
     
-    # Use lock to prevent concurrent initialization
-    async with _GOVERNANCE_INIT_LOCKS[cache_key]:
-        # Double-check cache in case another coroutine initialized it
-        if cache_key in _GOVERNANCE_CACHE:
-            return _GOVERNANCE_CACHE[cache_key]
+    # Now use the instance-specific lock
+    async with _governance_locks[key]:
+        # Double-check after acquiring lock (another task might have initialized)
+        if key in _governance_instances and not _initialization_in_progress.get(key, False):
+            return _governance_instances[key]
         
-        # Try to determine player name if not provided
-        if not player_name:
-            # Check if there's an existing player in the database
-            async with get_db_connection_context() as conn:
-                existing_player = await conn.fetchval("""
-                    SELECT player_name FROM PlayerStats
-                    WHERE user_id = $1 AND conversation_id = $2
-                    LIMIT 1
-                """, user_id, conversation_id)
+        # Check if initialization is already in progress (circular dependency)
+        if _initialization_in_progress.get(key, False):
+            logger.error(f"Circular initialization detected for governance {key}")
+            # If we have a partial instance, return it
+            if key in _governance_instances:
+                logger.warning(f"Returning partial governance instance for {key}")
+                return _governance_instances[key]
+            raise RuntimeError(f"Circular initialization detected for governance {key}")
+        
+        try:
+            # Mark initialization as in progress
+            _initialization_in_progress[key] = True
+            logger.info(f"Initializing governance for {key}")
+            
+            # Import here to avoid circular imports at module level
+            from nyx.nyx_governance import NyxGovernanceSystem
+            
+            # Create new governance instance
+            governance = NyxGovernanceSystem(user_id, conversation_id)
+            
+            # Store instance BEFORE initializing to handle circular deps
+            _governance_instances[key] = governance
+            
+            # Initialize the governance system
+            # Pass flag to prevent automatic agent discovery
+            if hasattr(governance, 'initialize'):
+                init_kwargs = {}
+                # Check if initialize accepts discover_agents parameter
+                import inspect
+                sig = inspect.signature(governance.initialize)
+                if 'discover_agents' in sig.parameters:
+                    init_kwargs['discover_agents'] = False
                 
-                if existing_player:
-                    player_name = existing_player
-                else:
-                    # For new games, check if there's a player name in CurrentRoleplay
-                    stored_name = await conn.fetchval("""
-                        SELECT value FROM CurrentRoleplay
-                        WHERE user_id = $1 AND conversation_id = $2 AND key = 'PlayerName'
-                    """, user_id, conversation_id)
-                    
-                    player_name = stored_name or 'Chase'  # Default to 'Chase' for new games
-        
-        # Create governor with player name
-        governor = NyxUnifiedGovernor(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            player_name=player_name
-        )
-        
-        # Initialize the governor
-        await governor.initialize()
-        
-        # Cache the initialized governor
-        _GOVERNANCE_CACHE[cache_key] = governor
-        
-        return governor
+                await governance.initialize(**init_kwargs)
+            
+            # Now discover agents if not already done
+            if hasattr(governance, '_discovery_completed') and not governance._discovery_completed:
+                try:
+                    await governance.discover_and_register_agents()
+                except Exception as e:
+                    logger.error(f"Error discovering agents: {e}")
+                    # Don't fail initialization if agent discovery fails
+            
+            logger.info(f"Governance initialization complete for {key}")
+            return governance
+            
+        except Exception as e:
+            logger.error(f"Error initializing governance for {key}: {e}", exc_info=True)
+            # Remove failed instance
+            _governance_instances.pop(key, None)
+            raise
+            
+        finally:
+            # Always clear the initialization flag
+            _initialization_in_progress[key] = False
+
 
 def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optional[int] = None):
     """
-    Clear governance cache entries.
+    Clear governance cache for testing or reset purposes.
     
     Args:
-        user_id: If provided with conversation_id, clear specific entry
-        conversation_id: If provided with user_id, clear specific entry
-        If neither provided, clear entire cache
+        user_id: Optional user ID to clear specific instance
+        conversation_id: Optional conversation ID to clear specific instance
     """
-    global _GOVERNANCE_CACHE, _GOVERNANCE_INIT_LOCKS
-    
     if user_id is not None and conversation_id is not None:
-        cache_key = (user_id, conversation_id)
-        if cache_key in _GOVERNANCE_CACHE:
-            del _GOVERNANCE_CACHE[cache_key]
-            logger.info(f"Cleared governance cache for {cache_key}")
-        if cache_key in _GOVERNANCE_INIT_LOCKS:
-            del _GOVERNANCE_INIT_LOCKS[cache_key]
+        key = f"{user_id}:{conversation_id}"
+        _governance_instances.pop(key, None)
+        _governance_locks.pop(key, None)
+        _initialization_in_progress.pop(key, None)
+        logger.info(f"Cleared governance cache for {key}")
     else:
-        _GOVERNANCE_CACHE.clear()
-        _GOVERNANCE_INIT_LOCKS.clear()
-        logger.info("Cleared entire governance cache")
+        # Clear all
+        _governance_instances.clear()
+        _governance_locks.clear()
+        _initialization_in_progress.clear()
+        logger.info("Cleared all governance caches")
+
 
 
 async def generate_lore_with_governance(
