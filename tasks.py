@@ -345,6 +345,11 @@ async def memory_maintenance_task():
             # Update the last cleanup time
             maintenance.last_cleanup = datetime.now()
             
+            # Also cleanup any memory service instances if needed
+            from memory.memory_integration import cleanup_memory_services, cleanup_memory_retrievers
+            await cleanup_memory_services()
+            await cleanup_memory_retrievers()
+            
             return {
                 "success": True,
                 "message": "Memory system maintenance completed",
@@ -366,6 +371,113 @@ async def memory_maintenance_task():
             "error": str(e),
             "traceback": traceback.format_exc()
         }
+
+@celery_app.task
+def process_memory_embedding_task(user_id, conversation_id, message_text, entity_type="memory", metadata=None):
+    """
+    Celery task to process a memory embedding asynchronously.
+    Uses the refactored memory_integration module.
+    """
+    logger.info(f"Processing memory embedding for user {user_id}, conversation {conversation_id}")
+    
+    async def process_memory_async():
+        from memory.memory_integration import add_memory_from_message
+        
+        try:
+            memory_id = await add_memory_from_message(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                message_text=message_text,
+                entity_type=entity_type,
+                metadata=metadata
+            )
+            
+            return {
+                "success": True,
+                "memory_id": memory_id,
+                "message": f"Successfully processed memory for user {user_id}, conversation {conversation_id}"
+            }
+        except Exception as e:
+            logger.error(f"Error processing memory: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    # Run the async function
+    return asyncio.run(process_memory_async())
+
+@celery_app.task
+def retrieve_memories_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
+    """
+    Celery task to retrieve relevant memories.
+    Uses the refactored memory_integration module.
+    """
+    logger.info(f"Retrieving memories for user {user_id}, conversation {conversation_id}, query: {query_text[:50]}...")
+    
+    async def retrieve_memories_async():
+        from memory.memory_integration import retrieve_relevant_memories
+        
+        try:
+            memories = await retrieve_relevant_memories(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                query_text=query_text,
+                entity_types=entity_types,
+                top_k=top_k
+            )
+            
+            return {
+                "success": True,
+                "memories": memories,
+                "message": f"Successfully retrieved {len(memories)} memories"
+            }
+        except Exception as e:
+            logger.error(f"Error retrieving memories: {e}")
+            return {
+                "success": False,
+                "memories": [],
+                "error": str(e)
+            }
+    
+    # Run the async function
+    return asyncio.run(retrieve_memories_async())
+
+@celery_app.task
+def analyze_with_memory_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
+    """
+    Celery task to analyze a query with relevant memories.
+    Uses the refactored memory_integration module.
+    """
+    logger.info(f"Analyzing query with memories for user {user_id}, conversation {conversation_id}, query: {query_text[:50]}...")
+    
+    async def analyze_with_memory_async():
+        from memory.memory_integration import analyze_with_memory
+        
+        try:
+            result = await analyze_with_memory(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                query_text=query_text,
+                entity_types=entity_types,
+                top_k=top_k
+            )
+            
+            return {
+                "success": True,
+                "result": result,
+                "message": "Successfully analyzed query with memories"
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing with memories: {e}")
+            return {
+                "success": False,
+                "result": None,
+                "error": str(e)
+            }
+    
+    # Run the async function
+    return asyncio.run(analyze_with_memory_async())
 
 # Fixed version of the NPC learning cycle task
 @celery_app.task
