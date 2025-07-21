@@ -871,7 +871,7 @@ async def create_all_tables():
                     recruitment_methods JSONB DEFAULT '[]', -- Changed from TEXT[]
                     leadership_structure JSONB,
                     founding_story TEXT,
-                    embedding VECTOR(384),
+                    embedding Vector(1536),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
