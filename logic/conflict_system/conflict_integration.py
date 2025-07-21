@@ -524,6 +524,9 @@ class ConflictSystemIntegration:
         try:
             # Step 3: Replace extraction code
             user_id, conversation_id, ctx = self._normalize_ctx(ctx)
+            
+            logger.info(f"Generating conflict for user {user_id}, conversation {conversation_id}")
+            logger.debug(f"Conflict data: {conflict_data_or_type}")
                     
             # Handle string (conflict_type) or None input
             if conflict_data_or_type is None or isinstance(conflict_data_or_type, str):
