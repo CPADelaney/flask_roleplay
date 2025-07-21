@@ -319,42 +319,53 @@ def analyze_with_memory_task(user_id, conversation_id, query_text, entity_types=
     return result
 
 @celery_app.task
-def memory_maintenance_task():
+@async_task
+async def memory_maintenance_task():
     """
     Celery task to perform maintenance on the memory system.
     This task should be scheduled to run periodically.
     """
-    from memory.memory_integration import memory_celery_task
-    
     logger.info("Running memory system maintenance task")
     
-    # Define async function
-    async def memory_maintenance_async():
-        from memory.memory_integration import cleanup_memory_services, cleanup_memory_retrievers
+    try:
+        # Import the actual maintenance class
+        from memory.maintenance import MemoryMaintenance
         
-        try:
-            # Run any needed maintenance tasks
+        # Create maintenance instance
+        maintenance = MemoryMaintenance()
+        
+        # Check if cleanup should run based on conditions
+        should_run = await maintenance.should_run_cleanup()
+        
+        if should_run:
+            # Run the actual memory cleanup
+            cleanup_stats = await maintenance.cleanup_old_memories()
+            logger.info(f"Memory cleanup completed: {cleanup_stats}")
             
-            # Finally, clean up resources
-            await cleanup_memory_services()
-            await cleanup_memory_retrievers()
+            # Update the last cleanup time
+            maintenance.last_cleanup = datetime.now()
             
             return {
                 "success": True,
-                "message": "Memory system maintenance completed"
+                "message": "Memory system maintenance completed",
+                "cleanup_stats": cleanup_stats,
+                "cleanup_performed": True
             }
-        except Exception as e:
-            logger.error(f"Error during memory maintenance: {e}")
+        else:
+            logger.info("Skipping memory cleanup - conditions not met")
             return {
-                "success": False,
-                "error": str(e)
+                "success": True,
+                "message": "Memory maintenance checked - cleanup not needed",
+                "cleanup_performed": False
             }
-    
-    # Create and use the task wrapper
-    wrapper = memory_celery_task(memory_maintenance_async)
-    result = wrapper()
-    
-    return result
+            
+    except Exception as e:
+        logger.error(f"Error during memory maintenance: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
 
 # Fixed version of the NPC learning cycle task
 @celery_app.task
