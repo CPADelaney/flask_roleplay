@@ -1243,28 +1243,33 @@ class NewGameAgent:
                 try:
                     from logic.conflict_system.conflict_integration import ConflictSystemIntegration
                     
-                    # Use get_instance instead of direct instantiation
+                    # Use get_instance with proper error handling
                     conflict_integration = await ConflictSystemIntegration.get_instance(user_id, conversation_id)
                     
-                    # Create a proper context for the call
-                    conflict_ctx = RunContextWrapper({
-                        "user_id": user_id,
-                        "conversation_id": conversation_id
-                    })
-                    
-                    # Pass the context when calling generate_conflict
-                    initial_conflict = await conflict_integration.generate_conflict(
-                        {
-                            "conflict_type": "major",
-                            "intensity": "medium",
-                            "player_involvement": "indirect"
-                        },
-                        ctx=conflict_ctx  # Add this parameter
-                    )
-                    conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
+                    # Only proceed if properly initialized
+                    if conflict_integration and conflict_integration.is_initialized:
+                        # Create a proper context for the call
+                        conflict_ctx = RunContextWrapper({
+                            "user_id": user_id,
+                            "conversation_id": conversation_id
+                        })
+                        
+                        # Pass the context when calling generate_conflict
+                        initial_conflict = await conflict_integration.generate_conflict(
+                            {
+                                "conflict_type": "major",
+                                "intensity": "medium",
+                                "player_involvement": "indirect"
+                            },
+                            ctx=conflict_ctx
+                        )
+                        conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
+                    else:
+                        logging.warning("Conflict system not properly initialized, skipping conflict generation")
+                        conflict_name = "No initial conflict - system not ready"
                 except Exception as e:
-                    logging.error(f"Error generating initial conflict: {e}")
-                    conflict_name = "No initial conflict"
+                    logging.error(f"Error generating initial conflict: {e}", exc_info=True)
+                    conflict_name = "No initial conflict - generation failed"
                 
                 # Generate currency system canonically
                 try:
