@@ -233,7 +233,7 @@ class ConflictSystemIntegration:
 
 
     async def _register_with_governance(self):
-        """Register with the central governance system"""
+        """Register with the central governance system (idempotent)"""
         key = f"{self.user_id}:{self.conversation_id}"
         
         # Check if already registered
@@ -252,6 +252,12 @@ class ConflictSystemIntegration:
                 
             try:
                 governance = await get_central_governance(self.user_id, self.conversation_id)
+                
+                # Check if already registered with governance
+                if governance.is_agent_registered(self.agent_id):
+                    self._registered_with_governance[key] = True
+                    logger.info(f"Conflict system already registered with governance for {key}")
+                    return
                 
                 await governance.register_agent(
                     self.agent_id,
