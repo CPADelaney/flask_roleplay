@@ -603,6 +603,8 @@ class NyxUnifiedGovernor(
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.player_name = player_name  # Can be set later via set_player_name()
+
+        self._discovery_completed: bool = False 
         
         # Will be initialized in _initialize_systems() to avoid circular dependency
         self.lore_system: Optional[Any] = None
