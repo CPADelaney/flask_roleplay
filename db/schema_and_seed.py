@@ -2665,6 +2665,10 @@ async def create_all_tables():
                                 'cult', 'supernatural', 'mystical', 'elite', 'underground',
                                 'faction', 'organization', 'group', 'other'));
                 ''',
+                '''
+                ALTER TABLE Locations 
+                ADD COLUMN IF NOT EXISTS controlling_faction TEXT;
+                ''',
             ]  # End of sql_commands list
 
             # Execute commands sequentially
