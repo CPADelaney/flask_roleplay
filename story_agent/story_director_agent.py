@@ -337,16 +337,18 @@ class StoryDirectorContext:
             logger.warning("Memory manager not initialized. Initializing now.")
             await self.initialize_context_components()
         if not self.memory_manager:
-             logger.error("Failed to initialize memory manager, cannot add memory.")
-             return
+            logger.error("Failed to initialize memory manager, cannot add memory.")
+            return
     
         try:
             request = MemoryAddRequest(
+                user_id=self.user_id,  # Added
+                conversation_id=self.conversation_id,  # Added
                 content=content,
                 memory_type=memory_type,
                 importance=importance,
                 tags=["story_director", memory_type],
-                metadata={"source": "story_director"}
+                metadata=MemoryMetadata(source="story_director")  # Changed to use constructor
             )
             
             await self.memory_manager._add_memory(request)
