@@ -2654,7 +2654,17 @@ async def create_all_tables():
                 '''
                 ALTER TABLE NPCMemories 
                 ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE;
-                ''',              
+                ''',       
+                '''
+                ALTER TABLE Factions DROP CONSTRAINT IF EXISTS factions_type_check;
+                ''',
+                '''
+                ALTER TABLE Factions ADD CONSTRAINT factions_type_check 
+                CHECK (type IN ('political', 'community', 'social', 'hobby', 'educational', 
+                                'professional', 'religious', 'criminal', 'corporate', 
+                                'cult', 'supernatural', 'mystical', 'elite', 'underground',
+                                'faction', 'organization', 'group', 'other'));
+                ''',
             ]  # End of sql_commands list
 
             # Execute commands sequentially
