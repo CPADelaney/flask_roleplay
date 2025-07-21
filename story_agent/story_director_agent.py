@@ -229,46 +229,62 @@ class StoryDirectorContext:
 
     def __post_init__(self):
         """Synchronous post-init; cannot contain 'await'."""
-        # Ensure managers are initialized synchronously if possible
-        try:
-            from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-            if not self.conflict_manager:
-                self.conflict_manager = ConflictSystemIntegration(self.user_id, self.conversation_id)
-        except ImportError:
-            logger.warning("ConflictSystemIntegration not found.")
-            self.conflict_manager = None
-
+        # Don't initialize async components here - they need to be initialized
+        # in initialize_context_components() instead
+        
+        # Only initialize synchronous components that don't require database or async calls
         try:
             from logic.resource_management import ResourceManager
             if not self.resource_manager:
                 self.resource_manager = ResourceManager(self.user_id, self.conversation_id)
         except ImportError:
-             logger.warning("ResourceManager not found.")
-             self.resource_manager = None
-
+            logger.warning("ResourceManager not found.")
+            self.resource_manager = None
+    
         try:
             from logic.activity_analyzer import ActivityAnalyzer
             if not self.activity_analyzer:
                 self.activity_analyzer = ActivityAnalyzer(self.user_id, self.conversation_id)
         except ImportError:
-             logger.warning("ActivityAnalyzer not found.")
-             self.activity_analyzer = None
+            logger.warning("ActivityAnalyzer not found.")
+            self.activity_analyzer = None
 
     async def initialize_context_components(self):
         """Initialize context components that require async calls."""
+        # Initialize conflict manager using the proper async method
+        if self.conflict_manager is None:
+            try:
+                from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+                self.conflict_manager = await ConflictSystemIntegration.get_instance(
+                    self.user_id, 
+                    self.conversation_id
+                )
+                logger.info(f"Conflict manager initialized for user {self.user_id}")
+            except Exception as e:
+                logger.error(f"Failed to initialize conflict manager: {e}")
+                self.conflict_manager = None
+        
+        # Initialize context service
         if self.context_service is None:
             self.context_service = await get_context_service(self.user_id, self.conversation_id)
+        
+        # Initialize memory manager
         if self.memory_manager is None:
             self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+        
+        # Initialize vector service
         if self.vector_service is None:
             self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
-
+    
+        # Initialize performance monitor
         self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
+        
+        # Initialize context manager and subscriptions
         self.context_manager = get_context_manager()
-
         self.context_manager.subscribe_to_changes("/narrative_stage", self.handle_narrative_stage_change)
         self.context_manager.subscribe_to_changes("/conflicts", self.handle_conflict_change)
-
+    
+        # Initialize directive handler
         if self.directive_handler is None:
             self.directive_handler = DirectiveHandler(
                 user_id=self.user_id,
@@ -277,7 +293,7 @@ class StoryDirectorContext:
                 agent_id="director",
                 governance=None
             )
-
+    
             self.directive_handler.register_handler(
                 DirectiveType.ACTION,
                 self.handle_action_directive
@@ -363,21 +379,16 @@ class StoryDirectorContext:
             logging.info(f"[StoryDirector] Processing action directive: {instruction}")
         
             if "generate conflict" in instruction.lower():
+                # Ensure conflict manager is initialized
                 if not self.conflict_manager:
-                    logger.error("Conflict manager not available.")
+                    await self.initialize_context_components()
+                    
+                if not self.conflict_manager:
+                    logger.error("Conflict manager not available after initialization attempt.")
                     return {"result": "error", "message": "Conflict manager not initialized"}
                 
                 params = directive.get("parameters", {})
                 conflict_type = params.get("conflict_type", "standard")
-                
-                # Ensure the conflict manager is properly initialized
-                if not hasattr(self.conflict_manager, 'user_id') or not hasattr(self.conflict_manager, 'conversation_id'):
-                    # Re-initialize if needed
-                    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-                    self.conflict_manager = await ConflictSystemIntegration.get_instance(
-                        self.user_id, 
-                        self.conversation_id
-                    )
                 
                 # Create a proper context for the call
                 conflict_ctx = RunContextWrapper({
@@ -385,14 +396,17 @@ class StoryDirectorContext:
                     "conversation_id": self.conversation_id
                 })
                 
-                # Pass the context
-                result = await self.conflict_manager.generate_conflict(conflict_type, ctx=conflict_ctx)
+                # Pass the context when calling generate_conflict
+                result = await self.conflict_manager.generate_conflict(
+                    {"conflict_type": conflict_type},  # Pass as dict
+                    ctx=conflict_ctx
+                )
                     
                 if result and result.get("conflict_id"):
                     from lore.core import canon
                     async with get_db_connection_context() as conn:
                         await canon.log_canonical_event(
-                            ctx, conn,
+                            conflict_ctx, conn,
                             f"Generated new {conflict_type} conflict: {result.get('conflict_name', 'Unknown')}",
                             tags=["conflict", "generation", conflict_type],
                             significance=7
