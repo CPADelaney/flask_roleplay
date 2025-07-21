@@ -1782,7 +1782,7 @@ async def create_all_tables():
                     realization_level INTEGER DEFAULT 0,
                     last_revelation TIMESTAMP,
                     stage_entered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    stage_history JSONB DEFAULT '[]',::jsonb,
+                    stage_history JSONB DEFAULT '[]'::jsonb,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                     FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
@@ -2463,6 +2463,9 @@ async def create_all_tables():
                 ''',
                 '''
                 ALTER TABLE NPCStats ADD COLUMN trauma_triggers JSONB;
+                ''',
+                '''
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS personality_patterns JSONB DEFAULT '[]'::jsonb;
                 ''',
                 '''
                 ALTER TABLE NPCStats ADD COLUMN flashback_triggers JSONB;
