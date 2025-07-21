@@ -236,10 +236,14 @@ class ConflictSystemIntegration:
         key = f"{user_id}:{conversation_id}"
         if key not in cls._npc_systems:
             try:
-                cls._npc_systems[key] = IntegratedNPCSystem(user_id, conversation_id)
+                # Create instance and store in local variable first
+                npc_system = IntegratedNPCSystem(user_id, conversation_id)
+                cls._npc_systems[key] = npc_system
+                
                 # Only initialize if not already initialized
-                if not npc_system.initialized:  # <-- Change to .is_initialized
+                if not npc_system.is_initialized:
                     await npc_system.initialize()
+                    
                 logger.info(f"Created new IntegratedNPCSystem for {key}")
             except Exception as e:
                 logger.error(f"Error creating NPC system: {e}")
