@@ -158,6 +158,7 @@ class IntegratedNPCSystem:
         
         # Initialize memory system
         self._memory_system = None
+        self.is_initialized: bool = False
         
         # Set up periodic cache cleanup and metrics reporting
         self._setup_cache_cleanup()
@@ -184,6 +185,8 @@ class IntegratedNPCSystem:
                 self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
             except Exception as e:
                 logger.error(f"Failed to initialize memory system: {e}")
+
+        self.is_initialized = True
         return self
 
     async def _get_active_npcs(self) -> List[Dict[str, Any]]:
