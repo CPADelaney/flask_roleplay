@@ -544,6 +544,33 @@ class RPGEntityManager:
     async def close(self) -> None:
         """Close the entity manager"""
         await self.vector_db.close()
+
+    async def _add_memory(self, data):
+            """Add a memory to the vector database."""
+            if not self.entity_manager:
+                await self.initialize()
+                if not self.entity_manager:
+                    return False
+            
+            memory_id = data.get("memory_id", "")
+            content = data.get("content", "")
+            memory_type = data.get("memory_type", "observation")
+            importance = data.get("importance", 0.5)
+            tags = data.get("tags", [])
+            
+            # Get embedding
+            embedding = await self._get_embedding(content)
+            
+            # Use the generic add_entity method with entity_type="memory"
+            return await self.entity_manager.add_entity(
+                entity_type="memory",
+                entity_id=memory_id,
+                content=content,
+                embedding=embedding,
+                memory_type=memory_type,
+                importance=importance,
+                tags=tags
+            )
     
     async def add_entity(
         self,
