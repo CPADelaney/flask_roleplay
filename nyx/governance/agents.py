@@ -31,6 +31,8 @@ MAX_TOTAL_DISCOVERY  = 20.0     # fail-safe ceiling for the whole routine
 
 class AgentGovernanceMixin:
     """Handles agent coordination and management functions."""
+    def __init__(self):
+        self._discovery_completed = False  # Add flag
     
     async def register_agent(self, agent_type: str, agent_instance: Any, agent_id: str) -> Dict[str, Any]:
         """Register an agent instance under (type, id)."""
@@ -152,22 +154,21 @@ class AgentGovernanceMixin:
         logger.info(f"Action report processed: {report_id} from {agent_type} / {agent_id}")
         return {"success": True, "report_id": report_id}
     
+    @staticmethod  # Add static method decorator
     async def _safe_import(module_path: str):
         """
         Import a module in a worker-thread so that any slow I/O
-        (network, disk, heavy static initialisation) can’t stall the loop.
+        (network, disk, heavy static initialisation) can't stall the loop.
         """
         return await asyncio.to_thread(importlib.import_module, module_path)
     
     
     async def discover_and_register_agents(self):
-        """
-        Non-blocking agent discovery:
-        • each import guarded with per-module timeout
-        • each agent instantiation guarded with timeout
-        • whole routine bounded by MAX_TOTAL_DISCOVERY
-        • every register_agent queued – we don’t await the queue consumer
-        """
+        """Non-blocking agent discovery with protection against repeated calls"""
+        if self._discovery_completed:
+            logger.debug("Agent discovery already completed, skipping")
+            return True
+            
         logger.info(
             f"[discover] starting for user={self.user_id}, conv={self.conversation_id}"
         )
@@ -248,6 +249,7 @@ class AgentGovernanceMixin:
         # ------------------------------------------------------------
         asyncio.create_task(self._discover_npc_agents())
     
+        self._discovery_completed = True
         logger.info(f"[discover] completed – {registered} static agents queued")
         return registered > 0
     
