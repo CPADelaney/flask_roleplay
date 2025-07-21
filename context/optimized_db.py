@@ -69,8 +69,6 @@ class VectorDatabase:
         raise NotImplementedError("Subclasses must implement get_by_id")
 
 
-# Keep only ONE external database implementation that you actually use
-# For example, if you use Qdrant:
 class QdrantDatabase(VectorDatabase):
     """Qdrant vector database integration with Render optimizations"""
     
@@ -544,33 +542,6 @@ class RPGEntityManager:
     async def close(self) -> None:
         """Close the entity manager"""
         await self.vector_db.close()
-
-    async def _add_memory(self, data):
-            """Add a memory to the vector database."""
-            if not self.entity_manager:
-                await self.initialize()
-                if not self.entity_manager:
-                    return False
-            
-            memory_id = data.get("memory_id", "")
-            content = data.get("content", "")
-            memory_type = data.get("memory_type", "observation")
-            importance = data.get("importance", 0.5)
-            tags = data.get("tags", [])
-            
-            # Get embedding
-            embedding = await self._get_embedding(content)
-            
-            # Use the generic add_entity method with entity_type="memory"
-            return await self.entity_manager.add_entity(
-                entity_type="memory",
-                entity_id=memory_id,
-                content=content,
-                embedding=embedding,
-                memory_type=memory_type,
-                importance=importance,
-                tags=tags
-            )
     
     async def add_entity(
         self,
@@ -631,6 +602,173 @@ class RPGEntityManager:
             ids=[f"{entity_type}_{entity_id}"],
             vectors=[embedding],
             metadata=[full_metadata]
+        )
+    
+    async def add_memory(
+        self,
+        memory_id: str,
+        content: str,
+        memory_type: str = "observation",
+        importance: float = 0.5,
+        tags: Optional[List[str]] = None,
+        embedding: Optional[List[float]] = None,
+        **extra_metadata
+    ) -> bool:
+        """
+        Add a memory to the vector database.
+        
+        Args:
+            memory_id: Unique identifier for the memory
+            content: Memory content text  
+            memory_type: Type of memory (observation, event, etc.)
+            importance: Importance score (0-1)
+            tags: Optional list of tags
+            embedding: Optional pre-computed embedding
+            **extra_metadata: Additional metadata fields
+            
+        Returns:
+            Success status
+        """
+        # Combine all metadata
+        metadata = {
+            "memory_type": memory_type,
+            "importance": importance,
+            "tags": tags or [],
+            **extra_metadata
+        }
+        
+        # Use the generic add_entity method with entity_type="memory"
+        return await self.add_entity(
+            entity_type="memory",
+            entity_id=memory_id,
+            content=content,
+            embedding=embedding,
+            **metadata
+        )
+    
+    async def add_npc(
+        self,
+        npc_id: str,
+        npc_name: str,
+        description: str = "",
+        personality: str = "",
+        location: Optional[str] = None,
+        embedding: Optional[List[float]] = None,
+        **extra_metadata
+    ) -> bool:
+        """
+        Add an NPC to the vector database.
+        
+        Args:
+            npc_id: Unique identifier for the NPC
+            npc_name: Name of the NPC
+            description: Physical description
+            personality: Personality traits
+            location: Current location
+            embedding: Optional pre-computed embedding
+            **extra_metadata: Additional metadata fields
+            
+        Returns:
+            Success status
+        """
+        # Create content for embedding if not provided
+        content = f"NPC: {npc_name}. {description} {personality}"
+        
+        metadata = {
+            "npc_name": npc_name,
+            "description": description,
+            "personality": personality,
+            "location": location,
+            **extra_metadata
+        }
+        
+        return await self.add_entity(
+            entity_type="npc",
+            entity_id=npc_id,
+            content=content,
+            embedding=embedding,
+            **metadata
+        )
+    
+    async def add_location(
+        self,
+        location_id: str,
+        location_name: str,
+        description: str = "",
+        location_type: Optional[str] = None,
+        connected_locations: Optional[List[str]] = None,
+        embedding: Optional[List[float]] = None,
+        **extra_metadata
+    ) -> bool:
+        """
+        Add a location to the vector database.
+        
+        Args:
+            location_id: Unique identifier for the location
+            location_name: Name of the location
+            description: Location description
+            location_type: Type of location (city, dungeon, etc.)
+            connected_locations: List of connected location IDs
+            embedding: Optional pre-computed embedding
+            **extra_metadata: Additional metadata fields
+            
+        Returns:
+            Success status
+        """
+        # Create content for embedding if not provided
+        content = f"Location: {location_name}. {description}"
+        
+        metadata = {
+            "location_name": location_name,
+            "description": description,
+            "location_type": location_type,
+            "connected_locations": connected_locations or [],
+            **extra_metadata
+        }
+        
+        return await self.add_entity(
+            entity_type="location",
+            entity_id=location_id,
+            content=content,
+            embedding=embedding,
+            **metadata
+        )
+    
+    async def add_narrative(
+        self,
+        narrative_id: str,
+        content: str,
+        narrative_type: str = "story",
+        importance: float = 0.5,
+        embedding: Optional[List[float]] = None,
+        **extra_metadata
+    ) -> bool:
+        """
+        Add a narrative element to the vector database.
+        
+        Args:
+            narrative_id: Unique identifier for the narrative
+            content: Narrative content text
+            narrative_type: Type of narrative (story, quest, etc.)
+            importance: Importance score (0-1)
+            embedding: Optional pre-computed embedding
+            **extra_metadata: Additional metadata fields
+            
+        Returns:
+            Success status
+        """
+        metadata = {
+            "narrative_type": narrative_type,
+            "importance": importance,
+            **extra_metadata
+        }
+        
+        return await self.add_entity(
+            entity_type="narrative",
+            entity_id=narrative_id,
+            content=content,
+            embedding=embedding,
+            **metadata
         )
     
     async def search_entities(
