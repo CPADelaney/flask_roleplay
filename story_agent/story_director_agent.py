@@ -49,6 +49,7 @@ from context.vector_service import get_vector_service
 from context.context_manager import get_context_manager, ContextDiff
 from context.context_performance import PerformanceMonitor, track_performance
 from context.unified_cache import context_cache
+from context.models import MemoryMetadata  # Add this line
 
 from logic.conflict_system.hooks import (
     check_and_generate_conflict,
