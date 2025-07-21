@@ -2220,7 +2220,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     description += "Agreement was reached. " if negotiation_results.get("agreement_reached", False) else "No agreement was reached. "
                     
                     await self.add_international_relation(
-                        RunContextWrapper(context=None),
+                        self.create_run_context(),  # Use the base manager's context creation method
                         nation1_id=nation1_id,
                         nation2_id=nation2_id,
                         relationship_type=relation_type,
