@@ -1,27 +1,35 @@
-# memory/memory_intregration.py
-
+# memory/memory_integration.py
 """
-Memory Integration Helper Module
+Memory Integration Module
 
-This module provides utility functions to integrate the memory retrieval system
-with the existing application architecture and Celery tasks.
+This module provides:
+1. Helper functions to integrate the memory retrieval system with Celery tasks
+2. Integration layer between the memory system and Nyx's central governance framework
 """
 
 import os
 import logging
 import asyncio
+import json
 from typing import Dict, List, Any, Optional, Union, Tuple
 from functools import wraps
+from datetime import datetime
 
 # Import memory components
 from memory.memory_service import MemoryEmbeddingService
 from memory.memory_retriever import MemoryRetrieverAgent
+from memory.memory_nyx_integration import MemoryNyxBridge
+from memory.core import MemoryType, MemorySignificance
 
 # Import database connection
 from db.connection import get_db_connection_context
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# PART 1: Memory Service Helper Functions
+# ============================================================================
 
 # Global registry to avoid recreating services
 _memory_services = {}
@@ -304,7 +312,6 @@ async def analyze_with_memory(
     
     return result
 
-# Function to integrate with background_chat_task
 async def enrich_context_with_memories(
     user_id: int,
     conversation_id: int,
@@ -413,23 +420,10 @@ async def process_memory_task(user_id, conversation_id, message_text, entity_typ
             "success": False,
             "error": str(e)
         }
-"""
-Memory Integration for Nyx Governance System.
 
-This module provides the integration layer between the memory system and Nyx's
-central governance framework, ensuring memory operations follow governance rules.
-"""
-
-import logging
-import json
-from typing import Dict, List, Any, Optional, Union
-from datetime import datetime
-
-from memory.memory_nyx_integration import MemoryNyxBridge
-from memory.core import MemoryType, MemorySignificance
-from db.connection import get_db_connection_context
-
-logger = logging.getLogger(__name__)
+# ============================================================================
+# PART 2: Memory Nyx Governance Integration
+# ============================================================================
 
 class MemoryIntegration(MemoryNyxBridge):
     """
