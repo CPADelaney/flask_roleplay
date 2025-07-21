@@ -477,10 +477,12 @@ class MemoryManager:
                 memory.memory_id = str(db_id)
                 logger.info(f"Added memory {memory.memory_id} (type: {request.memory_type}, importance: {final_importance:.2f})")
                 
-                # Add to local cache if above threshold
+                # Add to local cache if above threshold - FIXED
                 cache_importance_threshold = 0.6
                 if self.config:
-                    cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
+                    config_value = self.config.get("memory_cache_importance_threshold", 0.6)
+                    cache_importance_threshold = config_value if config_value is not None else 0.6
+                
                 if final_importance >= cache_importance_threshold:
                     self.memories[memory.memory_id] = memory
                     self._build_memory_indices()
@@ -552,10 +554,12 @@ class MemoryManager:
                             mem.last_accessed = update_result["last_accessed"]
                             logger.debug(f"Updated access count for memory {memory_id} in DB.")
                         
-                        # maybe add to local cache
+                        # maybe add to local cache - FIXED
                         cache_importance_threshold = 0.6
                         if self.config:
-                            cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
+                            config_value = self.config.get("memory_cache_importance_threshold", 0.6)
+                            cache_importance_threshold = config_value if config_value is not None else 0.6
+                        
                         if mem.importance >= cache_importance_threshold:
                             self.memories[mem.memory_id] = mem
                             logger.debug(f"Memory {memory_id} added to local cache after DB fetch.")
@@ -580,14 +584,16 @@ class MemoryManager:
             if mem_obj and memory_id not in self.memories:
                 cache_importance_threshold = 0.6
                 if self.config:
-                    cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
+                    config_value = self.config.get("memory_cache_importance_threshold", 0.6)
+                    cache_importance_threshold = config_value if config_value is not None else 0.6
+                
                 if mem_obj.importance >= cache_importance_threshold:
                     self.memories[memory_id] = mem_obj
                     logger.debug(f"Memory {memory_id} added to local cache after cache fetch.")
             return mem_obj
         
         return None
-
+    
     async def _get_recent_memories(
         self,
         days: int = 3,
@@ -1038,10 +1044,13 @@ class MemoryManager:
             """
             importance_thresh = 0.6
             if self.config:
-                importance_thresh = self.config.get("memory_cache_importance_threshold", 0.6)
+                config_value = self.config.get("memory_cache_importance_threshold", 0.6)
+                importance_thresh = config_value if config_value is not None else 0.6
+            
             limit = 100
             if self.config:
-                limit = self.config.get("memory_cache_limit", 100)
+                config_limit = self.config.get("memory_cache_limit", 100)
+                limit = config_limit if config_limit is not None else 100
             
             mem_dict = {}
             try:
@@ -1068,7 +1077,7 @@ class MemoryManager:
         else:
             self.memories = {}
         logger.debug(f"Memory cache populated with {len(self.memories)} memories.")
-
+    
     def _build_memory_indices(self):
         """Build memory indices from the self.memories cache."""
         logger.debug(f"Building memory indices from {len(self.memories)} cached memories...")
