@@ -91,7 +91,7 @@ async def get_central_governance(user_id: int, conversation_id: int) -> Any:
         conversation_id: Conversation ID
         
     Returns:
-        NyxGovernanceSystem instance
+        NyxUnifiedGovernor instance
         
     Raises:
         RuntimeError: If circular initialization is detected
@@ -127,34 +127,17 @@ async def get_central_governance(user_id: int, conversation_id: int) -> Any:
             _initialization_in_progress[key] = True
             logger.info(f"Initializing governance for {key}")
             
-            # Import here to avoid circular imports at module level
-            from nyx.nyx_governance import NyxGovernanceSystem
+            # Import the correct class - NyxUnifiedGovernor instead of NyxGovernanceSystem
+            from nyx.governance import NyxUnifiedGovernor
             
             # Create new governance instance
-            governance = NyxGovernanceSystem(user_id, conversation_id)
+            governance = NyxUnifiedGovernor(user_id, conversation_id)
             
             # Store instance BEFORE initializing to handle circular deps
             _governance_instances[key] = governance
             
             # Initialize the governance system
-            # Pass flag to prevent automatic agent discovery
-            if hasattr(governance, 'initialize'):
-                init_kwargs = {}
-                # Check if initialize accepts discover_agents parameter
-                import inspect
-                sig = inspect.signature(governance.initialize)
-                if 'discover_agents' in sig.parameters:
-                    init_kwargs['discover_agents'] = False
-                
-                await governance.initialize(**init_kwargs)
-            
-            # Now discover agents if not already done
-            if hasattr(governance, '_discovery_completed') and not governance._discovery_completed:
-                try:
-                    await governance.discover_and_register_agents()
-                except Exception as e:
-                    logger.error(f"Error discovering agents: {e}")
-                    # Don't fail initialization if agent discovery fails
+            await governance.initialize()
             
             logger.info(f"Governance initialization complete for {key}")
             return governance
