@@ -1071,12 +1071,21 @@ class LoreKnowledgeAccess(BaseDataAccess):
                     for row in rows:
                         item = dict(row)
                         
-                        # Skip if no embedding
-                        if "embedding" not in item or not item["embedding"]:
+                        # Skip if no embedding - FIXED: proper check for numpy array
+                        if "embedding" not in item or item["embedding"] is None:
+                            continue
+                        
+                        # Convert embedding to list if it's not already
+                        embedding = item["embedding"]
+                        if hasattr(embedding, 'tolist'):
+                            embedding = embedding.tolist()
+                        
+                        # Skip if embedding is empty
+                        if not embedding or len(embedding) == 0:
                             continue
                             
                         # Calculate similarity
-                        similarity = await compute_similarity(query_embedding, item["embedding"])
+                        similarity = await compute_similarity(query_embedding, embedding)
                         
                         # Only include if above threshold
                         if similarity >= min_relevance:
@@ -1138,8 +1147,8 @@ class LoreKnowledgeAccess(BaseDataAccess):
                 if not lore_item:
                     continue
                     
-                # Skip if no embedding
-                if "embedding" not in lore_item or not lore_item["embedding"]:
+                # Skip if no embedding - FIXED: proper check for numpy array
+                if "embedding" not in lore_item or lore_item["embedding"] is None:
                     # Try to generate an embedding from the description
                     if "description" in lore_item:
                         try:
@@ -1149,8 +1158,17 @@ class LoreKnowledgeAccess(BaseDataAccess):
                     else:
                         continue
                 
+                # Convert embedding to list if it's not already
+                embedding = lore_item["embedding"]
+                if hasattr(embedding, 'tolist'):
+                    embedding = embedding.tolist()
+                
+                # Skip if embedding is empty
+                if not embedding or len(embedding) == 0:
+                    continue
+                
                 # Calculate similarity
-                similarity = await compute_similarity(query_embedding, lore_item["embedding"])
+                similarity = await compute_similarity(query_embedding, embedding)
                 
                 # Add to results
                 lore_with_knowledge = {
