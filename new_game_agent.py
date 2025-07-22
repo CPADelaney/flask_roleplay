@@ -246,6 +246,7 @@ class ProcessNewGameResult(BaseModel):
     conversation_id: int
     welcome_image_url: Optional[str]
     status: str
+    opening_narrative: str  # Add this field
     model_config = ConfigDict(extra="forbid")
 
 class GameCreationResult(BaseModel):
@@ -1690,8 +1691,10 @@ class NewGameAgent:
                 logger.info("Started background directive processing")
             
             logger.info(f"New game creation completed for conversation {conversation_id}")
+                        
+            opening_narrative_text = opening  # Store the actual text
             
-            # Return structured result
+            # Then in the return statement at the end:
             return ProcessNewGameResult(
                 message=f"New game started. environment={env.setting_name}, conversation_id={conversation_id}",
                 scenario_name=env.scenario_name,
@@ -1700,7 +1703,8 @@ class NewGameAgent:
                 lore_summary=final.lore_summary,
                 conversation_id=conversation_id,
                 welcome_image_url=final.welcome_image_url,
-                status="ready"
+                status="ready",
+                opening_narrative=opening_narrative_text  # Add this
             )
             
         except Exception as e:
