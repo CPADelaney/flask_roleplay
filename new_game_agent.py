@@ -1251,30 +1251,23 @@ class NewGameAgent:
                 logging.warning(f"Only {npc_count} NPCs available, skipping conflict generation")
                 conflict_name = "No initial conflict - insufficient NPCs"
             else:
-                # Generate initial conflict (existing code)
+                # Generate initial conflict
                 try:
                     from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+                    
+                    # Create conflict context
+                    conflict_ctx = RunContextWrapper(context={
+                        'user_id': user_id,
+                        'conversation_id': conversation_id
+                    })
                     
                     # Always ensure the singleton *finishes* booting
                     conflict_integration = await ConflictSystemIntegration.get_instance(
                         user_id, conversation_id
                     )
-                    await conflict_integration.initialize()          #  ←──── NEW LINE
+                    await conflict_integration.initialize()
                     
-                    # Now it’s guaranteed ready
-                    initial_conflict = await conflict_integration.generate_conflict(
-                        {
-                            "conflict_type": "major",
-                            "intensity": "medium",
-                            "player_involvement": "indirect",
-                        },
-                        ctx=conflict_ctx,
-                    )
-                    conflict_name = initial_conflict.get("conflict_details", {}).get(
-                        "name", "Unnamed Conflict"
-                    )
-                        
-                    # Pass the context when calling generate_conflict
+                    # Now it's guaranteed ready
                     initial_conflict = await conflict_integration.generate_conflict(
                         {
                             "conflict_type": "major",
@@ -1284,97 +1277,94 @@ class NewGameAgent:
                         ctx=conflict_ctx
                     )
                     conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
-                else:
-                    logging.warning("Conflict system not properly initialized, skipping conflict generation")
-                    conflict_name = "No initial conflict - system not ready"
-            except Exception as e:
-                logging.error(f"Error generating initial conflict: {e}", exc_info=True)
-                conflict_name = "No initial conflict - generation failed"
+                except Exception as e:
+                    logging.error(f"Error generating initial conflict: {e}", exc_info=True)
+                    conflict_name = "No initial conflict - generation failed"
             
-            # Generate currency system canonically
-            try:
-                from logic.currency_generator import CurrencyGenerator
-                currency_gen = CurrencyGenerator(user_id, conversation_id)
-                currency_system = await currency_gen.get_currency_system()
+        # Generate currency system canonically
+        try:
+            from logic.currency_generator import CurrencyGenerator
+            currency_gen = CurrencyGenerator(user_id, conversation_id)
+            currency_system = await currency_gen.get_currency_system()
+            
+            # Create currency canonically
+            async with get_db_connection_context() as conn:
+                await canon.find_or_create_currency_system(
+                    canon_ctx, conn,
+                    currency_name=currency_system['currency_name'],
+                    currency_plural=currency_system['currency_plural'],
+                    minor_currency_name=currency_system.get('minor_currency_name'),
+                    minor_currency_plural=currency_system.get('minor_currency_plural'),
+                    exchange_rate=currency_system.get('exchange_rate', 100),
+                    currency_symbol=currency_system.get('currency_symbol', '$'),
+                    description=currency_system.get('description', ''),
+                    setting_context=currency_system.get('setting_context', '')
+                )
                 
-                # Create currency canonically
-                async with get_db_connection_context() as conn:
-                    await canon.find_or_create_currency_system(
-                        canon_ctx, conn,
-                        currency_name=currency_system['currency_name'],
-                        currency_plural=currency_system['currency_plural'],
-                        minor_currency_name=currency_system.get('minor_currency_name'),
-                        minor_currency_plural=currency_system.get('minor_currency_plural'),
-                        exchange_rate=currency_system.get('exchange_rate', 100),
-                        currency_symbol=currency_system.get('currency_symbol', '$'),
-                        description=currency_system.get('description', ''),
-                        setting_context=currency_system.get('setting_context', '')
-                    )
-                    
-                currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
-            except Exception as e:
-                logging.error(f"Error generating currency system: {e}")
-                currency_name = "Standard currency"
-                
-            # Try to generate welcome image, but don't fail if it's not available
-            welcome_image_url = None
-            try:
-                if self._image_gen_available():          # ←── changed line
-                    scene_data_json = json.dumps({
-                        "scene_data": {
-                            "npc_names": [],
-                            "setting": await self._get_setting_name(ctx),
-                            "actions": ["introduction", "welcome"],
-                            "mood": "atmospheric",
-                            "expressions": {},
-                            "npc_positions": {},
-                            "visibility_triggers": {
-                                "character_introduction": True,
-                                "significant_location": True,
-                                "emotional_intensity": 50,
-                                "intimacy_level": 20,
-                                "appearance_change": False
-                            }
-                        },
-                        "image_generation": {
-                            "generate": True,
-                            "priority": "high",
-                            "focus": "setting",
-                            "framing": "wide_shot",
-                            "reason": "Initial scene visualization"
+            currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
+        except Exception as e:
+            logging.error(f"Error generating currency system: {e}")
+            currency_name = "Standard currency"
+            
+        # Try to generate welcome image, but don't fail if it's not available
+        welcome_image_url = None
+        try:
+            if self._image_gen_available():
+                scene_data_json = json.dumps({
+                    "scene_data": {
+                        "npc_names": [],
+                        "setting": await self._get_setting_name(ctx),
+                        "actions": ["introduction", "welcome"],
+                        "mood": "atmospheric",
+                        "expressions": {},
+                        "npc_positions": {},
+                        "visibility_triggers": {
+                            "character_introduction": True,
+                            "significant_location": True,
+                            "emotional_intensity": 50,
+                            "intimacy_level": 20,
+                            "appearance_change": False
                         }
-                    })
+                    },
+                    "image_generation": {
+                        "generate": True,
+                        "priority": "high",
+                        "focus": "setting",
+                        "framing": "wide_shot",
+                        "reason": "Initial scene visualization"
+                    }
+                })
+                
+                # Parse back to dict for the function call
+                scene_data = json.loads(scene_data_json)
+                
+                image_result = await generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id)
+                if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                    welcome_image_url = image_result["image_urls"][0]
                     
-                    # Parse back to dict for the function call
-                    scene_data = json.loads(scene_data_json)
-                    
-                    image_result = await generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id)
-                    if image_result and "image_urls" in image_result and image_result["image_urls"]:
-                        welcome_image_url = image_result["image_urls"][0]
-                        
-                        # Store the image URL canonically
-                        async with get_db_connection_context() as conn:
-                            await canon.update_current_roleplay(
-                                canon_ctx, conn,
-                                'WelcomeImageUrl', welcome_image_url
-                            )
-                        logging.info("Welcome image generated successfully")
-                else:
-                    logging.info("Image generation skipped - no API key configured")
-                    
-            except Exception as e:
-                # Log the error but don't fail the entire setup
-                logging.warning(f"Failed to generate welcome image: {e}")
-                logging.info("Continuing without welcome image")
-            
-            # Return structured result - but DON'T mark as ready yet
-            return FinalizeResult(
-                status="finalized",  # Not "ready" yet
-                welcome_image_url=welcome_image_url,
-                lore_summary=lore_summary,
-                initial_conflict=conflict_name,
-                currency_system=currency_name
-            )
+                    # Store the image URL canonically
+                    async with get_db_connection_context() as conn:
+                        await canon.update_current_roleplay(
+                            canon_ctx, conn,
+                            'WelcomeImageUrl', welcome_image_url
+                        )
+                    logging.info("Welcome image generated successfully")
+            else:
+                logging.info("Image generation skipped - no API key configured")
+                
+        except Exception as e:
+            # Log the error but don't fail the entire setup
+            logging.warning(f"Failed to generate welcome image: {e}")
+            logging.info("Continuing without welcome image")
+        
+        # Return structured result - but DON'T mark as ready yet
+        return FinalizeResult(
+            status="finalized",  # Not "ready" yet
+            welcome_image_url=welcome_image_url,
+            lore_summary=lore_summary,
+            initial_conflict=conflict_name,
+            currency_system=currency_name
+        )
 
     async def _get_setting_name(self, ctx: RunContextWrapper[GameContext]) -> str:
         """Helper method to get the setting name from the database"""
