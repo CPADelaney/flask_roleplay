@@ -93,59 +93,61 @@ class ConflictSystemIntegration:
         self._init_lock: asyncio.Lock = asyncio.Lock()  
 
     @classmethod
-    async def get_instance(cls, user_id: int, conversation_id: int) -> 'ConflictSystemIntegration':
-        """Get or create instance for user/conversation with proper locking"""
-        key = f"{user_id}:{conversation_id}"
-        
-        # Create lock if it doesn't exist
+    async def get_instance(cls, user_id: int, conversation_id: int) -> "ConflictSystemIntegration":
+        """
+        Singleton per (user_id, conversation_id).
+        """
+        key: tuple[int, int] = (user_id, conversation_id)
+    
+        # one lock per key
         if key not in cls._initialization_locks:
             cls._initialization_locks[key] = asyncio.Lock()
-        
-        # Use the lock to ensure only one initialization happens
+    
         async with cls._initialization_locks[key]:
             if key not in cls._instances:
-                instance = cls(user_id, conversation_id)
-                cls._instances[key] = instance
-                await instance.initialize()
-            
-        return cls._instances[key]
-
+                logger.info("-- creating ConflictSystemIntegration for %s", key)
+                inst = cls(user_id, conversation_id)
+                cls._instances[key] = inst
+                # heavy init happens lazily when first .initialize() is awaited
+            return cls._instances[key]
     
     async def initialize(self):
         """
-        Thread-safe, idempotent initialiser.
-        May be awaited concurrently by many coroutines.
-        Heavy work (assistant creation, background loops, governance
-        registration) is executed exactly once.
+        Idempotent & concurrency-safe initialiser.
+    
+        - Fast return if we've already finished.
+        - If another coroutine is currently inside the heavy section, it will grab
+          the same lock first; when it finishes the flag is already True so the
+          second coroutine exits immediately.
         """
-        # ── fast exit if we're already done ─────────────────────────────────
-        if self.is_initialized:
+    
+        if self.is_initialized:                       # cheap fast-path
             return self
     
-        # ── wait here if *another* coroutine is already in progress ─────────
-        if getattr(self, "_initialising", False):
-            # Someone else is doing the work – just wait until they finish
-            while not self.is_initialized:
-                await asyncio.sleep(0.1)
-            return self
+        # create the per-instance lock if it doesn't exist
+        if not hasattr(self, "_init_lock"):
+            self._init_lock = asyncio.Lock()
     
-        # ── we are the first one; mark that we're doing the work ────────────
-        self._initialising = True
+        async with self._init_lock:
+            # another coroutine may have completed while we waited
+            if self.is_initialized:
+                logger.info("-- initialise(): fast exit after waiting (done)")
+                return self
     
-        async with self._init_lock:        # only one coroutine can enter here
+            # mark as done *before* any await so that a waiter exits quickly
+            self.is_initialized = True
+            logger.info("-- initialise(): entering heavy block for uid=%s cid=%s",
+                        self.user_id, self.conversation_id)
+    
             try:
-                # Double-check after the await (someone might have finished
-                # while we were waiting for the lock)
-                if self.is_initialized:
-                    return self
-    
                 with trace(workflow_name="ConflictSystemInit",
                            group_id=f"conflict_{self.conversation_id}"):
     
-                    # 1. assistant pool
+                    # 1. assistant pool ------------------------------------------------
                     self.agents = apply_guardrails(await initialize_agents())
+                    logger.info("-- assistants created")
     
-                    # 2. world-state helpers
+                    # 2. helper subsystems --------------------------------------------
                     self.lore_system = await self.get_lore_system(
                         self.user_id, self.conversation_id
                     )
@@ -153,7 +155,7 @@ class ConflictSystemIntegration:
                         self.user_id, self.conversation_id
                     )
     
-                    # 3. conflict mechanics
+                    # 3. conflict mechanics -------------------------------------------
                     self.resolution_system = ConflictResolutionSystem(
                         self.user_id, self.conversation_id
                     )
@@ -166,12 +168,12 @@ class ConflictSystemIntegration:
                         self.user_id, self.conversation_id
                     )
     
-                    # 4. player stats (idempotent)
+                    # 4. player stats (idempotent) ------------------------------------
                     from logic.narrative_events import initialize_player_stats
                     await initialize_player_stats(self.user_id,
                                                   self.conversation_id)
     
-                    # 5. context, memory, vector search
+                    # 5. context/memory/vector layers ---------------------------------
                     self.context_service = await get_context_service(
                         self.user_id, self.conversation_id
                     )
@@ -182,37 +184,34 @@ class ConflictSystemIntegration:
                         self.user_id, self.conversation_id
                     )
     
-                    # 6. story director (guard against recursion)
-                    if not hasattr(self, "_story_director_initialising"):
-                        self._story_director_initialising = True
-                        from story_agent.story_director_agent import (
-                            initialize_story_director,
-                        )
-                        (
-                            self.story_director,
-                            self.story_director_context,
-                        ) = await initialize_story_director(
-                            self.user_id, self.conversation_id
-                        )
-                        self._story_director_initialising = False
+                    # 6. story-director (guard recursion) -----------------------------
+                    if not hasattr(self, "_story_dir_lock"):
+                        self._story_dir_lock = asyncio.Lock()
     
-                    # 7. governance registration (idempotent)
+                    async with self._story_dir_lock:
+                        if not hasattr(self, "story_director"):
+                            from story_agent.story_director_agent import (
+                                initialize_story_director,
+                            )
+                            (self.story_director,
+                             self.story_director_context) = await initialize_story_director(
+                                self.user_id, self.conversation_id
+                            )
+    
+                    # 7. governance registration --------------------------------------
                     await self._register_with_governance()
     
-                    # 8. Mark complete
-                    self.is_initialized = True
-                    logger.info(
-                        "Conflict system initialised (uid=%s, cid=%s)",
-                        self.user_id,
-                        self.conversation_id,
-                    )
+                    logger.info("-- initialise(): SUCCESS (uid=%s, cid=%s)",
+                                self.user_id, self.conversation_id)
     
-            finally:
-                # Make sure the flag is cleared even if we hit an exception
-                self._initialising = False
+            except Exception:
+                # roll back so later attempts can retry
+                self.is_initialized = False
+                logger.exception("-- initialise(): FAILED (uid=%s, cid=%s)",
+                                 self.user_id, self.conversation_id)
+                raise
     
         return self
-
 
 
     # Step 1: Add helper method
