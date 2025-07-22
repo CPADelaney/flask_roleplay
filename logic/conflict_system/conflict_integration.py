@@ -110,32 +110,41 @@ class ConflictSystemIntegration:
             
         return cls._instances[key]
 
-
+    
     async def initialize(self):
         """
-        Prepare the conflict-system for <user_id, conversation_id>.
-
-        * idempotent – may be awaited by multiple coroutines safely
-        * heavy work (assistant creation, background loops, governance
-          registration) is executed **exactly once**
+        Thread-safe, idempotent initialiser.
+        May be awaited concurrently by many coroutines.
+        Heavy work (assistant creation, background loops, governance
+        registration) is executed exactly once.
         """
-        # ─── cheap fast-path ──────────────────────────────────────────────
-        if self.is_initialized:                 # already ready
+        # ── fast exit if we're already done ─────────────────────────────────
+        if self.is_initialized:
             return self
-
-        # ─── only ONE coroutine may perform the heavyweight section ──────
-        async with self._init_lock:             # created in __init__
-            if self.is_initialized:             # someone else finished
-                return self
-
+    
+        # ── wait here if *another* coroutine is already in progress ─────────
+        if getattr(self, "_initialising", False):
+            # Someone else is doing the work – just wait until they finish
+            while not self.is_initialized:
+                await asyncio.sleep(0.1)
+            return self
+    
+        # ── we are the first one; mark that we're doing the work ────────────
+        self._initialising = True
+    
+        async with self._init_lock:        # only one coroutine can enter here
             try:
+                # Double-check after the await (someone might have finished
+                # while we were waiting for the lock)
+                if self.is_initialized:
+                    return self
+    
                 with trace(workflow_name="ConflictSystemInit",
                            group_id=f"conflict_{self.conversation_id}"):
-
+    
                     # 1. assistant pool
-                    assistants = await initialize_agents()
-                    self.agents = apply_guardrails(assistants)
-
+                    self.agents = apply_guardrails(await initialize_agents())
+    
                     # 2. world-state helpers
                     self.lore_system = await self.get_lore_system(
                         self.user_id, self.conversation_id
@@ -143,27 +152,26 @@ class ConflictSystemIntegration:
                     self.npc_system = await self.get_npc_system(
                         self.user_id, self.conversation_id
                     )
-
+    
                     # 3. conflict mechanics
                     self.resolution_system = ConflictResolutionSystem(
                         self.user_id, self.conversation_id
                     )
                     await self.resolution_system.initialize()
-
+    
                     self.conflict_generator   = OrganicConflictGenerator(
                         self.user_id, self.conversation_id
                     )
                     self.stakeholder_autonomy = StakeholderAutonomySystem(
                         self.user_id, self.conversation_id
                     )
-
+    
                     # 4. player stats (idempotent)
                     from logic.narrative_events import initialize_player_stats
-                    await initialize_player_stats(
-                        self.user_id, self.conversation_id
-                    )
-
-                    # 5. context + memories + vectors
+                    await initialize_player_stats(self.user_id,
+                                                  self.conversation_id)
+    
+                    # 5. context, memory, vector search
                     self.context_service = await get_context_service(
                         self.user_id, self.conversation_id
                     )
@@ -173,10 +181,10 @@ class ConflictSystemIntegration:
                     self.vector_service  = await get_vector_service(
                         self.user_id, self.conversation_id
                     )
-
-                    # 6. story-director (guard against recursion)
-                    if not hasattr(self, "_story_director_initializing"):
-                        self._story_director_initializing = True
+    
+                    # 6. story director (guard against recursion)
+                    if not hasattr(self, "_story_director_initialising"):
+                        self._story_director_initialising = True
                         from story_agent.story_director_agent import (
                             initialize_story_director,
                         )
@@ -186,30 +194,25 @@ class ConflictSystemIntegration:
                         ) = await initialize_story_director(
                             self.user_id, self.conversation_id
                         )
-                        self._story_director_initializing = False
-
+                        self._story_director_initialising = False
+    
                     # 7. governance registration (idempotent)
                     await self._register_with_governance()
-
-                    # 8. mark done
+    
+                    # 8. Mark complete
                     self.is_initialized = True
                     logger.info(
                         "Conflict system initialised (uid=%s, cid=%s)",
                         self.user_id,
                         self.conversation_id,
                     )
-
-            except Exception:
-                # make sure subsequent calls retry instead of skipping
-                self.is_initialized = False
-                logger.exception(
-                    "Conflict system initialisation failed (uid=%s, cid=%s)",
-                    self.user_id,
-                    self.conversation_id,
-                )
-                raise
-
+    
+            finally:
+                # Make sure the flag is cleared even if we hit an exception
+                self._initialising = False
+    
         return self
+
 
 
     # Step 1: Add helper method
