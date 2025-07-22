@@ -1112,6 +1112,7 @@ class NewGameAgent:
                    VALUES ($1, $2, $3, NOW())""",
                 conversation_id, "Nyx", opening_narrative
             )
+            await conn.execute("COMMIT")
         
         return opening_narrative
 
@@ -1680,8 +1681,20 @@ class NewGameAgent:
             if not await self._is_setup_complete(user_id, conversation_id):
                 raise Exception("Game setup incomplete - missing required components")
             
-            # Update conversation with final name and ready status
             async with get_db_connection_context() as conn:
+                # First verify the opening narrative exists
+                msg_check = await conn.fetchval("""
+                    SELECT COUNT(*) FROM messages 
+                    WHERE conversation_id=$1 AND sender='Nyx'
+                """, conversation_id)
+                
+                if msg_check == 0:
+                    # If no message exists, store the opening narrative now
+                    await conn.execute("""
+                        INSERT INTO messages (conversation_id, sender, content, created_at)
+                        VALUES ($1, 'Nyx', $2, NOW())
+                    """, conversation_id, opening)
+                
                 await conn.execute("""
                     UPDATE conversations 
                     SET status='ready', 
