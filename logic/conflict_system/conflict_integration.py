@@ -481,21 +481,27 @@ class ConflictSystemIntegration:
             return await handler(directive_data)
         else:
             return {"success": False, "message": f"Unhandled directive type: {directive_type}", "directive_type": directive_type}
-
+    
     async def _handle_action_directive(self, directive_data: Dict[str, Any]) -> Dict[str, Any]:
         """Handles action requests from governance."""
         action_type = directive_data.get("action_type")
         action_params = directive_data.get("parameters", {})
         augmented_params = {**action_params, "enhanced": True}
         
+        # Create context for the action
+        ctx = RunContextWrapper({
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
+        
         if action_type == "generate_conflict":
-            return await self.generate_conflict(augmented_params)
+            return await self.generate_conflict(ctx, augmented_params)
         elif action_type == "resolve_conflict":
-            return await self.resolve_conflict(augmented_params)
+            return await self.resolve_conflict(ctx, augmented_params)
         elif action_type == "update_stakeholders":
-            return await self.update_stakeholders(augmented_params)
+            return await self.update_stakeholders(ctx, augmented_params)
         elif action_type == "manage_manipulation":
-            return await self.manage_manipulation(augmented_params)
+            return await self.manage_manipulation(ctx, augmented_params)
         else:
             return {"success": False, "message": f"Unknown action type: {action_type}"}
 
@@ -942,10 +948,11 @@ class ConflictSystemIntegration:
         action_type="evolve_conflict",
         action_description="Evolving conflict based on events"
     )
-    async def evolve_conflict(self, conflict_id: int, 
-                            event_type: str,
-                            event_data: Dict[str, Any],
-                            ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
+    async def evolve_conflict(self,
+                            ctx: Optional[RunContextWrapper] = None,
+                            conflict_id: int = None, 
+                            event_type: str = None,
+                            event_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Evolve a conflict based on events"""
         await self.initialize()
         
@@ -1037,13 +1044,9 @@ class ConflictSystemIntegration:
                     })
             
             async with get_db_connection_context() as conn:
-                ctx_obj = type("ctx", (), {
-                    "user_id": user_id,
-                    "conversation_id": conversation_id
-                })()
-                
+                # Just use the normalized ctx you already have
                 await canon.log_canonical_event(
-                    ctx_obj, conn,
+                    ctx, conn,
                     f"Conflict '{conflict['conflict_name']}' evolved due to {event_type}",
                     tags=["conflict", "evolution", event_type],
                     significance=6
@@ -1130,10 +1133,12 @@ class ConflictSystemIntegration:
         action_type="handle_story_beat",
         action_description="Processing story beat for conflict"
     )
-    async def handle_story_beat(self, conflict_id: int, path_id: str,
-                               beat_description: str,
-                               involved_npcs: List[int],
-                               ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
+    async def handle_story_beat(self,
+                               ctx: Optional[RunContextWrapper] = None,
+                               conflict_id: int = None,
+                               path_id: str = None,
+                               beat_description: str = None,
+                               involved_npcs: List[int] = None) -> Dict[str, Any]:
         """Handle a story beat in a conflict"""
         await self.initialize()
         
@@ -1207,7 +1212,7 @@ class ConflictSystemIntegration:
         action_type="resolve_conflict",
         action_description="Resolve an existing conflict"
     )
-    async def resolve_conflict(self, resolution_data: Dict[str, Any], ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
+    async def resolve_conflict(self, ctx: Optional[RunContextWrapper] = None, resolution_data: Dict[str, Any] = None) -> Dict[str, Any]:
         await self.initialize()
         try:
             # Step 3: Replace extraction code
@@ -1282,7 +1287,7 @@ class ConflictSystemIntegration:
         action_type="update_stakeholders",
         action_description="Update conflict stakeholders"
     )
-    async def update_stakeholders(self, stakeholder_data: Dict[str, Any], ctx: Optional[RunContextWrapper] = None) -> Dict[str, Any]:
+    async def update_stakeholders(self, ctx: Optional[RunContextWrapper] = None, stakeholder_data: Dict[str, Any] = None) -> Dict[str, Any]:
         await self.initialize()
         try:
             # Step 3: Replace extraction code
