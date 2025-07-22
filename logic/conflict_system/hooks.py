@@ -83,7 +83,15 @@ async def check_and_generate_conflict(user_id: int, conversation_id: int) -> Opt
     """
     try:
         system = await ensure_conflict_system(user_id, conversation_id)
-        result = await system.monitor_and_generate_conflicts()
+        
+        # CREATE CONTEXT HERE
+        ctx = RunContextWrapper({
+            "user_id": user_id, 
+            "conversation_id": conversation_id
+        })
+        
+        # PASS CONTEXT TO THE METHOD
+        result = await system.monitor_and_generate_conflicts(ctx=ctx)
         
         return result.get('generated_conflict')
         
