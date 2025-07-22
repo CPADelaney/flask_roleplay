@@ -2665,7 +2665,7 @@ async def create_all_tables():
                 ALTER TABLE Factions ADD CONSTRAINT factions_type_check 
                 CHECK (type IN ('political', 'community', 'social', 'hobby', 'educational', 
                                 'professional', 'religious', 'criminal', 'corporate', 
-                                'cult', 'supernatural', 'mystical', 'elite', 'underground',
+                                'cult', 'supernatural', 'mystical', 'elite', 'military', 'underground',
                                 'faction', 'organization', 'group', 'other'));
                 ''',
                 '''
