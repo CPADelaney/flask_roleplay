@@ -1284,7 +1284,20 @@ class NewGameAgent:
                         },
                         ctx=conflict_ctx
                     )
-                    conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
+                    
+                    # Add null check here
+                    if initial_conflict and isinstance(initial_conflict, dict):
+                        if initial_conflict.get("success", False):
+                            conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
+                        else:
+                            # Handle failure case
+                            error_msg = initial_conflict.get("message", "Unknown error")
+                            logging.warning(f"Conflict generation failed: {error_msg}")
+                            conflict_name = "No initial conflict - generation failed"
+                    else:
+                        logging.warning(f"Conflict generation returned None or invalid response")
+                        conflict_name = "No initial conflict - invalid response"
+                        
                 except Exception as e:
                     logging.error(f"Error generating initial conflict: {e}", exc_info=True)
                     conflict_name = "No initial conflict - generation failed"
