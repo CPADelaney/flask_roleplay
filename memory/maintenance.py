@@ -31,8 +31,12 @@ class MemoryMaintenance:
     async def cleanup_old_memories(self) -> Dict[str, Any]:
         """
         Clean up old, low-importance memories based on configured thresholds.
-        Returns statistics about the cleanup operation.
         """
+        # ──------------  DEBUG PROBE  ------------
+        logger.debug(
+            "DEBUG – get_db_connection_context=%r  MemoryTelemetry.record=%r",
+            type(get_db_connection_context), type(MemoryTelemetry.record)
+        )
         start_time = datetime.now()
         stats = {
             "deleted_count": 0,
