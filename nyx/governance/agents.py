@@ -46,6 +46,28 @@ class AgentGovernanceMixin:
             "agent_id": agent_id,
             "timestamp": datetime.now().isoformat()
         }
+
+    def is_agent_registered(self, agent_id: str, agent_type: Optional[str] = None) -> bool:
+        """
+        Check if an agent is already registered.
+        
+        Args:
+            agent_id: ID of the agent to check
+            agent_type: Optional agent type to narrow the search
+            
+        Returns:
+            True if the agent is registered, False otherwise
+        """
+        if agent_type:
+            # Check specific agent type
+            return (agent_type in self.registered_agents and 
+                    agent_id in self.registered_agents.get(agent_type, {}))
+        else:
+            # Check all agent types
+            for agents_dict in self.registered_agents.values():
+                if agent_id in agents_dict:
+                    return True
+            return False
     
     async def issue_directive(self, agent_type: str, agent_id: str, directive_type: str, directive_data: Dict[str, Any],
                              priority: int = DirectivePriority.MEDIUM, duration_minutes: int = 60) -> Dict[str, Any]:
