@@ -81,6 +81,7 @@ class ConflictSystemIntegration:
         self.vector_service = None
         self.story_director = None
         self.story_director_context = None
+        
 
         # Directive handlers
         self.directive_handlers = {
@@ -89,6 +90,7 @@ class ConflictSystemIntegration:
             DirectiveType.PROHIBITION: self._handle_prohibition_directive,
             DirectiveType.INFORMATION: self._handle_information_directive
         }
+        self._init_lock: asyncio.Lock = asyncio.Lock()  
 
     @classmethod
     async def get_instance(cls, user_id: int, conversation_id: int) -> 'ConflictSystemIntegration':
@@ -110,65 +112,105 @@ class ConflictSystemIntegration:
 
 
     async def initialize(self):
-        """Initialize the conflict system (only runs once)"""
-        if self.is_initialized:
-            return self
-            
-        key = f"{self.user_id}:{self.conversation_id}"
-        
-        # Remove the old circular initialization detection code
-        # No need for _initializing set anymore
-        
-        try:
-            with trace(workflow_name="ConflictSystemInit", group_id=f"conflict_{self.conversation_id}"):
-                # Initialize core components
-                self.agents = await initialize_agents()
-                self.agents = apply_guardrails(self.agents)
-                
-                self.lore_system = await self.get_lore_system(self.user_id, self.conversation_id)
-                self.npc_system = await self.get_npc_system(self.user_id, self.conversation_id)
-                
-                # Initialize resolution system
-                self.resolution_system = ConflictResolutionSystem(self.user_id, self.conversation_id)
-                await self.resolution_system.initialize()
-                
-                # Initialize conflict generator
-                self.conflict_generator = OrganicConflictGenerator(self.user_id, self.conversation_id)
-                
-                # Initialize stakeholder autonomy
-                self.stakeholder_autonomy = StakeholderAutonomySystem(self.user_id, self.conversation_id)
-                
-                # Initialize player stats if needed
-                from logic.narrative_events import initialize_player_stats
-                await initialize_player_stats(self.user_id, self.conversation_id)
-                
-                # Initialize context-related systems
-                self.context_service = await get_context_service(self.user_id, self.conversation_id)
-                self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-                self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
+        """
+        Prepare the conflict-system for <user_id, conversation_id>.
 
-                from story_agent.story_director_agent import initialize_story_director
-                # Initialize story director (but prevent recursive init)
-                if not hasattr(self, '_story_director_initializing'):
-                    self._story_director_initializing = True
-                    self.story_director, self.story_director_context = await initialize_story_director(
+        * idempotent – may be awaited by multiple coroutines safely
+        * heavy work (assistant creation, background loops, governance
+          registration) is executed **exactly once**
+        """
+        # ─── cheap fast-path ──────────────────────────────────────────────
+        if self.is_initialized:                 # already ready
+            return self
+
+        # ─── only ONE coroutine may perform the heavyweight section ──────
+        async with self._init_lock:             # created in __init__
+            if self.is_initialized:             # someone else finished
+                return self
+
+            try:
+                with trace(workflow_name="ConflictSystemInit",
+                           group_id=f"conflict_{self.conversation_id}"):
+
+                    # 1. assistant pool
+                    assistants = await initialize_agents()
+                    self.agents = apply_guardrails(assistants)
+
+                    # 2. world-state helpers
+                    self.lore_system = await self.get_lore_system(
                         self.user_id, self.conversation_id
                     )
-                    self._story_director_initializing = False
-                
-                self.story_context = await self._get_story_context()
-                
-                # Register with governance (with protection)
-                await self._register_with_governance()
-                
-                self.is_initialized = True
-                logger.info(f"Conflict system initialized successfully for {key}")
-                
-        except Exception as e:
-            logger.error(f"Error initializing conflict system: {e}", exc_info=True)
-            raise
-            
+                    self.npc_system = await self.get_npc_system(
+                        self.user_id, self.conversation_id
+                    )
+
+                    # 3. conflict mechanics
+                    self.resolution_system = ConflictResolutionSystem(
+                        self.user_id, self.conversation_id
+                    )
+                    await self.resolution_system.initialize()
+
+                    self.conflict_generator   = OrganicConflictGenerator(
+                        self.user_id, self.conversation_id
+                    )
+                    self.stakeholder_autonomy = StakeholderAutonomySystem(
+                        self.user_id, self.conversation_id
+                    )
+
+                    # 4. player stats (idempotent)
+                    from logic.narrative_events import initialize_player_stats
+                    await initialize_player_stats(
+                        self.user_id, self.conversation_id
+                    )
+
+                    # 5. context + memories + vectors
+                    self.context_service = await get_context_service(
+                        self.user_id, self.conversation_id
+                    )
+                    self.memory_manager  = await get_memory_manager(
+                        self.user_id, self.conversation_id
+                    )
+                    self.vector_service  = await get_vector_service(
+                        self.user_id, self.conversation_id
+                    )
+
+                    # 6. story-director (guard against recursion)
+                    if not hasattr(self, "_story_director_initializing"):
+                        self._story_director_initializing = True
+                        from story_agent.story_director_agent import (
+                            initialize_story_director,
+                        )
+                        (
+                            self.story_director,
+                            self.story_director_context,
+                        ) = await initialize_story_director(
+                            self.user_id, self.conversation_id
+                        )
+                        self._story_director_initializing = False
+
+                    # 7. governance registration (idempotent)
+                    await self._register_with_governance()
+
+                    # 8. mark done
+                    self.is_initialized = True
+                    logger.info(
+                        "Conflict system initialised (uid=%s, cid=%s)",
+                        self.user_id,
+                        self.conversation_id,
+                    )
+
+            except Exception:
+                # make sure subsequent calls retry instead of skipping
+                self.is_initialized = False
+                logger.exception(
+                    "Conflict system initialisation failed (uid=%s, cid=%s)",
+                    self.user_id,
+                    self.conversation_id,
+                )
+                raise
+
         return self
+
 
     # Step 1: Add helper method
     def _normalize_ctx(
