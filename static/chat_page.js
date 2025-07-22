@@ -413,12 +413,22 @@ async function startNewGame() {
                         await loadConversations();
                         
                         // Show success message
-                        const successMsg = { 
-                            sender: "system", 
-                            content: `New game started! Welcome to ${statusData.conversation_name || "your new world"}.` 
-                        };
-                        appendMessage(successMsg, true);
-                        
+                        if (statusData.opening_narrative) {
+                            // Display the actual opening narrative from Nyx
+                            const openingMsg = { 
+                                sender: "Nyx", 
+                                content: statusData.opening_narrative
+                            };
+                            appendMessage(openingMsg, true);
+                        } else {
+                            // Fallback to generic message if no opening narrative
+                            const successMsg = { 
+                                sender: "system", 
+                                content: `New game started! Welcome to ${statusData.conversation_name || "your new world"}.` 
+                            };
+                            appendMessage(successMsg, true);
+                        }
+                                                
                     } else if (statusData.status === "failed" || attempts >= maxAttempts) {
                         clearInterval(pollInterval);
                         throw new Error(attempts >= maxAttempts ? "Game creation timed out" : "Game creation failed");
