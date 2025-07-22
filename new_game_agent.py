@@ -1169,7 +1169,6 @@ class NewGameAgent:
                 'user_id': user_id,
                 'conversation_id': conversation_id
             })
-
             
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
@@ -1187,6 +1186,7 @@ class NewGameAgent:
             npc_ids = [row["npc_id"] for row in rows] if rows else []
             
         # Initialize and generate lore
+        lore_summary = "Failed to generate lore"  # Default value
         try:
             # Use LoreSystem which has all the integration methods
             from lore.core.lore_system import LoreSystem
@@ -1249,61 +1249,72 @@ class NewGameAgent:
             logging.error(f"Error generating lore: {e}", exc_info=True)
             lore_summary = "Failed to generate lore"
         
-        # Before generating conflict, ensure we have NPCs
+        # Generate initial conflict
+        conflict_name = "No initial conflict"  # Default value
+        
+        # Check if we have enough NPCs
         async with get_db_connection_context() as conn:
             npc_count = await conn.fetchval("""
                 SELECT COUNT(*) FROM NPCStats
                 WHERE user_id = $1 AND conversation_id = $2
             """, user_id, conversation_id)
-            
-            if npc_count < 3:
-                logging.warning(f"Only {npc_count} NPCs available, skipping conflict generation")
-                conflict_name = "No initial conflict - insufficient NPCs"
-            else:
-                # Generate initial conflict
-                try:
-                    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-                    
-                    # Create conflict context
-                    conflict_ctx = RunContextWrapper(context={
-                        'user_id': user_id,
-                        'conversation_id': conversation_id
-                    })
-                    
-                    # Always ensure the singleton *finishes* booting
-                    conflict_integration = await ConflictSystemIntegration.get_instance(
-                        user_id, conversation_id
-                    )
-                    await conflict_integration.initialize()
-                    
-                    # Now it's guaranteed ready
-                    initial_conflict = await conflict_integration.generate_conflict(
-                        conflict_ctx,
-                        {
-                            "conflict_type": "major",
-                            "intensity": "medium",
-                            "player_involvement": "indirect"
-                        }
-                    )
-                    
-                    # Add null check here
-                    if initial_conflict and isinstance(initial_conflict, dict):
-                        if initial_conflict.get("success", False):
-                            conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
-                        else:
-                            # Handle failure case
-                            error_msg = initial_conflict.get("message", "Unknown error")
-                            logging.warning(f"Conflict generation failed: {error_msg}")
-                            conflict_name = "No initial conflict - generation failed"
+        
+        if npc_count < 3:
+            logging.warning(f"Only {npc_count} NPCs available, skipping conflict generation")
+            conflict_name = "No initial conflict - insufficient NPCs"
+        else:
+            # Try to generate conflict
+            try:
+                from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+                
+                # Create conflict context
+                conflict_ctx = RunContextWrapper(context={
+                    'user_id': user_id,
+                    'conversation_id': conversation_id
+                })
+                
+                # Initialize conflict system
+                conflict_integration = await ConflictSystemIntegration.get_instance(
+                    user_id, conversation_id
+                )
+                await conflict_integration.initialize()
+                
+                # Generate conflict
+                initial_conflict = await conflict_integration.generate_conflict(
+                    conflict_ctx,
+                    {
+                        "conflict_type": "major",
+                        "intensity": "medium",
+                        "player_involvement": "indirect"
+                    }
+                )
+                
+                # Safely extract conflict name with multiple checks
+                if initial_conflict is None:
+                    logging.warning("Conflict generation returned None")
+                    conflict_name = "No initial conflict - generation returned None"
+                elif not isinstance(initial_conflict, dict):
+                    logging.warning(f"Conflict generation returned unexpected type: {type(initial_conflict)}")
+                    conflict_name = "No initial conflict - invalid response type"
+                elif not initial_conflict.get("success", False):
+                    error_msg = initial_conflict.get("message", "Unknown error")
+                    logging.warning(f"Conflict generation failed: {error_msg}")
+                    conflict_name = f"No initial conflict - {error_msg}"
+                else:
+                    # Success case - safely extract the name
+                    conflict_details = initial_conflict.get("conflict_details")
+                    if conflict_details and isinstance(conflict_details, dict):
+                        conflict_name = conflict_details.get("name", "Unnamed Conflict")
                     else:
-                        logging.warning(f"Conflict generation returned None or invalid response")
-                        conflict_name = "No initial conflict - invalid response"
+                        logging.warning("Conflict details missing or invalid")
+                        conflict_name = "Unnamed Conflict"
                         
-                except Exception as e:
-                    logging.error(f"Error generating initial conflict: {e}", exc_info=True)
-                    conflict_name = "No initial conflict - generation failed"
+            except Exception as e:
+                logging.error(f"Error generating initial conflict: {e}", exc_info=True)
+                conflict_name = "No initial conflict - exception occurred"
             
         # Generate currency system canonically
+        currency_name = "Standard currency"  # Default value
         try:
             from logic.currency_generator import CurrencyGenerator
             currency_gen = CurrencyGenerator(user_id, conversation_id)
