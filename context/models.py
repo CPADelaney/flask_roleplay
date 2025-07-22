@@ -31,12 +31,19 @@ class MemoryMetadata(BaseMetadata):
     context_type:    Optional[str] = None
     related_memories: Optional[List[str]] = None
 
-    # ---- conflict keys added earlier -------------------------------------
-    conflict_id:     Optional[int]  = None
-    conflict_name:   Optional[str]  = None
-    conflict_type:   Optional[str]  = None
-    phase:           Optional[str]  = None
-    location:        Optional[str]  = None     # conflict location
+    conflict_id:       Optional[int]  = None
+    conflict_name:     Optional[str]  = None
+    conflict_type:     Optional[str]  = None
+    phase:             Optional[str]  = None
+    location:          Optional[str]  = None
+
+    # 🔥 NEW: alias of “conflict_identifier” → conflict_id
+    conflict_identifier: Optional[int] = Field(
+        default=None,
+        description="Deprecated.  Alias for conflict_id.",
+        alias="conflict_identifier"
+    )
+
 
 class TimeSpanMetadata(BaseModel):
     """Time span metadata for consolidated memories"""
