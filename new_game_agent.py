@@ -1106,6 +1106,13 @@ class NewGameAgent:
                 opening_narrative
             )
         
+            # Also store in messages table for easy retrieval
+            await conn.execute(
+                """INSERT INTO messages (conversation_id, sender, content, created_at)
+                   VALUES ($1, $2, $3, NOW())""",
+                conversation_id, "Nyx", opening_narrative
+            )
+        
         return opening_narrative
 
     async def _is_setup_complete(self, user_id: int, conversation_id: int) -> bool:
