@@ -1278,12 +1278,12 @@ class NewGameAgent:
                     
                     # Now it's guaranteed ready
                     initial_conflict = await conflict_integration.generate_conflict(
+                        conflict_ctx,
                         {
                             "conflict_type": "major",
                             "intensity": "medium",
                             "player_involvement": "indirect"
-                        },
-                        ctx=conflict_ctx
+                        }
                     )
                     
                     # Add null check here
