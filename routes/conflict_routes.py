@@ -10,6 +10,7 @@ from functools import wraps
 from typing import Dict, Any
 from quart import Blueprint, request, jsonify, session
 
+from agents import RunContextWrapper  # Added import for context wrapper
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
@@ -77,7 +78,15 @@ async def generate_conflict(user_id):
         
         # Generate the conflict
         conflict_data = data.get("conflict_data", {})
-        result = await conflict_system.generate_conflict(conflict_data)
+        
+        # Create context wrapper with user and conversation IDs
+        conflict_ctx = RunContextWrapper({
+            "user_id": user_id, 
+            "conversation_id": int(conversation_id)
+        })
+        
+        # Pass ctx to generate_conflict
+        result = await conflict_system.generate_conflict(conflict_data, ctx=conflict_ctx)
         
         return jsonify(result)
     except Exception as e:
@@ -111,11 +120,18 @@ async def resolve_conflict(user_id):
                 "message": "Please register the conflict system first"
             }), 400
         
+        # Create context wrapper
+        conflict_ctx = RunContextWrapper({
+            "user_id": user_id, 
+            "conversation_id": int(conversation_id)
+        })
+        
         # Resolve the conflict
         resolution_data = data.get("resolution_data", {})
         resolution_data["conflict_id"] = conflict_id
         
-        result = await conflict_system.resolve_conflict(resolution_data)
+        # Pass ctx to resolve_conflict
+        result = await conflict_system.resolve_conflict(resolution_data, ctx=conflict_ctx)
         
         return jsonify(result)
     except Exception as e:
@@ -149,11 +165,18 @@ async def update_stakeholders(user_id):
                 "message": "Please register the conflict system first"
             }), 400
         
+        # Create context wrapper
+        conflict_ctx = RunContextWrapper({
+            "user_id": user_id, 
+            "conversation_id": int(conversation_id)
+        })
+        
         # Update stakeholders
         stakeholder_data = data.get("stakeholder_data", {})
         stakeholder_data["conflict_id"] = conflict_id
         
-        result = await conflict_system.update_stakeholders(stakeholder_data)
+        # Pass ctx to update_stakeholders
+        result = await conflict_system.update_stakeholders(stakeholder_data, ctx=conflict_ctx)
         
         return jsonify(result)
     except Exception as e:
@@ -187,11 +210,18 @@ async def manage_manipulation(user_id):
                 "message": "Please register the conflict system first"
             }), 400
         
+        # Create context wrapper
+        conflict_ctx = RunContextWrapper({
+            "user_id": user_id, 
+            "conversation_id": int(conversation_id)
+        })
+        
         # Manage manipulation
         manipulation_data = data.get("manipulation_data", {})
         manipulation_data["conflict_id"] = conflict_id
         
-        result = await conflict_system.manage_manipulation(manipulation_data)
+        # Pass ctx to manage_manipulation
+        result = await conflict_system.manage_manipulation(manipulation_data, ctx=conflict_ctx)
         
         return jsonify(result)
     except Exception as e:
@@ -218,7 +248,7 @@ async def issue_conflict_directive(user_id):
         priority = data.get("priority", DirectivePriority.MEDIUM)
         duration_minutes = data.get("duration_minutes", 60)
         
-        # Issue directive
+        # Issue directive (no context needed here as we're using governance directly)
         directive_id = await governance.governor.issue_directive(
             agent_type=AgentType.CONFLICT_ANALYST,
             directive_type=directive_type,
@@ -250,42 +280,37 @@ async def get_player_inventory(user_id):
     try:
         async with get_db_connection_context() as conn:
             # Get inventory items
-            async with conn.cursor() as cursor:
-                await cursor.execute("""
-                    SELECT item_id, item_name, item_description, item_category, 
-                           item_properties, quantity, equipped, date_acquired
-                    FROM PlayerInventory
-                    WHERE user_id = %s AND conversation_id = %s
-                    ORDER BY date_acquired DESC
-                """, (user_id, conversation_id))
-                
-                rows = await cursor.fetchall()
+            items = await conn.fetch("""
+                SELECT item_id, item_name, item_description, item_category, 
+                       item_properties, quantity, equipped, date_acquired
+                FROM PlayerInventory
+                WHERE user_id = $1 AND conversation_id = $2
+                ORDER BY date_acquired DESC
+            """, user_id, int(conversation_id))
             
-            items = []
-            for row in rows:
-                item_id, name, description, category, properties, quantity, equipped, date_acquired = row
-                
-                # Parse JSON properties
+            formatted_items = []
+            for item in items:
+                # Parse JSON properties safely
                 try:
-                    props = json.loads(properties) if isinstance(properties, str) else properties or {}
+                    props = item['item_properties'] if isinstance(item['item_properties'], dict) else {}
                 except (json.JSONDecodeError, TypeError):
                     props = {}
                 
-                items.append({
-                    "item_id": item_id,
-                    "name": name,
-                    "description": description,
-                    "category": category,
+                formatted_items.append({
+                    "item_id": item['item_id'],
+                    "name": item['item_name'],
+                    "description": item['item_description'],
+                    "category": item['item_category'],
                     "properties": props,
-                    "quantity": quantity,
-                    "equipped": equipped,
-                    "date_acquired": date_acquired.isoformat() if date_acquired else None
+                    "quantity": item['quantity'],
+                    "equipped": item['equipped'],
+                    "date_acquired": item['date_acquired'].isoformat() if item['date_acquired'] else None
                 })
         
         return jsonify({
             "success": True,
-            "inventory_items": items,
-            "count": len(items)
+            "inventory_items": formatted_items,
+            "count": len(formatted_items)
         })
     except Exception as e:
         logger.error(f"Error getting player inventory: {e}", exc_info=True)
@@ -303,41 +328,36 @@ async def get_player_perks(user_id):
     try:
         async with get_db_connection_context() as conn:
             # Get perks
-            async with conn.cursor() as cursor:
-                await cursor.execute("""
-                    SELECT perk_id, perk_name, perk_description, perk_category, 
-                           perk_tier, perk_properties, date_acquired
-                    FROM PlayerPerks
-                    WHERE user_id = %s AND conversation_id = %s
-                    ORDER BY perk_tier DESC, date_acquired DESC
-                """, (user_id, conversation_id))
-                
-                rows = await cursor.fetchall()
+            perks = await conn.fetch("""
+                SELECT perk_id, perk_name, perk_description, perk_category, 
+                       perk_tier, perk_properties, date_acquired
+                FROM PlayerPerks
+                WHERE user_id = $1 AND conversation_id = $2
+                ORDER BY perk_tier DESC, date_acquired DESC
+            """, user_id, int(conversation_id))
             
-            perks = []
-            for row in rows:
-                perk_id, name, description, category, tier, properties, date_acquired = row
-                
-                # Parse JSON properties
+            formatted_perks = []
+            for perk in perks:
+                # Parse JSON properties safely
                 try:
-                    props = json.loads(properties) if isinstance(properties, str) else properties or {}
+                    props = perk['perk_properties'] if isinstance(perk['perk_properties'], dict) else {}
                 except (json.JSONDecodeError, TypeError):
                     props = {}
                 
-                perks.append({
-                    "perk_id": perk_id,
-                    "name": name,
-                    "description": description,
-                    "category": category,
-                    "tier": tier,
+                formatted_perks.append({
+                    "perk_id": perk['perk_id'],
+                    "name": perk['perk_name'],
+                    "description": perk['perk_description'],
+                    "category": perk['perk_category'],
+                    "tier": perk['perk_tier'],
                     "properties": props,
-                    "date_acquired": date_acquired.isoformat() if date_acquired else None
+                    "date_acquired": perk['date_acquired'].isoformat() if perk['date_acquired'] else None
                 })
         
         return jsonify({
             "success": True,
-            "perks": perks,
-            "count": len(perks)
+            "perks": formatted_perks,
+            "count": len(formatted_perks)
         })
     except Exception as e:
         logger.error(f"Error getting player perks: {e}", exc_info=True)
@@ -355,42 +375,37 @@ async def get_player_special_rewards(user_id):
     try:
         async with get_db_connection_context() as conn:
             # Get special rewards
-            async with conn.cursor() as cursor:
-                await cursor.execute("""
-                    SELECT reward_id, reward_name, reward_description, reward_effect, 
-                           reward_category, reward_properties, used, date_acquired
-                    FROM PlayerSpecialRewards
-                    WHERE user_id = %s AND conversation_id = %s
-                    ORDER BY date_acquired DESC
-                """, (user_id, conversation_id))
-                
-                rows = await cursor.fetchall()
+            rewards = await conn.fetch("""
+                SELECT reward_id, reward_name, reward_description, reward_effect, 
+                       reward_category, reward_properties, used, date_acquired
+                FROM PlayerSpecialRewards
+                WHERE user_id = $1 AND conversation_id = $2
+                ORDER BY date_acquired DESC
+            """, user_id, int(conversation_id))
             
-            rewards = []
-            for row in rows:
-                reward_id, name, description, effect, category, properties, used, date_acquired = row
-                
-                # Parse JSON properties
+            formatted_rewards = []
+            for reward in rewards:
+                # Parse JSON properties safely
                 try:
-                    props = json.loads(properties) if isinstance(properties, str) else properties or {}
+                    props = reward['reward_properties'] if isinstance(reward['reward_properties'], dict) else {}
                 except (json.JSONDecodeError, TypeError):
                     props = {}
                 
-                rewards.append({
-                    "reward_id": reward_id,
-                    "name": name,
-                    "description": description,
-                    "effect": effect,
-                    "category": category,
+                formatted_rewards.append({
+                    "reward_id": reward['reward_id'],
+                    "name": reward['reward_name'],
+                    "description": reward['reward_description'],
+                    "effect": reward['reward_effect'],
+                    "category": reward['reward_category'],
                     "properties": props,
-                    "used": used,
-                    "date_acquired": date_acquired.isoformat() if date_acquired else None
+                    "used": reward['used'],
+                    "date_acquired": reward['date_acquired'].isoformat() if reward['date_acquired'] else None
                 })
         
         return jsonify({
             "success": True,
-            "special_rewards": rewards,
-            "count": len(rewards)
+            "special_rewards": formatted_rewards,
+            "count": len(formatted_rewards)
         })
     except Exception as e:
         logger.error(f"Error getting player special rewards: {e}", exc_info=True)
@@ -413,45 +428,37 @@ async def use_special_reward(user_id):
     try:
         async with get_db_connection_context() as conn:
             # Check if reward exists and belongs to user
-            async with conn.cursor() as cursor:
-                await cursor.execute("""
-                    SELECT reward_name, reward_effect, used
-                    FROM PlayerSpecialRewards
-                    WHERE reward_id = %s AND user_id = %s AND conversation_id = %s
-                """, (reward_id, user_id, conversation_id))
-                
-                row = await cursor.fetchone()
+            reward = await conn.fetchrow("""
+                SELECT reward_name, reward_effect, used
+                FROM PlayerSpecialRewards
+                WHERE reward_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, reward_id, user_id, int(conversation_id))
             
-            if not row:
+            if not reward:
                 return jsonify({
                     "error": "Special reward not found or doesn't belong to this user"
                 }), 404
             
-            reward_name, reward_effect, used = row
-            
             # Check if already used
-            if used:
+            if reward['used']:
                 return jsonify({
                     "success": False,
                     "message": "This special reward has already been used"
                 }), 400
             
             # Mark as used
-            async with conn.cursor() as cursor:
-                await cursor.execute("""
-                    UPDATE PlayerSpecialRewards
-                    SET used = TRUE
-                    WHERE reward_id = %s
-                """, (reward_id,))
-            
-            await conn.commit()
+            await conn.execute("""
+                UPDATE PlayerSpecialRewards
+                SET used = TRUE
+                WHERE reward_id = $1
+            """, reward_id)
         
         # Return the effect that should be applied
         return jsonify({
             "success": True,
-            "message": f"Successfully used special reward: {reward_name}",
-            "reward_name": reward_name,
-            "reward_effect": reward_effect
+            "message": f"Successfully used special reward: {reward['reward_name']}",
+            "reward_name": reward['reward_name'],
+            "reward_effect": reward['reward_effect']
         })
     except Exception as e:
         logger.error(f"Error using special reward: {e}", exc_info=True)
