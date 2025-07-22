@@ -514,7 +514,7 @@ class ConflictSystemIntegration:
                 "duration": "short",
                 "existing_npcs": participants
             }
-            asyncio.create_task(self.generate_conflict(conflict_data))
+            asyncio.create_task(self.generate_conflict(self.run_ctx, conflict_data))
         
         if self.memory_manager:
             await self.memory_manager.add_memory(
@@ -578,9 +578,9 @@ class ConflictSystemIntegration:
         action_description="Generate a new conflict with stakeholders"
     )
     async def generate_conflict(
-        self, 
-        conflict_data_or_type: Union[Dict[str, Any], str, None] = None,
-        ctx: Optional[RunContextWrapper] = None
+        self,
+        ctx: Optional[RunContextWrapper] = None,  # Move ctx to first position
+        conflict_data_or_type: Union[Dict[str, Any], str, None] = None
     ) -> Dict[str, Any]:
         """Generate a new conflict with stakeholders and resolution paths"""
         await self.initialize()
