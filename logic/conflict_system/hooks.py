@@ -150,7 +150,9 @@ async def advance_conflict_story(
         system = await ensure_conflict_system(user_id, conversation_id)
         
         # First, evolve the conflict based on the event
+        ctx = RunContextWrapper({"user_id": user_id, "conversation_id": conversation_id})
         evolution_result = await system.evolve_conflict(
+            ctx,
             conflict_id,
             "player_action",
             {"description": event_description, "npcs": involved_npcs or []}
