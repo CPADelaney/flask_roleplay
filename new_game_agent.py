@@ -849,6 +849,18 @@ class NewGameAgent:
         
         return npc_ids
 
+    def _image_gen_available(self) -> bool:
+        """
+        Return True only when it makes sense to call `generate_roleplay_image_from_gpt`.
+        Current rule: we must be able to import routes.ai_image_generator *and*
+        its SINKIN_ACCESS_TOKEN must be non-empty.
+        """
+        try:
+            from routes.ai_image_generator import SINKIN_ACCESS_TOKEN
+            return bool(SINKIN_ACCESS_TOKEN)
+        except Exception:
+            return False
+
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "create_chase_schedule")
     async def create_chase_schedule(self, ctx: RunContextWrapper[GameContext], params: CreateChaseScheduleParams) -> str:
         """
@@ -1307,8 +1319,7 @@ class NewGameAgent:
             # Try to generate welcome image, but don't fail if it's not available
             welcome_image_url = None
             try:
-                # Check if we have the necessary API key/token
-                if os.getenv("OPENAI_API_KEY") or os.getenv("IMAGE_API_TOKEN"):
+                if self._image_gen_available():          # ←── changed line
                     scene_data_json = json.dumps({
                         "scene_data": {
                             "npc_names": [],
