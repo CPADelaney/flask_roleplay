@@ -930,58 +930,70 @@ async function loadGameConversation(convId) {
   await checkForWelcomeImage(convId);
 }
 
+// ===== Conversation messages loader =====
 async function loadMessages(convId, replace = false) {
-  const chatWindow = $("chatWindow");
-  const loadMoreBtn = $("loadMore");
+  const chatWindow  = $("chatWindow");
+  let   loadMoreBtn = $("loadMore");      // ⬅️  let, not const
   if (!chatWindow) return;
-  
-  const url = `/multiuser/conversations/${convId}/messages?offset=${AppState.messagesOffset}&limit=${CONFIG.MESSAGES_PER_LOAD}`;
-  
+
+  const url = `/multiuser/conversations/${convId}/messages` +
+              `?offset=${AppState.messagesOffset}&limit=${CONFIG.MESSAGES_PER_LOAD}`;
+
   try {
     const data = await fetchJson(url);
-    
-    if (replace) {
-      // Clear chat window except for load more button
-      while (chatWindow.firstChild && chatWindow.firstChild !== loadMoreBtn) {
-        chatWindow.removeChild(chatWindow.firstChild);
-      }
-      if (!chatWindow.contains(loadMoreBtn)) {
-        chatWindow.insertBefore(loadMoreBtn, chatWindow.firstChild);
-      }
-    }
-    
-    // Preserve scroll position for older messages
-    const prevHeight = chatWindow.scrollHeight;
-    
-    // Create messages
-    const fragment = document.createDocumentFragment();
-    data.messages.slice().reverse().forEach(msg => {
-      fragment.appendChild(createBubble(msg));
-    });
 
+    // ---------- Hard replace branch ----------
     if (replace) {
-      chatWindow.appendChild(fragment);
-      chatWindow.scrollTop = chatWindow.scrollHeight;
-    } else {
-      // Guard against loadMoreBtn being removed
+      // 1️⃣ remove the existing Load-More span from DOM (if any)
       if (loadMoreBtn && loadMoreBtn.parentNode) {
-        loadMoreBtn.after(fragment);
-      } else {
-        chatWindow.prepend(fragment);
+        loadMoreBtn.remove();
       }
-      // Adjust scroll to maintain viewport
-      const delta = chatWindow.scrollHeight - prevHeight;
-      chatWindow.scrollTop += delta;
+
+      // 2️⃣ clear ALL previous message rows
+      chatWindow.innerHTML = "";
+
+      // 3️⃣ (re)create the Load-More span
+      const btn = loadMoreBtn || document.createElement("span");
+      btn.id = "loadMore";
+      btn.textContent = "Load older messages...";
+      btn.style.display = "none";
+      btn.addEventListener("click", loadPreviousMessages);
+
+      chatWindow.appendChild(btn);
+
+      // 4️⃣ keep our reference up-to-date for the rest of this function
+      if (!loadMoreBtn) loadMoreBtn = btn;
+    }
+    // ---------- end replace ----------
+
+    // Preserve scroll position if we're prepending messages
+    const prevHeight = chatWindow.scrollHeight;
+
+    // Build DOM nodes for the fetched messages
+    const frag = document.createDocumentFragment();
+    data.messages
+        .slice()         // shallow copy
+        .reverse()       // oldest first
+        .forEach(msg => frag.appendChild(createBubble(msg)));
+
+    if (replace) {
+      chatWindow.appendChild(frag);
+      chatWindow.scrollTop = chatWindow.scrollHeight;   // scroll to bottom
+    } else {
+      loadMoreBtn.after(frag);                          // prepend
+      chatWindow.scrollTop += chatWindow.scrollHeight - prevHeight;
     }
 
-    if (loadMoreBtn) {
-      loadMoreBtn.style.display = data.messages.length < CONFIG.MESSAGES_PER_LOAD ? "none" : "block";
-    }
+    // toggle visibility of the Load-More control
+    loadMoreBtn.style.display =
+      data.messages.length < CONFIG.MESSAGES_PER_LOAD ? "none" : "block";
+
   } catch (err) {
     console.error("Error loading messages:", err);
-    appendMessage({sender: "system", content: "Error loading messages."}, true);
+    appendMessage({ sender: "system", content: "Error loading messages." }, true);
   }
 }
+
 
 async function checkForWelcomeImage(convId) {
   try {
@@ -1045,8 +1057,10 @@ async function startNewGame() {
     if (pollResult.ready) {
       loadingDiv.remove();
       
-      // Join the new game room
-      await socketManager.joinRoom(AppState.currentConvId);
+      // Join only if we didn’t get auto-joined
+      if (AppState.currentRoomId !== String(newConvNum)) {
+        await socketManager.joinRoom(newConvNum);
+      }
       
       // Load game content
       await loadMessages(AppState.currentConvId, true);
