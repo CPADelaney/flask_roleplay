@@ -169,26 +169,24 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             "aggregator_data": aggregator_data
         }
 
-        # Apply universal update if provided (ensure this uses asyncpg)
+        # Apply universal update if provided (ensure this uses its own connection)
         if universal_update:
             logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
             try:
                 from logic.universal_updater_agent import apply_universal_updates_async, UniversalUpdaterContext
                 
-                # The IDs should already be integers from the fix at the start of the function
-                # But double-check here if needed:
                 updater_context = UniversalUpdaterContext(user_id, conversation_id)
                 await updater_context.initialize()
                 
-                # Get a database connection and apply updates
-                async with get_db_connection_context() as conn:
-                    await apply_universal_updates_async(
-                        updater_context,  # Pass the context object
-                        user_id,
-                        conversation_id,
-                        universal_update,
-                        conn
-                    )
+                # apply_universal_updates_async should use its own connection internally
+                # Don't pass a connection from outside
+                await apply_universal_updates_async(
+                    updater_context,
+                    user_id,
+                    conversation_id,
+                    universal_update,
+                    None  # Let it get its own connection
+                )
                 
                 logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
                 
