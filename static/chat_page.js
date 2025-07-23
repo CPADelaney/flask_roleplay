@@ -1,19 +1,41 @@
-// chat_page.js
-console.log("Main JS file loaded!");
+// chat_page.js - Refactored for robust connection and conversation management
+console.log("Chat page loaded!");
 
-// Utility: Markdown + sanitization
+// ===== Utility Functions =====
 function sanitizeAndRenderMarkdown(markdownText) {
   const renderedHTML = marked.parse(markdownText);
   return DOMPurify.sanitize(renderedHTML);
 }
 
-// Global conversation info
-let currentConvId = null;
-let messagesOffset = 0;
-const MESSAGES_PER_LOAD = 20;
-let isDarkMode = false;
-let isCreatingGame = false;
-let isSelectingConversation = false;
+// ===== State Management =====
+const AppState = {
+  // User info
+  userId: null,
+  
+  // Conversation state
+  currentConvId: null,
+  currentRoomId: null,  // Track which room we're actually in
+  messagesOffset: 0,
+  
+  // UI state
+  isDarkMode: false,
+  isCreatingGame: false,
+  isSelectingConversation: false,
+  isSendingMessage: false,
+  
+  // Connection state
+  socket: null,
+  isConnected: false,
+  reconnectionInProgress: false,
+  
+  // Message streaming
+  currentAssistantBubble: null,
+  partialAssistantText: "",
+  
+  // Constants
+  MESSAGES_PER_LOAD: 20,
+  NYX_SPACE_CONV_ID: "__nyx_space__"
+};
 
 // Universal updates object
 let pendingUniversalUpdates = {
@@ -48,257 +70,928 @@ function resetPendingUniversalUpdates() {
   };
 }
 
-// Socket.IO reference
-let socket = null;
-let reconnectionInProgress = false;
+// DOM Element cache
+const DOM = {};
 
-// We accumulate the partial streamed content in a single bubble
-let currentAssistantBubble = null;
-let partialAssistantText = "";
+// ===== Socket Management =====
+class SocketManager {
+  constructor() {
+    this.socket = null;
+    this.handlers = {};
+  }
 
-// DOM Elements (cache them after DOMContentLoaded)
-let logoutBtn, toggleDarkModeBtn, advanceTimeBtn, newGameBtn, convListDiv,
-    chatWindow, loadMoreBtn, userMsgInput, sendBtn, contextMenuDiv, leftPanelInner;
+  initialize() {
+    if (this.socket) {
+      console.warn("Socket already initialized");
+      return;
+    }
 
+    // Create socket with robust configuration
+    this.socket = createRobustSocketConnection({
+      onConnect: (socket, wasReconnect) => this.handleConnect(socket, wasReconnect),
+      onDisconnect: (socket, reason) => this.handleDisconnect(socket, reason),
+      onReconnect: (socket, attemptNumber) => this.handleReconnect(socket, attemptNumber),
+      onReconnectFailed: () => this.handleReconnectFailed()
+    });
 
-function setupSocketListeners() {
-  // Connection events
-  socket.on("connect", () => {
-    console.log("Socket.IO connected with ID:", socket.id);
+    AppState.socket = this.socket;
+    this.setupMessageHandlers();
+    this.setupHeartbeat();
+  }
+
+  handleConnect(socket, wasReconnect) {
+    console.log("Socket connected with ID:", socket.id);
+    AppState.isConnected = true;
     
-    // If reconnection was in progress, add a system message
-    if (reconnectionInProgress) {
-      const reconnectMsg = { sender: "system", content: "Connection restored!" };
-      appendMessage(reconnectMsg, true);
-      reconnectionInProgress = false;
+    if (wasReconnect) {
+      appendMessage({ sender: "system", content: "Connection restored!" }, true);
+      AppState.reconnectionInProgress = false;
     }
     
-    // Join conversation room if one is active
-    if (currentConvId) {
-      socket.emit('join', { conversation_id: currentConvId });
-      console.log(`Joined room: ${currentConvId}`);
+    // Only join room if we have a conversation selected and we're not already in it
+    if (AppState.currentConvId && AppState.currentConvId !== AppState.currentRoomId) {
+      this.joinRoom(AppState.currentConvId);
     }
-  });
+  }
 
-  socket.on("disconnect", (reason) => {
-    console.error("Socket.IO disconnected DETAILED:", reason, "Current socket ID:", socket.id, "Connected:", socket.connected); // More detail
-    reconnectionInProgress = true;
-    const disconnectMsg = { sender: "system", content: `Connection lost (${reason}). Attempting to reconnect...` };
-    appendMessage(disconnectMsg, true);
+  handleDisconnect(socket, reason) {
+    console.error("Socket disconnected:", reason);
+    AppState.isConnected = false;
+    AppState.currentRoomId = null;  // Clear room state
+    AppState.reconnectionInProgress = true;
     
-    // Server-initiated disconnect needs manual reconnection
-    if (reason === 'io server disconnect') {
-      setTimeout(() => socket.connect(), 1000);
-    }
-  });
+    appendMessage({ 
+      sender: "system", 
+      content: `Connection lost (${reason}). Attempting to reconnect...` 
+    }, true);
+  }
 
-  socket.on("connect_error", (error) => {
-    console.error("Socket.IO connection error:", error);
-  });
-  
-  socket.on("reconnect_attempt", (attemptNumber) => {
-    console.log(`Socket.IO reconnection attempt #${attemptNumber}`);
+  handleReconnect(socket, attemptNumber) {
+    console.log(`Socket reconnected after ${attemptNumber} attempts`);
+    AppState.isConnected = true;
+    AppState.reconnectionInProgress = false;
     
-    // After several reconnection attempts, try alternate transports
-    if (attemptNumber % 3 === 0) {
-      console.log("Trying alternate transport strategy...");
+    // Rejoin the conversation room if we had one
+    if (AppState.currentConvId) {
+      this.joinRoom(AppState.currentConvId);
     }
-  });
-  
-  socket.on("reconnect", (attemptNumber) => {
-    console.log(`Socket.IO reconnected after ${attemptNumber} attempts`);
-    
-    // Reset reconnection state
-    reconnectionInProgress = false;
-    
-    // Rejoin the conversation room if active
-    if (currentConvId) {
-      socket.emit('join', { conversation_id: currentConvId });
+  }
+
+  handleReconnectFailed() {
+    console.error("Socket reconnection failed");
+    appendMessage({ 
+      sender: "system", 
+      content: "Unable to reconnect. Please refresh the page." 
+    }, true);
+  }
+
+  joinRoom(conversationId) {
+    if (!this.socket || !this.socket.connected) {
+      console.warn("Cannot join room - socket not connected");
+      return false;
     }
-  });
-  
-  socket.on("reconnect_failed", () => {
-    console.error("Socket.IO reconnection failed");
-    const failMsg = { sender: "system", content: "Unable to reconnect. Please refresh the page." };
-    appendMessage(failMsg, true);
-  });
 
-  // Room events
-  socket.on("joined", (data) => {
-    console.log("Joined room:", data.room);
-    const joinMsg = { sender: "system", content: "Connected to game session" };
-    appendMessage(joinMsg, true);
-  });
-
-  // Message streaming events
-  socket.on("new_token", function(payload) {
-    handleNewToken(payload.token);
-  });
-
-  socket.on("done", function(payload) {
-    console.log("Done streaming. Full text received.");
-    finalizeAssistantMessage(payload.full_text);
-  });
-
-  socket.on("error", (payload) => {
-    console.error("Server error:", payload.error);
-    handleNewToken("[Error: " + payload.error + "]");
-    finalizeAssistantMessage(""); // Finalize with empty if error occurred during stream
-  });
-
-  socket.on("message", function(data) {
-    console.log("Received non-streaming message event:", data);
-    const messageObj = {
-      sender: data.sender || "Nyx",
-      content: data.content || data.message || "No content"
-    };
-    appendMessage(messageObj, true);
-  });
-
-  socket.on("image", function(payload) {
-     console.log("Received image:", payload);
-     appendImageToChat(payload.image_url, payload.reason);
-   });
-
-  socket.on("processing", function(data) {
-     console.log("Server is processing:", data.message);
-     const chatWindowEl = document.getElementById("chatWindow"); // Use direct ID if needed before cache
-     let processingDiv = document.getElementById("processingIndicator");
-     if (!processingDiv) {
-         processingDiv = document.createElement("div");
-         processingDiv.id = "processingIndicator";
-         processingDiv.innerHTML = '<div style="text-align: center; padding: 10px; font-style: italic; color: #888;">Processing your request...</div>';
-         chatWindowEl.appendChild(processingDiv);
-     }
-     chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
-  });
-
-  socket.on("game_state_update", function(data) {
-     console.log("Game state updated:", data);
-     // Example: if (data.type === "npc_update") updateNPCInfo(data.npc_data);
-  });
-  
-  // Heartbeat handler to keep connection alive
-  socket.on("server_heartbeat", function(data) {
-    console.log("Received server heartbeat:", data.timestamp);
-  });
-  
-  // Set up client heartbeat to keep connection alive
-  setInterval(() => {
-    if (socket && socket.connected) {
-      socket.emit('client_heartbeat', { timestamp: Date.now() });
+    if (AppState.currentRoomId === conversationId) {
+      console.log(`Already in room ${conversationId}`);
+      return true;
     }
-  }, 20000); // Send heartbeat every 20 seconds
+
+    console.log(`Joining room ${conversationId}`);
+    this.socket.emit('join', { conversation_id: conversationId });
+    return true;
+  }
+
+  setupMessageHandlers() {
+    // Room events
+    this.socket.on("joined", (data) => {
+      console.log("Joined room:", data.room);
+      AppState.currentRoomId = data.room;
+      
+      // Only show connection message on initial join
+      if (!AppState.isSendingMessage) {
+        appendMessage({ sender: "system", content: "Connected to game session" }, true);
+      }
+    });
+
+    // Message streaming events
+    this.socket.on("new_token", (payload) => {
+      handleNewToken(payload.token);
+    });
+
+    this.socket.on("done", (payload) => {
+      console.log("Done streaming");
+      finalizeAssistantMessage(payload.full_text);
+      AppState.isSendingMessage = false;
+    });
+
+    this.socket.on("error", (payload) => {
+      console.error("Server error:", payload.error);
+      appendMessage({ 
+        sender: "system", 
+        content: `Error: ${payload.error}` 
+      }, true);
+      AppState.isSendingMessage = false;
+    });
+
+    this.socket.on("image", (payload) => {
+      console.log("Received image:", payload);
+      appendImageToChat(payload.image_url, payload.reason);
+    });
+
+    this.socket.on("processing", (data) => {
+      console.log("Server is processing:", data.message);
+      showProcessingIndicator();
+    });
+
+    this.socket.on("game_state_update", (data) => {
+      console.log("Game state updated:", data);
+    });
+
+    this.socket.on("server_heartbeat", (data) => {
+      console.log("Received server heartbeat:", data.timestamp);
+    });
+  }
+
+  setupHeartbeat() {
+    setInterval(() => {
+      if (this.socket && this.socket.connected) {
+        this.socket.emit('client_heartbeat', { timestamp: Date.now() });
+      }
+    }, 20000); // Every 20 seconds
+  }
+
+  sendMessage(data) {
+    if (!this.socket || !this.socket.connected) {
+      console.error("Cannot send message - socket not connected");
+      return false;
+    }
+
+    if (AppState.currentRoomId !== String(data.conversation_id)) {
+      console.warn("Not in the correct room, joining first");
+      if (!this.joinRoom(data.conversation_id)) {
+        return false;
+      }
+    }
+
+    AppState.isSendingMessage = true;
+    this.socket.emit("storybeat", data);
+    return true;
+  }
 }
 
- function appendImageToChat(imageUrl, reason) {
-     const chatWindowEl = chatWindow || document.getElementById("chatWindow");
-     const imageRow = document.createElement("div");
-     imageRow.classList.add("message-row", "gpt-row");
+// Create global socket manager instance
+const socketManager = new SocketManager();
 
-     const imageBubble = document.createElement("div");
-     imageBubble.classList.add("message-bubble", "image-bubble");
-     imageBubble.innerHTML = `
-     <div class="image-container">
-         <img src="${imageUrl}" alt="Generated scene" style="max-width: 100%; border-radius: 5px;" />
-         <div class="image-caption">
-         ${DOMPurify.sanitize(reason || "AI-generated scene visualization")}
-         </div>
-     </div>
-     `;
-     imageRow.appendChild(imageBubble);
-     chatWindowEl.appendChild(imageRow);
-     chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
- }
+// ===== Message Display Functions =====
+function appendMessage(message, autoScroll = true) {
+  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  const bubbleRow = createBubble(message);
+  chatWindow.appendChild(bubbleRow);
+  
+  if (autoScroll) {
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+  }
+  
+  return bubbleRow;
+}
 
+function createBubble(message) {
+  const row = document.createElement("div");
+  row.classList.add("message-row");
+  
+  if (message.sender === "user") {
+    row.classList.add("user-row");
+  } else {
+    row.classList.add("gpt-row");
+  }
+  
+  const bubble = document.createElement("div");
+  bubble.classList.add("message-bubble");
+  
+  const safeContent = sanitizeAndRenderMarkdown(message.content || "");
+  bubble.innerHTML = `<strong>${DOMPurify.sanitize(message.sender)}:</strong> ${safeContent}`;
+  
+  row.appendChild(bubble);
+  return row;
+}
+
+function appendImageToChat(imageUrl, reason) {
+  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  const imageRow = document.createElement("div");
+  imageRow.classList.add("message-row", "gpt-row");
+
+  const imageBubble = document.createElement("div");
+  imageBubble.classList.add("message-bubble", "image-bubble");
+  imageBubble.innerHTML = `
+    <div class="image-container">
+      <img src="${imageUrl}" alt="Generated scene" style="max-width: 100%; border-radius: 5px;" />
+      <div class="image-caption">
+        ${DOMPurify.sanitize(reason || "AI-generated scene visualization")}
+      </div>
+    </div>
+  `;
+  
+  imageRow.appendChild(imageBubble);
+  chatWindow.appendChild(imageRow);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+}
 
 function handleNewToken(token) {
-  const processingIndicator = document.getElementById("processingIndicator");
-  if (processingIndicator) {
-    processingIndicator.remove();
-  }
-  const chatWindowEl = chatWindow || document.getElementById("chatWindow");
+  removeProcessingIndicator();
+  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
 
-  if (!currentAssistantBubble) {
+  if (!AppState.currentAssistantBubble) {
     const row = document.createElement("div");
     row.classList.add("message-row", "gpt-row");
+    
     const bubble = document.createElement("div");
     bubble.classList.add("message-bubble");
-    bubble.innerHTML = `<strong>Nyx:</strong> `; // Start with sender
-    const contentSpan = document.createElement('span'); // Create a span for the actual content
+    bubble.innerHTML = `<strong>Nyx:</strong> `;
+    
+    const contentSpan = document.createElement('span');
     contentSpan.innerHTML = sanitizeAndRenderMarkdown(token);
     bubble.appendChild(contentSpan);
 
     row.appendChild(bubble);
-    chatWindowEl.appendChild(row);
-    currentAssistantBubble = contentSpan; // The bubble to append to is now the span
-    partialAssistantText = token;
+    chatWindow.appendChild(row);
+    
+    AppState.currentAssistantBubble = contentSpan;
+    AppState.partialAssistantText = token;
   } else {
-    partialAssistantText += token;
-    currentAssistantBubble.innerHTML = sanitizeAndRenderMarkdown(partialAssistantText);
+    AppState.partialAssistantText += token;
+    AppState.currentAssistantBubble.innerHTML = sanitizeAndRenderMarkdown(AppState.partialAssistantText);
   }
-  chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
+  
+  chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
 function finalizeAssistantMessage(finalText) {
-  if (!currentAssistantBubble) {
-     // It's possible a non-streaming message or image came first, or an error cleared it.
-     // If finalText is substantial, create a new bubble for it.
-     if (finalText && finalText.trim() !== "") {
-         console.warn("No current assistant bubble to finalize, but finalText exists. Creating new bubble.");
-         const messageObj = { sender: "Nyx", content: finalText };
-         appendMessage(messageObj, true);
-     } else {
-         console.log("No assistant bubble to finalize and no final text.");
-     }
-     currentAssistantBubble = null; // Ensure reset
-     partialAssistantText = "";    // Ensure reset
-     return;
+  if (!AppState.currentAssistantBubble) {
+    if (finalText && finalText.trim() !== "") {
+      console.warn("No current assistant bubble, creating new one for final text");
+      appendMessage({ sender: "Nyx", content: finalText }, true);
+    }
+  } else {
+    AppState.currentAssistantBubble.innerHTML = sanitizeAndRenderMarkdown(finalText);
   }
-  currentAssistantBubble.innerHTML = sanitizeAndRenderMarkdown(finalText);
-  currentAssistantBubble = null;
-  partialAssistantText = "";
-  const chatWindowEl = chatWindow || document.getElementById("chatWindow");
-  chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
+  
+  AppState.currentAssistantBubble = null;
+  AppState.partialAssistantText = "";
+  
+  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
-let myUserId = null;
+function showProcessingIndicator() {
+  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  removeProcessingIndicator();
+  
+  const processingDiv = document.createElement("div");
+  processingDiv.id = "processingIndicator";
+  processingDiv.innerHTML = '<div style="text-align: center; padding: 10px; font-style: italic; color: #888;">Processing your request...</div>';
+  chatWindow.appendChild(processingDiv);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+}
 
+function removeProcessingIndicator() {
+  const indicator = document.getElementById("processingIndicator");
+  if (indicator) {
+    indicator.remove();
+  }
+}
+
+// ===== User Actions =====
+async function sendMessage() {
+  const userInput = DOM.userMsgInput || document.getElementById("userMsg");
+  const userText = userInput.value.trim();
+  
+  if (!userText || !AppState.currentConvId) {
+    return;
+  }
+
+  // Prevent double sending
+  if (AppState.isSendingMessage) {
+    console.warn("Already sending a message");
+    return;
+  }
+
+  userInput.value = "";
+
+  // Handle Nyx Space differently
+  if (AppState.currentConvId === AppState.NYX_SPACE_CONV_ID) {
+    await handleNyxSpaceMessage(userText);
+    return;
+  }
+
+  // Display user message
+  appendMessage({ sender: "user", content: userText }, true);
+
+  // Reset streaming state
+  AppState.currentAssistantBubble = null;
+  AppState.partialAssistantText = "";
+
+  // Prepare message data
+  const messageData = {
+    user_input: userText,
+    conversation_id: AppState.currentConvId,
+    player_name: "Chase",
+    advance_time: false,
+    universal_update: pendingUniversalUpdates
+  };
+
+  // Send message
+  console.log(`Sending message for conversation ${AppState.currentConvId}`);
+  
+  if (!socketManager.sendMessage(messageData)) {
+    appendMessage({ 
+      sender: "system", 
+      content: "Failed to send message. Please check your connection." 
+    }, true);
+    AppState.isSendingMessage = false;
+    return;
+  }
+
+  resetPendingUniversalUpdates();
+
+  // Set timeout for response
+  setTimeout(() => {
+    if (AppState.isSendingMessage) {
+      appendMessage({ 
+        sender: "system", 
+        content: "Server is taking longer than expected. Please wait..." 
+      }, true);
+    }
+  }, 15000);
+}
+
+async function handleNyxSpaceMessage(userText) {
+  try {
+    // Save user message
+    await fetch('/nyx_space/messages', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        sender: "user", 
+        content: userText, 
+        timestamp: Date.now()
+      })
+    });
+
+    appendMessage({sender: "user", content: userText}, true);
+
+    // Get Nyx's response
+    const adminRequest = {
+      user_input: userText,
+      generate_response: true
+    };
+    
+    const replyRes = await fetch('/admin/nyx_direct', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(adminRequest)
+    });
+
+    const replyData = await replyRes.json();
+    console.log("Admin Nyx response:", replyData);
+
+    // Extract response
+    let aiReply = "...";
+    if (replyData.response_result && replyData.response_result.main_message) {
+      aiReply = replyData.response_result.main_message;
+    } else if (replyData.processing_result && replyData.processing_result.message) {
+      aiReply = replyData.processing_result.message;
+    } else if (replyData.response_result && replyData.response_result.message) {
+      aiReply = replyData.response_result.message;
+    }
+
+    appendMessage({sender: "Nyx", content: aiReply}, true);
+
+    // Save Nyx's reply
+    await fetch('/nyx_space/messages', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        sender: "Nyx", 
+        content: aiReply, 
+        timestamp: Date.now()
+      })
+    });
+  } catch (error) {
+    console.error("Error processing Nyx message:", error);
+    appendMessage({
+      sender: "Nyx", 
+      content: "Sorry, an error occurred processing your message."
+    }, true);
+  }
+}
+
+function advanceTime() {
+  if (!AppState.currentConvId) {
+    alert("Please select a conversation first");
+    return;
+  }
+
+  appendMessage({ 
+    sender: "user", 
+    content: "Let's advance to the next time period." 
+  }, true);
+
+  // Reset streaming state
+  AppState.currentAssistantBubble = null;
+  AppState.partialAssistantText = "";
+
+  const messageData = {
+    user_input: "Let's advance to the next time period.",
+    conversation_id: AppState.currentConvId,
+    player_name: "Chase",
+    advance_time: true,
+    universal_update: pendingUniversalUpdates
+  };
+
+  if (!socketManager.sendMessage(messageData)) {
+    appendMessage({ 
+      sender: "system", 
+      content: "Failed to advance time. Please check your connection." 
+    }, true);
+    return;
+  }
+
+  resetPendingUniversalUpdates();
+}
+
+// ===== Conversation Management =====
+async function selectConversation(convId) {
+  if (AppState.isSelectingConversation) {
+    console.log("Already selecting a conversation");
+    return;
+  }
+
+  AppState.isSelectingConversation = true;
+  AppState.currentConvId = convId;
+  AppState.messagesOffset = 0;
+
+  console.log(`Selecting conversation: ${convId}`);
+
+  // Join the room
+  if (socketManager.socket && socketManager.socket.connected) {
+    socketManager.joinRoom(convId);
+  }
+
+  // Handle different conversation types
+  if (convId === AppState.NYX_SPACE_CONV_ID) {
+    await loadNyxSpace();
+  } else {
+    await loadGameConversation(convId);
+  }
+
+  AppState.isSelectingConversation = false;
+}
+
+async function loadNyxSpace() {
+  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  chatWindow.innerHTML = "";
+  
+  appendMessage({sender: "system", content: "Loading Nyx's Space..."}, true);
+  
+  try {
+    const res = await fetch("/nyx_space/messages");
+    if (res.ok) {
+      const data = await res.json();
+      chatWindow.innerHTML = "";
+      
+      if (data.messages && data.messages.length > 0) {
+        data.messages.forEach(msg => appendMessage(msg, false));
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+      } else {
+        appendMessage({
+          sender: "Nyx", 
+          content: "Welcome to Nyx's Space! You can chat with me here anytime."
+        }, true);
+      }
+    } else {
+      appendMessage({
+        sender: "Nyx", 
+        content: "Could not fetch Nyx's Space messages."
+      }, true);
+    }
+  } catch (err) {
+    console.error("Error loading Nyx Space:", err);
+    chatWindow.innerHTML = "";
+    appendMessage({
+      sender: "Nyx", 
+      content: "There was an error loading Nyx's Space."
+    }, true);
+  }
+  
+  // Hide game-specific buttons
+  if (DOM.advanceTimeBtn) DOM.advanceTimeBtn.style.display = "none";
+  if (DOM.loadMoreBtn) DOM.loadMoreBtn.style.display = "none";
+}
+
+async function loadGameConversation(convId) {
+  // Show game-specific buttons
+  if (DOM.advanceTimeBtn) DOM.advanceTimeBtn.style.display = "";
+  if (DOM.loadMoreBtn) DOM.loadMoreBtn.style.display = "";
+  
+  await loadMessages(convId, true);
+  await checkForWelcomeImage(convId);
+}
+
+async function loadMessages(convId, replace = false) {
+  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  const loadMoreBtn = DOM.loadMoreBtn || document.getElementById("loadMore");
+  
+  const url = `/multiuser/conversations/${convId}/messages?offset=${AppState.messagesOffset}&limit=${AppState.MESSAGES_PER_LOAD}`;
+  
+  try {
+    const res = await fetch(url, { method: "GET", credentials: "include" });
+    if (!res.ok) {
+      console.error("Failed to load messages:", res.status);
+      appendMessage({
+        sender: "system", 
+        content: `Error loading messages for game ${convId}.`
+      }, true);
+      return;
+    }
+    
+    const data = await res.json();
+    
+    if (replace) {
+      // Clear chat window except for load more button
+      while (chatWindow.firstChild && chatWindow.firstChild !== loadMoreBtn) {
+        chatWindow.removeChild(chatWindow.firstChild);
+      }
+      if (!chatWindow.contains(loadMoreBtn)) {
+        chatWindow.insertBefore(loadMoreBtn, chatWindow.firstChild);
+      }
+    }
+    
+    // Create messages
+    const fragment = document.createDocumentFragment();
+    data.messages.slice().reverse().forEach(msg => {
+      fragment.appendChild(createBubble(msg));
+    });
+
+    if (replace) {
+      chatWindow.appendChild(fragment);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    } else {
+      loadMoreBtn.after(fragment);
+    }
+
+    loadMoreBtn.style.display = data.messages.length < AppState.MESSAGES_PER_LOAD ? "none" : "block";
+  } catch (err) {
+    console.error("Error loading messages:", err);
+    appendMessage({sender: "system", content: "Error loading messages."}, true);
+  }
+}
+
+async function checkForWelcomeImage(convId) {
+  try {
+    const res = await fetch(`/universal/get_roleplay_value?conversation_id=${convId}&key=WelcomeImageUrl`, {
+      method: "GET",
+      credentials: "include"
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.value) {
+        appendImageToChat(data.value, "Welcome to this new world");
+      }
+    }
+  } catch (err) {
+    console.error("Error checking for welcome image:", err);
+  }
+}
+
+async function startNewGame() {
+  if (AppState.isCreatingGame) {
+    console.log("Game creation already in progress");
+    return;
+  }
+
+  const newGameBtn = DOM.newGameBtn || document.getElementById("newGameBtn");
+  if (newGameBtn) {
+    newGameBtn.disabled = true;
+    newGameBtn.textContent = "Creating...";
+  }
+
+  AppState.isCreatingGame = true;
+
+  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  const loadingDiv = document.createElement("div");
+  loadingDiv.id = "newGameLoadingIndicator";
+  loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing new game world...</div>';
+  chatWindow.appendChild(loadingDiv);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+
+  try {
+    const res = await fetch("/start_new_game", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({})
+    });
+    
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to start new game");
+    }
+
+    AppState.currentConvId = data.conversation_id;
+    AppState.messagesOffset = 0;
+
+    // Update loading message
+    loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Creating your world... This may take a minute...</div>';
+
+    // Poll for completion
+    const pollResult = await pollForGameReady(data.conversation_id);
+    
+    if (pollResult.ready) {
+      loadingDiv.remove();
+      
+      // Join the new game room
+      socketManager.joinRoom(AppState.currentConvId);
+      
+      // Load game content
+      await loadMessages(AppState.currentConvId, true);
+      await checkForWelcomeImage(AppState.currentConvId);
+      await loadConversations();
+      
+      // Show opening narrative
+      if (pollResult.opening_narrative) {
+        appendMessage({ 
+          sender: "Nyx", 
+          content: pollResult.opening_narrative
+        }, true);
+      } else {
+        appendMessage({ 
+          sender: "system", 
+          content: `New game started! Welcome to ${pollResult.conversation_name || "your new world"}.` 
+        }, true);
+      }
+    } else {
+      throw new Error(pollResult.error || "Game creation timed out");
+    }
+
+  } catch (err) {
+    console.error("startNewGame error:", err);
+    
+    const existingLoadingDiv = document.getElementById("newGameLoadingIndicator");
+    if (existingLoadingDiv) existingLoadingDiv.remove();
+    
+    appendMessage({ 
+      sender: "system", 
+      content: `Error starting new game: ${err.message}. Please try again.` 
+    }, true);
+  } finally {
+    AppState.isCreatingGame = false;
+    if (newGameBtn) {
+      newGameBtn.disabled = false;
+      newGameBtn.textContent = "New Game";
+    }
+  }
+}
+
+async function pollForGameReady(conversationId) {
+  const maxAttempts = 60;
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    attempts++;
+    
+    try {
+      const statusRes = await fetch(`/new_game/conversation_status?conversation_id=${conversationId}`, {
+        method: "GET",
+        credentials: "include"
+      });
+      
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        
+        if (statusData.status === "ready") {
+          return {
+            ready: true,
+            opening_narrative: statusData.opening_narrative,
+            conversation_name: statusData.conversation_name
+          };
+        } else if (statusData.status === "failed") {
+          return {
+            ready: false,
+            error: "Game creation failed"
+          };
+        }
+      }
+    } catch (pollError) {
+      console.error("Error polling game status:", pollError);
+    }
+    
+    // Wait before next attempt
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+  
+  return {
+    ready: false,
+    error: "Game creation timed out"
+  };
+}
+
+async function loadConversations() {
+  try {
+    const res = await fetch("/multiuser/conversations", { 
+      method: "GET", 
+      credentials: "include" 
+    });
+    
+    if (!res.ok) {
+      console.error("Failed to get conversations:", res.status);
+      return;
+    }
+    
+    const convoData = await res.json();
+    renderConvoList(convoData);
+  } catch (err) {
+    console.error("Error loading conversations:", err);
+  }
+}
+
+function renderConvoList(conversations) {
+  const convListDiv = DOM.convListDiv || document.getElementById("convList");
+  convListDiv.innerHTML = "";
+  
+  conversations.forEach(conv => {
+    const wrapper = document.createElement("div");
+    wrapper.style.display = "flex";
+    wrapper.style.marginBottom = "5px";
+    
+    const btn = document.createElement("button");
+    btn.textContent = conv.name || `Game ${conv.id}`;
+    btn.style.flex = "1";
+    btn.dataset.convId = conv.id;
+
+    // Click handler
+    btn.addEventListener("click", async () => {
+      if (AppState.isSelectingConversation) {
+        return;
+      }
+      
+      btn.disabled = true;
+      try {
+        await selectConversation(conv.id);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    
+    // Right-click handler
+    btn.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, conv.id);
+    });
+    
+    wrapper.appendChild(btn);
+    convListDiv.appendChild(wrapper);
+  });
+}
+
+// ===== Context Menu =====
+function showContextMenu(x, y, convId) {
+  const menuDiv = DOM.contextMenuDiv || document.getElementById("contextMenu");
+  menuDiv.innerHTML = "";
+
+  const options = [
+    { text: "Rename", action: () => renameConversation(convId) },
+    { text: "Move to Folder", action: () => moveConversationToFolder(convId) },
+    { text: "Delete", action: () => deleteConversation(convId) }
+  ];
+
+  options.forEach(opt => {
+    const div = document.createElement("div");
+    div.textContent = opt.text;
+    div.addEventListener("click", (e) => {
+      e.stopPropagation();
+      opt.action();
+      menuDiv.style.display = "none";
+    });
+    menuDiv.appendChild(div);
+  });
+
+  menuDiv.style.left = x + "px";
+  menuDiv.style.top = y + "px";
+  menuDiv.style.display = "block";
+}
+
+async function renameConversation(convId) {
+  const newName = prompt("Enter new conversation name:");
+  if (!newName || newName.trim() === "") return;
+  
+  try {
+    const res = await fetch(`/multiuser/conversations/${convId}`, {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      credentials: "include",
+      body: JSON.stringify({ conversation_name: newName.trim() })
+    });
+    
+    if (res.ok) {
+      await loadConversations();
+    } else {
+      const errData = await res.json().catch(() => ({error: "Unknown error"}));
+      alert(`Error renaming conversation: ${errData.error}`);
+    }
+  } catch (err) {
+    console.error("Rename conversation error:", err);
+    alert("Network error renaming conversation.");
+  }
+}
+
+async function moveConversationToFolder(convId) {
+  const folderName = prompt("Enter folder name:");
+  if (!folderName || folderName.trim() === "") return;
+  
+  try {
+    const res = await fetch(`/multiuser/conversations/${convId}/move_folder`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder_name: folderName.trim() })
+    });
+    
+    if (res.ok) {
+      await loadConversations();
+    } else {
+      const errData = await res.json().catch(() => ({error: "Unknown error"}));
+      alert(`Error moving conversation: ${errData.error}`);
+    }
+  } catch (err) {
+    console.error("Move conversation error:", err);
+    alert("Network error moving conversation.");
+  }
+}
+
+async function deleteConversation(convId) {
+  if (!confirm("Are you sure you want to delete this conversation? This cannot be undone.")) {
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/multiuser/conversations/${convId}`, {
+      method: "DELETE",
+      credentials: "include"
+    });
+    
+    if (res.ok) {
+      await loadConversations();
+      if (AppState.currentConvId === convId) {
+        const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+        chatWindow.innerHTML = '<span id="loadMore" style="display:none;">Load older messages...</span>';
+        AppState.currentConvId = null;
+        AppState.currentRoomId = null;
+      }
+    } else {
+      const errData = await res.json().catch(() => ({error: "Unknown error"}));
+      alert(`Error deleting conversation: ${errData.error}`);
+    }
+  } catch (err) {
+    console.error("Delete conversation error:", err);
+    alert("Network error deleting conversation.");
+  }
+}
+
+// ===== Utility Functions =====
 async function checkLoggedIn() {
   const res = await fetch("/whoami", { credentials: "include" });
   const data = await res.json();
+  
   if (!data.logged_in) {
-    return window.location.href = "/login_page";
+    window.location.href = "/login_page";
+    return false;
   }
-  myUserId = data.user_id;
-  document.getElementById("logoutBtn").style.display = "inline-block";
-}
-
-
-function attachEnterKey() {
-  (userMsgInput || document.getElementById("userMsg")).addEventListener("keydown", function(e) {
-    if (e.key === "Enter" && !e.shiftKey) { // Allow shift+enter for new line
-      e.preventDefault();
-      sendMessage();
-    }
-  });
+  
+  AppState.userId = data.user_id;
+  const logoutBtn = document.getElementById("logoutBtn");
+  if (logoutBtn) {
+    logoutBtn.style.display = "inline-block";
+  }
+  
+  return true;
 }
 
 function loadDarkModeFromStorage() {
   const val = localStorage.getItem("dark_mode_enabled");
   if (val === "true") {
-    isDarkMode = true;
+    AppState.isDarkMode = true;
     document.body.classList.add("dark-mode");
   } else {
-    isDarkMode = false;
+    AppState.isDarkMode = false;
     document.body.classList.remove("dark-mode");
   }
 }
 
 function toggleDarkMode() {
-  isDarkMode = !isDarkMode;
-  localStorage.setItem("dark_mode_enabled", isDarkMode);
-  document.body.classList.toggle("dark-mode", isDarkMode);
+  AppState.isDarkMode = !AppState.isDarkMode;
+  localStorage.setItem("dark_mode_enabled", AppState.isDarkMode);
+  document.body.classList.toggle("dark-mode", AppState.isDarkMode);
 }
 
 async function logout() {
@@ -314,813 +1007,99 @@ async function logout() {
   }
 }
 
-async function loadConversations() {
-  try {
-    const res = await fetch("/multiuser/conversations", { method: "GET", credentials: "include" });
-    if (!res.ok) {
-      console.error("Failed to get conversations:", res.status);
-      return;
-    }
-    const convoData = await res.json();
-    renderConvoList(convoData);
-  } catch (err) {
-    console.error("Error loading conversations:", err);
-  }
-}
-
-async function startNewGame() {
-    // Prevent multiple simultaneous game creations
-    if (isCreatingGame) {
-        console.log("Game creation already in progress");
-        return;
-    }
-    
-    // Get the button and disable it
-    const newGameBtnEl = newGameBtn || document.getElementById("newGameBtn");
-    if (newGameBtnEl) {
-        newGameBtnEl.disabled = true;
-        newGameBtnEl.textContent = "Creating...";
-    }
-    
-    isCreatingGame = true;
-    
-    const chatWindowEl = chatWindow || document.getElementById("chatWindow");
-    const loadingDiv = document.createElement("div");
-    loadingDiv.id = "loadingIndicator";
-    loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing new game world...</div>';
-    chatWindowEl.appendChild(loadingDiv);
-    chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
-
-    try {
-        const res = await fetch("/start_new_game", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({})
-        });
-        const data = await res.json();
-
-        if (!res.ok) {
-            throw new Error(data.error || "Failed to start new game");
-        }
-
-        currentConvId = data.conversation_id;
-        messagesOffset = 0;
-
-        // Update loading message
-        loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Creating your world... This may take a minute...</div>';
-
-        // Poll for completion
-        const maxAttempts = 60; // 60 attempts = 3 minutes max
-        let attempts = 0;
-        let gameReady = false;
-
-        const pollInterval = setInterval(async () => {
-            attempts++;
-            
-            try {
-                const statusRes = await fetch(`/new_game/conversation_status?conversation_id=${currentConvId}`, {
-                    method: "GET",
-                    credentials: "include"
-                });
-                
-                if (statusRes.ok) {
-                    const statusData = await statusRes.json();
-                    
-                    // Update loading message with status
-                    const statusText = attempts % 3 === 0 ? "Still working..." : 
-                                     attempts % 3 === 1 ? "Building your world..." : 
-                                     "Almost there...";
-                    loadingDiv.innerHTML = `<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">${statusText}</div>`;
-                    
-                    if (statusData.status === "ready") {
-                        gameReady = true;
-                        clearInterval(pollInterval);
-                        
-                        // Remove loading indicator
-                        if (loadingDiv && loadingDiv.parentNode) {
-                            loadingDiv.remove();
-                        }
-                        
-                        // Join socket room
-                        if (socket && socket.connected) {
-                            socket.emit('join', { conversation_id: currentConvId });
-                        }
-                        
-                        // Load the game content
-                        await loadMessages(currentConvId, true);
-                        await checkForWelcomeImage(currentConvId);
-                        await loadConversations();
-                        
-                        // Show success message
-                        if (statusData.opening_narrative) {
-                            // Display the actual opening narrative from Nyx
-                            const openingMsg = { 
-                                sender: "Nyx", 
-                                content: statusData.opening_narrative
-                            };
-                            appendMessage(openingMsg, true);
-                        } else {
-                            // Fallback to generic message if no opening narrative
-                            const successMsg = { 
-                                sender: "system", 
-                                content: `New game started! Welcome to ${statusData.conversation_name || "your new world"}.` 
-                            };
-                            appendMessage(successMsg, true);
-                        }
-                                                
-                    } else if (statusData.status === "failed" || attempts >= maxAttempts) {
-                        clearInterval(pollInterval);
-                        throw new Error(attempts >= maxAttempts ? "Game creation timed out" : "Game creation failed");
-                    }
-                }
-            } catch (pollError) {
-                console.error("Error polling game status:", pollError);
-                if (attempts >= maxAttempts) {
-                    clearInterval(pollInterval);
-                    throw new Error("Failed to check game status");
-                }
-            }
-        }, 3000); // Check every 3 seconds
-
-    } catch (err) {
-        console.error("startNewGame error:", err);
-        
-        // Clean up loading indicator
-        const existingLoadingDiv = document.getElementById("loadingIndicator");
-        if (existingLoadingDiv) existingLoadingDiv.remove();
-        
-        // Show error message
-        const errorMsg = { 
-            sender: "system", 
-            content: `Error starting new game: ${err.message}. Please try again.` 
-        };
-        appendMessage(errorMsg, true);
-    } finally {
-        // Always re-enable the button and reset the flag
-        isCreatingGame = false;
-        const newGameBtnEl = newGameBtn || document.getElementById("newGameBtn");
-        if (newGameBtnEl) {
-            newGameBtnEl.disabled = false;
-            newGameBtnEl.textContent = "New Game";
-        }
-    }
-}
-
-
-function renderConvoList(conversations) {
-  const convListDivEl = convListDiv || document.getElementById("convList");
-  convListDivEl.innerHTML = "";
-  conversations.forEach(conv => {
-    const wrapper = document.createElement("div");
-    wrapper.style.display = "flex";
-    wrapper.style.marginBottom = "5px";
-    const btn = document.createElement("button");
-    btn.textContent = conv.name || `Game ${conv.id}`;
-    btn.style.flex = "1";
-    btn.dataset.convId = conv.id; // Store convId for easier access
-
-    // Left-click with protection
-    btn.addEventListener("click", async () => {
-      if (isSelectingConversation) {
-        console.log("Already selecting a conversation");
-        return;
-      }
-      isSelectingConversation = true;
-      btn.disabled = true;
-      
-      try {
-        await selectConversation(conv.id);
-      } finally {
-        isSelectingConversation = false;
-        btn.disabled = false;
-      }
-    });
-    
-    // Right-click
-    btn.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      showContextMenu(e.clientX, e.clientY, conv.id);
-    });
-    wrapper.appendChild(btn);
-    convListDivEl.appendChild(wrapper);
-  });
-}
-
-async function selectConversation(convId) {
-  if (convId === nyxSpaceConvId) {
-    console.log("Chat with Nyx selected, clearing window");
-  } else {
-    console.log(`selectConversation called with ${convId}`);
-  }
-  currentConvId = convId;
-  messagesOffset = 0;
-  // Debug socket connection
-  console.log(`Socket state: ${socket ? (socket.connected ? 'connected' : 'disconnected') : 'null'}`);
-  
-
-  if (socket && socket.connected) {
-    socket.emit('join', { conversation_id: convId });
-  } else {
-    if (socket) socket.connect();
-  }
-
-  if (convId === nyxSpaceConvId) {
-    (chatWindow || document.getElementById("chatWindow")).innerHTML = ""; // Clear previous
-    // Show loading indication while fetching
-    appendMessage({sender: "system", content: "Loading Nyx's Space..."}, true);
-    // Fetch chat messages
-    try {
-      let res = await fetch("/nyx_space/messages");
-      if (res.ok) {
-        let data = await res.json();
-        (chatWindow || document.getElementById("chatWindow")).innerHTML = ""; // Remove loading
-        if (data.messages && data.messages.length > 0) {
-          data.messages.forEach(msg => appendMessage(msg, false)); // false = don't auto-scroll yet
-          // After all, then scroll:
-          (chatWindow || document.getElementById("chatWindow")).scrollTop = (chatWindow || document.getElementById("chatWindow")).scrollHeight;
-        } else {
-          appendMessage({sender: "Nyx", content: "Welcome to Nyx's Space! You can chat with me here anytime."}, true);
-        }
-      } else {
-        appendMessage({sender: "Nyx", content: "Could not fetch Nyx's Space messages."}, true);
-      }
-    } catch (err) {
-      (chatWindow || document.getElementById("chatWindow")).innerHTML = "";
-      appendMessage({sender: "Nyx", content: "There was an error loading Nyx's Space."}, true);
-      console.error(err);
-    }
-    if (advanceTimeBtn) advanceTimeBtn.style.display = "none";
-    if (loadMoreBtn) loadMoreBtn.style.display = "none";
-  } else {
-    if (advanceTimeBtn) advanceTimeBtn.style.display = "";
-    if (loadMoreBtn) loadMoreBtn.style.display = "";
-    await loadMessages(convId, true);
-    await checkForWelcomeImage(convId);
-  }
-}
-
-
- async function loadMessages(convId, replace = false) {
-     const chatWindowEl = chatWindow || document.getElementById("chatWindow");
-     const loadMoreBtnEl = loadMoreBtn || document.getElementById("loadMore");
-     const url = `/multiuser/conversations/${convId}/messages?offset=${messagesOffset}&limit=${MESSAGES_PER_LOAD}`;
-     try {
-         const res = await fetch(url, { method: "GET", credentials: "include" });
-         if (!res.ok) {
-             console.error("Failed to load messages for convo:", convId, res.status);
-             appendMessage({sender: "system", content: `Error loading messages for game ${convId}.`}, true);
-             return;
-         }
-         const data = await res.json();
-         if (replace) {
-             // Clear chat window except for loadMore button
-             while (chatWindowEl.firstChild && chatWindowEl.firstChild !== loadMoreBtnEl) {
-                 chatWindowEl.removeChild(chatWindowEl.firstChild);
-             }
-             // If loadMoreBtn was removed, re-add it to the top
-             if (!chatWindowEl.contains(loadMoreBtnEl)) {
-                 chatWindowEl.insertBefore(loadMoreBtnEl, chatWindowEl.firstChild);
-             }
-         }
-         // Prepend messages if not replacing, append if replacing (after clearing)
-         const fragment = document.createDocumentFragment();
-         data.messages.slice().reverse().forEach(msg => { // reverse for chronological order when prepending
-             fragment.appendChild(createBubble(msg));
-         });
-
-         if (replace) {
-             chatWindowEl.appendChild(fragment); // Append all new messages
-             chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
-         } else {
-             loadMoreBtnEl.after(fragment); // Insert after "load more"
-         }
-
-         loadMoreBtnEl.style.display = data.messages.length < MESSAGES_PER_LOAD ? "none" : "block";
-     } catch (err) {
-         console.error("Error loading messages:", err);
-         appendMessage({sender: "system", content: "Error loading messages."}, true);
-     }
- }
-
- async function checkForWelcomeImage(convId) {
-     try {
-     const res = await fetch(`/universal/get_roleplay_value?conversation_id=${convId}&key=WelcomeImageUrl`, {
-         method: "GET",
-         credentials: "include"
-     });
-     if (res.ok) {
-         const data = await res.json();
-         if (data.value) {
-             appendImageToChat(data.value, "Welcome to this new world");
-         }
-     }
-     } catch (err) {
-     console.error("Error checking for welcome image:", err);
-     }
- }
-
 function loadPreviousMessages() {
-  if (!currentConvId) return;
-  messagesOffset += MESSAGES_PER_LOAD;
-  loadMessages(currentConvId, false); // false to prepend
+  if (!AppState.currentConvId) return;
+  AppState.messagesOffset += AppState.MESSAGES_PER_LOAD;
+  loadMessages(AppState.currentConvId, false);
 }
 
-function appendMessage(m, autoScroll = true) {
-  const chatWindowEl = chatWindow || document.getElementById("chatWindow");
-  const bubbleRow = createBubble(m);
-  chatWindowEl.appendChild(bubbleRow);
-  if (autoScroll) {
-    chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
-  }
-  return bubbleRow;
-}
-
-function createBubble(m) {
-  const row = document.createElement("div");
-  row.classList.add("message-row");
-  if (m.sender === "user") {
-    row.classList.add("user-row");
-  } else {
-    row.classList.add("gpt-row");
-  }
-  const bubble = document.createElement("div");
-  bubble.classList.add("message-bubble");
-  // Sanitize content before setting innerHTML
-  const safeContent = sanitizeAndRenderMarkdown(m.content || "");
-  bubble.innerHTML = `<strong>${DOMPurify.sanitize(m.sender)}:</strong> ${safeContent}`;
-  row.appendChild(bubble);
-  return row;
-}
-
-async function sendMessage() {
-  const userMsgInputEl = userMsgInput || document.getElementById("userMsg");
-  const userText = userMsgInputEl.value.trim();
-  if (!userText || !currentConvId) return;
-
-  userMsgInputEl.value = "";
-
-  // Nyx's Space handling
-  if (currentConvId === nyxSpaceConvId) {
-    try {
-      // 1. Save the user message
-      await fetch('/nyx_space/messages', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({sender: "user", content: userText, timestamp: Date.now()})
-      });
-  
-      appendMessage({sender: "user", content: userText, timestamp: Date.now()}, true);
-  
-      // 2. Get Nyx's admin reply using the new full admin endpoint!
-      // Optional: Expose advanced toggles via UI, or keep it hardcoded for now.
-      const adminRequest = {
-        user_input: userText,
-        // context: { debug_trace: true }, // Optional: add custom admin context
-        // use_thinking: true,
-        // use_conditioning: false,
-        // use_coordination: true,
-        // thinking_level: 2,
-        // mode: "coordinated",
-        // generate_response: true,
-        // use_hierarchical_memory: true
-      };
-      const replyRes = await fetch('/admin/nyx_direct', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(adminRequest)
-      });
-  
-      const replyData = await replyRes.json();
-      console.log("Admin Nyx response data:", replyData);
-  
-      // Safely extract the final message (from response_result or processing_result)
-      let aiReply = "...";
-      if (replyData.response_result && replyData.response_result.main_message) {
-        aiReply = replyData.response_result.main_message;
-      } else if (replyData.processing_result && replyData.processing_result.message) {
-        aiReply = replyData.processing_result.message;
-      } else if (replyData.response_result && replyData.response_result.message) {
-        aiReply = replyData.response_result.message;
-      }
-  
-      appendMessage({sender: "Nyx", content: aiReply, timestamp: Date.now()}, true);
-  
-      // 3. Save Nyx's reply to the DB
-      await fetch('/nyx_space/messages', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({sender: "Nyx", content: aiReply, timestamp: Date.now()})
-      });
-      return;
-    } catch (error) {
-      console.error("Error processing Nyx admin message:", error);
-      appendMessage({sender: "Nyx", content: "Sorry, an error occurred processing your admin message.", timestamp: Date.now()}, true);
-      return;
-    }
-  }
-
-  // Regular conversation handling with Socket.IO
-  const userMsgObj = { sender: "user", content: userText };
-  appendMessage(userMsgObj, true);
-
-  currentAssistantBubble = null; // Reset for new assistant message
-  partialAssistantText = "";
-
-  console.log(`Sending storybeat to server for conversation ${currentConvId}`);
-  
-  // Check if socket is connected before sending
-  if (!socket || !socket.connected) {
-    console.warn("Socket disconnected, attempting to reconnect before sending...");
-    
-    // Add reconnection message
-    const reconnectingMsg = { sender: "system", content: "Connection lost. Reconnecting before sending your message..." };
-    appendMessage(reconnectingMsg, true);
-    
-    // Try to reconnect
-    if (socket) {
-      socket.connect();
-      
-      // Wait for connection to establish before proceeding
-      let attempts = 0;
-      const maxAttempts = 5;
-      const waitForConnection = setInterval(() => {
-        attempts++;
-        if (socket.connected) {
-          clearInterval(waitForConnection);
-          console.log("Socket reconnected. Proceeding with message send.");
-          proceedWithSend();
-        } else if (attempts >= maxAttempts) {
-          clearInterval(waitForConnection);
-          console.error("Failed to reconnect after multiple attempts.");
-          const errorMsg = { sender: "system", content: "Could not connect to server. Please refresh the page and try again." };
-          appendMessage(errorMsg, true);
-        }
-      }, 1000);
-      
-      return; // Exit here and let the interval handler call proceedWithSend
-    } else {
-      const errorMsg = { sender: "system", content: "Connection error. Please refresh the page." };
-      appendMessage(errorMsg, true);
-      return;
-    }
-  }
-  
-  // If socket is connected, proceed with sending
-  proceedWithSend();
-  
-  function proceedWithSend() {
-    // Ensure joined to the correct room (socket might have reconnected)
-    socket.emit('join', { conversation_id: currentConvId });
-
-    // Set a timeout to detect if server doesn't respond
-    const messageTimeout = setTimeout(() => {
-      const timeoutMsg = { sender: "system", content: "Server taking longer than expected to respond. Please wait..." };
-      appendMessage(timeoutMsg, true);
-    }, 15000); // 15 seconds timeout
-    
-    // Listen for any response to clear the timeout
-    const clearTimeoutHandler = () => clearTimeout(messageTimeout);
-    socket.once('new_token', clearTimeoutHandler);
-    socket.once('error', clearTimeoutHandler);
-    socket.once('processing', clearTimeoutHandler);
-    
-    // Send the message
-    socket.emit("storybeat", {
-      user_input: userText,
-      conversation_id: currentConvId,
-      player_name: "Chase", // This should ideally come from logged-in user data
-      advance_time: false,
-      universal_update: pendingUniversalUpdates
-    });
-    resetPendingUniversalUpdates();
-  }
-}
-
-function advanceTime() {
-  if (!currentConvId) {
-    alert("Please select a conversation first");
-    return;
-  }
-  const userMsg = { sender: "user", content: "Let's advance to the next time period." };
-  appendMessage(userMsg, true);
-
-  currentAssistantBubble = null; // Reset
-  partialAssistantText = "";
-
-  // Check if socket is connected
-  if (!socket || !socket.connected) {
-    console.warn("Socket disconnected, attempting to reconnect...");
-    
-    if (socket) {
-      socket.connect();
-      
-      // Wait briefly for connection
-      setTimeout(() => {
-        if (socket.connected) {
-          sendAdvanceTimeCommand();
-        } else {
-          const errorMsg = { sender: "system", content: "Not connected to server. Please refresh the page." };
-          appendMessage(errorMsg, true);
-        }
-      }, 1000);
-    }
-  } else {
-    sendAdvanceTimeCommand();
-  }
-  
-  function sendAdvanceTimeCommand() {
-    socket.emit('join', { conversation_id: currentConvId }); // Ensure joined
-    socket.emit("storybeat", {
-      user_input: "Let's advance to the next time period.", // Or a specific system command
-      conversation_id: currentConvId,
-      player_name: "Chase",
-      advance_time: true,
-      universal_update: pendingUniversalUpdates
-    });
-    resetPendingUniversalUpdates();
-  }
-}
-
-// Context Menu
-function showContextMenu(x, y, convId) {
-  const menuDivEl = contextMenuDiv || document.getElementById("contextMenu");
-  menuDivEl.innerHTML = ""; // Clear previous items
-
-  const options = [
-    { text: "Rename", action: () => renameConversation(convId) },
-    { text: "Move to Folder", action: () => moveConversationToFolder(convId) },
-    { text: "Delete", action: () => deleteConversation(convId) }
-  ];
-
-  options.forEach(opt => {
-    const div = document.createElement("div");
-    div.textContent = opt.text;
-    div.addEventListener("click", (e) => {
-      e.stopPropagation(); // Prevent click from closing menu immediately via document listener
-      opt.action();
-      menuDivEl.style.display = "none"; // Hide menu after action
-    });
-    menuDivEl.appendChild(div);
-  });
-
-  menuDivEl.style.left = x + "px";
-  menuDivEl.style.top = y + "px";
-  menuDivEl.style.display = "block";
-}
-
-async function renameConversation(convId) {
-  const newName = prompt("Enter new conversation name:");
-  if (!newName || newName.trim() === "") return;
-  try {
-    const res = await fetch(`/multiuser/conversations/${convId}`, {
-      method: "PUT",
-      headers: {"Content-Type": "application/json"},
-      credentials: "include",
-      body: JSON.stringify({ conversation_name: newName.trim() })
-    });
-    if (res.ok) {
-      await loadConversations(); // Refresh list
-    } else {
-      const errData = await res.json().catch(() => ({error: "Unknown error during rename"}));
-      alert(`Error renaming conversation: ${errData.error}`);
-    }
-  } catch (err) {
-    console.error("Rename conversation fetch error:", err);
-    alert("Network error renaming conversation.");
-  }
-}
-
-async function moveConversationToFolder(convId) {
-  const folderName = prompt("Enter folder name (will be created if it doesn't exist):");
-  if (!folderName || folderName.trim() === "") return;
-  try {
-    const res = await fetch(`/multiuser/conversations/${convId}/move_folder`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder_name: folderName.trim() })
-    });
-    if (res.ok) {
-      await loadConversations();
-    } else {
-     const errData = await res.json().catch(() => ({error: "Unknown error moving conversation"}));
-      alert(`Error moving conversation: ${errData.error}`);
-    }
-  } catch (err) {
-    console.error("Move conversation fetch error:", err);
-    alert("Network error moving conversation.");
-  }
-}
-
-async function deleteConversation(convId) {
-  if (!confirm("Are you sure you want to delete this conversation? This cannot be undone.")) return;
-  try {
-    const res = await fetch(`/multiuser/conversations/${convId}`, {
-      method: "DELETE",
-      credentials: "include"
-    });
-    if (res.ok) {
-      await loadConversations();
-      if (currentConvId === convId) {
-        (chatWindow || document.getElementById("chatWindow")).innerHTML = '<span id="loadMore" style="display:none;">Load older messages...</span>'; // Clear chat if current was deleted
-        currentConvId = null;
-      }
-    } else {
-     const errData = await res.json().catch(() => ({error: "Unknown error deleting conversation"}));
-      alert(`Error deleting conversation: ${errData.error}`);
-    }
-  } catch (err) {
-    console.error("Delete conversation fetch error:", err);
-    alert("Network error deleting conversation.");
-  }
-}
-
-// Improved Socket.IO initialization with robust configuration
-function initializeSocket() {
-  // Use the enhanced connection manager
-  socket = createRobustSocketConnection({
-    // Event handlers that integrate with the UI
-    onConnect: (socket, wasReconnect) => {
-      console.log("Socket connected with ID:", socket.id);
-      
-      // If reconnection was in progress, add a system message
-      if (wasReconnect) {
-        const reconnectMsg = { sender: "system", content: "Connection restored!" };
-        appendMessage(reconnectMsg, true);
-        reconnectionInProgress = false;
-      }
-      
-      // Join conversation room if one is active
-      if (currentConvId) {
-        socket.emit('join', { conversation_id: currentConvId });
-        console.log(`Joined room: ${currentConvId}`);
-      }
-    },
-    
-    onDisconnect: (socket, reason) => {
-      console.error("Socket disconnected:", reason);
-      reconnectionInProgress = true;
-      const disconnectMsg = { sender: "system", content: `Connection lost (${reason}). Attempting to reconnect...` };
-      appendMessage(disconnectMsg, true);
-    },
-    
-    onReconnect: (socket, attemptNumber) => {
-      console.log(`Socket reconnected after ${attemptNumber} attempts`);
-      reconnectionInProgress = false;
-      
-      // Rejoin the conversation room if active
-      if (currentConvId) {
-        socket.emit('join', { conversation_id: currentConvId });
-      }
-      
-      const reconnectMsg = { sender: "system", content: "Connection restored!" };
-      appendMessage(reconnectMsg, true);
-    },
-    
-    onReconnectFailed: () => {
-      console.error("Socket reconnection failed");
-      const failMsg = { sender: "system", content: "Unable to reconnect. Please refresh the page." };
-      appendMessage(failMsg, true);
+function attachEnterKey() {
+  const userInput = DOM.userMsgInput || document.getElementById("userMsg");
+  userInput.addEventListener("keydown", function(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
     }
   });
-  
-  // Set up event listeners for message handling
-  setupSocketMessageListeners();
 }
 
-// Separate function for message-specific listeners
-function setupSocketMessageListeners() {
-  // Room events
-  socket.on("joined", (data) => {
-    console.log("Joined room:", data.room);
-    const joinMsg = { sender: "system", content: "Connected to game session" };
-    appendMessage(joinMsg, true);
-  });
-
-  // Message streaming events
-  socket.on("new_token", function(payload) {
-    handleNewToken(payload.token);
-  });
-
-  socket.on("done", function(payload) {
-    console.log("Done streaming. Full text received.");
-    finalizeAssistantMessage(payload.full_text);
-  });
-
-  socket.on("error", (payload) => {
-    console.error("Server error:", payload.error);
-    handleNewToken("[Error: " + payload.error + "]");
-    finalizeAssistantMessage(""); // Finalize with empty if error occurred during stream
-  });
-
-  socket.on("message", function(data) {
-    console.log("Received non-streaming message event:", data);
-    const messageObj = {
-      sender: data.sender || "Nyx",
-      content: data.content || data.message || "No content"
-    };
-    appendMessage(messageObj, true);
-  });
-
-  socket.on("image", function(payload) {
-    console.log("Received image:", payload);
-    appendImageToChat(payload.image_url, payload.reason);
-  });
-
-  socket.on("processing", function(data) {
-    console.log("Server is processing:", data.message);
-    const chatWindowEl = document.getElementById("chatWindow");
-    let processingDiv = document.getElementById("processingIndicator");
-    if (!processingDiv) {
-        processingDiv = document.createElement("div");
-        processingDiv.id = "processingIndicator";
-        processingDiv.innerHTML = '<div style="text-align: center; padding: 10px; font-style: italic; color: #888;">Processing your request...</div>';
-        chatWindowEl.appendChild(processingDiv);
-    }
-    chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
-  });
-
-  socket.on("game_state_update", function(data) {
-    console.log("Game state updated:", data);
-    // Example: if (data.type === "npc_update") updateNPCInfo(data.npc_data);
-  });
-}
-
-// DOMContentLoaded to initialize everything
-const nyxSpaceConvId = "__nyx_space__";
-
+// ===== Initialization =====
 document.addEventListener('DOMContentLoaded', async function() {
+  console.log("DOM Content Loaded - Initializing chat page");
+  
   // Cache DOM elements
-  logoutBtn = document.getElementById("logoutBtn");
-  toggleDarkModeBtn = document.getElementById("toggleDarkModeBtn");
-  advanceTimeBtn = document.getElementById("advanceTimeBtn");
-  newGameBtn = document.getElementById("newGameBtn");
-  const nyxSpaceBtn = document.getElementById("nyxSpaceBtn");
-  if (nyxSpaceBtn) nyxSpaceBtn.addEventListener("click", () => selectConversation(nyxSpaceConvId));
-  convListDiv = document.getElementById("convList");
-  chatWindow = document.getElementById("chatWindow");
-  loadMoreBtn = document.getElementById("loadMore");
-  userMsgInput = document.getElementById("userMsg");
-  sendBtn = document.getElementById("sendBtn");
-  contextMenuDiv = document.getElementById("contextMenu");
-  leftPanelInner = document.getElementById("leftPanelInner");
+  DOM.logoutBtn = document.getElementById("logoutBtn");
+  DOM.toggleDarkModeBtn = document.getElementById("toggleDarkModeBtn");
+  DOM.advanceTimeBtn = document.getElementById("advanceTimeBtn");
+  DOM.newGameBtn = document.getElementById("newGameBtn");
+  DOM.nyxSpaceBtn = document.getElementById("nyxSpaceBtn");
+  DOM.convListDiv = document.getElementById("convList");
+  DOM.chatWindow = document.getElementById("chatWindow");
+  DOM.loadMoreBtn = document.getElementById("loadMore");
+  DOM.userMsgInput = document.getElementById("userMsg");
+  DOM.sendBtn = document.getElementById("sendBtn");
+  DOM.contextMenuDiv = document.getElementById("contextMenu");
+  DOM.leftPanelInner = document.getElementById("leftPanelInner");
 
-  // Initial setup
-  await checkLoggedIn(); // This might redirect, so subsequent calls might not happen if not logged in
+  // Check login status
+  const isLoggedIn = await checkLoggedIn();
+  if (!isLoggedIn) return;
+
+  // Initialize UI
   attachEnterKey();
   loadDarkModeFromStorage();
   await loadConversations();
 
-  // Socket.IO connection with improved configuration
-  initializeSocket();
+  // Initialize socket connection
+  socketManager.initialize();
 
-  // Attach global event listeners
-  if (logoutBtn) logoutBtn.addEventListener("click", logout);
-  if (toggleDarkModeBtn) toggleDarkModeBtn.addEventListener("click", toggleDarkMode);
-  if (advanceTimeBtn) advanceTimeBtn.addEventListener("click", advanceTime);
-  if (newGameBtn) newGameBtn.addEventListener("click", startNewGame);
-  if (loadMoreBtn) loadMoreBtn.addEventListener("click", loadPreviousMessages);
-  if (sendBtn) sendBtn.addEventListener("click", sendMessage);
+  // Attach event listeners
+  if (DOM.logoutBtn) DOM.logoutBtn.addEventListener("click", logout);
+  if (DOM.toggleDarkModeBtn) DOM.toggleDarkModeBtn.addEventListener("click", toggleDarkMode);
+  if (DOM.advanceTimeBtn) DOM.advanceTimeBtn.addEventListener("click", advanceTime);
+  if (DOM.newGameBtn) DOM.newGameBtn.addEventListener("click", startNewGame);
+  if (DOM.nyxSpaceBtn) DOM.nyxSpaceBtn.addEventListener("click", () => selectConversation(AppState.NYX_SPACE_CONV_ID));
+  if (DOM.loadMoreBtn) DOM.loadMoreBtn.addEventListener("click", loadPreviousMessages);
+  if (DOM.sendBtn) DOM.sendBtn.addEventListener("click", sendMessage);
 
   // Hide context menu on global click
   document.addEventListener("click", (e) => {
-     if (contextMenuDiv && !contextMenuDiv.contains(e.target)) {
-         contextMenuDiv.style.display = "none";
-     }
+    if (DOM.contextMenuDiv && !DOM.contextMenuDiv.contains(e.target)) {
+      DOM.contextMenuDiv.style.display = "none";
+    }
   });
   
-  // Add page visibility change handler to detect when browser tab becomes inactive/active
+  // Handle page visibility changes
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
-      console.log("Page is now visible, checking connection status");
-      // If socket exists but disconnected, try to reconnect
-      if (socket && !socket.connected) {
-        console.log("Page became visible but socket disconnected. Reconnecting...");
-        socket.connect();
+      console.log("Page is now visible, checking connection");
+      if (socketManager.socket && !socketManager.socket.connected) {
+        console.log("Reconnecting socket...");
+        socketManager.socket.connect();
       }
     }
   });
   
-  // Add window focus handler as well (sometimes more reliable than visibilitychange)
+  // Handle window focus
   window.addEventListener("focus", () => {
-    console.log("Window regained focus, checking connection status");
-    if (socket && !socket.connected) {
-      console.log("Window focused but socket disconnected. Reconnecting...");
-      socket.connect();
+    console.log("Window focused, checking connection");
+    if (socketManager.socket && !socketManager.socket.connected) {
+      console.log("Reconnecting socket...");
+      socketManager.socket.connect();
     }
   });
   
-  // Add window online/offline handlers
+  // Handle online/offline
   window.addEventListener("online", () => {
-    console.log("Browser reports online status, attempting to reconnect socket");
-    if (socket && !socket.connected) {
-      socket.connect();
+    console.log("Browser online");
+    if (socketManager.socket && !socketManager.socket.connected) {
+      socketManager.socket.connect();
     }
   });
   
   window.addEventListener("offline", () => {
-    console.log("Browser reports offline status");
-    // No action needed - the socket's internal events will handle this
+    console.log("Browser offline");
   });
+
+  console.log("Chat page initialization complete");
 });
