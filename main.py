@@ -135,27 +135,36 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         if universal_update:
             logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
             try:
-                from logic.universal_updater_agent import apply_universal_updates_async # Needs to be async
-                async with get_db_connection_context() as conn: # Use async context manager
+                from logic.universal_updater_agent import apply_universal_updates_async, UniversalUpdaterContext
+                
+                # Create the UniversalUpdaterContext
+                updater_context = UniversalUpdaterContext(user_id, conversation_id)
+                await updater_context.initialize()
+                
+                # Get a database connection and apply updates
+                async with get_db_connection_context() as conn:
                     await apply_universal_updates_async(
+                        updater_context,  # Pass the context object, not user_id
                         user_id,
                         conversation_id,
                         universal_update,
-                        conn # Pass the connection
+                        conn
                     )
+                
                 logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
+                
                 # Refresh aggregator data post-update
-                aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
+                aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
                 context["aggregator_data"] = aggregator_data
+                
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
-                 logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
-                 # Decide if to continue or emit error and stop
-                 await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
-                 return
+                logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
+                await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                return
             except Exception as update_err:
-                 logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                 await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
-                 return
+                logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
+                await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
         # Ensure this function is async
