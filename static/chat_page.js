@@ -84,6 +84,7 @@ const AppState = {
   // Conversation state
   currentConvId: null,      // Always normalized to string
   currentRoomId: null,      // Always stored as string
+  roomConnectedOnce: false,   // <— NEW
   messagesOffset: 0,
   
   // UI state
@@ -336,8 +337,9 @@ class SocketManager {
       }
       
       // Only show connection message on initial join
-      if (!AppState.isSendingMessage) {
+      if (!AppState.roomConnectedOnce) {
         appendMessage({ sender: "system", content: "Connected to game session" }, true);
+        AppState.roomConnectedOnce = true;
       }
     });
 
@@ -847,6 +849,7 @@ async function selectConversation(convId) {
     return;
   }
 
+  AppState.roomConnectedOnce = false;   // reset flag when switching rooms
   AppState.isSelectingConversation = true;
   AppState.currentConvId = normalizeConvId(convId);
   AppState.messagesOffset = 0;
@@ -1030,6 +1033,7 @@ async function startNewGame() {
 
     const newConvNum = data.conversation_id;          // keep the numeric form
     AppState.currentConvId = normalizeConvId(newConvNum);
+    AppState.roomConnectedOnce = false;
     AppState.messagesOffset = 0;
 
     // Update loading message
@@ -1042,11 +1046,11 @@ async function startNewGame() {
       loadingDiv.remove();
       
       // Join the new game room
-      await socketManager.joinRoom(newConvNum);
+      await socketManager.joinRoom(AppState.currentConvId);
       
       // Load game content
-      await loadMessages(newConvNum, true);
-      await checkForWelcomeImage(newConvNum);
+      await loadMessages(AppState.currentConvId, true);
+      await checkForWelcomeImage(AppState.currentConvId);
       await loadConversations();
       
       // Show opening narrative
