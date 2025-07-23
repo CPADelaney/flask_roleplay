@@ -150,6 +150,13 @@ async def list_conversations():
     if not user_id:
         return jsonify({"error": "Not authenticated"}), 401
     
+    # FIX: Ensure user_id is int
+    try:
+        user_id = int(user_id) if isinstance(user_id, str) else user_id
+    except (ValueError, TypeError):
+        logging.error(f"Invalid user_id in session: {user_id}")
+        return jsonify({"error": "Invalid user session"}), 400
+    
     try:
         # Use a fresh connection with statement_cache_size=0 for pgbouncer compatibility
         dsn = get_db_dsn()
