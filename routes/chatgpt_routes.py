@@ -56,6 +56,12 @@ async def chat():
                 reflection_enabled=data.get('reflection_enabled', False),
                 use_nyx_integration=True  # Force Nyx integration
             )
+        except Exception as e:
+            logging.error(f"Error getting GPT response: {e}")
+            return jsonify({
+                "error": "Failed to get GPT response",
+                "message": str(e)
+            }), 500
         
         # Handle the response based on type
         if gpt_response_data['type'] == 'function_call':
