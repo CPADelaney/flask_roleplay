@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # -- Initialize the centralized model --
 try:
-    openai_model = get_agents_openai_model()
+    openai_model = "gpt-4.1-nano"
 except Exception as e:
     logger.error(f"Failed to get OpenAI model from centralized integration: {e}")
     openai_model = None
