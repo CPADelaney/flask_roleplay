@@ -649,6 +649,41 @@ class ResponseFilter:
         response = self._format_response(response)
         
         return response
+
+    def _update_emotional_state(self, context: Dict[str, Any]):
+        """Update Nyx's emotional state based on context"""
+        # Process event emotional impact if present
+        if "event" in context:
+            self._process_event_emotional_impact(context["event"])
+        
+        # React to user emotions if present
+        if "user_emotion" in context:
+            self._react_to_user_emotion(context["user_emotion"])
+        
+        # Apply emotional decay to prevent extreme states
+        for emotion in self.style.emotional_state:
+            self.style.emotional_state[emotion] *= 0.95  # 5% decay
+            # Ensure values stay within bounds
+            self.style.emotional_state[emotion] = max(0.0, min(1.0, self.style.emotional_state[emotion]))
+        
+        # Special handling for certain emotions
+        # Boredom increases if nothing interesting happens
+        if not context.get("event") and not context.get("user_emotion"):
+            self.style.emotional_state["boredom"] += 0.05
+        
+        # Satisfaction decreases without positive feedback
+        if context.get("user_submission", 0) < 0.3:
+            self.style.emotional_state["satisfaction"] *= 0.9
+        
+        # Interest adjusts based on user engagement
+        if context.get("user_engagement", 0.5) > 0.7:
+            self.style.emotional_state["interest"] += 0.1
+        else:
+            self.style.emotional_state["interest"] -= 0.05
+        
+        # Ensure all values remain in valid range
+        for emotion, value in self.style.emotional_state.items():
+            self.style.emotional_state[emotion] = max(0.0, min(1.0, value))
         
     def _update_boredom_level(self, context: Dict[str, Any]):
         """Update Nyx's boredom level based on context"""
