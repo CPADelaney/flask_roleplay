@@ -546,16 +546,27 @@ def run_npc_learning_cycle_task():
 async def process_new_game_task(user_id, conversation_data):
     """
     Celery task to process new game creation.
-    
-    Args:
-        user_id: The user ID for the new game
-        conversation_data: Dict containing conversation setup data
-        
-    Returns:
-        Dict with game creation results (JSON-serializable)
     """
     with trace(workflow_name="process_new_game_celery_task"):
         logger.info("CELERY – process_new_game_task called")
+        
+        # FIX: Ensure user_id is int
+        try:
+            if isinstance(user_id, str):
+                user_id = int(user_id)
+        except (ValueError, TypeError) as e:
+            logger.error(f"Invalid user_id format: {user_id}")
+            return {"status": "failed", "error": f"Invalid user_id: {str(e)}"}
+        
+        # FIX: Ensure conversation_id in data is int
+        if "conversation_id" in conversation_data:
+            try:
+                conv_id = conversation_data["conversation_id"]
+                if isinstance(conv_id, str):
+                    conversation_data["conversation_id"] = int(conv_id)
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid conversation_id format: {conv_id}")
+                return {"status": "failed", "error": f"Invalid conversation_id: {str(e)}"}
         agent = NewGameAgent()
         conversation_id = None
     
