@@ -1762,7 +1762,8 @@ async def process_user_input(
             await nyx_context.learn_from_interaction(
                 action="response",
                 outcome="error",
-                s
+                success=False,
+            )
         
         return {
             "success": False,
