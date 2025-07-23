@@ -47,12 +47,15 @@ async def chat():
             # Fall back to regular system prompt (which is handled internally by get_chatgpt_response)
         
         # Get response from GPT using the existing function signature
-        gpt_response_data = await get_chatgpt_response(
-            conversation_id=conversation_id,
-            aggregator_text="",  # You can add aggregator text here if needed
-            user_input=formatted_user_prompt,
-            reflection_enabled=data.get('reflection_enabled', False)
-        )
+        try:
+            # Always use unified pipeline
+            gpt_response_data = await get_chatgpt_response(
+                conversation_id=conversation_id,
+                aggregator_text="",
+                user_input=user_message,
+                reflection_enabled=data.get('reflection_enabled', False),
+                use_nyx_integration=True  # Force Nyx integration
+            )
         
         # Handle the response based on type
         if gpt_response_data['type'] == 'function_call':
