@@ -100,78 +100,79 @@ class ActivityRecommendation(BaseModel):
 @dataclass
 class NyxContext:
     """Enhanced context for Nyx agents with state management"""
-    user_id: int
-    conversation_id: int
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
     
-    # Core systems
-    memory_system: Optional[MemoryNyxBridge] = None
-    user_model: Optional[UserModelManager] = None
-    task_integration: Optional[NyxTaskIntegration] = None
-    response_filter: Optional[ResponseFilter] = None
-    emotional_core: Optional[EmotionalCore] = None
-    performance_monitor: Optional[PerformanceMonitor] = None
-    belief_system: Optional[Any] = None  # Belief system integration
-    
-    # State management
-    current_context: Dict[str, Any] = field(default_factory=dict)
-    scenario_state: Dict[str, Any] = field(default_factory=dict)
-    relationship_states: Dict[str, Dict[str, float]] = field(default_factory=dict)  # Improved typing
-    active_tasks: List[Dict[str, Any]] = field(default_factory=list)
-    
-    # Performance tracking
-    performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
-        "total_actions": 0,
-        "successful_actions": 0,
-        "failed_actions": 0,
-        "response_times": [],
-        "memory_usage": 0,
-        "cpu_usage": 0,
-        "error_rates": {
-            "total": 0,
-            "recovered": 0,
-            "unrecovered": 0
-        }
-    })
-    
-    # Emotional state
-    emotional_state: Dict[str, float] = field(default_factory=lambda: {
-        "valence": 0.0,
-        "arousal": 0.5,
-        "dominance": 0.7
-    })
-    
-    # Learning and adaptation
-    learned_patterns: Dict[str, Any] = field(default_factory=dict)
-    strategy_effectiveness: Dict[str, Any] = field(default_factory=dict)
-    adaptation_history: List[Dict[str, Any]] = field(default_factory=list)
-    learning_metrics: Dict[str, Any] = field(default_factory=lambda: {
-        "pattern_recognition_rate": 0.0,
-        "strategy_improvement_rate": 0.0,
-        "adaptation_success_rate": 0.0
-    })
-    
-    # Error tracking
-    error_log: List[Dict[str, Any]] = field(default_factory=list)
-    
-    # Task scheduling
-    last_task_runs: Dict[str, datetime] = field(default_factory=dict)
-    task_intervals: Dict[str, float] = field(default_factory=lambda: {
-        "memory_reflection": 300,  # 5 minutes
-        "relationship_update": 600,  # 10 minutes
-        "scenario_check": 60,  # 1 minute
-        "performance_check": 300,  # 5 minutes
-        "task_generation": 300,  # 5 minutes - Added missing entry
-        "learning_save": 900,  # 15 minutes - Added missing entry
-        "performance_save": 600  # 10 minutes - Added missing entry
-    })
-    
-    # Private attributes for internal state management
-    _db_connection: Optional[Any] = field(init=False, default=None)
-    _strategy_cache: Optional[Tuple[float, Any]] = field(init=False, default=None)
-    _strategy_cache_ttl: float = field(init=False, default=300.0)  # 5 minute cache
-    _cpu_usage_cache: Optional[float] = field(init=False, default=None)
-    _cpu_usage_last_update: float = field(init=False, default=0.0)
-    _cpu_usage_update_interval: float = field(init=False, default=10.0)  # Update every 10 seconds
+        # Core systems
+        memory_system: Optional[MemoryNyxBridge] = None
+        user_model: Optional[UserModelManager] = None
+        task_integration: Optional[NyxTaskIntegration] = None
+        response_filter: Optional[ResponseFilter] = None
+        emotional_core: Optional[EmotionalCore] = None
+        performance_monitor: Optional[PerformanceMonitor] = None
+        belief_system: Optional[Any] = None  # Belief system integration
+        
+        # State management
+        current_context: Dict[str, Any] = field(default_factory=dict)
+        scenario_state: Dict[str, Any] = field(default_factory=dict)
+        relationship_states: Dict[str, Dict[str, float]] = field(default_factory=dict)  # Improved typing
+        active_tasks: List[Dict[str, Any]] = field(default_factory=list)
+        
+        # Performance tracking
+        performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
+            "total_actions": 0,
+            "successful_actions": 0,
+            "failed_actions": 0,
+            "response_times": [],
+            "memory_usage": 0,
+            "cpu_usage": 0,
+            "error_rates": {
+                "total": 0,
+                "recovered": 0,
+                "unrecovered": 0
+            }
+        })
+        
+        # Emotional state
+        emotional_state: Dict[str, float] = field(default_factory=lambda: {
+            "valence": 0.0,
+            "arousal": 0.5,
+            "dominance": 0.7
+        })
+        
+        # Learning and adaptation
+        learned_patterns: Dict[str, Any] = field(default_factory=dict)
+        strategy_effectiveness: Dict[str, Any] = field(default_factory=dict)
+        adaptation_history: List[Dict[str, Any]] = field(default_factory=list)
+        learning_metrics: Dict[str, Any] = field(default_factory=lambda: {
+            "pattern_recognition_rate": 0.0,
+            "strategy_improvement_rate": 0.0,
+            "adaptation_success_rate": 0.0
+        })
+        
+        # Error tracking
+        error_log: List[Dict[str, Any]] = field(default_factory=list)
+        
+        # Task scheduling
+        last_task_runs: Dict[str, datetime] = field(default_factory=dict)
+        task_intervals: Dict[str, float] = field(default_factory=lambda: {
+            "memory_reflection": 300,  # 5 minutes
+            "relationship_update": 600,  # 10 minutes
+            "scenario_check": 60,  # 1 minute
+            "performance_check": 300,  # 5 minutes
+            "task_generation": 300,  # 5 minutes - Added missing entry
+            "learning_save": 900,  # 15 minutes - Added missing entry
+            "performance_save": 600  # 10 minutes - Added missing entry
+        })
+        
+        # Private attributes for internal state management
+        _db_connection: Optional[Any] = field(init=False, default=None)
+        _strategy_cache: Optional[Tuple[float, Any]] = field(init=False, default=None)
+        _strategy_cache_ttl: float = field(init=False, default=300.0)  # 5 minute cache
+        _cpu_usage_cache: Optional[float] = field(init=False, default=None)
+        _cpu_usage_last_update: float = field(init=False, default=0.0)
+        _cpu_usage_update_interval: float = field(init=False, default=10.0)  # Update every 10 seconds
     
     async def initialize(self):
         """Initialize all systems"""
@@ -203,27 +204,6 @@ class NyxContext:
         
         # Load existing state from database
         await self._load_state()
-    
-    async def get_db_connection(self):
-        """Get shared database connection for this context"""
-        if not self._db_connection:
-            # Get the connection manager
-            context_manager = get_db_connection_context()
-            self._db_connection = await context_manager.__aenter__()
-        return self._db_connection
-    
-    async def close_db_connection(self):
-        """Close shared database connection"""
-        if self._db_connection:
-            # Use suppress to handle cases where close() might not exist or already closed
-            with suppress(AttributeError, Exception):
-                # If using a raw connection, close it
-                if hasattr(self._db_connection, 'close'):
-                    await self._db_connection.close()
-                # If it's a context manager, exit it properly
-                elif hasattr(self._db_connection, '__aexit__'):
-                    await self._db_connection.__aexit__(None, None, None)
-            self._db_connection = None
     
     async def get_active_strategies_cached(self):
         """Get active strategies with caching"""
@@ -622,6 +602,17 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], user_messa
             "source": "explicit_statement"
         })
     
+    # Save revelations to database if found
+    if revelations and ctx.context.user_model:
+        # User model will handle its own DB connection
+        for revelation in revelations:
+            if revelation["type"] == "kink_preference":
+                await ctx.context.user_model.update_kink_preference(
+                    revelation["kink"],
+                    revelation["intensity"],
+                    revelation["source"]
+                )
+    
     return json.dumps({
         "revelations": revelations,
         "has_revelations": len(revelations) > 0
@@ -650,7 +641,8 @@ async def generate_image_from_scene(
         "style": style
     }
     
-    result = generate_roleplay_image_from_gpt(
+    # This function should handle its own connections
+    result = await generate_roleplay_image_from_gpt(
         image_data,
         ctx.context.user_id,
         ctx.context.conversation_id
@@ -680,6 +672,15 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
         "arousal": emotional_data["arousal"],
         "dominance": emotional_data["dominance"]
     })
+    
+    # Save to database with its own connection
+    async with get_db_connection_context() as conn:
+        await conn.execute("""
+            INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, conversation_id) 
+            DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
+        """, ctx.context.user_id, ctx.context.conversation_id, json.dumps(ctx.context.emotional_state))
     
     # Return the result with confirmation of update
     emotional_data["state_updated"] = True
@@ -761,40 +762,6 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], context
         }
     }, ensure_ascii=False)
 
-async def _get_memory_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> Dict[str, float]:
-    """Get emotional impact from relevant memories"""
-    impact = {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
-    
-    try:
-        # Get relevant memories
-        memories_str = await retrieve_memories(ctx, str(context), limit=5)
-        if not memories_str or memories_str == "No relevant memories found.":
-            return impact
-        
-        # Simple analysis of memory content
-        memories_lower = memories_str.lower()
-        
-        # Positive memories
-        if any(word in memories_lower for word in ["happy", "joy", "success", "pleasure"]):
-            impact["valence"] += 0.2
-        
-        # Negative memories
-        if any(word in memories_lower for word in ["sad", "fail", "pain", "frustrate"]):
-            impact["valence"] -= 0.2
-        
-        # Intense memories
-        if any(word in memories_lower for word in ["intense", "extreme", "overwhelming"]):
-            impact["arousal"] += 0.2
-        
-        # Control-related memories
-        if any(word in memories_lower for word in ["control", "command", "dominate"]):
-            impact["dominance"] += 0.1
-        
-    except Exception as e:
-        logger.error(f"Error getting memory emotional impact: {e}")
-    
-    return impact
-
 @function_tool
 async def update_relationship_state(
     ctx: RunContextWrapper[NyxContext],
@@ -843,6 +810,27 @@ async def update_relationship_state(
         rel["type"] = "submissive"
     else:
         rel["type"] = "neutral"
+    
+    # Save to database with its own connection
+    async with get_db_connection_context() as conn:
+        await conn.execute("""
+            INSERT INTO RelationshipEvolution 
+            (user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
+             relationship_type, current_stage, progress_to_next, evolution_history)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (user_id, conversation_id, npc1_id, entity2_type, entity2_id)
+            DO UPDATE SET 
+                relationship_type = $6,
+                current_stage = $7,
+                progress_to_next = $8,
+                evolution_history = $9
+        """, ctx.context.user_id, ctx.context.conversation_id, 0, "entity", entity_id,
+             rel["type"], rel["type"], 0, json.dumps([{
+                 "timestamp": time.time(),
+                 "trust": rel["trust"],
+                 "power": rel["power_dynamic"],
+                 "bond": rel["emotional_bond"]
+             }]))
     
     return json.dumps({
         "entity_id": entity_id,
@@ -905,6 +893,22 @@ async def check_performance_metrics(ctx: RunContextWrapper[NyxContext]) -> str:
         ctx.context.error_log = ctx.context.error_log[-50:]
         actions_taken.append("error_log_cleanup")
     
+    # Save metrics to database with its own connection
+    if ctx.context.should_run_task("performance_save"):
+        async with get_db_connection_context() as conn:
+            bounded_metrics = metrics.copy()
+            if "response_times" in bounded_metrics:
+                bounded_metrics["response_times"] = bounded_metrics["response_times"][-50:]
+            
+            await conn.execute("""
+                INSERT INTO performance_metrics (user_id, conversation_id, metrics, error_log, created_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            """, ctx.context.user_id, ctx.context.conversation_id,
+            json.dumps(bounded_metrics, ensure_ascii=False),
+            json.dumps(ctx.context.error_log[-50:], ensure_ascii=False))
+        
+        ctx.context.record_task_run("performance_save")
+    
     return json.dumps({
         "metrics": {
             "memory_mb": metrics["memory_usage"],
@@ -916,6 +920,7 @@ async def check_performance_metrics(ctx: RunContextWrapper[NyxContext]) -> str:
         "actions_taken": actions_taken,
         "health": "good" if not suggestions else "needs_attention"
     }, ensure_ascii=False)
+
 
 @function_tool
 async def get_activity_recommendations(
@@ -1114,6 +1119,101 @@ async def score_decision_options(
         "scored_options": scored_options,
         "best_option": scored_options[0]["option"],
         "confidence": scored_options[0]["score"]
+    }, ensure_ascii=False)
+
+@function_tool(strict_mode=False)
+async def detect_conflicts_and_instability(
+    ctx: RunContextWrapper[NyxContext],
+    scenario_state: Dict[str, Any]
+) -> str:
+    """
+    Detect conflicts and emotional instability in current scenario.
+    
+    Args:
+        scenario_state: Current scenario state
+    """
+    conflicts = []
+    instabilities = []
+    
+    # Check for relationship conflicts
+    # Create a copy of items to avoid mutation during iteration
+    relationship_items = list(ctx.context.relationship_states.items())
+    for i, (entity1_id, rel1) in enumerate(relationship_items):
+        for entity2_id, rel2 in relationship_items[i+1:]:
+            # Conflicting power dynamics
+            if abs(rel1.get("power_dynamic", 0.5) - rel2.get("power_dynamic", 0.5)) > 0.7:
+                conflicts.append({
+                    "type": "power_conflict",
+                    "entities": [entity1_id, entity2_id],
+                    "severity": abs(rel1["power_dynamic"] - rel2["power_dynamic"]),
+                    "description": "Conflicting power dynamics between entities"
+                })
+            
+            # Low mutual trust
+            if rel1.get("trust", 0.5) < 0.3 and rel2.get("trust", 0.5) < 0.3:
+                conflicts.append({
+                    "type": "trust_conflict",
+                    "entities": [entity1_id, entity2_id],
+                    "severity": 0.7,
+                    "description": "Mutual distrust between entities"
+                })
+    
+    # Check for emotional instability
+    emotional_state = ctx.context.emotional_state
+    
+    # High arousal with negative valence
+    if emotional_state["arousal"] > 0.8 and emotional_state["valence"] < -0.5:
+        instabilities.append({
+            "type": "emotional_volatility",
+            "severity": emotional_state["arousal"],
+            "description": "High arousal with negative emotions",
+            "recommendation": "De-escalation needed"
+        })
+    
+    # Rapid emotional changes
+    if ctx.context.adaptation_history:
+        recent_emotions = [h.get("emotional_state", {}) for h in ctx.context.adaptation_history[-5:]]
+        if recent_emotions:
+            valence_variance = _calculate_variance([e.get("valence", 0) for e in recent_emotions])
+            if valence_variance > 0.5:
+                instabilities.append({
+                    "type": "emotional_instability",
+                    "severity": min(1.0, valence_variance),
+                    "description": "Rapid emotional swings detected",
+                    "recommendation": "Stabilization recommended"
+                })
+    
+    # Scenario-specific conflicts
+    if scenario_state.get("objectives"):
+        blocked_objectives = [obj for obj in scenario_state["objectives"] 
+                             if obj.get("status") == "blocked"]
+        if blocked_objectives:
+            conflicts.append({
+                "type": "objective_conflict",
+                "severity": len(blocked_objectives) / len(scenario_state["objectives"]),
+                "description": f"{len(blocked_objectives)} objectives are blocked",
+                "blocked_objectives": blocked_objectives
+            })
+    
+    # Calculate overall stability (0 conflicts = 1.0 stability, 10+ conflicts = 0.0 stability)
+    total_issues = len(conflicts) + len(instabilities)
+    overall_stability = max(0.0, 1.0 - (total_issues / 10))
+    
+    # Save scenario state if needed
+    if ctx.context.scenario_state and ctx.context.scenario_state.get("active"):
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
+                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            """, ctx.context.user_id, ctx.context.conversation_id, 
+            json.dumps(ctx.context.scenario_state, ensure_ascii=False))
+    
+    return json.dumps({
+        "conflicts": conflicts,
+        "instabilities": instabilities,
+        "overall_stability": overall_stability,
+        "stability_note": f"{total_issues} issues detected (0 issues = 1.0 stability, 10+ issues = 0.0 stability)",
+        "requires_intervention": any(c["severity"] > 0.8 for c in conflicts + instabilities)
     }, ensure_ascii=False)
 
 def _calculate_context_relevance(option: Dict[str, Any], context: Dict[str, Any]) -> float:
@@ -1677,54 +1777,54 @@ async def process_user_input(
 
 async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
-    conn = await ctx.get_db_connection()
-    
-    try:
-        # Save emotional state
-        await conn.execute("""
-            INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
-            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-            ON CONFLICT (user_id, conversation_id) 
-            DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
-        """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.emotional_state, ensure_ascii=False))
-        
-        # Save scenario state if active
-        if ctx.scenario_state and ctx.scenario_state.get("active"):
+    # Use a fresh connection, not one from the context
+    async with get_db_connection_context() as conn:
+        try:
+            # Save emotional state
             await conn.execute("""
-                INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
+                INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
                 VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-            """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.scenario_state, ensure_ascii=False))
-        
-        # Save learning metrics periodically
-        if ctx.should_run_task("learning_save"):
-            await conn.execute("""
-                INSERT INTO learning_metrics (user_id, conversation_id, metrics, learned_patterns, created_at)
-                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-            """, ctx.user_id, ctx.conversation_id, 
-            json.dumps(ctx.learning_metrics, ensure_ascii=False), 
-            json.dumps(dict(list(ctx.learned_patterns.items())[-50:]), ensure_ascii=False))  # Save only recent patterns
+                ON CONFLICT (user_id, conversation_id) 
+                DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
+            """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.emotional_state, ensure_ascii=False))
             
-            ctx.record_task_run("learning_save")
-        
-        # Save performance metrics periodically
-        if ctx.should_run_task("performance_save"):
-            # Prepare metrics with bounded lists
-            bounded_metrics = ctx.performance_metrics.copy()
-            if "response_times" in bounded_metrics:
-                bounded_metrics["response_times"] = bounded_metrics["response_times"][-50:]
+            # Save scenario state if active
+            if ctx.scenario_state and ctx.scenario_state.get("active"):
+                await conn.execute("""
+                    INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
+                    VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.scenario_state, ensure_ascii=False))
             
-            await conn.execute("""
-                INSERT INTO performance_metrics (user_id, conversation_id, metrics, error_log, created_at)
-                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-            """, ctx.user_id, ctx.conversation_id,
-            json.dumps(bounded_metrics, ensure_ascii=False),
-            json.dumps(ctx.error_log[-50:], ensure_ascii=False))
+            # Save learning metrics periodically
+            if ctx.should_run_task("learning_save"):
+                await conn.execute("""
+                    INSERT INTO learning_metrics (user_id, conversation_id, metrics, learned_patterns, created_at)
+                    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                """, ctx.user_id, ctx.conversation_id, 
+                json.dumps(ctx.learning_metrics, ensure_ascii=False), 
+                json.dumps(dict(list(ctx.learned_patterns.items())[-50:]), ensure_ascii=False))  # Save only recent patterns
+                
+                ctx.record_task_run("learning_save")
             
-            ctx.record_task_run("performance_save")
-            
-    except Exception as e:
-        logger.error(f"Error saving context state: {e}")
-        # Don't re-raise to avoid failing the main request
+            # Save performance metrics periodically
+            if ctx.should_run_task("performance_save"):
+                # Prepare metrics with bounded lists
+                bounded_metrics = ctx.performance_metrics.copy()
+                if "response_times" in bounded_metrics:
+                    bounded_metrics["response_times"] = bounded_metrics["response_times"][-50:]
+                
+                await conn.execute("""
+                    INSERT INTO performance_metrics (user_id, conversation_id, metrics, error_log, created_at)
+                    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                """, ctx.user_id, ctx.conversation_id,
+                json.dumps(bounded_metrics, ensure_ascii=False),
+                json.dumps(ctx.error_log[-50:], ensure_ascii=False))
+                
+                ctx.record_task_run("performance_save")
+                
+        except Exception as e:
+            logger.error(f"Error saving context state: {e}")
+            # Don't re-raise to avoid failing the main request
 
 async def generate_reflection(
     user_id: int,
