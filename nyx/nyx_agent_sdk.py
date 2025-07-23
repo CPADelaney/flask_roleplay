@@ -504,19 +504,28 @@ async def add_memory(ctx: RunContextWrapper[NyxContext], memory_text: str, memor
     """
     memory_system = ctx.context.memory_system
     
-    memory_id = await memory_system.add_memory(
+    # Convert significance to importance string
+    if significance >= 8:
+        importance = "critical"
+    elif significance >= 6:
+        importance = "high"
+    elif significance >= 4:
+        importance = "medium"
+    elif significance >= 2:
+        importance = "low"
+    else:
+        importance = "trivial"
+    
+    result = await memory_system.remember(
+        entity_type="integrated",
+        entity_id=0,
         memory_text=memory_text,
-        memory_type=memory_type,
-        memory_scope="game",
-        significance=significance,
-        tags=["agent_generated"],
-        metadata={
-            "timestamp": datetime.now().isoformat(),
-            "auto_generated": True,
-            "emotional_state": ctx.context.emotional_state
-        }
+        importance=importance,
+        emotional=True,
+        tags=["agent_generated", memory_type]
     )
     
+    memory_id = result.get("memory_id", "unknown")
     return f"Memory stored successfully (ID: {memory_id})"
 
 @function_tool
@@ -1665,7 +1674,7 @@ async def process_user_input(
             context=nyx_context,
             run_config=RunConfig(
                 workflow_name="Nyx Roleplay",
-                trace_metadata={"user_id": user_id, "conversation_id": conversation_id}
+                trace_metadata={"user_id": str(user_id), "conversation_id": str(conversation_id)}
             )
         )
         
@@ -1703,17 +1712,13 @@ async def process_user_input(
                 nyx_context.record_task_run("task_generation")
         
         # Store the interaction in memory
-        await nyx_context.memory_system.add_memory(
+        memory_result = await nyx_context.memory_system.remember(
+            entity_type="integrated",
+            entity_id=0,
             memory_text=f"User: {user_input}\nNyx: {response.narrative}",
-            memory_type="conversation",
-            memory_scope="game",
-            significance=5,
-            tags=["interaction"],
-            metadata={
-                "timestamp": datetime.now().isoformat(),
-                "emotional_state": nyx_context.emotional_state,
-                "tension_level": response.tension_level
-            }
+            importance="medium",
+            emotional=True,
+            tags=["interaction", "conversation"]
         )
         
         # Learn from the interaction
@@ -1774,7 +1779,7 @@ async def process_user_input(
                 "generate_image": False
             }
         }
-
+      
 async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
     # Use a fresh connection, not one from the context
