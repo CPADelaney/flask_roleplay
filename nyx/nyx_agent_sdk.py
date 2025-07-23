@@ -103,10 +103,11 @@ class ActivityRecommendation(BaseModel):
 @dataclass
 class NyxContext:
     """Enhanced context for Nyx agents with state management"""
+    # Required fields (no defaults) must come first
     user_id: int
     conversation_id: int
     
-    # Core systems
+    # Optional fields (with defaults) come after
     memory_system: Optional[MemoryNyxBridge] = None
     user_model: Optional[UserModelManager] = None
     task_integration: Optional[NyxTaskIntegration] = None
@@ -115,7 +116,7 @@ class NyxContext:
     performance_monitor: Optional[PerformanceMonitor] = None
     belief_system: Optional[Any] = None  # Belief system integration
     
-    # State management
+    # State management - all have defaults
     current_context: Dict[str, Any] = field(default_factory=dict)
     scenario_state: Dict[str, Any] = field(default_factory=dict)
     relationship_states: Dict[str, Dict[str, float]] = field(default_factory=dict)
@@ -174,6 +175,7 @@ class NyxContext:
     _cpu_usage_cache: Optional[float] = field(init=False, default=None)
     _cpu_usage_last_update: float = field(init=False, default=0.0)
     _cpu_usage_update_interval: float = field(init=False, default=10.0)  # Update every 10 seconds
+    
     
     async def initialize(self):
         """Initialize all systems"""
