@@ -98,9 +98,35 @@ logging.basicConfig(level=logging.INFO)
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
     logger.critical("DB_DSN environment variable not set!")
-    # Potentially exit or raise an error here depending on requirements
 
-# Removed ConnectivityManager for brevity, can be added back if needed, ensure it uses async checks
+
+def ensure_int_ids(user_id=None, conversation_id=None):
+    """
+    Ensure user_id and conversation_id are integers.
+    Returns tuple (user_id, conversation_id) with proper types.
+    Raises ValueError if conversion fails.
+    """
+    # Handle user_id
+    if user_id is not None and user_id != "anonymous":
+        if isinstance(user_id, str):
+            try:
+                user_id = int(user_id)
+            except ValueError:
+                raise ValueError(f"Invalid user_id: '{user_id}' cannot be converted to integer")
+        elif not isinstance(user_id, int):
+            raise TypeError(f"user_id must be int or str, got {type(user_id)}")
+    
+    # Handle conversation_id
+    if conversation_id is not None:
+        if isinstance(conversation_id, str):
+            try:
+                conversation_id = int(conversation_id)
+            except ValueError:
+                raise ValueError(f"Invalid conversation_id: '{conversation_id}' cannot be converted to integer")
+        elif not isinstance(conversation_id, int):
+            raise TypeError(f"conversation_id must be int or str, got {type(conversation_id)}")
+    
+    return user_id, conversation_id
 
 ###############################################################################
 # BACKGROUND TASKS (Called via SocketIO or Celery)
@@ -111,6 +137,18 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
     """
     Background task for processing chat messages using Nyx agent with OpenAI integration.
     """
+    # FIX: Convert string IDs to integers immediately
+    try:
+        if isinstance(conversation_id, str):
+            conversation_id = int(conversation_id)
+        if isinstance(user_id, str) and user_id != "anonymous":
+            user_id = int(user_id)
+    except (ValueError, TypeError) as e:
+        logger.error(f"[BG Task] Invalid ID format: conversation_id={conversation_id}, user_id={user_id}, error={e}")
+        if sio:
+            await sio.emit('error', {'error': 'Invalid ID format'}, room=str(conversation_id))
+        return
+        
     from quart import current_app
     if not sio:
         logger.error(f"[BG Task {conversation_id}] No socketio instance provided")
@@ -482,11 +520,31 @@ def create_quart_app():
             logger.warning(f"Received 'storybeat' from sid={sid} before app is fully ready. Rejecting.")
             await sio.emit('error', {'error': 'Server is initializing, please try again in a moment.'}, to=sid)
             return
+        
         sock_sess = await sio.get_session(sid)
         user_id = sock_sess.get("user_id", "anonymous")
+        
+        # FIX: Convert IDs to integers
         conversation_id = data.get("conversation_id")
+        if conversation_id is not None:
+            try:
+                conversation_id = int(conversation_id)
+            except (ValueError, TypeError):
+                logger.error(f"Invalid conversation_id from client: {conversation_id}")
+                await sio.emit('error', {'error': 'Invalid conversation_id format'}, to=sid)
+                return
+        
+        # Also ensure user_id is int if it's not "anonymous"
+        if user_id != "anonymous":
+            try:
+                user_id = int(user_id)
+            except (ValueError, TypeError):
+                logger.error(f"Invalid user_id in session: {user_id}")
+                await sio.emit('error', {'error': 'Invalid user_id format'}, to=sid)
+                return
+        
         user_input = data.get("user_input")
-        universal_update = data.get("universal_update") # Make sure client sends this if needed
+        universal_update = data.get("universal_update")
     
         app.logger.info(f"Received 'storybeat' from sid={sid}, user_id={user_id}, conv_id={conversation_id}")
     
@@ -578,17 +636,79 @@ def create_quart_app():
     @sio.on("join")
     async def on_join(sid, data):
         sock_sess = await sio.get_session(sid)
-        user_id  = sock_sess.get("user_id", "anonymous")
-        room = str(data["conversation_id"])
+        user_id = sock_sess.get("user_id", "anonymous")
+        
+        # FIX: Ensure proper integer conversion
+        try:
+            conversation_id = int(data["conversation_id"])
+            room = str(conversation_id)  # Room names should be strings
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error(f"Invalid conversation_id in join request: {data}")
+            await sio.emit("error", {"error": "Invalid conversation_id"}, to=sid)
+            return
+        
+        # Convert user_id if needed
+        if user_id != "anonymous":
+            try:
+                user_id = int(user_id)
+            except (ValueError, TypeError):
+                pass  # Keep as is if conversion fails
+        
         await sio.enter_room(sid, room)
         await sio.emit("joined", {"room": room}, to=sid)
 
     @sio.on("message")
     async def on_message(sid, data):
         sock_sess = await sio.get_session(sid)
-        user_id  = sock_sess.get("user_id", "anonymous")        
+        user_id = sock_sess.get("user_id", "anonymous")
+        
+        # FIX: Convert user_id if needed
+        if user_id != "anonymous":
+            try:
+                user_id = int(user_id)
+            except (ValueError, TypeError):
+                logger.error(f"Invalid user_id in session: {user_id}")
+                await sio.emit("error", {"error": "Invalid user session"}, to=sid)
+                return
+        
+        # Extract and convert conversation_id
+        conversation_id = data.get("conversation_id")
+        if conversation_id is not None:
+            try:
+                conversation_id = int(conversation_id)
+            except (ValueError, TypeError):
+                logger.error(f"Invalid conversation_id from client: {conversation_id}")
+                await sio.emit("error", {"error": "Invalid conversation_id format"}, to=sid)
+                return
+        else:
+            await sio.emit("error", {"error": "Missing conversation_id"}, to=sid)
+            return
+        
+        # Get the message content
+        message_content = data.get("message", "").strip()
+        if not message_content:
+            await sio.emit("error", {"error": "Empty message"}, to=sid)
+            return
+        
+        # Emit acknowledgment
         await sio.emit("message_received", {"status": "processing"}, to=sid)
-        # … your background task kick‑off here …
+        
+        # Start background task (similar to storybeat)
+        try:
+            # Option 1: Use the same background_chat_task
+            sio.start_background_task(
+                background_chat_task,
+                conversation_id,
+                message_content,  # user_input
+                user_id,
+                None,  # universal_update
+                sio    # Pass the socketio instance
+            )
+            app.logger.info(f"Started background task for message from sid={sid}, conv_id={conversation_id}")
+            
+        except Exception as e:
+            app.logger.error(f"Error starting message processing task: {e}", exc_info=True)
+            await sio.emit('error', {'error': 'Failed to process message'}, room=str(conversation_id))
 
     # 6) Security headers
     @app.after_request
