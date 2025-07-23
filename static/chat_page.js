@@ -1028,7 +1028,8 @@ async function startNewGame() {
       body: JSON.stringify({})
     });
 
-    AppState.currentConvId = normalizeConvId(data.conversation_id);
+    const newConvNum = data.conversation_id;          // keep the numeric form
+    AppState.currentConvId = normalizeConvId(newConvNum);
     AppState.messagesOffset = 0;
 
     // Update loading message
@@ -1041,11 +1042,11 @@ async function startNewGame() {
       loadingDiv.remove();
       
       // Join the new game room
-      await socketManager.joinRoom(AppState.currentConvId);
+      await socketManager.joinRoom(newConvNum);
       
       // Load game content
-      await loadMessages(AppState.currentConvId, true);
-      await checkForWelcomeImage(AppState.currentConvId);
+      await loadMessages(newConvNum, true);
+      await checkForWelcomeImage(newConvNum);
       await loadConversations();
       
       // Show opening narrative
