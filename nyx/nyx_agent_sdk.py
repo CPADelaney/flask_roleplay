@@ -1625,6 +1625,79 @@ Always maintain your dominant persona while being attentive to user needs and sy
 
 # ===== Main Functions (maintaining original signatures) =====
 
+    if use_nyx_integration:
+        try:
+            # Import the universal updater
+            from logic.universal_updater_agent import process_universal_update
+            
+            # Build comprehensive context
+            context_data = {
+                "aggregator_text": aggregator_text,
+                "reflection_enabled": reflection_enabled,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "system_prompt": SYSTEM_PROMPT,
+                "private_reflection": PRIVATE_REFLECTION_INSTRUCTIONS,
+                "universal_update_schema": UNIVERSAL_UPDATE_FUNCTION_SCHEMA
+            }
+            
+            # Process through Nyx
+            nyx_result = await nyx_process_input(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                user_input=user_input,
+                context_data=context_data
+            )
+            
+            if nyx_result.get("success"):
+                response_data = nyx_result.get("response", {})
+                
+                # Process any narrative through universal updater
+                if response_data.get("narrative"):
+                    update_result = await process_universal_update(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        narrative=response_data["narrative"],
+                        context={"source": "nyx_response"}
+                    )
+                
+                # Build the expected function call format
+                function_args = {
+                    "narrative": response_data.get("narrative", ""),
+                    "roleplay_updates": response_data.get("universal_updates", {}).get("roleplay_updates", {}),
+                    "ChaseSchedule": response_data.get("universal_updates", {}).get("ChaseSchedule", {}),
+                    "MainQuest": response_data.get("universal_updates", {}).get("MainQuest", ""),
+                    "PlayerRole": response_data.get("universal_updates", {}).get("PlayerRole", ""),
+                    "npc_creations": response_data.get("universal_updates", {}).get("npc_creations", []),
+                    "npc_updates": response_data.get("universal_updates", {}).get("npc_updates", []),
+                    "character_stat_updates": response_data.get("universal_updates", {}).get("character_stat_updates", {}),
+                    "relationship_updates": response_data.get("universal_updates", {}).get("relationship_updates", []),
+                    "npc_introductions": response_data.get("universal_updates", {}).get("npc_introductions", []),
+                    "location_creations": response_data.get("universal_updates", {}).get("location_creations", []),
+                    "event_list_updates": response_data.get("universal_updates", {}).get("event_list_updates", []),
+                    "inventory_updates": response_data.get("universal_updates", {}).get("inventory_updates", {}),
+                    "quest_updates": response_data.get("universal_updates", {}).get("quest_updates", []),
+                    "social_links": response_data.get("universal_updates", {}).get("social_links", []),
+                    "perk_unlocks": response_data.get("universal_updates", {}).get("perk_unlocks", []),
+                    "activity_updates": response_data.get("universal_updates", {}).get("activity_updates", []),
+                    "journal_updates": response_data.get("universal_updates", {}).get("journal_updates", []),
+                    "image_generation": {
+                        "generate": response_data.get("generate_image", False),
+                        "priority": "high" if response_data.get("generate_image") else "low",
+                        "focus": "scene",
+                        "framing": "medium_shot",
+                        "reason": response_data.get("image_prompt", "")
+                    }
+                }
+                
+                return {
+                    "type": "function_call",
+                    "function_name": "apply_universal_update",
+                    "function_args": function_args,
+                    "tokens_used": nyx_result.get("performance", {}).get("tokens_used", 0),
+                    "nyx_metrics": nyx_result.get("performance", {})
+                }
+
 async def initialize_agents():
     """Initialize necessary resources for the agents system"""
     # Initialization handled per-request in process_user_input
@@ -1647,29 +1720,19 @@ async def process_user_input(
         nyx_context.current_context = context_data or {}
         nyx_context.current_context["user_input"] = user_input
         
-        # Get cached strategies
-        strategies = await nyx_context.get_active_strategies_cached()
-        nyx_context.current_context["nyx2_strategies"] = strategies
+        # Extract system prompt if provided
+        system_prompt = context_data.get("system_prompt", "")
+        private_reflection = context_data.get("private_reflection", "")
         
-        # Check if scenario monitoring should run
-        if nyx_context.should_run_task("scenario_check") and nyx_context.scenario_state.get("active"):
-            # Run scenario checks
-            conflict_result = await detect_conflicts_and_instability(
-                RunContextWrapper(context=nyx_context),
-                nyx_context.scenario_state
-            )
-            conflicts_data = json.loads(conflict_result)
-            
-            if conflicts_data["requires_intervention"]:
-                # Add conflict information to context
-                nyx_context.current_context["active_conflicts"] = conflicts_data["conflicts"]
-                nyx_context.current_context["instabilities"] = conflicts_data["instabilities"]
-            
-            nyx_context.record_task_run("scenario_check")
+        # Create agent with system prompt
+        if system_prompt:
+            agent = await create_nyx_agent_with_prompt(system_prompt, private_reflection)
+        else:
+            agent = nyx_main_agent
         
-        # Run the main agent
+        # Run the agent
         result = await Runner.run(
-            nyx_main_agent,
+            agent,
             user_input,
             context=nyx_context,
             run_config=RunConfig(
@@ -1681,14 +1744,14 @@ async def process_user_input(
         # Get the structured response
         response = result.final_output_as(NarrativeResponse)
         
-        # Check if emotional state was updated during processing
-        # This happens when the emotional agent is called
+        # Extract universal updates from context
+        universal_updates = nyx_context.current_context.get("universal_updates", {})
         
-        # Check if scenario requested time advancement
-        if nyx_context.scenario_state.get("active"):
-            scenario_decision = nyx_context.scenario_state.get("last_decision", {})
-            if scenario_decision.get("time_advancement", False):
-                response.time_advancement = True
+        
+        # Build universal updates if needed
+        universal_updates = {}
+        if nyx_context.current_context.get("universal_updates"):
+            universal_updates = nyx_context.current_context["universal_updates"]
         
         # Apply response filtering if available
         if nyx_context.response_filter and response.narrative:
@@ -1739,12 +1802,21 @@ async def process_user_input(
         
         return {
             "success": True,
-            "response": response.dict(),
+            "response": {
+                "narrative": response.narrative,
+                "tension_level": response.tension_level,
+                "generate_image": response.generate_image,
+                "image_prompt": response.image_prompt,
+                "environment_update": response.environment_description,
+                "time_advancement": response.time_advancement,
+                "universal_updates": universal_updates  # Include any universal updates
+            },
             "memories_used": [],
             "performance": {
                 "response_time": response_time,
                 "memory_usage": nyx_context.performance_metrics["memory_usage"],
-                "cpu_usage": nyx_context.performance_metrics["cpu_usage"]
+                "cpu_usage": nyx_context.performance_metrics["cpu_usage"],
+                "tokens_used": 0  # Would need to track this in agents
             },
             "learning": {
                 "patterns_learned": len(nyx_context.learned_patterns),
