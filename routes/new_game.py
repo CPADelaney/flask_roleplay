@@ -75,6 +75,14 @@ async def start_new_game():
 async def conversation_status():
     conversation_id_str = request.args.get("conversation_id")
     user_id = session.get("user_id")
+    
+    # Ensure user_id is int
+    if user_id is not None:
+        try:
+            user_id = int(user_id)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid user session"}), 400
+    
     if not user_id or not conversation_id_str:
         return jsonify({"error": "Missing parameters"}), 400
 
