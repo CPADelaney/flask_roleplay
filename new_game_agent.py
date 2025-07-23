@@ -1093,13 +1093,12 @@ class NewGameAgent:
         
         opening_narrative = result.final_output
         
-        # Store the opening narrative canonically
         async with get_db_connection_context() as conn:
             canon_ctx = RunContextWrapper(context={
                 'user_id': user_id,
                 'conversation_id': conversation_id
             })
-
+    
             await canon.create_opening_message(
                 canon_ctx, conn,
                 "Nyx",
@@ -1112,7 +1111,6 @@ class NewGameAgent:
                    VALUES ($1, $2, $3, NOW())""",
                 conversation_id, "Nyx", opening_narrative
             )
-            await conn.execute("COMMIT")
         
         return opening_narrative
 
