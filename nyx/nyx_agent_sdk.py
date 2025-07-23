@@ -400,6 +400,24 @@ class NyxContext:
             return self._cpu_usage_cache or 0.0
         except:
             return 0.0
+
+    async def get_db_connection(self):
+        """
+        Legacy shim — returns an *async context-manager* identical to
+        `get_db_connection_context()`.  Use it with:
+            async with ctx.get_db_connection() as conn: ...
+        """
+        return get_db_connection_context()          # NOTE: no await here
+
+    async def close_db_connection(self, conn=None):
+        """
+        No-op compatibility wrapper so calls like
+        `await nyx_context.close_db_connection()` don’t crash.
+        If you pass the connection you got from get_db_connection(),
+        it will be cleanly closed; otherwise it’s a harmless no-op.
+        """
+        if conn is not None:                        # caller gave us the handle
+            await conn.__aexit__(None, None, None)
     
     def _update_learning_metrics(self):
         """Update learning-related metrics"""
@@ -1731,18 +1749,20 @@ async def process_user_input(
         
     except Exception as e:
         logger.error(f"Error processing user input: {e}")
-        # Update failure metrics
-        if nyx_context:
-            nyx_context.update_performance("total_actions", nyx_context.performance_metrics["total_actions"] + 1)
-            nyx_context.update_performance("failed_actions", nyx_context.performance_metrics["failed_actions"] + 1)
+        if nyx_context is not None and hasattr(nyx_context, "performance_metrics"):
+            nyx_context.update_performance(
+                "total_actions",
+                nyx_context.performance_metrics["total_actions"] + 1
+            )
+            nyx_context.update_performance(
+                "failed_actions",
+                nyx_context.performance_metrics["failed_actions"] + 1
+            )
             nyx_context.log_error(e, {"user_input": user_input})
-            
-            # Learn from failure
             await nyx_context.learn_from_interaction(
                 action="response",
                 outcome="error",
-                success=False
-            )
+                s
         
         return {
             "success": False,
