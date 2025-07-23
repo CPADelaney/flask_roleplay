@@ -21,6 +21,35 @@ function $(id) {
   return document.getElementById(id);
 }
 
+// Helper function to ensure IDs are integers
+function ensureIntegerId(id) {
+    if (typeof id === 'string' && id !== 'anonymous') {
+        return parseInt(id, 10);
+    }
+    return id;
+}
+
+// When emitting socket events:
+socket.emit('storybeat', {
+    conversation_id: ensureIntegerId(currentConversationId),
+    user_input: userMessage,
+    universal_update: updateData
+});
+
+socket.emit('join', {
+    conversation_id: ensureIntegerId(conversationId)
+});
+
+// For any AJAX/fetch calls:
+fetch('/api/chat', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+        conversation_id: ensureIntegerId(conversationId),
+        message: userMessage
+    })
+});
+
 // Centralized fetch helper with consistent error handling
 async function fetchJson(url, opts = {}) {
   const res = await fetch(url, { credentials: 'include', ...opts });
