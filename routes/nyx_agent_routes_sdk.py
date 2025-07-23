@@ -36,7 +36,7 @@ async def initialize_once():
 @timed_function(name="nyx_response")
 async def nyx_response():
     """
-    Enhanced endpoint that processes user input through Nyx agent
+    Enhanced endpoint that processes user input through unified pipeline
     and returns a complete response using the OpenAI Agents SDK.
     """
     tracker = PerformanceTracker("nyx_response")
@@ -72,14 +72,44 @@ async def nyx_response():
             context.update(data["additional_context"])
         tracker.end_phase()
         
-        # Process input through agent
+        # Process input through unified pipeline
         tracker.start_phase("agent_processing")
-        response = await process_user_input(
-            user_id, 
-            conversation_id, 
-            user_input, 
-            context
+        from logic.chatgpt_integration import get_chatgpt_response
+        
+        response_data = await get_chatgpt_response(
+            conversation_id=conversation_id,
+            aggregator_text="",
+            user_input=user_input,
+            reflection_enabled=data.get('reflection_enabled', False),
+            use_nyx_integration=True,
+            context=context  # Pass context if get_chatgpt_response accepts it
         )
+        
+        # Transform to expected format
+        if response_data['type'] == 'function_call':
+            response_text = response_data['function_args'].get('narrative', '')
+            generate_image = response_data['function_args'].get('image_generation', {}).get('generate', False)
+            image_prompt = response_data['function_args'].get('image_generation', {}).get('reason', '')
+            time_advancement = response_data['function_args'].get('time_advancement', False)
+            environment_update = response_data['function_args'].get('environment_update')
+            tension_level = response_data['function_args'].get('tension_level')
+        else:
+            response_text = response_data.get('response', '')
+            generate_image = False
+            image_prompt = None
+            time_advancement = False
+            environment_update = None
+            tension_level = None
+        
+        # Build response object to match existing interface
+        response = {
+            "message": response_text,
+            "generate_image": generate_image,
+            "image_prompt": image_prompt,
+            "time_advancement": time_advancement,
+            "environment_update": environment_update,
+            "tension_level": tension_level
+        }
         tracker.end_phase()
         
         # Post-processing steps
