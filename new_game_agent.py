@@ -1289,6 +1289,9 @@ class NewGameAgent:
                     }
                 )
                 
+                # REMOVE THE PROBLEMATIC LINE - this is line 1292 that causes the error
+                # conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
+                
                 # Safely extract conflict name with multiple checks
                 if initial_conflict is None:
                     logging.warning("Conflict generation returned None")
