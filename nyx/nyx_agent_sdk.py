@@ -98,81 +98,82 @@ class ActivityRecommendation(BaseModel):
 
 # ===== Enhanced Context with State Management =====
 @dataclass
+# In nyx/nyx_agent_sdk.py, update the NyxContext class:
+
+@dataclass
 class NyxContext:
     """Enhanced context for Nyx agents with state management"""
-    def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
+    user_id: int
+    conversation_id: int
     
-        # Core systems
-        memory_system: Optional[MemoryNyxBridge] = None
-        user_model: Optional[UserModelManager] = None
-        task_integration: Optional[NyxTaskIntegration] = None
-        response_filter: Optional[ResponseFilter] = None
-        emotional_core: Optional[EmotionalCore] = None
-        performance_monitor: Optional[PerformanceMonitor] = None
-        belief_system: Optional[Any] = None  # Belief system integration
-        
-        # State management
-        current_context: Dict[str, Any] = field(default_factory=dict)
-        scenario_state: Dict[str, Any] = field(default_factory=dict)
-        relationship_states: Dict[str, Dict[str, float]] = field(default_factory=dict)  # Improved typing
-        active_tasks: List[Dict[str, Any]] = field(default_factory=list)
-        
-        # Performance tracking
-        performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
-            "total_actions": 0,
-            "successful_actions": 0,
-            "failed_actions": 0,
-            "response_times": [],
-            "memory_usage": 0,
-            "cpu_usage": 0,
-            "error_rates": {
-                "total": 0,
-                "recovered": 0,
-                "unrecovered": 0
-            }
-        })
-        
-        # Emotional state
-        emotional_state: Dict[str, float] = field(default_factory=lambda: {
-            "valence": 0.0,
-            "arousal": 0.5,
-            "dominance": 0.7
-        })
-        
-        # Learning and adaptation
-        learned_patterns: Dict[str, Any] = field(default_factory=dict)
-        strategy_effectiveness: Dict[str, Any] = field(default_factory=dict)
-        adaptation_history: List[Dict[str, Any]] = field(default_factory=list)
-        learning_metrics: Dict[str, Any] = field(default_factory=lambda: {
-            "pattern_recognition_rate": 0.0,
-            "strategy_improvement_rate": 0.0,
-            "adaptation_success_rate": 0.0
-        })
-        
-        # Error tracking
-        error_log: List[Dict[str, Any]] = field(default_factory=list)
-        
-        # Task scheduling
-        last_task_runs: Dict[str, datetime] = field(default_factory=dict)
-        task_intervals: Dict[str, float] = field(default_factory=lambda: {
-            "memory_reflection": 300,  # 5 minutes
-            "relationship_update": 600,  # 10 minutes
-            "scenario_check": 60,  # 1 minute
-            "performance_check": 300,  # 5 minutes
-            "task_generation": 300,  # 5 minutes - Added missing entry
-            "learning_save": 900,  # 15 minutes - Added missing entry
-            "performance_save": 600  # 10 minutes - Added missing entry
-        })
-        
-        # Private attributes for internal state management
-        _db_connection: Optional[Any] = field(init=False, default=None)
-        _strategy_cache: Optional[Tuple[float, Any]] = field(init=False, default=None)
-        _strategy_cache_ttl: float = field(init=False, default=300.0)  # 5 minute cache
-        _cpu_usage_cache: Optional[float] = field(init=False, default=None)
-        _cpu_usage_last_update: float = field(init=False, default=0.0)
-        _cpu_usage_update_interval: float = field(init=False, default=10.0)  # Update every 10 seconds
+    # Core systems
+    memory_system: Optional[MemoryNyxBridge] = None
+    user_model: Optional[UserModelManager] = None
+    task_integration: Optional[NyxTaskIntegration] = None
+    response_filter: Optional[ResponseFilter] = None
+    emotional_core: Optional[EmotionalCore] = None
+    performance_monitor: Optional[PerformanceMonitor] = None
+    belief_system: Optional[Any] = None  # Belief system integration
+    
+    # State management
+    current_context: Dict[str, Any] = field(default_factory=dict)
+    scenario_state: Dict[str, Any] = field(default_factory=dict)
+    relationship_states: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    active_tasks: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Performance tracking
+    performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
+        "total_actions": 0,
+        "successful_actions": 0,
+        "failed_actions": 0,
+        "response_times": [],
+        "memory_usage": 0,
+        "cpu_usage": 0,
+        "error_rates": {
+            "total": 0,
+            "recovered": 0,
+            "unrecovered": 0
+        }
+    })
+    
+    # Emotional state
+    emotional_state: Dict[str, float] = field(default_factory=lambda: {
+        "valence": 0.0,
+        "arousal": 0.5,
+        "dominance": 0.7
+    })
+    
+    # Learning and adaptation
+    learned_patterns: Dict[str, Any] = field(default_factory=dict)
+    strategy_effectiveness: Dict[str, Any] = field(default_factory=dict)
+    adaptation_history: List[Dict[str, Any]] = field(default_factory=list)
+    learning_metrics: Dict[str, Any] = field(default_factory=lambda: {
+        "pattern_recognition_rate": 0.0,
+        "strategy_improvement_rate": 0.0,
+        "adaptation_success_rate": 0.0
+    })
+    
+    # Error tracking
+    error_log: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Task scheduling
+    last_task_runs: Dict[str, datetime] = field(default_factory=dict)
+    task_intervals: Dict[str, float] = field(default_factory=lambda: {
+        "memory_reflection": 300,  # 5 minutes
+        "relationship_update": 600,  # 10 minutes
+        "scenario_check": 60,  # 1 minute
+        "performance_check": 300,  # 5 minutes
+        "task_generation": 300,  # 5 minutes
+        "learning_save": 900,  # 15 minutes
+        "performance_save": 600  # 10 minutes
+    })
+    
+    # Private attributes for internal state management
+    _strategy_cache: Optional[Tuple[float, Any]] = field(init=False, default=None)
+    _strategy_cache_ttl: float = field(init=False, default=300.0)  # 5 minute cache
+    _cpu_usage_cache: Optional[float] = field(init=False, default=None)
+    _cpu_usage_last_update: float = field(init=False, default=0.0)
+    _cpu_usage_update_interval: float = field(init=False, default=10.0)  # Update every 10 seconds
     
     async def initialize(self):
         """Initialize all systems"""
@@ -190,7 +191,7 @@ class NyxContext:
         
         # Initialize belief system if available
         try:
-            from nyx.nyx_belief_system import BeliefSystem
+            from nyx.belief_system import BeliefSystem
             self.belief_system = BeliefSystem(self.user_id, self.conversation_id)
         except Exception as e:
             logger.warning(f"BeliefSystem not available: {e}", exc_info=True)
@@ -215,9 +216,9 @@ class NyxContext:
             if current_time - cache_time < self._strategy_cache_ttl:
                 return strategies
         
-        # Fetch new strategies
-        conn = await self.get_db_connection()
-        strategies = await get_active_strategies(conn)
+        # Fetch new strategies using its own connection
+        async with get_db_connection_context() as conn:
+            strategies = await get_active_strategies(conn)
         
         # Update cache
         self._strategy_cache = (current_time, strategies)
@@ -225,31 +226,31 @@ class NyxContext:
     
     async def _load_state(self):
         """Load existing state from database"""
-        conn = await self.get_db_connection()
-        
-        # Load emotional state
-        row = await conn.fetchrow("""
-            SELECT emotional_state FROM NyxAgentState
-            WHERE user_id = $1 AND conversation_id = $2
-        """, self.user_id, self.conversation_id)
-        
-        if row and row["emotional_state"]:
-            state = json.loads(row["emotional_state"])
-            self.emotional_state.update(state)
-        
-        # Load scenario state if exists
-        try:
-            scenario_row = await conn.fetchrow("""
-                SELECT state_data FROM scenario_states
+        # Use context manager to get a connection
+        async with get_db_connection_context() as conn:
+            # Load emotional state
+            row = await conn.fetchrow("""
+                SELECT emotional_state FROM NyxAgentState
                 WHERE user_id = $1 AND conversation_id = $2
-                ORDER BY created_at DESC LIMIT 1
             """, self.user_id, self.conversation_id)
             
-            if scenario_row and scenario_row["state_data"]:
-                self.scenario_state = json.loads(scenario_row["state_data"])
-        except:
-            # Table might not exist yet
-            pass
+            if row and row["emotional_state"]:
+                state = json.loads(row["emotional_state"])
+                self.emotional_state.update(state)
+            
+            # Load scenario state if exists
+            try:
+                scenario_row = await conn.fetchrow("""
+                    SELECT state_data FROM scenario_states
+                    WHERE user_id = $1 AND conversation_id = $2
+                    ORDER BY created_at DESC LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if scenario_row and scenario_row["state_data"]:
+                    self.scenario_state = json.loads(scenario_row["state_data"])
+            except:
+                # Table might not exist yet
+                pass
     
     def update_performance(self, metric: str, value: Any):
         """Update performance metrics"""
@@ -1770,10 +1771,6 @@ async def process_user_input(
                 "generate_image": False
             }
         }
-    finally:
-        # Always close DB connection
-        if nyx_context:
-            await nyx_context.close_db_connection()
 
 async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
