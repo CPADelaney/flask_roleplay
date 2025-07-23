@@ -809,18 +809,22 @@ async def get_chatgpt_response(
     # 1) If Nyx integration is enabled, use the full Nyx agent system
     if use_nyx_integration:
         try:
-            # Build context data that includes everything Nyx needs
+            # Import the universal updater
+            from logic.universal_updater_agent import process_universal_update
+            
+            # Build comprehensive context
             context_data = {
                 "aggregator_text": aggregator_text,
                 "reflection_enabled": reflection_enabled,
                 "conversation_id": conversation_id,
                 "user_id": user_id,
-                "system_prompt": SYSTEM_PROMPT,  # Pass the system prompt to Nyx
-                "universal_update_schema": UNIVERSAL_UPDATE_FUNCTION_SCHEMA  # Pass the schema
+                "system_prompt": SYSTEM_PROMPT,
+                "private_reflection": PRIVATE_REFLECTION_INSTRUCTIONS,
+                "universal_update_schema": UNIVERSAL_UPDATE_FUNCTION_SCHEMA
             }
             
-            # Process through Nyx agent system
-            nyx_result = await nyx_process_input_sdk(
+            # Process through Nyx
+            nyx_result = await nyx_process_input(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 user_input=user_input,
@@ -830,48 +834,44 @@ async def get_chatgpt_response(
             if nyx_result.get("success"):
                 response_data = nyx_result.get("response", {})
                 
-                # Build function call format that matches the expected structure
+                # Process any narrative through universal updater
+                if response_data.get("narrative"):
+                    update_result = await process_universal_update(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        narrative=response_data["narrative"],
+                        context={"source": "nyx_response"}
+                    )
+                
+                # Build the expected function call format
                 function_args = {
                     "narrative": response_data.get("narrative", ""),
-                    "roleplay_updates": {},
-                    "ChaseSchedule": {},
-                    "MainQuest": "",
-                    "PlayerRole": "",
-                    "npc_creations": [],
-                    "npc_updates": [],
-                    "character_stat_updates": {},
-                    "relationship_updates": [],
-                    "npc_introductions": [],
-                    "location_creations": [],
-                    "event_list_updates": [],
-                    "inventory_updates": {},
-                    "quest_updates": [],
-                    "social_links": [],
-                    "perk_unlocks": [],
-                    "activity_updates": [],
-                    "journal_updates": [],
+                    "roleplay_updates": response_data.get("universal_updates", {}).get("roleplay_updates", {}),
+                    "ChaseSchedule": response_data.get("universal_updates", {}).get("ChaseSchedule", {}),
+                    "MainQuest": response_data.get("universal_updates", {}).get("MainQuest", ""),
+                    "PlayerRole": response_data.get("universal_updates", {}).get("PlayerRole", ""),
+                    "npc_creations": response_data.get("universal_updates", {}).get("npc_creations", []),
+                    "npc_updates": response_data.get("universal_updates", {}).get("npc_updates", []),
+                    "character_stat_updates": response_data.get("universal_updates", {}).get("character_stat_updates", {}),
+                    "relationship_updates": response_data.get("universal_updates", {}).get("relationship_updates", []),
+                    "npc_introductions": response_data.get("universal_updates", {}).get("npc_introductions", []),
+                    "location_creations": response_data.get("universal_updates", {}).get("location_creations", []),
+                    "event_list_updates": response_data.get("universal_updates", {}).get("event_list_updates", []),
+                    "inventory_updates": response_data.get("universal_updates", {}).get("inventory_updates", {}),
+                    "quest_updates": response_data.get("universal_updates", {}).get("quest_updates", []),
+                    "social_links": response_data.get("universal_updates", {}).get("social_links", []),
+                    "perk_unlocks": response_data.get("universal_updates", {}).get("perk_unlocks", []),
+                    "activity_updates": response_data.get("universal_updates", {}).get("activity_updates", []),
+                    "journal_updates": response_data.get("universal_updates", {}).get("journal_updates", []),
                     "image_generation": {
                         "generate": response_data.get("generate_image", False),
-                        "priority": "medium" if response_data.get("generate_image") else "low",
+                        "priority": "high" if response_data.get("generate_image") else "low",
                         "focus": "scene",
                         "framing": "medium_shot",
                         "reason": response_data.get("image_prompt", "")
                     }
                 }
                 
-                # Merge any universal updates from Nyx
-                if "universal_updates" in response_data:
-                    for key, value in response_data["universal_updates"].items():
-                        if key in function_args and value:
-                            function_args[key] = value
-                
-                # Add time advancement if requested
-                if response_data.get("time_advancement", False):
-                    if "roleplay_updates" not in function_args:
-                        function_args["roleplay_updates"] = {}
-                    function_args["roleplay_updates"]["TimeAdvancement"] = True
-                
-                # Return in expected format
                 return {
                     "type": "function_call",
                     "function_name": "apply_universal_update",
