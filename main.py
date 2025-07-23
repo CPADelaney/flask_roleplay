@@ -150,11 +150,11 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
                  logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
                  # Decide if to continue or emit error and stop
-                 await current_app.socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                 await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
                  return
             except Exception as update_err:
                  logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                 await current_app.socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                 await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
                  return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
@@ -167,7 +167,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         if not response or not response.get("success", False):
             error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
             logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
-            await current_app.socketio.emit('error', {'error': error_msg}, room=str(conversation_id))
+            await sio.emit('error', {'error': error_msg}, room=str(conversation_id))
             return
 
         # Extract the message content
@@ -214,7 +214,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                     prompt_used = res.get('prompt_used', '')
                     reason = img_data["image_generation"].get("reason", "Narrative moment")
                     logger.info(f"[BG Task {conversation_id}] Image generated: {image_url}")
-                    await current_app.socketio.emit('image', {
+                    await sio.emit('image', {
                         'image_url': image_url, 'prompt_used': prompt_used, 'reason': reason
                     }, room=str(conversation_id))
                 else:
@@ -229,18 +229,18 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             delay = 0.01 # Small delay between chunks
             for i in range(0, len(message_content), chunk_size):
                 token = message_content[i:i+chunk_size]
-                await current_app.socketio.emit('new_token', {'token': token}, room=str(conversation_id))
+                await sio.emit('new_token', {'token': token}, room=str(conversation_id))
                 await asyncio.sleep(delay) # Use asyncio.sleep in async task
 
-            await current_app.socketio.emit('done', {'full_text': message_content}, room=str(conversation_id))
+            await sio.emit('done', {'full_text': message_content}, room=str(conversation_id))
             logger.info(f"[BG Task {conversation_id}] Finished streaming response.")
         else:
              logger.warning(f"[BG Task {conversation_id}] No message content to stream.")
-             await current_app.socketio.emit('done', {'full_text': ''}, room=str(conversation_id)) # Still signal done
+             await sio.emit('done', {'full_text': ''}, room=str(conversation_id)) # Still signal done
 
     except Exception as e:
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
-        await current_app.socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
+        await sio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
 app_is_ready = asyncio.Event()
 
