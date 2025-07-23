@@ -1627,79 +1627,6 @@ Always maintain your dominant persona while being attentive to user needs and sy
 
 # ===== Main Functions (maintaining original signatures) =====
 
-    if use_nyx_integration:
-        try:
-            # Import the universal updater
-            from logic.universal_updater_agent import process_universal_update
-            
-            # Build comprehensive context
-            context_data = {
-                "aggregator_text": aggregator_text,
-                "reflection_enabled": reflection_enabled,
-                "conversation_id": conversation_id,
-                "user_id": user_id,
-                "system_prompt": SYSTEM_PROMPT,
-                "private_reflection": PRIVATE_REFLECTION_INSTRUCTIONS,
-                "universal_update_schema": UNIVERSAL_UPDATE_FUNCTION_SCHEMA
-            }
-            
-            # Process through Nyx
-            nyx_result = await nyx_process_input(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                user_input=user_input,
-                context_data=context_data
-            )
-            
-            if nyx_result.get("success"):
-                response_data = nyx_result.get("response", {})
-                
-                # Process any narrative through universal updater
-                if response_data.get("narrative"):
-                    update_result = await process_universal_update(
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        narrative=response_data["narrative"],
-                        context={"source": "nyx_response"}
-                    )
-                
-                # Build the expected function call format
-                function_args = {
-                    "narrative": response_data.get("narrative", ""),
-                    "roleplay_updates": response_data.get("universal_updates", {}).get("roleplay_updates", {}),
-                    "ChaseSchedule": response_data.get("universal_updates", {}).get("ChaseSchedule", {}),
-                    "MainQuest": response_data.get("universal_updates", {}).get("MainQuest", ""),
-                    "PlayerRole": response_data.get("universal_updates", {}).get("PlayerRole", ""),
-                    "npc_creations": response_data.get("universal_updates", {}).get("npc_creations", []),
-                    "npc_updates": response_data.get("universal_updates", {}).get("npc_updates", []),
-                    "character_stat_updates": response_data.get("universal_updates", {}).get("character_stat_updates", {}),
-                    "relationship_updates": response_data.get("universal_updates", {}).get("relationship_updates", []),
-                    "npc_introductions": response_data.get("universal_updates", {}).get("npc_introductions", []),
-                    "location_creations": response_data.get("universal_updates", {}).get("location_creations", []),
-                    "event_list_updates": response_data.get("universal_updates", {}).get("event_list_updates", []),
-                    "inventory_updates": response_data.get("universal_updates", {}).get("inventory_updates", {}),
-                    "quest_updates": response_data.get("universal_updates", {}).get("quest_updates", []),
-                    "social_links": response_data.get("universal_updates", {}).get("social_links", []),
-                    "perk_unlocks": response_data.get("universal_updates", {}).get("perk_unlocks", []),
-                    "activity_updates": response_data.get("universal_updates", {}).get("activity_updates", []),
-                    "journal_updates": response_data.get("universal_updates", {}).get("journal_updates", []),
-                    "image_generation": {
-                        "generate": response_data.get("generate_image", False),
-                        "priority": "high" if response_data.get("generate_image") else "low",
-                        "focus": "scene",
-                        "framing": "medium_shot",
-                        "reason": response_data.get("image_prompt", "")
-                    }
-                }
-                
-                return {
-                    "type": "function_call",
-                    "function_name": "apply_universal_update",
-                    "function_args": function_args,
-                    "tokens_used": nyx_result.get("performance", {}).get("tokens_used", 0),
-                    "nyx_metrics": nyx_result.get("performance", {})
-                }
-
 async def initialize_agents():
     """Initialize necessary resources for the agents system"""
     # Initialization handled per-request in process_user_input
@@ -2114,6 +2041,43 @@ async def store_messages(user_id: int, conversation_id: int, user_input: str, ny
             "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
             conversation_id, "Nyx", nyx_response
         )
+
+@function_tool
+async def generate_universal_updates(
+    ctx: RunContextWrapper[NyxContext],
+    narrative: str
+) -> str:
+    """
+    Generate universal updates from the narrative using the Universal Updater.
+    
+    Args:
+        narrative: The narrative text to process
+    """
+    from logic.universal_updater_agent import process_universal_update
+    
+    try:
+        # Process the narrative
+        update_result = await process_universal_update(
+            user_id=ctx.context.user_id,
+            conversation_id=ctx.context.conversation_id,
+            narrative=narrative,
+            context={"source": "nyx_agent"}
+        )
+        
+        # Store the updates in context
+        if "universal_updates" not in ctx.context.current_context:
+            ctx.context.current_context["universal_updates"] = {}
+        
+        # Merge the updates
+        if update_result.get("success") and update_result.get("details"):
+            for key, value in update_result["details"].items():
+                ctx.context.current_context["universal_updates"][key] = value
+        
+        return json.dumps({"success": True, "updates_generated": True})
+    except Exception as e:
+        logger.error(f"Error generating universal updates: {e}")
+        return json.dumps({"success": False, "error": str(e)})
+
 
 async def create_nyx_agent_with_prompt(system_prompt: str, private_reflection: str = "") -> Agent[NyxContext]:
     """Create a Nyx agent with custom system prompt"""
