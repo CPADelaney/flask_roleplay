@@ -1,11 +1,80 @@
-// chat_page.js - Refactored for robust connection and conversation management
+// chat_page.js - Production-ready version with all optimizations
 console.log("Chat page loaded!");
 
 // ===== Utility Functions =====
 function sanitizeAndRenderMarkdown(markdownText) {
-  const renderedHTML = marked.parse(markdownText);
-  return DOMPurify.sanitize(renderedHTML);
+  try {
+    if (typeof marked === 'undefined') {
+      console.warn('Marked library not loaded, returning plain text');
+      return DOMPurify.sanitize(markdownText);
+    }
+    const renderedHTML = marked.parse(markdownText || '');
+    return DOMPurify.sanitize(renderedHTML);
+  } catch (e) {
+    console.error('Error rendering markdown:', e);
+    return DOMPurify.sanitize(markdownText || '');
+  }
 }
+
+// Dynamic DOM helper to avoid stale references
+function $(id) {
+  return document.getElementById(id);
+}
+
+// Centralized fetch helper with consistent error handling
+async function fetchJson(url, opts = {}) {
+  const res = await fetch(url, { credentials: 'include', ...opts });
+  let data = null;
+  
+  try {
+    data = await res.json();
+  } catch (e) {
+    // Response might not be JSON
+  }
+  
+  if (!res.ok) {
+    const error = new Error(data?.error || `${res.status} ${res.statusText}`);
+    error.status = res.status;
+    error.data = data;
+    throw error;
+  }
+  
+  return data;
+}
+
+// Normalize conversation IDs to strings
+function normalizeConvId(id) {
+  return id == null ? null : String(id);
+}
+
+// Validate URL is safe (http/https/protocol-relative)
+function isValidImageUrl(url) {
+  return /^(https?:)?\/\//i.test(url);
+}
+
+// Check if user is near bottom of scroll
+function isNearBottom(element, threshold = 200) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight < threshold;
+}
+
+// Debug logging helper
+function debugLog(...args) {
+  if (window.localStorage.getItem('debugSocket') === '1') {
+    console.log(...args);
+  }
+}
+
+// ===== Configuration =====
+const CONFIG = {
+  MESSAGES_PER_LOAD: 20,
+  NYX_SPACE_CONV_ID: "__nyx_space__",
+  HEARTBEAT_INTERVAL: 20000,
+  JOIN_TIMEOUT: 8000,
+  SEND_TIMEOUT: 15000,
+  GAME_POLL_INTERVAL: 3000,
+  GAME_POLL_MAX_ATTEMPTS: 60,
+  SCROLL_THRESHOLD: 200 // px from bottom to auto-scroll
+};
 
 // ===== State Management =====
 const AppState = {
@@ -13,8 +82,8 @@ const AppState = {
   userId: null,
   
   // Conversation state
-  currentConvId: null,
-  currentRoomId: null,  // Track which room we're actually in
+  currentConvId: null,      // Always normalized to string
+  currentRoomId: null,      // Always stored as string
   messagesOffset: 0,
   
   // UI state
@@ -30,31 +99,20 @@ const AppState = {
   
   // Message streaming
   currentAssistantBubble: null,
-  partialAssistantText: "",
+  partialAssistantMarkdown: "",
+  _rafScheduled: false,
   
-  // Constants
-  MESSAGES_PER_LOAD: 20,
-  NYX_SPACE_CONV_ID: "__nyx_space__"
+  // Timers/Intervals
+  heartbeatInterval: null,
+  
+  // Pending operations
+  pendingUniversalUpdates: null
 };
 
-// Universal updates object
-let pendingUniversalUpdates = {
-  roleplay_updates: {},
-  npc_creations: [],
-  npc_updates: [],
-  character_stat_updates: { player_name: "Chase", stats: {} },
-  relationship_updates: [],
-  npc_introductions: [],
-  location_creations: [],
-  event_list_updates: [],
-  inventory_updates: { player_name: "Chase", added_items: [], removed_items: [] },
-  quest_updates: [],
-  social_links: [],
-  perk_unlocks: []
-};
-
-function resetPendingUniversalUpdates() {
-  pendingUniversalUpdates = {
+// Universal updates object factory
+function createUniversalUpdates() {
+  return {
+    batch_id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     roleplay_updates: {},
     npc_creations: [],
     npc_updates: [],
@@ -70,14 +128,22 @@ function resetPendingUniversalUpdates() {
   };
 }
 
-// DOM Element cache
-const DOM = {};
+// Initialize pending updates
+AppState.pendingUniversalUpdates = createUniversalUpdates();
+
+function resetPendingUniversalUpdates() {
+  AppState.pendingUniversalUpdates = createUniversalUpdates();
+}
 
 // ===== Socket Management =====
 class SocketManager {
   constructor() {
     this.socket = null;
-    this.handlers = {};
+    this.pendingJoinTarget = null;
+    this.joinPromise = null;
+    this.joinResolver = null;
+    this.joinRejecter = null;
+    this.joinTimeout = null;
   }
 
   initialize() {
@@ -99,6 +165,32 @@ class SocketManager {
     this.setupHeartbeat();
   }
 
+  destroy() {
+    // Clean up heartbeat interval
+    if (AppState.heartbeatInterval) {
+      clearInterval(AppState.heartbeatInterval);
+      AppState.heartbeatInterval = null;
+    }
+    
+    // Clean up join timeout
+    if (this.joinTimeout) {
+      clearTimeout(this.joinTimeout);
+      this.joinTimeout = null;
+    }
+    
+    // Clear all join-related state
+    this.pendingJoinTarget = null;
+    this.joinPromise = null;
+    this.joinResolver = null;
+    this.joinRejecter = null;
+    
+    if (this.socket) {
+      this.socket.removeAllListeners();
+      this.socket.disconnect();
+      this.socket = null;
+    }
+  }
+
   handleConnect(socket, wasReconnect) {
     console.log("Socket connected with ID:", socket.id);
     AppState.isConnected = true;
@@ -110,15 +202,29 @@ class SocketManager {
     
     // Only join room if we have a conversation selected and we're not already in it
     if (AppState.currentConvId && AppState.currentConvId !== AppState.currentRoomId) {
-      this.joinRoom(AppState.currentConvId);
+      this.joinRoom(AppState.currentConvId).catch(err => {
+        console.error("Failed to rejoin room on reconnect:", err);
+      });
     }
   }
 
   handleDisconnect(socket, reason) {
     console.error("Socket disconnected:", reason);
     AppState.isConnected = false;
-    AppState.currentRoomId = null;  // Clear room state
+    AppState.currentRoomId = null;
     AppState.reconnectionInProgress = true;
+    
+    // Clear sending state to prevent stuck UI
+    AppState.isSendingMessage = false;
+    
+    // Re-enable input
+    const userInput = $("userMsg");
+    if (userInput) {
+      userInput.disabled = false;
+    }
+    
+    // Hide processing indicator
+    removeProcessingIndicator();
     
     appendMessage({ 
       sender: "system", 
@@ -133,12 +239,24 @@ class SocketManager {
     
     // Rejoin the conversation room if we had one
     if (AppState.currentConvId) {
-      this.joinRoom(AppState.currentConvId);
+      this.joinRoom(AppState.currentConvId).catch(err => {
+        console.error("Failed to rejoin room after reconnect:", err);
+      });
     }
   }
 
   handleReconnectFailed() {
     console.error("Socket reconnection failed");
+    AppState.isSendingMessage = false;
+    
+    // Re-enable input
+    const userInput = $("userMsg");
+    if (userInput) {
+      userInput.disabled = false;
+    }
+    
+    removeProcessingIndicator();
+    
     appendMessage({ 
       sender: "system", 
       content: "Unable to reconnect. Please refresh the page." 
@@ -147,29 +265,92 @@ class SocketManager {
 
   joinRoom(conversationId) {
     if (!this.socket || !this.socket.connected) {
-      console.warn("Cannot join room - socket not connected");
-      return false;
+      return Promise.reject(new Error("Socket not connected"));
     }
 
-    if (AppState.currentRoomId === conversationId) {
-      console.log(`Already in room ${conversationId}`);
-      return true;
+    const target = normalizeConvId(conversationId);
+    
+    // Already in the target room
+    if (AppState.currentRoomId === target && !this.pendingJoinTarget) {
+      return Promise.resolve();
+    }
+    
+    // Already joining this room
+    if (this.pendingJoinTarget === target && this.joinPromise) {
+      return this.joinPromise;
     }
 
-    console.log(`Joining room ${conversationId}`);
+    // Clear any previous join timeout
+    if (this.joinTimeout) {
+      clearTimeout(this.joinTimeout);
+      this.joinTimeout = null;
+    }
+
+    this.pendingJoinTarget = target;
+    this.joinPromise = new Promise((resolve, reject) => {
+      // Store resolver and rejecter
+      this.joinResolver = (room) => {
+        const roomStr = normalizeConvId(room);
+        if (roomStr === this.pendingJoinTarget) {
+          this.pendingJoinTarget = null;
+          this.joinPromise = null;
+          this.joinRejecter = null;
+          if (this.joinTimeout) {
+            clearTimeout(this.joinTimeout);
+            this.joinTimeout = null;
+          }
+          resolve();
+        } else {
+          console.warn("Received joined for unexpected room:", room, "expected:", this.pendingJoinTarget);
+        }
+      };
+      
+      this.joinRejecter = reject;
+      
+      // Set timeout
+      this.joinTimeout = setTimeout(() => {
+        if (this.pendingJoinTarget === target) {
+          this.pendingJoinTarget = null;
+          this.joinPromise = null;
+          this.joinResolver = null;
+          this.joinRejecter = null;
+          reject(new Error(`Join room ${target} timed out`));
+        }
+      }, CONFIG.JOIN_TIMEOUT);
+    });
+
+    console.log(`Joining room ${target}`);
     this.socket.emit('join', { conversation_id: conversationId });
-    return true;
+    return this.joinPromise;
   }
 
   setupMessageHandlers() {
     // Room events
     this.socket.on("joined", (data) => {
       console.log("Joined room:", data.room);
-      AppState.currentRoomId = data.room;
+      AppState.currentRoomId = normalizeConvId(data.room);
+      
+      // Resolve join promise if pending
+      if (this.joinResolver) {
+        this.joinResolver(data.room);
+      }
       
       // Only show connection message on initial join
       if (!AppState.isSendingMessage) {
         appendMessage({ sender: "system", content: "Connected to game session" }, true);
+      }
+    });
+
+    // Handle join errors
+    this.socket.on("join_error", (error) => {
+      console.error("Join error:", error);
+      if (this.joinRejecter) {
+        this.pendingJoinTarget = null;
+        this.joinPromise = null;
+        this.joinResolver = null;
+        const rejecter = this.joinRejecter;
+        this.joinRejecter = null;
+        rejecter(new Error(error.message || 'Join failed'));
       }
     });
 
@@ -182,15 +363,22 @@ class SocketManager {
       console.log("Done streaming");
       finalizeAssistantMessage(payload.full_text);
       AppState.isSendingMessage = false;
+      
+      // Reset universal updates only on success
+      resetPendingUniversalUpdates();
     });
 
     this.socket.on("error", (payload) => {
       console.error("Server error:", payload.error);
+      removeProcessingIndicator();
       appendMessage({ 
         sender: "system", 
         content: `Error: ${payload.error}` 
       }, true);
       AppState.isSendingMessage = false;
+      
+      // Reset universal updates on error too
+      resetPendingUniversalUpdates();
     });
 
     this.socket.on("image", (payload) => {
@@ -208,32 +396,42 @@ class SocketManager {
     });
 
     this.socket.on("server_heartbeat", (data) => {
-      console.log("Received server heartbeat:", data.timestamp);
+      debugLog("Received server heartbeat:", data.timestamp);
     });
   }
 
   setupHeartbeat() {
-    setInterval(() => {
-      if (this.socket && this.socket.connected) {
-        this.socket.emit('client_heartbeat', { timestamp: Date.now() });
+    // Clear any existing interval
+    if (AppState.heartbeatInterval) {
+      clearInterval(AppState.heartbeatInterval);
+    }
+    
+    AppState.heartbeatInterval = setInterval(() => {
+      // Early return if disconnected
+      if (!this.socket || !this.socket.connected) {
+        return;
       }
-    }, 20000); // Every 20 seconds
+      this.socket.emit('client_heartbeat', { timestamp: Date.now() });
+    }, CONFIG.HEARTBEAT_INTERVAL);
   }
 
-  sendMessage(data) {
+  async sendMessage(data) {
     if (!this.socket || !this.socket.connected) {
       console.error("Cannot send message - socket not connected");
       return false;
     }
 
-    if (AppState.currentRoomId !== String(data.conversation_id)) {
+    const roomIdStr = normalizeConvId(data.conversation_id);
+    if (AppState.currentRoomId !== roomIdStr) {
       console.warn("Not in the correct room, joining first");
-      if (!this.joinRoom(data.conversation_id)) {
+      try {
+        await this.joinRoom(data.conversation_id);
+      } catch (err) {
+        console.error("Failed to join room:", err);
         return false;
       }
     }
 
-    AppState.isSendingMessage = true;
     this.socket.emit("storybeat", data);
     return true;
   }
@@ -243,62 +441,115 @@ class SocketManager {
 const socketManager = new SocketManager();
 
 // ===== Message Display Functions =====
-function appendMessage(message, autoScroll = true) {
-  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
-  const bubbleRow = createBubble(message);
-  chatWindow.appendChild(bubbleRow);
-  
-  if (autoScroll) {
-    chatWindow.scrollTop = chatWindow.scrollHeight;
+const MessageFactory = {
+  create(message, autoScroll = true) {
+    const chatWindow = $("chatWindow");
+    if (!chatWindow) return null;
+    
+    // Check if we should auto-scroll before adding message
+    const shouldScroll = autoScroll && isNearBottom(chatWindow, CONFIG.SCROLL_THRESHOLD);
+    
+    const bubbleRow = this.createBubble(message);
+    chatWindow.appendChild(bubbleRow);
+    
+    if (shouldScroll) {
+      requestAnimationFrame(() => {
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+      });
+    }
+    
+    return bubbleRow;
+  },
+
+  createBubble(message) {
+    const row = document.createElement("div");
+    row.classList.add("message-row");
+    
+    const isUser = message.sender && message.sender.toLowerCase() === "user";
+    row.classList.add(isUser ? "user-row" : "gpt-row");
+    
+    const bubble = document.createElement("div");
+    bubble.classList.add("message-bubble");
+    
+    // Create elements instead of using innerHTML
+    const senderStrong = document.createElement("strong");
+    senderStrong.textContent = message.sender + ":";
+    bubble.appendChild(senderStrong);
+    
+    const contentSpan = document.createElement("span");
+    contentSpan.innerHTML = " " + sanitizeAndRenderMarkdown(message.content || "");
+    bubble.appendChild(contentSpan);
+    
+    row.appendChild(bubble);
+    return row;
+  },
+
+  createImage(imageUrl, reason) {
+    const chatWindow = $("chatWindow");
+    if (!chatWindow) return;
+    
+    // Validate URL safety
+    if (!isValidImageUrl(imageUrl)) {
+      console.error("Invalid image URL:", imageUrl);
+      return;
+    }
+    
+    // Check if we should auto-scroll before adding image
+    const shouldScroll = isNearBottom(chatWindow, CONFIG.SCROLL_THRESHOLD);
+    
+    const row = document.createElement("div");
+    row.className = "message-row gpt-row";
+    
+    const bubble = document.createElement("div");
+    bubble.className = "message-bubble image-bubble";
+
+    const container = document.createElement("div");
+    container.className = "image-container";
+
+    const img = document.createElement("img");
+    img.src = imageUrl; // Browser handles URL safely
+    img.alt = "Generated scene";
+    img.style.maxWidth = "100%";
+    img.style.borderRadius = "5px";
+    img.loading = "lazy"; // Performance optimization
+
+    const caption = document.createElement("div");
+    caption.className = "image-caption";
+    caption.textContent = reason || "AI-generated scene visualization";
+
+    container.appendChild(img);
+    container.appendChild(caption);
+    bubble.appendChild(container);
+    row.appendChild(bubble);
+    
+    chatWindow.appendChild(row);
+    
+    if (shouldScroll) {
+      requestAnimationFrame(() => {
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+      });
+    }
   }
-  
-  return bubbleRow;
+};
+
+// Wrapper functions for compatibility
+function appendMessage(message, autoScroll = true) {
+  return MessageFactory.create(message, autoScroll);
 }
 
 function createBubble(message) {
-  const row = document.createElement("div");
-  row.classList.add("message-row");
-  
-  if (message.sender === "user") {
-    row.classList.add("user-row");
-  } else {
-    row.classList.add("gpt-row");
-  }
-  
-  const bubble = document.createElement("div");
-  bubble.classList.add("message-bubble");
-  
-  const safeContent = sanitizeAndRenderMarkdown(message.content || "");
-  bubble.innerHTML = `<strong>${DOMPurify.sanitize(message.sender)}:</strong> ${safeContent}`;
-  
-  row.appendChild(bubble);
-  return row;
+  return MessageFactory.createBubble(message);
 }
 
 function appendImageToChat(imageUrl, reason) {
-  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
-  const imageRow = document.createElement("div");
-  imageRow.classList.add("message-row", "gpt-row");
-
-  const imageBubble = document.createElement("div");
-  imageBubble.classList.add("message-bubble", "image-bubble");
-  imageBubble.innerHTML = `
-    <div class="image-container">
-      <img src="${imageUrl}" alt="Generated scene" style="max-width: 100%; border-radius: 5px;" />
-      <div class="image-caption">
-        ${DOMPurify.sanitize(reason || "AI-generated scene visualization")}
-      </div>
-    </div>
-  `;
-  
-  imageRow.appendChild(imageBubble);
-  chatWindow.appendChild(imageRow);
-  chatWindow.scrollTop = chatWindow.scrollHeight;
+  return MessageFactory.createImage(imageUrl, reason);
 }
 
+// Optimized token handling with throttling
 function handleNewToken(token) {
   removeProcessingIndicator();
-  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  const chatWindow = $("chatWindow");
+  if (!chatWindow) return;
 
   if (!AppState.currentAssistantBubble) {
     const row = document.createElement("div");
@@ -306,44 +557,77 @@ function handleNewToken(token) {
     
     const bubble = document.createElement("div");
     bubble.classList.add("message-bubble");
-    bubble.innerHTML = `<strong>Nyx:</strong> `;
+    
+    const senderStrong = document.createElement("strong");
+    senderStrong.textContent = "Nyx: ";
+    bubble.appendChild(senderStrong);
     
     const contentSpan = document.createElement('span');
-    contentSpan.innerHTML = sanitizeAndRenderMarkdown(token);
     bubble.appendChild(contentSpan);
 
     row.appendChild(bubble);
     chatWindow.appendChild(row);
     
     AppState.currentAssistantBubble = contentSpan;
-    AppState.partialAssistantText = token;
-  } else {
-    AppState.partialAssistantText += token;
-    AppState.currentAssistantBubble.innerHTML = sanitizeAndRenderMarkdown(AppState.partialAssistantText);
+    AppState.partialAssistantMarkdown = "";
   }
   
-  chatWindow.scrollTop = chatWindow.scrollHeight;
+  // Accumulate markdown
+  AppState.partialAssistantMarkdown += token;
+  
+  // Simplified throttled UI update
+  if (!AppState._rafScheduled) {
+    AppState._rafScheduled = true;
+    
+    requestAnimationFrame(() => {
+      if (AppState.currentAssistantBubble) {
+        AppState.currentAssistantBubble.textContent = AppState.partialAssistantMarkdown;
+        
+        // Only auto-scroll if user is near bottom
+        if (isNearBottom(chatWindow, CONFIG.SCROLL_THRESHOLD)) {
+          chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+      }
+      AppState._rafScheduled = false;
+    });
+  }
 }
 
 function finalizeAssistantMessage(finalText) {
+  // Use server text if valid, otherwise fall back to accumulated markdown
+  const text = (typeof finalText === 'string' && finalText.trim().length > 0)
+    ? finalText
+    : AppState.partialAssistantMarkdown;
+
   if (!AppState.currentAssistantBubble) {
-    if (finalText && finalText.trim() !== "") {
-      console.warn("No current assistant bubble, creating new one for final text");
-      appendMessage({ sender: "Nyx", content: finalText }, true);
+    if (text && text.trim()) {
+      appendMessage({ sender: "Nyx", content: text }, true);
     }
   } else {
-    AppState.currentAssistantBubble.innerHTML = sanitizeAndRenderMarkdown(finalText);
+    // Parse markdown once at the end
+    try {
+      AppState.currentAssistantBubble.innerHTML = sanitizeAndRenderMarkdown(text);
+    } catch (e) {
+      console.error('Error finalizing message:', e);
+      AppState.currentAssistantBubble.textContent = text;
+    }
   }
   
   AppState.currentAssistantBubble = null;
-  AppState.partialAssistantText = "";
+  AppState.partialAssistantMarkdown = "";
   
-  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
-  chatWindow.scrollTop = chatWindow.scrollHeight;
+  const chatWindow = $("chatWindow");
+  if (chatWindow) {
+    requestAnimationFrame(() => {
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    });
+  }
 }
 
 function showProcessingIndicator() {
-  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  const chatWindow = $("chatWindow");
+  if (!chatWindow) return;
+  
   removeProcessingIndicator();
   
   const processingDiv = document.createElement("div");
@@ -354,7 +638,7 @@ function showProcessingIndicator() {
 }
 
 function removeProcessingIndicator() {
-  const indicator = document.getElementById("processingIndicator");
+  const indicator = $("processingIndicator");
   if (indicator) {
     indicator.remove();
   }
@@ -362,7 +646,9 @@ function removeProcessingIndicator() {
 
 // ===== User Actions =====
 async function sendMessage() {
-  const userInput = DOM.userMsgInput || document.getElementById("userMsg");
+  const userInput = $("userMsg");
+  if (!userInput) return;
+  
   const userText = userInput.value.trim();
   
   if (!userText || !AppState.currentConvId) {
@@ -375,59 +661,83 @@ async function sendMessage() {
     return;
   }
 
+  // Set sending state immediately
+  AppState.isSendingMessage = true;
   userInput.value = "";
+  userInput.disabled = true; // Prevent input during send
 
-  // Handle Nyx Space differently
-  if (AppState.currentConvId === AppState.NYX_SPACE_CONV_ID) {
-    await handleNyxSpaceMessage(userText);
-    return;
-  }
+  try {
+    // Handle Nyx Space differently
+    if (AppState.currentConvId === CONFIG.NYX_SPACE_CONV_ID) {
+      try {
+        await handleNyxSpaceMessage(userText);
+      } catch (nyxError) {
+        console.error("Error in Nyx Space handler:", nyxError);
+        appendMessage({ 
+          sender: "system", 
+          content: "Failed to process Nyx Space message." 
+        }, true);
+      }
+      return;
+    }
 
-  // Display user message
-  appendMessage({ sender: "user", content: userText }, true);
+    // Display user message
+    appendMessage({ sender: "user", content: userText }, true);
 
-  // Reset streaming state
-  AppState.currentAssistantBubble = null;
-  AppState.partialAssistantText = "";
+    // Reset streaming state
+    AppState.currentAssistantBubble = null;
+    AppState.partialAssistantMarkdown = "";
 
-  // Prepare message data
-  const messageData = {
-    user_input: userText,
-    conversation_id: AppState.currentConvId,
-    player_name: "Chase",
-    advance_time: false,
-    universal_update: pendingUniversalUpdates
-  };
+    // Prepare message data
+    const messageData = {
+      user_input: userText,
+      conversation_id: AppState.currentConvId,
+      player_name: "Chase",
+      advance_time: false,
+      universal_update: AppState.pendingUniversalUpdates
+    };
 
-  // Send message
-  console.log(`Sending message for conversation ${AppState.currentConvId}`);
-  
-  if (!socketManager.sendMessage(messageData)) {
+    // Send message
+    console.log(`Sending message for conversation ${AppState.currentConvId}`);
+    
+    const sent = await socketManager.sendMessage(messageData);
+    if (!sent) {
+      throw new Error("Failed to send message");
+    }
+
+    // Set timeout for response
+    setTimeout(() => {
+      if (AppState.isSendingMessage) {
+        appendMessage({ 
+          sender: "system", 
+          content: "Server is taking longer than expected. Please wait..." 
+        }, true);
+        // Clear stale data on timeout
+        resetPendingUniversalUpdates();
+        AppState.isSendingMessage = false;
+      }
+    }, CONFIG.SEND_TIMEOUT);
+    
+  } catch (err) {
+    console.error("Error sending message:", err);
     appendMessage({ 
       sender: "system", 
       content: "Failed to send message. Please check your connection." 
     }, true);
     AppState.isSendingMessage = false;
-    return;
-  }
-
-  resetPendingUniversalUpdates();
-
-  // Set timeout for response
-  setTimeout(() => {
-    if (AppState.isSendingMessage) {
-      appendMessage({ 
-        sender: "system", 
-        content: "Server is taking longer than expected. Please wait..." 
-      }, true);
+  } finally {
+    userInput.disabled = false;
+    // Ensure flag is cleared even if Nyx handler fails
+    if (AppState.currentConvId === CONFIG.NYX_SPACE_CONV_ID) {
+      AppState.isSendingMessage = false;
     }
-  }, 15000);
+  }
 }
 
 async function handleNyxSpaceMessage(userText) {
   try {
     // Save user message
-    await fetch('/nyx_space/messages', {
+    await fetchJson('/nyx_space/messages', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -440,18 +750,15 @@ async function handleNyxSpaceMessage(userText) {
     appendMessage({sender: "user", content: userText}, true);
 
     // Get Nyx's response
-    const adminRequest = {
-      user_input: userText,
-      generate_response: true
-    };
-    
-    const replyRes = await fetch('/admin/nyx_direct', {
+    const replyData = await fetchJson('/admin/nyx_direct', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(adminRequest)
+      body: JSON.stringify({
+        user_input: userText,
+        generate_response: true
+      })
     });
 
-    const replyData = await replyRes.json();
     console.log("Admin Nyx response:", replyData);
 
     // Extract response
@@ -467,7 +774,7 @@ async function handleNyxSpaceMessage(userText) {
     appendMessage({sender: "Nyx", content: aiReply}, true);
 
     // Save Nyx's reply
-    await fetch('/nyx_space/messages', {
+    await fetchJson('/nyx_space/messages', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -482,14 +789,24 @@ async function handleNyxSpaceMessage(userText) {
       sender: "Nyx", 
       content: "Sorry, an error occurred processing your message."
     }, true);
+  } finally {
+    AppState.isSendingMessage = false;
   }
 }
 
-function advanceTime() {
+async function advanceTime() {
   if (!AppState.currentConvId) {
     alert("Please select a conversation first");
     return;
   }
+
+  // Prevent double sending
+  if (AppState.isSendingMessage) {
+    console.warn("Already processing a message");
+    return;
+  }
+
+  AppState.isSendingMessage = true;
 
   appendMessage({ 
     sender: "user", 
@@ -498,25 +815,29 @@ function advanceTime() {
 
   // Reset streaming state
   AppState.currentAssistantBubble = null;
-  AppState.partialAssistantText = "";
+  AppState.partialAssistantMarkdown = "";
 
   const messageData = {
     user_input: "Let's advance to the next time period.",
     conversation_id: AppState.currentConvId,
     player_name: "Chase",
     advance_time: true,
-    universal_update: pendingUniversalUpdates
+    universal_update: AppState.pendingUniversalUpdates
   };
 
-  if (!socketManager.sendMessage(messageData)) {
+  try {
+    const sent = await socketManager.sendMessage(messageData);
+    if (!sent) {
+      throw new Error("Failed to advance time");
+    }
+  } catch (err) {
+    console.error("Error advancing time:", err);
     appendMessage({ 
       sender: "system", 
       content: "Failed to advance time. Please check your connection." 
     }, true);
-    return;
+    AppState.isSendingMessage = false;
   }
-
-  resetPendingUniversalUpdates();
 }
 
 // ===== Conversation Management =====
@@ -527,51 +848,56 @@ async function selectConversation(convId) {
   }
 
   AppState.isSelectingConversation = true;
-  AppState.currentConvId = convId;
+  AppState.currentConvId = normalizeConvId(convId);
   AppState.messagesOffset = 0;
+  
+  // Reset pending updates when switching conversations
+  resetPendingUniversalUpdates();
 
-  console.log(`Selecting conversation: ${convId}`);
+  console.log(`Selecting conversation: ${AppState.currentConvId}`);
 
   // Join the room
   if (socketManager.socket && socketManager.socket.connected) {
-    socketManager.joinRoom(convId);
+    try {
+      await socketManager.joinRoom(AppState.currentConvId);
+    } catch (err) {
+      console.error("Failed to join conversation room:", err);
+      appendMessage({ 
+        sender: "system", 
+        content: "Failed to join conversation. Please try again." 
+      }, true);
+    }
   }
 
   // Handle different conversation types
-  if (convId === AppState.NYX_SPACE_CONV_ID) {
+  if (AppState.currentConvId === CONFIG.NYX_SPACE_CONV_ID) {
     await loadNyxSpace();
   } else {
-    await loadGameConversation(convId);
+    await loadGameConversation(AppState.currentConvId);
   }
 
   AppState.isSelectingConversation = false;
 }
 
 async function loadNyxSpace() {
-  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  const chatWindow = $("chatWindow");
+  if (!chatWindow) return;
+  
   chatWindow.innerHTML = "";
   
   appendMessage({sender: "system", content: "Loading Nyx's Space..."}, true);
   
   try {
-    const res = await fetch("/nyx_space/messages");
-    if (res.ok) {
-      const data = await res.json();
-      chatWindow.innerHTML = "";
-      
-      if (data.messages && data.messages.length > 0) {
-        data.messages.forEach(msg => appendMessage(msg, false));
-        chatWindow.scrollTop = chatWindow.scrollHeight;
-      } else {
-        appendMessage({
-          sender: "Nyx", 
-          content: "Welcome to Nyx's Space! You can chat with me here anytime."
-        }, true);
-      }
+    const data = await fetchJson("/nyx_space/messages");
+    chatWindow.innerHTML = "";
+    
+    if (data.messages && data.messages.length > 0) {
+      data.messages.forEach(msg => appendMessage(msg, false));
+      chatWindow.scrollTop = chatWindow.scrollHeight;
     } else {
       appendMessage({
         sender: "Nyx", 
-        content: "Could not fetch Nyx's Space messages."
+        content: "Welcome to Nyx's Space! You can chat with me here anytime."
       }, true);
     }
   } catch (err) {
@@ -584,37 +910,32 @@ async function loadNyxSpace() {
   }
   
   // Hide game-specific buttons
-  if (DOM.advanceTimeBtn) DOM.advanceTimeBtn.style.display = "none";
-  if (DOM.loadMoreBtn) DOM.loadMoreBtn.style.display = "none";
+  const advanceTimeBtn = $("advanceTimeBtn");
+  const loadMoreBtn = $("loadMore");
+  if (advanceTimeBtn) advanceTimeBtn.style.display = "none";
+  if (loadMoreBtn) loadMoreBtn.style.display = "none";
 }
 
 async function loadGameConversation(convId) {
   // Show game-specific buttons
-  if (DOM.advanceTimeBtn) DOM.advanceTimeBtn.style.display = "";
-  if (DOM.loadMoreBtn) DOM.loadMoreBtn.style.display = "";
+  const advanceTimeBtn = $("advanceTimeBtn");
+  const loadMoreBtn = $("loadMore");
+  if (advanceTimeBtn) advanceTimeBtn.style.display = "";
+  if (loadMoreBtn) loadMoreBtn.style.display = "";
   
   await loadMessages(convId, true);
   await checkForWelcomeImage(convId);
 }
 
 async function loadMessages(convId, replace = false) {
-  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
-  const loadMoreBtn = DOM.loadMoreBtn || document.getElementById("loadMore");
+  const chatWindow = $("chatWindow");
+  const loadMoreBtn = $("loadMore");
+  if (!chatWindow) return;
   
-  const url = `/multiuser/conversations/${convId}/messages?offset=${AppState.messagesOffset}&limit=${AppState.MESSAGES_PER_LOAD}`;
+  const url = `/multiuser/conversations/${convId}/messages?offset=${AppState.messagesOffset}&limit=${CONFIG.MESSAGES_PER_LOAD}`;
   
   try {
-    const res = await fetch(url, { method: "GET", credentials: "include" });
-    if (!res.ok) {
-      console.error("Failed to load messages:", res.status);
-      appendMessage({
-        sender: "system", 
-        content: `Error loading messages for game ${convId}.`
-      }, true);
-      return;
-    }
-    
-    const data = await res.json();
+    const data = await fetchJson(url);
     
     if (replace) {
       // Clear chat window except for load more button
@@ -626,6 +947,9 @@ async function loadMessages(convId, replace = false) {
       }
     }
     
+    // Preserve scroll position for older messages
+    const prevHeight = chatWindow.scrollHeight;
+    
     // Create messages
     const fragment = document.createDocumentFragment();
     data.messages.slice().reverse().forEach(msg => {
@@ -636,10 +960,20 @@ async function loadMessages(convId, replace = false) {
       chatWindow.appendChild(fragment);
       chatWindow.scrollTop = chatWindow.scrollHeight;
     } else {
-      loadMoreBtn.after(fragment);
+      // Guard against loadMoreBtn being removed
+      if (loadMoreBtn && loadMoreBtn.parentNode) {
+        loadMoreBtn.after(fragment);
+      } else {
+        chatWindow.prepend(fragment);
+      }
+      // Adjust scroll to maintain viewport
+      const delta = chatWindow.scrollHeight - prevHeight;
+      chatWindow.scrollTop += delta;
     }
 
-    loadMoreBtn.style.display = data.messages.length < AppState.MESSAGES_PER_LOAD ? "none" : "block";
+    if (loadMoreBtn) {
+      loadMoreBtn.style.display = data.messages.length < CONFIG.MESSAGES_PER_LOAD ? "none" : "block";
+    }
   } catch (err) {
     console.error("Error loading messages:", err);
     appendMessage({sender: "system", content: "Error loading messages."}, true);
@@ -648,15 +982,9 @@ async function loadMessages(convId, replace = false) {
 
 async function checkForWelcomeImage(convId) {
   try {
-    const res = await fetch(`/universal/get_roleplay_value?conversation_id=${convId}&key=WelcomeImageUrl`, {
-      method: "GET",
-      credentials: "include"
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.value) {
-        appendImageToChat(data.value, "Welcome to this new world");
-      }
+    const data = await fetchJson(`/universal/get_roleplay_value?conversation_id=${convId}&key=WelcomeImageUrl`);
+    if (data.value) {
+      appendImageToChat(data.value, "Welcome to this new world");
     }
   } catch (err) {
     console.error("Error checking for welcome image:", err);
@@ -669,7 +997,7 @@ async function startNewGame() {
     return;
   }
 
-  const newGameBtn = DOM.newGameBtn || document.getElementById("newGameBtn");
+  const newGameBtn = $("newGameBtn");
   if (newGameBtn) {
     newGameBtn.disabled = true;
     newGameBtn.textContent = "Creating...";
@@ -677,7 +1005,16 @@ async function startNewGame() {
 
   AppState.isCreatingGame = true;
 
-  const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
+  const chatWindow = $("chatWindow");
+  if (!chatWindow) {
+    AppState.isCreatingGame = false;
+    if (newGameBtn) {
+      newGameBtn.disabled = false;
+      newGameBtn.textContent = "New Game";
+    }
+    return;
+  }
+  
   const loadingDiv = document.createElement("div");
   loadingDiv.id = "newGameLoadingIndicator";
   loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing new game world...</div>';
@@ -685,20 +1022,13 @@ async function startNewGame() {
   chatWindow.scrollTop = chatWindow.scrollHeight;
 
   try {
-    const res = await fetch("/start_new_game", {
+    const data = await fetchJson("/start_new_game", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "include",
       body: JSON.stringify({})
     });
-    
-    const data = await res.json();
 
-    if (!res.ok) {
-      throw new Error(data.error || "Failed to start new game");
-    }
-
-    AppState.currentConvId = data.conversation_id;
+    AppState.currentConvId = normalizeConvId(data.conversation_id);
     AppState.messagesOffset = 0;
 
     // Update loading message
@@ -711,7 +1041,7 @@ async function startNewGame() {
       loadingDiv.remove();
       
       // Join the new game room
-      socketManager.joinRoom(AppState.currentConvId);
+      await socketManager.joinRoom(AppState.currentConvId);
       
       // Load game content
       await loadMessages(AppState.currentConvId, true);
@@ -737,7 +1067,7 @@ async function startNewGame() {
   } catch (err) {
     console.error("startNewGame error:", err);
     
-    const existingLoadingDiv = document.getElementById("newGameLoadingIndicator");
+    const existingLoadingDiv = $("newGameLoadingIndicator");
     if (existingLoadingDiv) existingLoadingDiv.remove();
     
     appendMessage({ 
@@ -754,40 +1084,33 @@ async function startNewGame() {
 }
 
 async function pollForGameReady(conversationId) {
-  const maxAttempts = 60;
+  const maxAttempts = CONFIG.GAME_POLL_MAX_ATTEMPTS;
   let attempts = 0;
 
   while (attempts < maxAttempts) {
     attempts++;
     
     try {
-      const statusRes = await fetch(`/new_game/conversation_status?conversation_id=${conversationId}`, {
-        method: "GET",
-        credentials: "include"
-      });
+      const statusData = await fetchJson(`/new_game/conversation_status?conversation_id=${conversationId}`);
       
-      if (statusRes.ok) {
-        const statusData = await statusRes.json();
-        
-        if (statusData.status === "ready") {
-          return {
-            ready: true,
-            opening_narrative: statusData.opening_narrative,
-            conversation_name: statusData.conversation_name
-          };
-        } else if (statusData.status === "failed") {
-          return {
-            ready: false,
-            error: "Game creation failed"
-          };
-        }
+      if (statusData.status === "ready") {
+        return {
+          ready: true,
+          opening_narrative: statusData.opening_narrative,
+          conversation_name: statusData.conversation_name
+        };
+      } else if (statusData.status === "failed") {
+        return {
+          ready: false,
+          error: "Game creation failed"
+        };
       }
     } catch (pollError) {
       console.error("Error polling game status:", pollError);
     }
     
     // Wait before next attempt
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await new Promise(resolve => setTimeout(resolve, CONFIG.GAME_POLL_INTERVAL));
   }
   
   return {
@@ -798,17 +1121,7 @@ async function pollForGameReady(conversationId) {
 
 async function loadConversations() {
   try {
-    const res = await fetch("/multiuser/conversations", { 
-      method: "GET", 
-      credentials: "include" 
-    });
-    
-    if (!res.ok) {
-      console.error("Failed to get conversations:", res.status);
-      return;
-    }
-    
-    const convoData = await res.json();
+    const convoData = await fetchJson("/multiuser/conversations");
     renderConvoList(convoData);
   } catch (err) {
     console.error("Error loading conversations:", err);
@@ -816,7 +1129,9 @@ async function loadConversations() {
 }
 
 function renderConvoList(conversations) {
-  const convListDiv = DOM.convListDiv || document.getElementById("convList");
+  const convListDiv = $("convList");
+  if (!convListDiv) return;
+  
   convListDiv.innerHTML = "";
   
   conversations.forEach(conv => {
@@ -855,30 +1170,65 @@ function renderConvoList(conversations) {
 }
 
 // ===== Context Menu =====
+let contextMenuConvId = null;
+
 function showContextMenu(x, y, convId) {
-  const menuDiv = DOM.contextMenuDiv || document.getElementById("contextMenu");
-  menuDiv.innerHTML = "";
+  const menuDiv = $("contextMenu");
+  if (!menuDiv) return;
+  
+  // Clear any existing menu state
+  menuDiv.style.display = "none";
+  contextMenuConvId = convId;
+  
+  // Clear old content and listeners
+  menuDiv.replaceChildren();
 
   const options = [
-    { text: "Rename", action: () => renameConversation(convId) },
-    { text: "Move to Folder", action: () => moveConversationToFolder(convId) },
-    { text: "Delete", action: () => deleteConversation(convId) }
+    { text: "Rename", action: "rename" },
+    { text: "Move to Folder", action: "move" },
+    { text: "Delete", action: "delete" }
   ];
 
   options.forEach(opt => {
     const div = document.createElement("div");
     div.textContent = opt.text;
-    div.addEventListener("click", (e) => {
-      e.stopPropagation();
-      opt.action();
-      menuDiv.style.display = "none";
-    });
+    div.dataset.action = opt.action;
     menuDiv.appendChild(div);
   });
 
   menuDiv.style.left = x + "px";
   menuDiv.style.top = y + "px";
-  menuDiv.style.display = "block";
+  
+  // Show menu after a tick to avoid immediate close
+  setTimeout(() => {
+    menuDiv.style.display = "block";
+  }, 0);
+}
+
+// Single event handler for context menu
+function handleContextMenuClick(e) {
+  const menuDiv = $("contextMenu");
+  if (!menuDiv || !menuDiv.contains(e.target)) return;
+  
+  const action = e.target.dataset.action;
+  if (!action || !contextMenuConvId) return;
+  
+  e.stopPropagation();
+  menuDiv.style.display = "none";
+  
+  switch(action) {
+    case "rename":
+      renameConversation(contextMenuConvId);
+      break;
+    case "move":
+      moveConversationToFolder(contextMenuConvId);
+      break;
+    case "delete":
+      deleteConversation(contextMenuConvId);
+      break;
+  }
+  
+  contextMenuConvId = null;
 }
 
 async function renameConversation(convId) {
@@ -886,22 +1236,15 @@ async function renameConversation(convId) {
   if (!newName || newName.trim() === "") return;
   
   try {
-    const res = await fetch(`/multiuser/conversations/${convId}`, {
+    await fetchJson(`/multiuser/conversations/${convId}`, {
       method: "PUT",
       headers: {"Content-Type": "application/json"},
-      credentials: "include",
       body: JSON.stringify({ conversation_name: newName.trim() })
     });
     
-    if (res.ok) {
-      await loadConversations();
-    } else {
-      const errData = await res.json().catch(() => ({error: "Unknown error"}));
-      alert(`Error renaming conversation: ${errData.error}`);
-    }
+    await loadConversations();
   } catch (err) {
-    console.error("Rename conversation error:", err);
-    alert("Network error renaming conversation.");
+    alert(`Error renaming conversation: ${err.message}`);
   }
 }
 
@@ -910,22 +1253,15 @@ async function moveConversationToFolder(convId) {
   if (!folderName || folderName.trim() === "") return;
   
   try {
-    const res = await fetch(`/multiuser/conversations/${convId}/move_folder`, {
+    await fetchJson(`/multiuser/conversations/${convId}/move_folder`, {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ folder_name: folderName.trim() })
     });
     
-    if (res.ok) {
-      await loadConversations();
-    } else {
-      const errData = await res.json().catch(() => ({error: "Unknown error"}));
-      alert(`Error moving conversation: ${errData.error}`);
-    }
+    await loadConversations();
   } catch (err) {
-    console.error("Move conversation error:", err);
-    alert("Network error moving conversation.");
+    alert(`Error moving conversation: ${err.message}`);
   }
 }
 
@@ -935,46 +1271,57 @@ async function deleteConversation(convId) {
   }
   
   try {
-    const res = await fetch(`/multiuser/conversations/${convId}`, {
-      method: "DELETE",
-      credentials: "include"
+    await fetchJson(`/multiuser/conversations/${convId}`, {
+      method: "DELETE"
     });
     
-    if (res.ok) {
-      await loadConversations();
-      if (AppState.currentConvId === convId) {
-        const chatWindow = DOM.chatWindow || document.getElementById("chatWindow");
-        chatWindow.innerHTML = '<span id="loadMore" style="display:none;">Load older messages...</span>';
-        AppState.currentConvId = null;
-        AppState.currentRoomId = null;
+    await loadConversations();
+    
+    if (normalizeConvId(AppState.currentConvId) === normalizeConvId(convId)) {
+      const chatWindow = $("chatWindow");
+      if (chatWindow) {
+        // Reuse existing load more button or create new one
+        let loadMoreBtn = $("loadMore");
+        if (!loadMoreBtn) {
+          loadMoreBtn = document.createElement("span");
+          loadMoreBtn.id = "loadMore";
+          loadMoreBtn.textContent = "Load older messages...";
+          loadMoreBtn.style.display = "none";
+          loadMoreBtn.addEventListener("click", loadPreviousMessages);
+        }
+        chatWindow.innerHTML = "";
+        chatWindow.appendChild(loadMoreBtn);
       }
-    } else {
-      const errData = await res.json().catch(() => ({error: "Unknown error"}));
-      alert(`Error deleting conversation: ${errData.error}`);
+      AppState.currentConvId = null;
+      AppState.currentRoomId = null;
     }
   } catch (err) {
-    console.error("Delete conversation error:", err);
-    alert("Network error deleting conversation.");
+    alert(`Error deleting conversation: ${err.message}`);
   }
 }
 
 // ===== Utility Functions =====
 async function checkLoggedIn() {
-  const res = await fetch("/whoami", { credentials: "include" });
-  const data = await res.json();
-  
-  if (!data.logged_in) {
+  try {
+    const data = await fetchJson("/whoami");
+    
+    if (!data.logged_in) {
+      window.location.href = "/login_page";
+      return false;
+    }
+    
+    AppState.userId = data.user_id;
+    const logoutBtn = $("logoutBtn");
+    if (logoutBtn) {
+      logoutBtn.style.display = "inline-block";
+    }
+    
+    return true;
+  } catch (err) {
+    console.error("Error checking login status:", err);
     window.location.href = "/login_page";
     return false;
   }
-  
-  AppState.userId = data.user_id;
-  const logoutBtn = document.getElementById("logoutBtn");
-  if (logoutBtn) {
-    logoutBtn.style.display = "inline-block";
-  }
-  
-  return true;
 }
 
 function loadDarkModeFromStorage() {
@@ -996,25 +1343,24 @@ function toggleDarkMode() {
 
 async function logout() {
   try {
-    const res = await fetch("/logout", { method: "POST", credentials: "include" });
-    if (res.ok) {
-      window.location.href = "/login_page";
-    } else {
-      alert("Logout failed!");
-    }
+    await fetchJson("/logout", { method: "POST" });
+    window.location.href = "/login_page";
   } catch (err) {
     console.error("Logout error:", err);
+    alert("Logout failed!");
   }
 }
 
 function loadPreviousMessages() {
   if (!AppState.currentConvId) return;
-  AppState.messagesOffset += AppState.MESSAGES_PER_LOAD;
+  AppState.messagesOffset += CONFIG.MESSAGES_PER_LOAD;
   loadMessages(AppState.currentConvId, false);
 }
 
 function attachEnterKey() {
-  const userInput = DOM.userMsgInput || document.getElementById("userMsg");
+  const userInput = $("userMsg");
+  if (!userInput) return;
+  
   userInput.addEventListener("keydown", function(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1023,24 +1369,42 @@ function attachEnterKey() {
   });
 }
 
+// Keyboard accessibility for context menu
+function handleKeyboard(e) {
+  const contextMenu = $("contextMenu");
+  if (!contextMenu || contextMenu.style.display === "none") return;
+  
+  if (e.key === "Escape") {
+    contextMenu.style.display = "none";
+    contextMenuConvId = null;
+  }
+}
+
+// Global unhandled rejection handler
+window.addEventListener("unhandledrejection", e => {
+  console.error("Unhandled promise rejection:", e.reason);
+  
+  let message = "An error occurred";
+  if (e.reason instanceof Error) {
+    if (e.reason.message.includes("Failed to fetch") || e.reason.message.includes("NetworkError")) {
+      message = "Network error. Please check your connection.";
+    } else {
+      message = `Error: ${e.reason.message}`;
+    }
+  }
+  
+  appendMessage({
+    sender: "system", 
+    content: message
+  }, true);
+  
+  e.preventDefault();
+});
+
 // ===== Initialization =====
 document.addEventListener('DOMContentLoaded', async function() {
   console.log("DOM Content Loaded - Initializing chat page");
   
-  // Cache DOM elements
-  DOM.logoutBtn = document.getElementById("logoutBtn");
-  DOM.toggleDarkModeBtn = document.getElementById("toggleDarkModeBtn");
-  DOM.advanceTimeBtn = document.getElementById("advanceTimeBtn");
-  DOM.newGameBtn = document.getElementById("newGameBtn");
-  DOM.nyxSpaceBtn = document.getElementById("nyxSpaceBtn");
-  DOM.convListDiv = document.getElementById("convList");
-  DOM.chatWindow = document.getElementById("chatWindow");
-  DOM.loadMoreBtn = document.getElementById("loadMore");
-  DOM.userMsgInput = document.getElementById("userMsg");
-  DOM.sendBtn = document.getElementById("sendBtn");
-  DOM.contextMenuDiv = document.getElementById("contextMenu");
-  DOM.leftPanelInner = document.getElementById("leftPanelInner");
-
   // Check login status
   const isLoggedIn = await checkLoggedIn();
   if (!isLoggedIn) return;
@@ -1053,21 +1417,36 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Initialize socket connection
   socketManager.initialize();
 
-  // Attach event listeners
-  if (DOM.logoutBtn) DOM.logoutBtn.addEventListener("click", logout);
-  if (DOM.toggleDarkModeBtn) DOM.toggleDarkModeBtn.addEventListener("click", toggleDarkMode);
-  if (DOM.advanceTimeBtn) DOM.advanceTimeBtn.addEventListener("click", advanceTime);
-  if (DOM.newGameBtn) DOM.newGameBtn.addEventListener("click", startNewGame);
-  if (DOM.nyxSpaceBtn) DOM.nyxSpaceBtn.addEventListener("click", () => selectConversation(AppState.NYX_SPACE_CONV_ID));
-  if (DOM.loadMoreBtn) DOM.loadMoreBtn.addEventListener("click", loadPreviousMessages);
-  if (DOM.sendBtn) DOM.sendBtn.addEventListener("click", sendMessage);
+  // Attach event listeners using dynamic lookups
+  const logoutBtn = $("logoutBtn");
+  const toggleDarkModeBtn = $("toggleDarkModeBtn");
+  const advanceTimeBtn = $("advanceTimeBtn");
+  const newGameBtn = $("newGameBtn");
+  const nyxSpaceBtn = $("nyxSpaceBtn");
+  const loadMoreBtn = $("loadMore");
+  const sendBtn = $("sendBtn");
 
-  // Hide context menu on global click
+  if (logoutBtn) logoutBtn.addEventListener("click", logout);
+  if (toggleDarkModeBtn) toggleDarkModeBtn.addEventListener("click", toggleDarkMode);
+  if (advanceTimeBtn) advanceTimeBtn.addEventListener("click", advanceTime);
+  if (newGameBtn) newGameBtn.addEventListener("click", startNewGame);
+  if (nyxSpaceBtn) nyxSpaceBtn.addEventListener("click", () => selectConversation(CONFIG.NYX_SPACE_CONV_ID));
+  if (loadMoreBtn) loadMoreBtn.addEventListener("click", loadPreviousMessages);
+  if (sendBtn) sendBtn.addEventListener("click", sendMessage);
+
+  // Context menu handlers
   document.addEventListener("click", (e) => {
-    if (DOM.contextMenuDiv && !DOM.contextMenuDiv.contains(e.target)) {
-      DOM.contextMenuDiv.style.display = "none";
+    const contextMenu = $("contextMenu");
+    if (contextMenu && !contextMenu.contains(e.target)) {
+      contextMenu.style.display = "none";
+      contextMenuConvId = null;
+    } else if (contextMenu && contextMenu.contains(e.target)) {
+      handleContextMenuClick(e);
     }
   });
+  
+  // Keyboard accessibility
+  document.addEventListener("keydown", handleKeyboard);
   
   // Handle page visibility changes
   document.addEventListener("visibilitychange", () => {
@@ -1082,7 +1461,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   
   // Handle window focus
   window.addEventListener("focus", () => {
-    console.log("Window focused, checking connection");
+    debugLog("Window focused, checking connection");
     if (socketManager.socket && !socketManager.socket.connected) {
       console.log("Reconnecting socket...");
       socketManager.socket.connect();
@@ -1099,6 +1478,13 @@ document.addEventListener('DOMContentLoaded', async function() {
   
   window.addEventListener("offline", () => {
     console.log("Browser offline");
+  });
+
+  // Cleanup on page unload
+  window.addEventListener("beforeunload", () => {
+    if (socketManager) {
+      socketManager.destroy();
+    }
   });
 
   console.log("Chat page initialization complete");
