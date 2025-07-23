@@ -633,7 +633,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     'name_field': 'name'  # Tell the function which field contains the name
                 }
                 
-                nation_id = await find_or_create_entity(
+                nation_id = await canon.find_or_create_entity(
                     ctx=ctx,
                     conn=conn,
                     entity_type="nation",
@@ -787,6 +787,7 @@ class WorldPoliticsManager(BaseLoreManager):
     @function_tool
     async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
         """Generate initial conflicts between nations with canon checks."""
+        from lore.core import canon
         with trace(
             "GenerateInitialConflicts",
             group_id=self.trace_group_id,
