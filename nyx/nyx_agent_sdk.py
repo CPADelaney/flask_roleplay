@@ -56,6 +56,8 @@ class NarrativeResponse(BaseModel):
     image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
     environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
     time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
+    universal_updates: Optional[Dict[str, Any]] = Field(None, description="Universal updates extracted from narrative")
+
 
 class MemoryReflection(BaseModel):
     """Structured output for memory reflections"""
@@ -2112,6 +2114,61 @@ async def store_messages(user_id: int, conversation_id: int, user_input: str, ny
             "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
             conversation_id, "Nyx", nyx_response
         )
+
+async def create_nyx_agent_with_prompt(system_prompt: str, private_reflection: str = "") -> Agent[NyxContext]:
+    """Create a Nyx agent with custom system prompt"""
+    
+    combined_instructions = f"""{system_prompt}
+
+{private_reflection if private_reflection else ''}
+
+As Nyx, you must:
+1. Generate compelling narrative responses
+2. Extract game state changes using generate_universal_updates
+3. Determine if images should be generated
+4. Manage emotional states and relationships
+5. Track user preferences and adapt
+
+Always call generate_universal_updates after creating your narrative to extract state changes.
+"""
+    
+    return Agent[NyxContext](
+        name="Nyx",
+        instructions=combined_instructions,
+        handoffs=[
+            handoff(memory_agent),
+            handoff(analysis_agent),
+            handoff(emotional_agent),
+            handoff(visual_agent),
+            handoff(activity_agent),
+            handoff(performance_agent),
+            handoff(scenario_agent),
+            handoff(belief_agent),
+            handoff(decision_agent),
+            handoff(reflection_agent),
+        ],
+        tools=[
+            retrieve_memories,
+            add_memory,
+            get_user_model_guidance,
+            detect_user_revelations,
+            generate_image_from_scene,
+            calculate_and_update_emotional_state,
+            calculate_emotional_impact,
+            update_relationship_state,
+            check_performance_metrics,
+            get_activity_recommendations,
+            manage_beliefs,
+            score_decision_options,
+            detect_conflicts_and_instability,
+            generate_universal_updates  # Add this tool
+        ],
+        output_type=NarrativeResponse,
+        input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
+        model="gpt-4.1-nano",
+        model_settings=ModelSettings(temperature=0.7)
+    )
+
 
 # Additional helper functions
 async def get_emotional_state(ctx) -> str:
