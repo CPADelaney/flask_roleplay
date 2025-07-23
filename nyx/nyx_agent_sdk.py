@@ -22,6 +22,7 @@ This keeps the main request path fast and non-blocking.
 import logging
 import json
 import asyncio
+import os
 import time
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable
@@ -98,83 +99,63 @@ class ActivityRecommendation(BaseModel):
 
 # ===== Enhanced Context with State Management =====
 @dataclass
-# In nyx/nyx_agent_sdk.py, update the NyxContext class:
-
-@dataclass
 class NyxContext:
-    """Enhanced context for Nyx agents with state management"""
-    # Required fields (no defaults) must come first
+    # ────────── REQUIRED (no defaults) ──────────
     user_id: int
     conversation_id: int
-    
-    # Optional fields (with defaults) come after
-    memory_system: Optional[MemoryNyxBridge] = None
-    user_model: Optional[UserModelManager] = None
-    task_integration: Optional[NyxTaskIntegration] = None
-    response_filter: Optional[ResponseFilter] = None
-    emotional_core: Optional[EmotionalCore] = None
+
+    # ────────── SUB-SYSTEM HANDLES ──────────
+    memory_system:      Optional[MemoryNyxBridge]   = None
+    user_model:         Optional[UserModelManager]  = None
+    task_integration:   Optional[NyxTaskIntegration] = None
+    response_filter:    Optional[ResponseFilter]    = None
+    emotional_core:     Optional[EmotionalCore]     = None
     performance_monitor: Optional[PerformanceMonitor] = None
-    belief_system: Optional[Any] = None  # Belief system integration
-    
-    # State management - all have defaults
-    current_context: Dict[str, Any] = field(default_factory=dict)
-    scenario_state: Dict[str, Any] = field(default_factory=dict)
-    relationship_states: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    active_tasks: List[Dict[str, Any]] = field(default_factory=list)
-    
-    # Performance tracking
+    belief_system:      Optional[Any]               = None
+
+    # ────────── MUTABLE STATE BUCKETS ──────────
+    current_context:     Dict[str, Any]                = field(default_factory=dict)
+    scenario_state:      Dict[str, Any]                = field(default_factory=dict)
+    relationship_states: Dict[str, Dict[str, float]]   = field(default_factory=dict)
+    active_tasks:        List[Dict[str, Any]]          = field(default_factory=list)
+
+    # ────────── PERFORMANCE & EMOTION ──────────
     performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
-        "total_actions": 0,
-        "successful_actions": 0,
-        "failed_actions": 0,
-        "response_times": [],
-        "memory_usage": 0,
-        "cpu_usage": 0,
-        "error_rates": {
-            "total": 0,
-            "recovered": 0,
-            "unrecovered": 0
-        }
+        "total_actions": 0, "successful_actions": 0, "failed_actions": 0,
+        "response_times": [], "memory_usage": 0, "cpu_usage": 0,
+        "error_rates": {"total": 0, "recovered": 0, "unrecovered": 0}
     })
-    
-    # Emotional state
     emotional_state: Dict[str, float] = field(default_factory=lambda: {
-        "valence": 0.0,
-        "arousal": 0.5,
-        "dominance": 0.7
+        "valence": 0.0, "arousal": 0.5, "dominance": 0.7
     })
-    
-    # Learning and adaptation
-    learned_patterns: Dict[str, Any] = field(default_factory=dict)
-    strategy_effectiveness: Dict[str, Any] = field(default_factory=dict)
-    adaptation_history: List[Dict[str, Any]] = field(default_factory=list)
-    learning_metrics: Dict[str, Any] = field(default_factory=lambda: {
+
+    # ────────── LEARNING & ADAPTATION ──────────
+    learned_patterns:      Dict[str, Any]           = field(default_factory=dict)
+    strategy_effectiveness: Dict[str, Any]          = field(default_factory=dict)
+    adaptation_history:    List[Dict[str, Any]]     = field(default_factory=list)
+    learning_metrics:      Dict[str, Any]           = field(default_factory=lambda: {
         "pattern_recognition_rate": 0.0,
         "strategy_improvement_rate": 0.0,
         "adaptation_success_rate": 0.0
     })
-    
-    # Error tracking
+
+    # ────────── ERROR LOGGING ──────────
     error_log: List[Dict[str, Any]] = field(default_factory=list)
-    
-    # Task scheduling
+
+    # ────────── TASK SCHEDULING ──────────
     last_task_runs: Dict[str, datetime] = field(default_factory=dict)
-    task_intervals: Dict[str, float] = field(default_factory=lambda: {
-        "memory_reflection": 300,  # 5 minutes
-        "relationship_update": 600,  # 10 minutes
-        "scenario_check": 60,  # 1 minute
-        "performance_check": 300,  # 5 minutes
-        "task_generation": 300,  # 5 minutes
-        "learning_save": 900,  # 15 minutes
-        "performance_save": 600  # 10 minutes
+    task_intervals: Dict[str, float]    = field(default_factory=lambda: {
+        "memory_reflection": 300, "relationship_update": 600,
+        "scenario_check": 60, "performance_check": 300,
+        "task_generation": 300, "learning_save": 900, "performance_save": 600
     })
-    
-    # Private attributes for internal state management
-    _strategy_cache: Optional[Tuple[float, Any]] = field(init=False, default=None)
-    _strategy_cache_ttl: float = field(init=False, default=300.0)  # 5 minute cache
-    _cpu_usage_cache: Optional[float] = field(init=False, default=None)
-    _cpu_usage_last_update: float = field(init=False, default=0.0)
-    _cpu_usage_update_interval: float = field(init=False, default=10.0)  # Update every 10 seconds
+
+    # ────────── PRIVATE CACHES (init=False) ──────────
+    _strategy_cache:             Optional[Tuple[float, Any]] = field(init=False, default=None)
+    _strategy_cache_ttl:         float = field(init=False, default=300.0)
+    _cpu_usage_cache:            Optional[float] = field(init=False, default=None)
+    _cpu_usage_last_update:      float = field(init=False, default=0.0)
+    _cpu_usage_update_interval:  float = field(init=False, default=10.0)
     
     
     async def initialize(self):
@@ -849,79 +830,78 @@ async def update_relationship_state(
 async def check_performance_metrics(ctx: RunContextWrapper[NyxContext]) -> str:
     """Check current performance metrics and apply remediation if needed."""
     metrics = ctx.context.performance_metrics
-    
-    # Update current metrics using safe wrappers
+
+    # Refresh CPU & RAM values
     try:
-        # Try to get process handle safely
-        process = safe_psutil('Process')
-        if process:
+        process_cls = safe_psutil('Process')          # returns the class
+        if process_cls:
+            process = process_cls(os.getpid())        # instantiate with current PID
             memory_info = safe_process_metric(process, 'memory_info')
-            if memory_info:
-                metrics["memory_usage"] = memory_info / 1024 / 1024  # MB
-            else:
-                metrics["memory_usage"] = 0
+            metrics["memory_usage"] = memory_info / 1024 / 1024 if memory_info else 0
         else:
             metrics["memory_usage"] = 0
-            
+
         metrics["cpu_usage"] = ctx.context.get_cpu_usage()
     except Exception as e:
         logger.debug(f"Error getting process metrics: {e}")
         metrics["memory_usage"] = 0
         metrics["cpu_usage"] = 0
-    
-    suggestions = []
-    actions_taken = []
-    
-    # Check response times
+
+    suggestions, actions_taken = [], []
+
+    # --- Health checks ----------------------------------------------------
     if metrics["response_times"]:
-        avg_response_time = sum(metrics["response_times"]) / len(metrics["response_times"])
-        if avg_response_time > 2.0:  # 2 seconds
-            suggestions.append("Response times are high - consider caching frequent queries")
-    
-    # Check memory usage and apply remediation
-    if metrics["memory_usage"] > 500:  # 500MB
-        suggestions.append("High memory usage detected - triggering cleanup")
+        avg_rt = sum(metrics["response_times"]) / len(metrics["response_times"])
+        if avg_rt > 2.0:
+            suggestions.append("Response times are high – consider caching frequent queries")
+
+    if metrics["memory_usage"] > 500:                 # MB
+        suggestions.append("High memory usage detected – triggering cleanup")
         await ctx.context.handle_high_memory_usage()
         actions_taken.append("memory_cleanup")
-    
-    # Check success rate
-    if metrics["total_actions"] > 0:
+
+    if metrics["total_actions"]:
         success_rate = metrics["successful_actions"] / metrics["total_actions"]
         if success_rate < 0.8:
-            suggestions.append("Success rate below 80% - review error patterns")
-    
-    # Check error rate and clear if too high
+            suggestions.append("Success rate below 80 % – review error patterns")
+
     if metrics["error_rates"]["total"] > 100:
-        suggestions.append("High error count - clearing old errors")
+        suggestions.append("High error count – clearing old errors")
         ctx.context.error_log = ctx.context.error_log[-50:]
         actions_taken.append("error_log_cleanup")
-    
-    # Save metrics to database with its own connection
+
+    # --- Persist metrics periodically ------------------------------------
     if ctx.context.should_run_task("performance_save"):
         async with get_db_connection_context() as conn:
-            bounded_metrics = metrics.copy()
-            if "response_times" in bounded_metrics:
-                bounded_metrics["response_times"] = bounded_metrics["response_times"][-50:]
-            
-            await conn.execute("""
-                INSERT INTO performance_metrics (user_id, conversation_id, metrics, error_log, created_at)
-                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-            """, ctx.context.user_id, ctx.context.conversation_id,
-            json.dumps(bounded_metrics, ensure_ascii=False),
-            json.dumps(ctx.context.error_log[-50:], ensure_ascii=False))
-        
+            bounded = metrics.copy()
+            bounded["response_times"] = bounded["response_times"][-50:]
+            await conn.execute(
+                """INSERT INTO performance_metrics
+                   (user_id, conversation_id, metrics, error_log, created_at)
+                   VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)""",
+                ctx.context.user_id,
+                ctx.context.conversation_id,
+                json.dumps(bounded, ensure_ascii=False),
+                json.dumps(ctx.context.error_log[-50:], ensure_ascii=False),
+            )
         ctx.context.record_task_run("performance_save")
-    
+
     return json.dumps({
         "metrics": {
             "memory_mb": metrics["memory_usage"],
             "cpu_percent": metrics["cpu_usage"],
-            "avg_response_time": sum(metrics["response_times"]) / len(metrics["response_times"]) if metrics["response_times"] else 0,
-            "success_rate": metrics["successful_actions"] / metrics["total_actions"] if metrics["total_actions"] > 0 else 1.0
+            "avg_response_time": (
+                sum(metrics["response_times"]) / len(metrics["response_times"])
+                if metrics["response_times"] else 0
+            ),
+            "success_rate": (
+                metrics["successful_actions"] / metrics["total_actions"]
+                if metrics["total_actions"] else 1.0
+            ),
         },
         "suggestions": suggestions,
         "actions_taken": actions_taken,
-        "health": "good" if not suggestions else "needs_attention"
+        "health": "good" if not suggestions else "needs_attention",
     }, ensure_ascii=False)
 
 
