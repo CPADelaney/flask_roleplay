@@ -175,14 +175,15 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             try:
                 from logic.universal_updater_agent import apply_universal_updates_async, UniversalUpdaterContext
                 
-                # Create the UniversalUpdaterContext
+                # The IDs should already be integers from the fix at the start of the function
+                # But double-check here if needed:
                 updater_context = UniversalUpdaterContext(user_id, conversation_id)
                 await updater_context.initialize()
                 
                 # Get a database connection and apply updates
                 async with get_db_connection_context() as conn:
                     await apply_universal_updates_async(
-                        updater_context,  # Pass the context object, not user_id
+                        updater_context,  # Pass the context object
                         user_id,
                         conversation_id,
                         universal_update,
