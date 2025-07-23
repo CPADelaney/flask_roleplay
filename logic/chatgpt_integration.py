@@ -14,6 +14,7 @@ from db.connection import get_db_connection_context
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
 
+
 # Configure module logger
 logger = logging.getLogger(__name__)
 
@@ -776,20 +777,10 @@ async def get_chatgpt_response(
     aggregator_text: str, 
     user_input: str,
     reflection_enabled: bool = False,
-    use_nyx_integration: bool = False
+    use_nyx_integration: bool = True  # Default to True for unified pipeline
 ) -> dict[str, Any]:
     """
     Get a response from OpenAI with optional Nyx integration.
-    
-    Args:
-        conversation_id: ID of the conversation
-        aggregator_text: Aggregated context text
-        user_input: User's input message
-        reflection_enabled: Whether to use reflection step (default: False)
-        use_nyx_integration: Whether to use full Nyx agent system (default: False)
-    
-    Returns:
-        Dictionary containing response data
     """
     
     # Get user_id from conversation
@@ -818,25 +809,18 @@ async def get_chatgpt_response(
     # 1) If Nyx integration is enabled, use the full Nyx agent system
     if use_nyx_integration:
         try:
-            # Initialize governor
-            from nyx.governance import NyxUnifiedGovernor
-            governor = NyxUnifiedGovernor(user_id, conversation_id)
-            await governor.initialize()
-            
-            # Build context data
+            # Build context data that includes everything Nyx needs
             context_data = {
                 "aggregator_text": aggregator_text,
                 "reflection_enabled": reflection_enabled,
                 "conversation_id": conversation_id,
-                "user_id": user_id
+                "user_id": user_id,
+                "system_prompt": SYSTEM_PROMPT,  # Pass the system prompt to Nyx
+                "universal_update_schema": UNIVERSAL_UPDATE_FUNCTION_SCHEMA  # Pass the schema
             }
             
-            # Get current game state
-            game_state = await governor.get_current_state()
-            context_data.update(game_state)
-            
             # Process through Nyx agent system
-            nyx_result = await nyx_process_input(
+            nyx_result = await nyx_process_input_sdk(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 user_input=user_input,
@@ -846,7 +830,7 @@ async def get_chatgpt_response(
             if nyx_result.get("success"):
                 response_data = nyx_result.get("response", {})
                 
-                # Build function call format if there are updates
+                # Build function call format that matches the expected structure
                 function_args = {
                     "narrative": response_data.get("narrative", ""),
                     "roleplay_updates": {},
@@ -875,8 +859,16 @@ async def get_chatgpt_response(
                     }
                 }
                 
+                # Merge any universal updates from Nyx
+                if "universal_updates" in response_data:
+                    for key, value in response_data["universal_updates"].items():
+                        if key in function_args and value:
+                            function_args[key] = value
+                
                 # Add time advancement if requested
                 if response_data.get("time_advancement", False):
+                    if "roleplay_updates" not in function_args:
+                        function_args["roleplay_updates"] = {}
                     function_args["roleplay_updates"]["TimeAdvancement"] = True
                 
                 # Return in expected format
@@ -884,16 +876,18 @@ async def get_chatgpt_response(
                     "type": "function_call",
                     "function_name": "apply_universal_update",
                     "function_args": function_args,
-                    "tokens_used": 0,  # Nyx system doesn't track tokens the same way
+                    "tokens_used": nyx_result.get("performance", {}).get("tokens_used", 0),
                     "nyx_metrics": nyx_result.get("performance", {})
                 }
             else:
                 # Fall back to regular processing if Nyx fails
                 logger.warning(f"Nyx processing failed: {nyx_result.get('error')}, falling back to regular processing")
+                use_nyx_integration = False  # Fall through to regular processing
                 
         except Exception as e:
             logger.error(f"Error in Nyx integration: {e}", exc_info=True)
-            # Fall back to regular processing
+            use_nyx_integration = False  # Fall through to regular processing
+
 
     # 2) Regular OpenAI processing (fallback or when Nyx is disabled)
     
