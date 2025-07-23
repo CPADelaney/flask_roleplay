@@ -189,7 +189,7 @@ class NyxContext:
         
         # Initialize belief system if available
         try:
-            from nyx.core.beliefs.belief_system import BeliefSystem
+            from nyx.belief_system import BeliefSystem
             self.belief_system = BeliefSystem(self.user_id, self.conversation_id)
         except Exception as e:
             logger.warning(f"BeliefSystem not available: {e}", exc_info=True)
