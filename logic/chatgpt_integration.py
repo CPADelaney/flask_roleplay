@@ -660,15 +660,14 @@ def get_async_openai_client():
 
 def get_agents_openai_model():
     """
-    DEPRECATED: Use OpenAIClientManager instead.
-    Get agents SDK model for backwards compatibility.
+    DEPRECATED: This function is no longer needed.
+    Use generate_text_completion() or get_chatgpt_response() directly.
     """
-    warnings.warn(
-        "get_agents_openai_model() is deprecated. Use OpenAIClientManager().get_pydantic_responses_model() instead.",
-        DeprecationWarning,
-        stacklevel=2
+    raise NotImplementedError(
+        "get_agents_openai_model() is deprecated. "
+        "Use generate_text_completion() for simple text generation "
+        "or get_chatgpt_response() for full conversation handling."
     )
-    return _client_manager.get_pydantic_responses_model()
 
 
 # =====================================================
