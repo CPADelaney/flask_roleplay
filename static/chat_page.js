@@ -29,6 +29,19 @@ function ensureIntegerId(id) {
     return id;
 }
 
+// Helper function to check if ID should be converted to integer
+function shouldConvertToInt(id) {
+    return /^\d+$/.test(String(id));
+}
+
+// Helper function to safely convert IDs
+function safeConvertId(id) {
+    if (shouldConvertToInt(id)) {
+        return ensureIntegerId(id);
+    }
+    return id;
+}
+
 // Centralized fetch helper with consistent error handling
 async function fetchJson(url, opts = {}) {
   const res = await fetch(url, { credentials: 'include', ...opts });
@@ -329,7 +342,7 @@ class SocketManager {
     });
 
     console.log(`Joining room ${target}`);
-    this.socket.emit('join', { conversation_id: conversationId });
+    this.socket.emit('join', { conversation_id: safeConvertId(conversationId) });
     return this.joinPromise;
   }
 
@@ -429,6 +442,11 @@ class SocketManager {
     if (!this.socket || !this.socket.connected) {
       console.error("Cannot send message - socket not connected");
       return false;
+    }
+
+    // Ensure conversation_id is properly formatted
+    if (data.conversation_id !== undefined) {
+      data.conversation_id = safeConvertId(data.conversation_id);
     }
 
     const roomIdStr = normalizeConvId(data.conversation_id);
@@ -701,7 +719,7 @@ async function sendMessage() {
     // Prepare message data
     const messageData = {
       user_input: userText,
-      conversation_id: AppState.currentConvId,
+      conversation_id: safeConvertId(AppState.currentConvId),
       player_name: "Chase",
       advance_time: false,
       universal_update: AppState.pendingUniversalUpdates
@@ -765,7 +783,8 @@ async function handleNyxSpaceMessage(userText) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         user_input: userText,
-        generate_response: true
+        generate_response: true,
+        conversation_id: safeConvertId(AppState.currentConvId)
       })
     });
 
@@ -829,7 +848,7 @@ async function advanceTime() {
 
   const messageData = {
     user_input: "Let's advance to the next time period.",
-    conversation_id: AppState.currentConvId,
+    conversation_id: safeConvertId(AppState.currentConvId),
     player_name: "Chase",
     advance_time: true,
     universal_update: AppState.pendingUniversalUpdates
@@ -849,7 +868,6 @@ async function advanceTime() {
     AppState.isSendingMessage = false;
   }
 }
-
 
 // ===== Conversation Management =====
 async function selectConversation(convId) {
@@ -871,7 +889,7 @@ async function selectConversation(convId) {
   // Join the room
   if (socketManager.socket && socketManager.socket.connected) {
     try {
-      await socketManager.joinRoom(AppState.currentConvId);
+      await socketManager.joinRoom(convId); // Pass original value for special IDs like "__nyx_space__"
     } catch (err) {
       console.error("Failed to join conversation room:", err);
       appendMessage({ 
@@ -885,7 +903,7 @@ async function selectConversation(convId) {
   if (AppState.currentConvId === CONFIG.NYX_SPACE_CONV_ID) {
     await loadNyxSpace();
   } else {
-    await loadGameConversation(AppState.currentConvId);
+    await loadGameConversation(convId); // Pass original convId
   }
 
   AppState.isSelectingConversation = false;
@@ -945,7 +963,7 @@ async function loadMessages(convId, replace = false) {
   let   loadMoreBtn = $("loadMore");      // ⬅️  let, not const
   if (!chatWindow) return;
 
-  const url = `/multiuser/conversations/${convId}/messages` +
+  const url = `/multiuser/conversations/${ensureIntegerId(convId)}/messages` +
               `?offset=${AppState.messagesOffset}&limit=${CONFIG.MESSAGES_PER_LOAD}`;
 
   try {
@@ -1006,7 +1024,7 @@ async function loadMessages(convId, replace = false) {
 
 async function checkForWelcomeImage(convId) {
   try {
-    const data = await fetchJson(`/universal/get_roleplay_value?conversation_id=${convId}&key=WelcomeImageUrl`);
+    const data = await fetchJson(`/universal/get_roleplay_value?conversation_id=${ensureIntegerId(convId)}&key=WelcomeImageUrl`);
     if (data.value) {
       appendImageToChat(data.value, "Welcome to this new world");
     }
@@ -1066,7 +1084,7 @@ async function startNewGame() {
     if (pollResult.ready) {
       loadingDiv.remove();
       
-      // Join only if we didn’t get auto-joined
+      // Join only if we didn't get auto-joined
       if (AppState.currentRoomId !== String(newConvNum)) {
         await socketManager.joinRoom(newConvNum);
       }
@@ -1119,7 +1137,7 @@ async function pollForGameReady(conversationId) {
     attempts++;
     
     try {
-      const statusData = await fetchJson(`/new_game/conversation_status?conversation_id=${conversationId}`);
+      const statusData = await fetchJson(`/new_game/conversation_status?conversation_id=${ensureIntegerId(conversationId)}`);
       
       if (statusData.status === "ready") {
         return {
@@ -1264,7 +1282,7 @@ async function renameConversation(convId) {
   if (!newName || newName.trim() === "") return;
   
   try {
-    await fetchJson(`/multiuser/conversations/${convId}`, {
+    await fetchJson(`/multiuser/conversations/${ensureIntegerId(convId)}`, {
       method: "PUT",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ conversation_name: newName.trim() })
@@ -1281,7 +1299,7 @@ async function moveConversationToFolder(convId) {
   if (!folderName || folderName.trim() === "") return;
   
   try {
-    await fetchJson(`/multiuser/conversations/${convId}/move_folder`, {
+    await fetchJson(`/multiuser/conversations/${ensureIntegerId(convId)}/move_folder`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ folder_name: folderName.trim() })
@@ -1299,7 +1317,7 @@ async function deleteConversation(convId) {
   }
   
   try {
-    await fetchJson(`/multiuser/conversations/${convId}`, {
+    await fetchJson(`/multiuser/conversations/${ensureIntegerId(convId)}`, {
       method: "DELETE"
     });
     
@@ -1516,25 +1534,4 @@ document.addEventListener('DOMContentLoaded', async function() {
   });
 
   console.log("Chat page initialization complete");
-});
-
-// When emitting socket events:
-socket.emit('storybeat', {
-    conversation_id: ensureIntegerId(currentConversationId),
-    user_input: userMessage,
-    universal_update: updateData
-});
-
-socket.emit('join', {
-    conversation_id: ensureIntegerId(conversationId)
-});
-
-// For any AJAX/fetch calls:
-fetch('/api/chat', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-        conversation_id: ensureIntegerId(conversationId),
-        message: userMessage
-    })
 });
