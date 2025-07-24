@@ -666,7 +666,7 @@ async def generate_image_from_scene(
     else:
         return "Failed to generate image"
 
-@function_tool(strict_mode=False)
+@function_tool
 async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> str:
     """
     Calculate emotional impact and immediately update the emotional state.
@@ -699,7 +699,7 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
     emotional_data["state_updated"] = True
     return json.dumps(emotional_data, ensure_ascii=False)
 
-@function_tool(strict_mode=False)
+@function_tool
 async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> str:
     """
     Calculate emotional impact of current context using the emotional core system.
@@ -1018,7 +1018,7 @@ async def get_activity_recommendations(
         "total_available": len(activities)
     }, ensure_ascii=False)
 
-@function_tool(strict_mode=False)
+@function_tool
 async def manage_beliefs(ctx: RunContextWrapper[NyxContext], action: str, belief_data: Dict[str, Any]) -> str:
     """
     Manage belief system operations.
@@ -1055,7 +1055,7 @@ async def manage_beliefs(ctx: RunContextWrapper[NyxContext], action: str, belief
         logger.error(f"Error managing beliefs: {e}", exc_info=True)
         return json.dumps({"error": str(e), "result": {}}, ensure_ascii=False)
 
-@function_tool(strict_mode=False)
+@function_tool
 async def score_decision_options(
     ctx: RunContextWrapper[NyxContext],
     options: List[Dict[str, Any]],
@@ -1133,7 +1133,7 @@ async def score_decision_options(
         "confidence": scored_options[0]["score"]
     }, ensure_ascii=False)
 
-@function_tool(strict_mode=False)
+@function_tool
 async def detect_conflicts_and_instability(
     ctx: RunContextWrapper[NyxContext],
     scenario_state: Dict[str, Any]
@@ -1307,7 +1307,7 @@ def _get_fallback_decision(options: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Otherwise return the first option
     return options[0] if options else {"action": "observe", "description": "Take a moment to assess"}
 
-@function_tool(strict_mode=False)
+@function_tool
 async def detect_conflicts_and_instability(
     ctx: RunContextWrapper[NyxContext],
     scenario_state: Dict[str, Any]
