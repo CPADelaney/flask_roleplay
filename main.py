@@ -406,6 +406,9 @@ async def initialize_systems(app: Quart):
             app.config['ADMIN_USER_IDS'] = [1]
         logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
 
+        await initialize_preset_stories()
+        logger.info("Preset stories are ready.")
+
         # --- 6. Final Readiness Signals ---
         set_app_initialized() # For Celery
         logger.info("Celery tasks application initialization status set to True.")
@@ -739,6 +742,14 @@ def create_quart_app():
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
+    async def initialize_preset_stories():
+        """Load all preset stories into database on startup"""
+        from story_templates.preset_story_loader import PresetStoryLoader
+        from story_templates.additional_preset_stories import THE_FORGOTTEN_PACT
+        
+        await PresetStoryLoader.load_all_preset_stories()
+        await PresetStoryLoader.load_preset_story(THE_FORGOTTEN_PACT)
+    
     # --- Register Blueprints ---
     # (Ensure blueprints using async routes correctly use asyncpg)
     app.register_blueprint(new_game_bp, url_prefix='/new_game')
