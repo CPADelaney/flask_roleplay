@@ -21,6 +21,7 @@ logging.info(f"[new_game] Using DB_DSN={DB_DSN}")  # Add right after retrieving
 
 new_game_bp = Blueprint('new_game_bp', __name__)
 
+
 async def create_conversation_async(user_id):
     async with get_db_connection_context() as conn:
         preliminary_name = "New Game"
@@ -123,48 +124,55 @@ async def conversation_status():
             "opening_narrative": opening_msg_row['content'] if opening_msg_row else None
         })
 
-@router.get("/preset-stories")
-async def get_available_preset_stories():
-    """Get list of available preset stories"""
+@router.get("/api/preset-stories")
+async def list_preset_stories():
+    """Get all available preset stories"""
     async with get_db_connection_context() as conn:
         rows = await conn.fetch("""
-            SELECT story_id, story_data->>'name' as name, 
-                   story_data->>'theme' as theme,
-                   story_data->>'synopsis' as synopsis
+            SELECT 
+                story_id,
+                story_data->>'name' as name,
+                story_data->>'theme' as theme,
+                story_data->>'synopsis' as synopsis,
+                story_data->'acts' as acts
             FROM PresetStories
-            ORDER BY created_at
+            ORDER BY created_at DESC
         """)
         
-        return {
-            "preset_stories": [
-                {
-                    "id": row['story_id'],
-                    "name": row['name'],
-                    "theme": row['theme'],
-                    "synopsis": row['synopsis']
-                }
-                for row in rows
-            ]
-        }
+        stories = []
+        for row in rows:
+            stories.append({
+                "id": row["story_id"],
+                "name": row["name"],
+                "theme": row["theme"], 
+                "synopsis": row["synopsis"],
+                "num_acts": len(json.loads(row["acts"])) if row["acts"] else 0
+            })
+        
+        return {"stories": stories}
 
-@router.post("/new-game/preset/{story_id}")
-async def start_preset_story_game(
-    story_id: str,
+@router.post("/api/new-game/preset")
+async def start_preset_game(
+    request: Request,
+    story_id: str = Body(...),
     user_id: int = Depends(get_current_user_id)
 ):
     """Start a new game with a preset story"""
-    try:
-        # Queue the task
-        task = process_new_game_preset_task.delay(
-            user_id,
-            {"preset_story_id": story_id}
+    # Verify story exists
+    async with get_db_connection_context() as conn:
+        exists = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM PresetStories WHERE story_id = $1)",
+            story_id
         )
         
-        return {
-            "status": "processing",
-            "task_id": task.id,
-            "message": f"Creating new game with preset story: {story_id}"
-        }
-    except Exception as e:
-        logger.error(f"Error starting preset game: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if not exists:
+            raise HTTPException(404, f"Preset story '{story_id}' not found")
+    
+    # Queue the task
+    task = process_new_game_preset_task.delay(user_id, {"preset_story_id": story_id})
+    
+    return {
+        "status": "processing",
+        "task_id": task.id,
+        "story_id": story_id
+    }
