@@ -1622,8 +1622,7 @@ Always maintain your dominant persona while being attentive to user needs and sy
     output_type=NarrativeResponse,
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-4.1-nano",
-    model_settings=ModelSettings(temperature=0.7),
-    output_schema_strict=False  # Add this line
+    model_settings=ModelSettings(temperature=0.7)
 )
 
 # ===== Main Functions (maintaining original signatures) =====
@@ -2131,8 +2130,7 @@ Always call generate_universal_updates after creating your narrative to extract 
         output_type=NarrativeResponse,
         input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
         model="gpt-4.1-nano",
-        model_settings=ModelSettings(temperature=0.7),
-        output_schema_strict=False  # Add this line
+        model_settings=ModelSettings(temperature=0.7)
     )
 
 
