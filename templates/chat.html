@@ -49,6 +49,41 @@
     .dark-mode .image-caption { color: #aaa !important; }
     #processingIndicator div { color: #888 !important; }
     .dark-mode #processingIndicator div { color: #aaa !important; }
+
+    /* New styles for preset story feature */
+    #presetStoryModal .modal-content {
+      background-color: white;
+      color: #333;
+    }
+    .dark-mode #presetStoryModal .modal-content {
+      background-color: #2c2c2c;
+      color: #f0f0f0;
+    }
+    .dark-mode #presetStoryModal .modal-content div[style*="border: 1px solid #ddd"] {
+      border-color: #555 !important;
+    }
+    #newGameDropdown {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-top: 5px;
+    }
+    .dark-mode #newGameDropdown {
+      background-color: #3a3a3a;
+      border-color: #555;
+    }
+    #newGameDropdown a:hover {
+      background-color: #f0f0f0;
+    }
+    .dark-mode #newGameDropdown a {
+      color: #f0f0f0 !important;
+    }
+    .dark-mode #newGameDropdown a:hover {
+      background-color: #4a4a4a;
+    }
+    .new-game-wrapper {
+      position: relative;
+      display: inline-block;
+    }
   </style>
 
   <!-- Libraries -->
@@ -62,7 +97,6 @@
     <button id="logoutBtn" style="display:none;">Logout</button>
   </div>
   <div>
-    <!-- Added ID -->
     <button id="toggleDarkModeBtn">Toggle Dark Mode</button>
     <button id="advanceTimeBtn">Advance Time</button>
   </div>
@@ -72,34 +106,51 @@
   <div id="leftPanel">
     <div id="leftPanelInner">
       <h3>Conversations</h3>
-      <div>
-        <!-- Added ID -->
-        <button type="button" id="newGameBtn">New Game</button>
+      <div class="new-game-wrapper">
+        <button type="button" id="newGameBtn" style="padding-right: 30px;">New Game ▼</button>
+        <div id="newGameDropdown" style="display: none; position: absolute; background-color: white; min-width: 160px; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2); z-index: 1;">
+          <a href="#" onclick="showPresetStories(); return false;" style="color: black; padding: 12px 16px; text-decoration: none; display: block;">Choose Preset Story</a>
+          <a href="#" onclick="startNewGame(); return false;" style="color: black; padding: 12px 16px; text-decoration: none; display: block;">Custom Game</a>
+        </div>
       </div>
-        <button id="nyxSpaceBtn" style="width:100%;margin-bottom:8px;">Chat with Nyx</button>
+      <button id="nyxSpaceBtn" style="width:100%;margin-bottom:8px;margin-top:8px;">Chat with Nyx</button>
       <div id="convList" style="margin-top:10px;"></div>
     </div>
   </div>
 
   <div id="chatPanel">
     <div id="chatWindow">
-      <!-- Removed onclick -->
       <span id="loadMore" style="display:none;">Load older messages...</span>
     </div>
     <div id="inputRow">
       <input type="text" id="userMsg" placeholder="Type your message"/>
-      <!-- Removed onclick -->
       <button id="sendBtn">Send</button>
     </div>
   </div>
 </div>
 
 <div id="contextMenu"></div>
+
+<!-- Preset Story Selection Modal -->
+<div id="presetStoryModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1000;">
+  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: white; padding: 20px; border-radius: 10px; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+    <div class="modal-content">
+      <h2>Choose a Story</h2>
+      <div id="presetStoriesList" style="margin: 20px 0;">
+        <!-- Stories will be populated here -->
+      </div>
+      <div style="text-align: center; margin-top: 20px;">
+        <button onclick="closePresetStoryModal()" style="padding: 10px 20px; margin-right: 10px; cursor: pointer;">Cancel</button>
+        <button onclick="startCustomGame()" style="padding: 10px 20px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">Start Custom Game</button>
+      </div>
+    </div>
+  </div>
+</div>
   
-  <script>
-    // Quart’s session.user_id to JSON    
-    window.CURRENT_USER_ID = {{ session.user_id|tojson }};
-  </script>
+<script>
+  // Quart's session.user_id to JSON    
+  window.CURRENT_USER_ID = {{ session.user_id|tojson }};
+</script>
 <!-- Link to our refactored script, DEFER is important -->
 <script src="/static/socket-fix.js"></script>
 <script src="/static/chat_page.js" defer></script>
