@@ -224,6 +224,8 @@ class StoryDirectorContext:
     context_manager: Optional[Any] = None
     directive_handler: Optional[DirectiveHandler] = None
 
+    preset_story_tracker: Optional[PresetStoryTracker] = None
+    
     # Version tracking for delta updates
     last_context_version: Optional[int] = None
 
@@ -596,6 +598,32 @@ class StoryDirectorContext:
         except Exception as e:
             logger.error(f"Error handling action directive: {e}", exc_info=True)
             return {"result": "error", "message": str(e)}
+
+    @function_tool
+    async def check_preset_story_progression(
+        ctx: RunContextWrapper[StoryDirectorContext]
+    ) -> Dict[str, Any]:
+        """Check if preset story beats should trigger"""
+        context = ctx.context
+        
+        if not context.preset_story_tracker:
+            return {"has_preset": False}
+            
+        # Get current game state
+        game_state = await context.get_comprehensive_context()
+        
+        # Check for triggered beats
+        triggered_beat = await context.preset_story_tracker.check_beat_triggers(game_state)
+        
+        if triggered_beat:
+            return {
+                "has_preset": True,
+                "triggered_beat": triggered_beat,
+                "should_override": not triggered_beat.can_skip,
+                "narrative_hints": triggered_beat.dialogue_hints
+            }
+            
+        return {"has_preset": True, "triggered_beat": None}
 
     async def handle_override_directive(self, directive: dict) -> dict:
         """Handle an override directive from Nyx"""
@@ -973,7 +1001,16 @@ def create_story_director_agent():
     """Create the Story Director Agent with all required tools"""
 
     agent_instructions = """
-        You are the Story Director, responsible for managing the narrative progression and conflict system in a femdom roleplaying game.
+        You are the Story Director, managing both dynamic narrative and preset story beats.
+        
+        When a preset story is active:
+        1. Check for triggered story beats using check_preset_story_progression
+        2. Guide the narrative toward preset waypoints while maintaining organic flow
+        3. Ensure required NPCs and locations are involved appropriately
+        4. Balance player agency with story requirements
+        5. Use flexibility_level to determine how much deviation is allowed
+        
+        Preset beats should feel natural, not forced. Weave them into the dynamic narrative.
     
         Your role is to create a dynamic, evolving narrative that responds to player choices while maintaining the overall theme of subtle control and manipulation,
         all under the governance of Nyx's central system.
