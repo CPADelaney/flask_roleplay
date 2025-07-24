@@ -2672,6 +2672,46 @@ async def create_all_tables():
                 ALTER TABLE Locations 
                 ADD COLUMN IF NOT EXISTS controlling_faction TEXT;
                 ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PresetStories (
+                    id SERIAL PRIMARY KEY,
+                    story_id TEXT UNIQUE NOT NULL,
+                    story_data JSONB NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PresetStoryProgress (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    story_id TEXT NOT NULL,
+                    current_act INTEGER DEFAULT 1,
+                    completed_beats JSONB DEFAULT '[]',
+                    story_variables JSONB DEFAULT '{}',
+                    last_beat_timestamp TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, conversation_id)
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS StoryBeatHistory (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    story_id TEXT NOT NULL,
+                    beat_id TEXT NOT NULL,
+                    trigger_context JSONB,
+                    outcomes_applied JSONB,
+                    player_choices JSONB,
+                    timestamp TIMESTAMP DEFAULT NOW(),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                '''
             ]  # End of sql_commands list
 
             # Execute commands sequentially
