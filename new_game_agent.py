@@ -740,6 +740,135 @@ class NewGameAgent:
         return env_obj
     
 
+    async def process_new_game_with_preset(self, ctx, conversation_data: Dict[str, Any], preset_story_id: str) -> ProcessNewGameResult:
+        """Process new game creation with a preset story"""
+        user_id = ctx.user_id
+        conversation_id = None
+        
+        try:
+            # Load the preset story
+            async with get_db_connection_context() as conn:
+                story_row = await conn.fetchrow(
+                    "SELECT story_data FROM PresetStories WHERE story_id = $1",
+                    preset_story_id
+                )
+                
+                if not story_row:
+                    raise ValueError(f"Preset story {preset_story_id} not found")
+                
+                preset_story_data = json.loads(story_row['story_data'])
+            
+            # Create conversation
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    INSERT INTO conversations (user_id, conversation_name, status)
+                    VALUES ($1, $2, 'processing')
+                    RETURNING id
+                """, user_id, f"New Game - {preset_story_data['name']}")
+                conversation_id = row["id"]
+            
+            # Initialize player stats
+            await insert_default_player_stats_chase(user_id, conversation_id)
+            
+            # Generate environment based on preset story
+            env_params = GenerateEnvironmentParams(
+                mega_name=preset_story_data['name'],
+                mega_desc=preset_story_data['theme'] + "\n\n" + preset_story_data['synopsis'],
+                env_components=[],  # Can be filled from story data
+                enhanced_features=[],
+                stat_modifiers=[]
+            )
+            
+            ctx_wrap = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id,
+                'db_dsn': DB_DSN,
+                'agent_instance': self
+            })
+            
+            env = await self.generate_environment(ctx_wrap, env_params)
+            
+            # Create required locations from preset
+            for location_data in preset_story_data['required_locations']:
+                await canon.find_or_create_location(
+                    ctx_wrap, conn,
+                    location_data['name'],
+                    description=location_data.get('description', ''),
+                    location_type=location_data.get('type', 'building')
+                )
+            
+            # Create required NPCs from preset
+            npc_handler = NPCCreationHandler()
+            npc_ids = []
+            
+            for npc_data in preset_story_data['required_npcs']:
+                npc_id = await npc_handler.create_preset_npc(
+                    ctx=ctx_wrap,
+                    npc_data=npc_data,
+                    environment_context=env.environment_desc
+                )
+                npc_ids.append(npc_id)
+            
+            # Initialize preset story tracking
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    INSERT INTO PresetStoryProgress (
+                        user_id, conversation_id, story_id, 
+                        current_act, completed_beats, story_variables
+                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (user_id, conversation_id) 
+                    DO UPDATE SET story_id = $3
+                """, user_id, conversation_id, preset_story_id, 
+                    1, json.dumps([]), json.dumps({}))
+            
+            # Create opening narrative
+            opening = await self.create_preset_opening_narrative(
+                ctx_wrap, preset_story_data, env, npc_ids
+            )
+            
+            # Store opening message
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    INSERT INTO messages (conversation_id, sender, content, created_at)
+                    VALUES ($1, 'Nyx', $2, NOW())
+                """, conversation_id, opening)
+            
+            # Finalize
+            await self.finalize_game_setup(ctx_wrap, FinalizeGameSetupParams(
+                opening_narrative=opening
+            ))
+            
+            # Update conversation status
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE conversations 
+                    SET status='ready', 
+                        conversation_name=$3
+                    WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id, f"{preset_story_data['name']}")
+            
+            return ProcessNewGameResult(
+                message=f"Started preset story: {preset_story_data['name']}",
+                scenario_name=preset_story_data['name'],
+                environment_name=env.setting_name,
+                environment_desc=env.environment_desc,
+                lore_summary="Preset story loaded",
+                conversation_id=conversation_id,
+                welcome_image_url=None,
+                status="ready",
+                opening_narrative=opening
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in process_new_game_with_preset: {e}", exc_info=True)
+            if conversation_id:
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        UPDATE conversations 
+                        SET status='failed'
+                        WHERE id=$1 AND user_id=$2
+                    """, conversation_id, user_id)
+            raise
 
     async def _apply_setting_stat_modifiers(
         self,
