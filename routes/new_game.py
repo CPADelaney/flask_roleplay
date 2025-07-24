@@ -124,7 +124,7 @@ async def conversation_status():
             "opening_narrative": opening_msg_row['content'] if opening_msg_row else None
         })
 
-@router.get("/api/preset-stories")
+@new_game_bp.route('/api/preset-stories', methods=['GET'])
 async def list_preset_stories():
     """Get all available preset stories"""
     async with get_db_connection_context() as conn:
@@ -149,15 +149,23 @@ async def list_preset_stories():
                 "num_acts": len(json.loads(row["acts"])) if row["acts"] else 0
             })
         
-        return {"stories": stories}
+        return jsonify({"stories": stories})
 
-@router.post("/api/new-game/preset")
-async def start_preset_game(
-    request: Request,
-    story_id: str = Body(...),
-    user_id: int = Depends(get_current_user_id)
-):
+@new_game_bp.route('/api/new-game/preset', methods=['POST'])
+async def start_preset_game():
     """Start a new game with a preset story"""
+    from tasks import process_new_game_preset_task
+    
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    data = await request.get_json()
+    story_id = data.get('story_id')
+    
+    if not story_id:
+        return jsonify({"error": "story_id required"}), 400
+    
     # Verify story exists
     async with get_db_connection_context() as conn:
         exists = await conn.fetchval(
@@ -166,13 +174,13 @@ async def start_preset_game(
         )
         
         if not exists:
-            raise HTTPException(404, f"Preset story '{story_id}' not found")
+            return jsonify({"error": f"Preset story '{story_id}' not found"}), 404
     
     # Queue the task
     task = process_new_game_preset_task.delay(user_id, {"preset_story_id": story_id})
     
-    return {
+    return jsonify({
         "status": "processing",
         "task_id": task.id,
         "story_id": story_id
-    }
+    })
