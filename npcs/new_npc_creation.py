@@ -213,6 +213,43 @@ def _coerce_name(raw_txt: str, *, forbidden: list[str], existing: list[str]) -> 
         cand_name = f"{base} {suffix}"
     return cand_name
 
+async def create_preset_npc(self, ctx, npc_data: dict, environment_context: str) -> int:
+    """Create an NPC from preset story data"""
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    # Build the NPC creation prompt
+    prompt = f"""
+    Create an NPC for this environment: {environment_context}
+    
+    Required NPC specifications:
+    Name: {npc_data['name']}
+    Role: {npc_data['role']}
+    Archetype: {npc_data['archetype']}
+    Traits: {', '.join(npc_data['traits'])}
+    
+    Stats requirements:
+    {json.dumps(npc_data.get('stats', {}), indent=2)}
+    
+    Generate a compelling NPC that fits these specifications while adding rich details like:
+    - Physical appearance
+    - Backstory that explains their role
+    - Personality quirks
+    - Speaking style
+    - Personal interests/hobbies
+    - Schedule: {json.dumps(npc_data.get('schedule', {}), indent=2)}
+    """
+    
+    # Use your existing NPC creation logic
+    result = await self.create_single_npc(
+        ctx=ctx,
+        environment_desc=environment_context,
+        custom_prompt=prompt,
+        override_stats=npc_data.get('stats', {})
+    )
+    
+    return result["npc_id"]
+
 def _coerce_personality(data: dict) -> "NPCPersonalityData":
     return NPCPersonalityData(
         personality_traits=_safe_list(data.get("personality_traits"), fallback=[]),
