@@ -29,27 +29,6 @@ function ensureIntegerId(id) {
     return id;
 }
 
-// When emitting socket events:
-socket.emit('storybeat', {
-    conversation_id: ensureIntegerId(currentConversationId),
-    user_input: userMessage,
-    universal_update: updateData
-});
-
-socket.emit('join', {
-    conversation_id: ensureIntegerId(conversationId)
-});
-
-// For any AJAX/fetch calls:
-fetch('/api/chat', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-        conversation_id: ensureIntegerId(conversationId),
-        message: userMessage
-    })
-});
-
 // Centralized fetch helper with consistent error handling
 async function fetchJson(url, opts = {}) {
   const res = await fetch(url, { credentials: 'include', ...opts });
@@ -871,6 +850,7 @@ async function advanceTime() {
   }
 }
 
+
 // ===== Conversation Management =====
 async function selectConversation(convId) {
   if (AppState.isSelectingConversation) {
@@ -1536,4 +1516,25 @@ document.addEventListener('DOMContentLoaded', async function() {
   });
 
   console.log("Chat page initialization complete");
+});
+
+// When emitting socket events:
+socket.emit('storybeat', {
+    conversation_id: ensureIntegerId(currentConversationId),
+    user_input: userMessage,
+    universal_update: updateData
+});
+
+socket.emit('join', {
+    conversation_id: ensureIntegerId(conversationId)
+});
+
+// For any AJAX/fetch calls:
+fetch('/api/chat', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+        conversation_id: ensureIntegerId(conversationId),
+        message: userMessage
+    })
 });
