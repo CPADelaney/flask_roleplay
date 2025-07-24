@@ -1056,6 +1056,30 @@ async def sweep_and_merge_nyx_split_brains():
         logger.exception("Sweep-and-merge task failed critically.")
         return {"status": "error", "error": str(e)}
 
+@celery_app.task
+@async_task
+async def process_new_game_preset_task(user_id, preset_data):
+    """Process new game creation with preset story"""
+    logger.info(f"Starting preset game creation for user {user_id}")
+    
+    agent = NewGameAgent()
+    
+    try:
+        from lore.core.context import CanonicalContext
+        ctx = CanonicalContext(user_id, 0)
+        
+        result = await agent.process_new_game_with_preset(
+            ctx, 
+            preset_data,
+            preset_data['preset_story_id']
+        )
+        
+        return serialize_for_celery(result)
+        
+    except Exception as e:
+        logger.exception(f"Error in preset game task for user {user_id}")
+        return {"status": "failed", "error": str(e)}
+
 # --- NEW LLM Checkpointing Task ---
 @celery_app.task
 @async_task # Use decorator for the async logic
