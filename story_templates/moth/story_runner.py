@@ -13,7 +13,7 @@ from datetime import datetime
 from db.connection import get_db_connection_context
 from story_templates.moth.story_initializer import MothFlameStoryInitializer, MothFlameStoryProgression
 from story_templates.moth.poem_enhanced_generation import PoemEnhancedTextGenerator, integrate_poem_enhancement
-from npcs.lilith_mechanics import LilithMechanicsHandler
+from story_templates.moth.npcs.lilith_mechanics import LilithMechanicsHandler
 from memory.wrapper import MemorySystem
 from lore.core import canon
 
