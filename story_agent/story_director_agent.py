@@ -599,6 +599,42 @@ class StoryDirectorContext:
             logger.error(f"Error handling action directive: {e}", exc_info=True)
             return {"result": "error", "message": str(e)}
 
+    async def initialize_preset_story_tracker(self, user_id: int, conversation_id: int):
+        """Initialize preset story tracker if a preset story is active"""
+        async with get_db_connection_context() as conn:
+            progress = await conn.fetchrow("""
+                SELECT story_id, current_act, completed_beats, story_variables
+                FROM PresetStoryProgress
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            if progress:
+                # Load the preset story
+                story_row = await conn.fetchrow(
+                    "SELECT story_data FROM PresetStories WHERE story_id = $1",
+                    progress['story_id']
+                )
+                
+                if story_row:
+                    from story_agent.preset_story_tracker import PresetStoryTracker
+                    from story_templates.preset_stories import PresetStory
+                    
+                    story_data = json.loads(story_row['story_data'])
+                    
+                    # Reconstruct PresetStory object
+                    preset_story = self._reconstruct_preset_story(story_data)
+                    
+                    # Initialize tracker
+                    tracker = PresetStoryTracker(user_id, conversation_id)
+                    tracker.current_story_id = progress['story_id']
+                    tracker.current_act = progress['current_act']
+                    tracker.completed_beats = json.loads(progress['completed_beats'])
+                    tracker.story_variables = json.loads(progress['story_variables'])
+                    
+                    self.context.preset_story_tracker = tracker
+                    
+                    logger.info(f"Initialized preset story tracker for {progress['story_id']}")
+
     @function_tool
     async def check_preset_story_progression(
         ctx: RunContextWrapper[StoryDirectorContext]
