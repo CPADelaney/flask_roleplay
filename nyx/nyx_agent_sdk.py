@@ -34,7 +34,7 @@ from agents import (
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
