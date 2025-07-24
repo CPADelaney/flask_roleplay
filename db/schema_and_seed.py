@@ -2712,6 +2712,283 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 '''
+from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME, MOTH_FLAME_POEMS, STORY_TONE_PROMPT
+
+async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
+    """
+    Seeds story poems as core memories that the AI can reference for tone and imagery.
+    Call this during database initialization for each story that has poems.
+    """
+    logger.info(f"Seeding poems for story: {story_id}")
+    
+    # Get poems from the story
+    if story_id == "the_moth_and_flame":
+        poems = MOTH_FLAME_POEMS
+        tone_prompt = STORY_TONE_PROMPT
+    else:
+        logger.warning(f"No poems found for story: {story_id}")
+        return
+    
+    async with get_db_connection_context() as conn:
+        # Seed each poem as a core memory
+        for poem_id, poem_text in poems.items():
+            # Check if already exists
+            exists = await conn.fetchval(
+                """
+                SELECT id FROM unified_memories
+                WHERE entity_type = 'story_poem' 
+                AND entity_id = 0 
+                AND metadata->>'poem_id' = $1
+                AND metadata->>'story_id' = $2
+                """,
+                poem_id, story_id
+            )
+            
+            if not exists:
+                # Extract title (first line)
+                lines = poem_text.strip().split('\n')
+                title = lines[0] if lines else "Untitled"
+                
+                # Insert full poem
+                await conn.execute(
+                    """
+                    INSERT INTO unified_memories
+                    (entity_type, entity_id, user_id, conversation_id, 
+                     memory_text, memory_type, tags, significance, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    """,
+                    "story_poem",    # Entity type for story poems
+                    0,               # Generic ID
+                    0,               # System-level (user_id = 0)
+                    0,               # System-level (conversation_id = 0)
+                    poem_text,
+                    "gothic_poem",
+                    ["poetry", "tone_reference", story_id, poem_id, "gothic", "romantic"],
+                    10,              # Maximum significance
+                    {
+                        "poem_id": poem_id,
+                        "poem_title": title,
+                        "story_id": story_id,
+                        "usage": "tone_and_imagery_reference",
+                        "themes": ["masks", "vulnerability", "devotion", "abandonment"]
+                    }
+                )
+                
+                # Extract and store key imagery separately for quick access
+                key_imagery = extract_poetic_imagery(poem_text)
+                for i, imagery in enumerate(key_imagery[:20]):  # Limit to 20 key images
+                    await conn.execute(
+                        """
+                        INSERT INTO unified_memories
+                        (entity_type, entity_id, user_id, conversation_id,
+                         memory_text, memory_type, tags, significance, metadata)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        """,
+                        "story_imagery",
+                        0, 0, 0,
+                        imagery,
+                        "poetic_imagery",
+                        ["imagery", story_id, poem_id, "metaphor"],
+                        9,  # High significance
+                        {
+                            "source_poem": poem_id,
+                            "story_id": story_id,
+                            "imagery_index": i,
+                            "imagery_type": categorize_imagery(imagery)
+                        }
+                    )
+        
+        # Seed the tone instructions
+        if tone_prompt:
+            exists = await conn.fetchval(
+                """
+                SELECT id FROM unified_memories
+                WHERE entity_type = 'story_instructions'
+                AND metadata->>'story_id' = $1
+                AND user_id = 0 AND conversation_id = 0
+                """,
+                story_id
+            )
+            
+            if not exists:
+                await conn.execute(
+                    """
+                    INSERT INTO unified_memories
+                    (entity_type, entity_id, user_id, conversation_id,
+                     memory_text, memory_type, tags, significance, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    """,
+                    "story_instructions",
+                    0, 0, 0,
+                    tone_prompt,
+                    "writing_instructions",
+                    ["instructions", "tone", "style", story_id, "gothic", "poetry"],
+                    10,
+                    {
+                        "story_id": story_id,
+                        "instruction_type": "tone_and_style_guide",
+                        "apply_to": "all_story_content",
+                        "priority": "high"
+                    }
+                )
+        
+        logger.info(f"Seeded {len(poems)} poems and tone instructions for {story_id}")
+
+
+def extract_poetic_imagery(poem_text: str) -> List[str]:
+    """Extract key imagery and metaphors from poem text"""
+    import re
+    
+    imagery = []
+    lines = poem_text.split('\n')
+    
+    # Patterns that often indicate metaphorical language
+    metaphor_patterns = [
+        r'(?:I am|You are|She is|We are)\s+(.+?)(?:\.|,|$)',
+        r'like\s+(.+?)(?:\.|,|$)',
+        r'as\s+(.+?)(?:\.|,|$)',
+        r'(?:beneath|behind|within)\s+(.+?)(?:\.|,|$)',
+    ]
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Skip empty lines and titles
+        if not line or line.isupper() or len(line) < 10:
+            continue
+            
+        # Look for metaphorical patterns
+        for pattern in metaphor_patterns:
+            matches = re.findall(pattern, line, re.IGNORECASE)
+            for match in matches:
+                if len(match) > 5 and len(match) < 100:
+                    imagery.append(match.strip())
+        
+        # Also capture short, powerful standalone lines
+        if 15 < len(line) < 60 and any(word in line.lower() for word in 
+            ['moth', 'flame', 'mask', 'porcelain', 'velvet', 'thorns', 'altar', 
+             'temple', 'shadow', 'mirror', 'glass', 'broken', 'trembling']):
+            imagery.append(line)
+    
+    # Also include specific powerful phrases
+    powerful_phrases = [
+        "porcelain curves", "painted smile", "queen of thorns",
+        "fortress forged from glass", "altar of her throne",
+        "rough geography of breaks", "moth with wings of broken glass",
+        "invisible tattoos", "binding kiss", "velvet affliction",
+        "three syllables tasting of burning stars", "binary stars",
+        "lunar edict", "sanctified ruin", "lighthouse on my midnight tide"
+    ]
+    
+    for phrase in powerful_phrases:
+        if phrase.lower() in poem_text.lower():
+            imagery.append(phrase)
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_imagery = []
+    for img in imagery:
+        if img.lower() not in seen:
+            seen.add(img.lower())
+            unique_imagery.append(img)
+    
+    return unique_imagery
+
+
+def categorize_imagery(imagery: str) -> str:
+    """Categorize imagery for better retrieval"""
+    imagery_lower = imagery.lower()
+    
+    if any(word in imagery_lower for word in ['mask', 'porcelain', 'mirror', 'facade']):
+        return "masks_and_facades"
+    elif any(word in imagery_lower for word in ['moth', 'flame', 'burn', 'fire']):
+        return "moth_and_flame"
+    elif any(word in imagery_lower for word in ['altar', 'temple', 'worship', 'prayer']):
+        return "religious_devotion"
+    elif any(word in imagery_lower for word in ['broken', 'shatter', 'trembling', 'tears']):
+        return "vulnerability"
+    elif any(word in imagery_lower for word in ['velvet', 'silk', 'thorns', 'blood']):
+        return "sensual_danger"
+    elif any(word in imagery_lower for word in ['shadow', 'dark', 'night', 'void']):
+        return "darkness"
+    elif any(word in imagery_lower for word in ['stars', 'moon', 'gravity', 'orbit']):
+        return "celestial"
+    else:
+        return "general_imagery"
+
+
+# Update your main initialization to include poem seeding
+async def initialize_all_data():
+    """
+    Asynchronous convenience function to create tables + seed initial data.
+    Updated to include poem seeding for preset stories.
+    """
+    logger.info("Starting full database initialization...")
+    try:
+        await create_all_tables()
+        await seed_initial_data()
+        await seed_initial_vitals()
+        await seed_initial_resources()
+        await initialize_conflict_system()
+        
+        # Seed story poems
+        await seed_story_poems_as_memories("the_moth_and_flame")
+        
+        logger.info("All initialization steps completed successfully!")
+    except Exception as e:
+        logger.critical(f"Full database initialization failed: {e}", exc_info=True)
+        raise
+
+
+# Function to retrieve poem context for a specific conversation
+async def get_poem_context_for_conversation(user_id: int, conversation_id: int, story_id: str) -> Dict[str, Any]:
+    """
+    Retrieve poem context for use in text generation.
+    This would be called by your Nyx system when generating responses.
+    """
+    async with get_db_connection_context() as conn:
+        # Get relevant poems
+        poems = await conn.fetch(
+            """
+            SELECT memory_text, metadata
+            FROM unified_memories
+            WHERE entity_type = 'story_poem'
+            AND metadata->>'story_id' = $1
+            ORDER BY significance DESC
+            """,
+            story_id
+        )
+        
+        # Get imagery for current context
+        imagery = await conn.fetch(
+            """
+            SELECT memory_text, metadata
+            FROM unified_memories
+            WHERE entity_type = 'story_imagery'
+            AND metadata->>'story_id' = $1
+            ORDER BY significance DESC
+            LIMIT 15
+            """,
+            story_id
+        )
+        
+        # Get tone instructions
+        instructions = await conn.fetchval(
+            """
+            SELECT memory_text
+            FROM unified_memories
+            WHERE entity_type = 'story_instructions'
+            AND metadata->>'story_id' = $1
+            """,
+            story_id
+        )
+        
+        return {
+            "poems": [{"text": p["memory_text"], "title": p["metadata"].get("poem_title")} for p in poems],
+            "imagery": [i["memory_text"] for i in imagery],
+            "tone_instructions": instructions,
+            "story_id": story_id
+        }
             ]  # End of sql_commands list
 
             # Execute commands sequentially
