@@ -157,6 +157,167 @@ function resetPendingUniversalUpdates() {
   AppState.pendingUniversalUpdates = createUniversalUpdates();
 }
 
+// ===== New Game Dropdown Functions =====
+function toggleNewGameDropdown() {
+  const dropdown = $('newGameDropdown');
+  dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+}
+
+// Show preset stories modal
+window.showPresetStories = async function() {
+  const dropdown = $('newGameDropdown');
+  dropdown.style.display = 'none';
+  
+  try {
+    // Fetch available preset stories
+    const response = await fetch('/new_game/api/preset-stories');
+    const data = await response.json();
+    
+    // Populate the modal
+    const storiesList = $('presetStoriesList');
+    storiesList.innerHTML = '';
+    
+    if (data.stories && data.stories.length > 0) {
+      data.stories.forEach(story => {
+        const storyCard = document.createElement('div');
+        storyCard.style.cssText = 'border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; cursor: pointer; transition: background-color 0.3s;';
+        storyCard.onmouseover = () => storyCard.style.backgroundColor = '#f0f0f0';
+        storyCard.onmouseout = () => storyCard.style.backgroundColor = 'white';
+        
+        // Apply dark mode styles if active
+        if (AppState.isDarkMode) {
+          storyCard.style.borderColor = '#555';
+          storyCard.onmouseover = () => storyCard.style.backgroundColor = '#4a4a4a';
+          storyCard.onmouseout = () => storyCard.style.backgroundColor = 'transparent';
+        }
+        
+        storyCard.innerHTML = `
+          <h3 style="margin: 0 0 10px 0;">${story.name}</h3>
+          <p style="margin: 0 0 5px 0; color: ${AppState.isDarkMode ? '#aaa' : '#666'};"><strong>Theme:</strong> ${story.theme}</p>
+          <p style="margin: 0; color: ${AppState.isDarkMode ? '#f0f0f0' : '#333'};">${story.synopsis}</p>
+          <p style="margin: 5px 0 0 0; color: ${AppState.isDarkMode ? '#888' : '#999'}; font-size: 0.9em;">Acts: ${story.num_acts}</p>
+        `;
+        
+        storyCard.onclick = () => startPresetGame(story.id);
+        storiesList.appendChild(storyCard);
+      });
+    } else {
+      storiesList.innerHTML = '<p>No preset stories available.</p>';
+    }
+    
+    // Show the modal
+    $('presetStoryModal').style.display = 'block';
+    
+  } catch (error) {
+    console.error('Error fetching preset stories:', error);
+    alert('Failed to load preset stories. Please try again.');
+  }
+}
+
+// Close preset story modal
+window.closePresetStoryModal = function() {
+  $('presetStoryModal').style.display = 'none';
+}
+
+// Start a game with a preset story
+async function startPresetGame(storyId) {
+  if (AppState.isCreatingGame) {
+    console.log("Game creation already in progress");
+    return;
+  }
+
+  // Close the modal
+  closePresetStoryModal();
+  
+  const newGameBtn = $("newGameBtn");
+  if (newGameBtn) {
+    newGameBtn.disabled = true;
+    newGameBtn.textContent = "Creating...";
+  }
+
+  AppState.isCreatingGame = true;
+
+  const chatWindow = $("chatWindow");
+  if (!chatWindow) {
+    AppState.isCreatingGame = false;
+    if (newGameBtn) {
+      newGameBtn.disabled = false;
+      newGameBtn.textContent = "New Game ▼";
+    }
+    return;
+  }
+  
+  const loadingDiv = document.createElement("div");
+  loadingDiv.id = "newGameLoadingIndicator";
+  loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing preset story world...</div>';
+  chatWindow.appendChild(loadingDiv);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+
+  try {
+    const response = await fetch("/new_game/api/new-game/preset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: 'include',
+      body: JSON.stringify({ story_id: storyId })
+    });
+
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to start preset game');
+    }
+    
+    // Since we're using Celery tasks, we'll get a task_id
+    // Poll for completion like we do with regular new games
+    if (data.task_id || data.status === 'processing') {
+      // Update loading message
+      loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Creating your preset story world... This may take a minute...</div>';
+      
+      // For now, we'll just wait and then check conversations
+      // In a full implementation, you'd poll a task status endpoint
+      let pollAttempts = 0;
+      const maxAttempts = CONFIG.GAME_POLL_MAX_ATTEMPTS;
+      
+      // Since we don't have a task status endpoint in the current code,
+      // we'll just wait and refresh conversations
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+      
+      loadingDiv.remove();
+      
+      // Refresh conversation list
+      await loadConversations();
+      
+      appendMessage({ 
+        sender: "system", 
+        content: `Preset story "${storyId}" is being prepared. Check your conversation list in a moment.` 
+      }, true);
+    }
+
+  } catch (err) {
+    console.error("startPresetGame error:", err);
+    
+    const existingLoadingDiv = $("newGameLoadingIndicator");
+    if (existingLoadingDiv) existingLoadingDiv.remove();
+    
+    appendMessage({ 
+      sender: "system", 
+      content: `Error starting preset game: ${err.message}. Please try again.` 
+    }, true);
+  } finally {
+    AppState.isCreatingGame = false;
+    if (newGameBtn) {
+      newGameBtn.disabled = false;
+      newGameBtn.textContent = "New Game ▼";
+    }
+  }
+}
+
+// Start custom game (wrapper for existing startNewGame function)
+window.startCustomGame = async function() {
+  closePresetStoryModal();
+  await startNewGame();
+}
+
 // ===== Socket Management =====
 class SocketManager {
   constructor() {
@@ -1052,7 +1213,7 @@ async function startNewGame() {
     AppState.isCreatingGame = false;
     if (newGameBtn) {
       newGameBtn.disabled = false;
-      newGameBtn.textContent = "New Game";
+      newGameBtn.textContent = "New Game ▼";
     }
     return;
   }
@@ -1124,7 +1285,7 @@ async function startNewGame() {
     AppState.isCreatingGame = false;
     if (newGameBtn) {
       newGameBtn.disabled = false;
-      newGameBtn.textContent = "New Game";
+      newGameBtn.textContent = "New Game ▼";
     }
   }
 }
@@ -1475,7 +1636,10 @@ document.addEventListener('DOMContentLoaded', async function() {
   if (logoutBtn) logoutBtn.addEventListener("click", logout);
   if (toggleDarkModeBtn) toggleDarkModeBtn.addEventListener("click", toggleDarkMode);
   if (advanceTimeBtn) advanceTimeBtn.addEventListener("click", advanceTime);
-  if (newGameBtn) newGameBtn.addEventListener("click", startNewGame);
+  if (newGameBtn) {
+    newGameBtn.removeEventListener("click", startNewGame); // Remove old listener
+    newGameBtn.addEventListener("click", toggleNewGameDropdown); // Add new listener for dropdown
+  }
   if (nyxSpaceBtn) nyxSpaceBtn.addEventListener("click", () => selectConversation(CONFIG.NYX_SPACE_CONV_ID));
   if (loadMoreBtn) loadMoreBtn.addEventListener("click", loadPreviousMessages);
   if (sendBtn) sendBtn.addEventListener("click", sendMessage);
@@ -1483,11 +1647,20 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Context menu handlers
   document.addEventListener("click", (e) => {
     const contextMenu = $("contextMenu");
+    const dropdown = $('newGameDropdown');
+    const newGameBtn = $('newGameBtn');
+    
+    // Close context menu if clicking outside
     if (contextMenu && !contextMenu.contains(e.target)) {
       contextMenu.style.display = "none";
       contextMenuConvId = null;
     } else if (contextMenu && contextMenu.contains(e.target)) {
       handleContextMenuClick(e);
+    }
+    
+    // Close dropdown if clicking outside
+    if (!newGameBtn.contains(e.target) && !dropdown.contains(e.target)) {
+      dropdown.style.display = 'none';
     }
   });
   
