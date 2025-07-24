@@ -122,3 +122,49 @@ async def conversation_status():
             "status": row['status'],
             "opening_narrative": opening_msg_row['content'] if opening_msg_row else None
         })
+
+@router.get("/preset-stories")
+async def get_available_preset_stories():
+    """Get list of available preset stories"""
+    async with get_db_connection_context() as conn:
+        rows = await conn.fetch("""
+            SELECT story_id, story_data->>'name' as name, 
+                   story_data->>'theme' as theme,
+                   story_data->>'synopsis' as synopsis
+            FROM PresetStories
+            ORDER BY created_at
+        """)
+        
+        return {
+            "preset_stories": [
+                {
+                    "id": row['story_id'],
+                    "name": row['name'],
+                    "theme": row['theme'],
+                    "synopsis": row['synopsis']
+                }
+                for row in rows
+            ]
+        }
+
+@router.post("/new-game/preset/{story_id}")
+async def start_preset_story_game(
+    story_id: str,
+    user_id: int = Depends(get_current_user_id)
+):
+    """Start a new game with a preset story"""
+    try:
+        # Queue the task
+        task = process_new_game_preset_task.delay(
+            user_id,
+            {"preset_story_id": story_id}
+        )
+        
+        return {
+            "status": "processing",
+            "task_id": task.id,
+            "message": f"Creating new game with preset story: {story_id}"
+        }
+    except Exception as e:
+        logger.error(f"Error starting preset game: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
