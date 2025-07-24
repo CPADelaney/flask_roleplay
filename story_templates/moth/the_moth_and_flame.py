@@ -1,5 +1,11 @@
 # story_templates/moth/the_moth_and_flame.py
+"""
+The Moth and Flame - A Gothic Romance
+Complete story definition with poem integration and complex character dynamics
+"""
+
 from story_templates.preset_stories import PresetStory, StoryBeat
+from story_templates.character_profiles.lilith_ravencroft import LILITH_RAVENCROFT
 
 # The foundational poems that define tone, imagery, and themes
 MOTH_FLAME_POEMS = {
@@ -214,12 +220,12 @@ THE_MOTH_AND_FLAME = PresetStory(
         {
             "act": 2,
             "name": "When the Curtain Falls",
-            "beats": ["after_hours", "glimpse_beneath", "the_confession", "binding_words"]
+            "beats": ["after_hours", "glimpse_beneath", "the_confession", "binding_words", "dual_life_discovery"]
         },
         {
             "act": 3,
             "name": "Velvet Affliction",
-            "beats": ["the_test", "breaking_point", "true_devotion", "eternal_dance"]
+            "beats": ["the_test", "safehouse_crisis", "breaking_point", "true_devotion", "eternal_dance"]
         }
     ],
     
@@ -232,14 +238,17 @@ THE_MOTH_AND_FLAME = PresetStory(
             description="Player first encounters the mysterious dominatrix at an underground venue",
             trigger_conditions={
                 "game_start": True,
-                "time": "night"
+                "time": "night",
+                "location": "underground_district"
             },
-            required_npcs=["the_queen"],
-            required_locations=["velvet_sanctum", "main_stage"],
+            required_npcs=["lilith_ravencroft"],
+            required_locations=["velvet_sanctum"],
             narrative_stage="Innocent Beginning",
             outcomes={
-                "relationship_added": {"npc": "the_queen", "type": "intrigued"},
-                "player_stats": {"lust": +20, "curiosity": +30}
+                "relationship_added": {"npc": "lilith_ravencroft", "type": "intrigued"},
+                "player_stats": {"lust": "+20", "curiosity": "+30"},
+                "location_unlocked": "velvet_sanctum",
+                "knowledge_gained": "sanctum_exists"
             },
             dialogue_hints=[
                 "A queen of thorns holds court in velvet night",
@@ -255,14 +264,16 @@ THE_MOTH_AND_FLAME = PresetStory(
             description="Witness her commanding presence as she holds court",
             trigger_conditions={
                 "completed_beats": ["first_glimpse"],
-                "location": "velvet_sanctum"
+                "location": "velvet_sanctum",
+                "time": "night"
             },
-            required_npcs=["the_queen", "devoted_pilgrim"],
-            required_locations=["velvet_sanctum"],
+            required_npcs=["lilith_ravencroft", "devoted_pilgrim"],
+            required_locations=["velvet_sanctum", "throne_room"],
             narrative_stage="Innocent Beginning",
             outcomes={
                 "learned_fact": "queen_performs_nightly",
-                "player_stats": {"arousal": +15, "submission": +10}
+                "player_stats": {"arousal": "+15", "submission": "+10"},
+                "npc_awareness": {"lilith_ravencroft": "+10"}
             },
             dialogue_hints=[
                 "Pilgrims who seek their pain as benediction",
@@ -278,19 +289,46 @@ THE_MOTH_AND_FLAME = PresetStory(
             description="She notices you watching and extends a cryptic invitation",
             trigger_conditions={
                 "times_visited_sanctum": 3,
-                "queen_awareness": {"min": 20}
+                "npc_awareness": {"lilith_ravencroft": {"min": 20}},
+                "player_watched_performance": True
             },
-            required_npcs=["the_queen"],
+            required_npcs=["lilith_ravencroft"],
             required_locations=["velvet_sanctum"],
             narrative_stage="First Doubts",
             outcomes={
                 "quest_added": "answer_her_summons",
-                "item_received": "obsidian_token"
+                "item_received": "obsidian_token",
+                "relationship_progress": {"lilith_ravencroft": "+15"}
             },
             dialogue_hints=[
                 "I am the flame she cages in her dark",
                 "Her fingers trace invisible tattoos",
                 "Each touch a brand, each word a binding kiss"
+            ],
+            can_skip=False
+        ),
+        
+        StoryBeat(
+            id="first_session",
+            name="The Altar of Submission",
+            description="Your first private session with the Queen",
+            trigger_conditions={
+                "quest_completed": "answer_her_summons",
+                "has_item": "obsidian_token",
+                "location": "velvet_sanctum_private_booth"
+            },
+            required_npcs=["lilith_ravencroft"],
+            required_locations=["private_session_room"],
+            narrative_stage="First Doubts",
+            outcomes={
+                "relationship_type": {"lilith_ravencroft": "submissive_to"},
+                "player_stats": {"submission": "+25", "pain_threshold": "+10"},
+                "learned_skill": "proper_kneeling"
+            },
+            dialogue_hints=[
+                "On. Your. Knees. This is not a request, little moth.",
+                "You kneel so prettily, like a candle flame bowing to the wind",
+                "I trace invisible tattoos - marking you as mine"
             ],
             can_skip=False
         ),
@@ -303,14 +341,17 @@ THE_MOTH_AND_FLAME = PresetStory(
             trigger_conditions={
                 "act": 2,
                 "time": "late_night",
-                "location": "velvet_sanctum"
+                "location": "velvet_sanctum",
+                "relationship": {"lilith_ravencroft": {"min": 30}},
+                "sanctum_closed": True
             },
-            required_npcs=["the_queen"],
-            required_locations=["empty_sanctum", "private_chambers"],
+            required_npcs=["lilith_ravencroft"],
+            required_locations=["empty_sanctum"],
             narrative_stage="Creeping Realization",
             outcomes={
                 "discovered_secret": "queen_loneliness",
-                "relationship_progress": {"the_queen": +25}
+                "relationship_progress": {"lilith_ravencroft": "+25"},
+                "vulnerability_witnessed": True
             },
             dialogue_hints=[
                 "The music dies. The temple empties out",
@@ -325,15 +366,18 @@ THE_MOTH_AND_FLAME = PresetStory(
             name="Geography of Breaks",
             description="She removes her mask, revealing vulnerability",
             trigger_conditions={
-                "relationship": {"the_queen": {"min": 50}},
-                "private_moment": True
+                "relationship": {"lilith_ravencroft": {"min": 50}},
+                "private_moment": True,
+                "trust_established": True
             },
-            required_npcs=["the_queen"],
+            required_npcs=["lilith_ravencroft"],
             required_locations=["private_chambers"],
             narrative_stage="Veil Thinning",
             outcomes={
                 "learned_truth": "queen_past_abandonment",
-                "player_stats": {"empathy": +30, "devotion": +25}
+                "player_stats": {"empathy": "+30", "devotion": "+25"},
+                "mask_removed": "first_time",
+                "secret_discovered": "mask_collection"
             },
             dialogue_hints=[
                 "I watch her lift it slowly from her face",
@@ -349,14 +393,16 @@ THE_MOTH_AND_FLAME = PresetStory(
             description="She reveals her deepest fear - abandonment",
             trigger_conditions={
                 "intimacy_level": {"min": 70},
-                "trust_established": True
+                "trust_established": True,
+                "mask_removed": "first_time"
             },
-            required_npcs=["the_queen"],
+            required_npcs=["lilith_ravencroft"],
             required_locations=["private_chambers"],
             narrative_stage="Veil Thinning",
             outcomes={
                 "choice_presented": "promise_to_stay",
-                "relationship_evolution": "deeper_connection"
+                "relationship_evolution": "deeper_connection",
+                "learned_secret": "the_lists"
             },
             dialogue_hints=[
                 "Don't disappear, she whispers to the dark",
@@ -366,6 +412,31 @@ THE_MOTH_AND_FLAME = PresetStory(
             can_skip=False
         ),
         
+        StoryBeat(
+            id="dual_life_discovery",
+            name="The Moth Queen's Secret",
+            description="Discover her role as underground protector",
+            trigger_conditions={
+                "relationship": {"lilith_ravencroft": {"min": 60}},
+                "helped_vulnerable_npc": True,
+                "time": "late_night"
+            },
+            required_npcs=["lilith_ravencroft", "rescued_victim"],
+            required_locations=["safehouse_entrance"],
+            narrative_stage="Veil Thinning",
+            outcomes={
+                "discovered_secret": "moth_queen_identity",
+                "location_unlocked": "safehouse_network",
+                "new_quest": "help_the_underground"
+            },
+            dialogue_hints=[
+                "They call me 'The Moth Queen' in the underground",
+                "Beautiful, dangerous, drawn to flames",
+                "I save those like I once was - lost, hunted, disposable"
+            ],
+            can_skip=True
+        ),
+        
         # Act 3 Beats
         StoryBeat(
             id="the_test",
@@ -373,14 +444,16 @@ THE_MOTH_AND_FLAME = PresetStory(
             description="She tests your devotion through increasingly intense sessions",
             trigger_conditions={
                 "act": 3,
-                "devotion": {"min": 60}
+                "devotion": {"min": 60},
+                "sessions_completed": {"min": 5}
             },
-            required_npcs=["the_queen"],
+            required_npcs=["lilith_ravencroft"],
             required_locations=["sanctum_dungeon"],
             narrative_stage="Full Revelation",
             outcomes={
-                "player_stats": {"submission": +40, "pain_tolerance": +20},
-                "relationship_dynamic": "total_power_exchange"
+                "player_stats": {"submission": "+40", "pain_tolerance": "+20"},
+                "relationship_dynamic": "total_power_exchange",
+                "gained_title": "her_moth"
             },
             dialogue_hints=[
                 "We are binary stars",
@@ -391,18 +464,44 @@ THE_MOTH_AND_FLAME = PresetStory(
         ),
         
         StoryBeat(
+            id="safehouse_crisis",
+            name="When Both Worlds Collide",
+            description="A crisis forces her two worlds to intersect",
+            trigger_conditions={
+                "discovered_secret": "moth_queen_identity",
+                "random_event": "trafficking_ring_discovered"
+            },
+            required_npcs=["lilith_ravencroft", "trafficking_victim", "ring_enforcer"],
+            required_locations=["safehouse_network", "velvet_sanctum"],
+            narrative_stage="Full Revelation",
+            outcomes={
+                "choice_presented": "help_or_stay_safe",
+                "lilith_vulnerability": "maximum",
+                "potential_loss": True
+            },
+            dialogue_hints=[
+                "I can't lose another one, not again",
+                "This is who I really am beneath it all",
+                "Stay with me through this, please... don't disappear"
+            ],
+            can_skip=False
+        ),
+        
+        StoryBeat(
             id="breaking_point",
             name="The Unopened Letter",
             description="The moment where unspoken truths must be revealed",
             trigger_conditions={
                 "emotional_intensity": {"min": 90},
-                "sessions_completed": {"min": 10}
+                "sessions_completed": {"min": 10},
+                "crisis_resolved": True
             },
-            required_npcs=["the_queen"],
-            required_locations=["private_chambers"],
+            required_npcs=["lilith_ravencroft"],
+            required_locations=["private_chambers", "the_mask_room"],
             narrative_stage="Full Revelation",
             outcomes={
-                "major_choice": "speak_truth_or_maintain_silence"
+                "major_choice": "speak_truth_or_maintain_silence",
+                "three_words_moment": True
             },
             dialogue_hints=[
                 "There are words that live beneath my tongue",
@@ -413,6 +512,30 @@ THE_MOTH_AND_FLAME = PresetStory(
         ),
         
         StoryBeat(
+            id="true_devotion",
+            name="The Binding Ritual",
+            description="A ceremony of permanent connection",
+            trigger_conditions={
+                "major_choice": "speak_truth",
+                "mutual_confession": True
+            },
+            required_npcs=["lilith_ravencroft"],
+            required_locations=["velvet_sanctum_altar"],
+            narrative_stage="Full Revelation",
+            outcomes={
+                "permanent_bond": True,
+                "gained_item": "matching_moth_tattoos",
+                "new_role": "eternal_moth"
+            },
+            dialogue_hints=[
+                "You are my unopened letter, finally read",
+                "Carved in basalt, under vault and bone",
+                "My sweetest fall, my silent scream"
+            ],
+            can_skip=True
+        ),
+        
+        StoryBeat(
             id="eternal_dance",
             name="Velvet Affliction",
             description="The final form of your relationship, shaped by your choices",
@@ -420,7 +543,7 @@ THE_MOTH_AND_FLAME = PresetStory(
                 "major_choice_made": True,
                 "story_complete": 90
             },
-            required_npcs=["the_queen"],
+            required_npcs=["lilith_ravencroft"],
             required_locations=["varies_by_choice"],
             narrative_stage="Full Revelation",
             outcomes={
@@ -430,55 +553,61 @@ THE_MOTH_AND_FLAME = PresetStory(
             dialogue_hints=[
                 "I crave you like strays worship moonlit feasts",
                 "Within these ruins we have raised together",
-                "Carved in basalt, under vault and bone"
+                "You've claimed me, body, soul, and stone"
             ],
             can_skip=False
         )
     ],
     
-    # The main NPC - The Queen
+    # Required NPCs
     required_npcs=[
+        LILITH_RAVENCROFT,  # Use the complete character profile
         {
-            "id": "the_queen",
-            "name": "Lilith Ravencroft",  # You can change this name
-            "archetype": "Wounded Goddess",
-            "traits": [
-                "dominant", "vulnerable_beneath_mask", "fear_of_abandonment",
-                "darkly_poetic", "intensely_possessive", "hauntingly_beautiful"
-            ],
-            "role": "Dominatrix Queen with Hidden Depths",
+            "id": "devoted_pilgrim",
+            "name": "Marcus Sterling",
+            "archetype": "Devoted Submissive",
+            "traits": ["worshipful", "jealous_of_newcomers", "completely_broken", "wealthy"],
+            "role": "Example of total devotion/warning",
             "stats": {
-                "dominance": 95,
-                "cruelty": 60,  # Varies based on mood
-                "affection": 70,  # Hidden but intense
-                "trust": 20,  # Very hard to earn
-                "vulnerability": 85  # Hidden stat
+                "dominance": 5,
+                "submission": 95,
+                "jealousy": 80,
+                "devotion": 100
             },
-            "physical_description": "Porcelain skin, dark hair like spilled ink, eyes that burn with crimson intensity. Always masked in public.",
-            "personality_patterns": [
-                "Maintains perfect control in public, crumbles in private",
-                "Uses pain and pleasure to test loyalty",
-                "Speaks in poetic riddles when emotional",
-                "Becomes possessive when attachment forms"
-            ],
-            "trauma_triggers": [
-                "People leaving suddenly",
-                "Broken promises",
-                "Being seen without her mask by strangers"
-            ],
+            "personality": {
+                "likes": ["serving the Queen", "public humiliation", "being used as example"],
+                "dislikes": ["new submissives", "being ignored", "others getting attention"],
+                "hobbies": ["collecting Queen's used items", "writing devotional poetry"]
+            },
             "schedule": {
-                "evening": "Velvet Sanctum - Preparing",
-                "night": "Velvet Sanctum - Performing",
-                "late_night": "Private Chambers - Alone",
-                "dawn": "Private Chambers - Vulnerable"
+                "Evening": "Waiting outside Velvet Sanctum",
+                "Night": "Kneeling in the main chamber",
+                "Late Night": "Cleaning the sanctum"
             }
         },
         {
-            "id": "devoted_pilgrim",
-            "name": "Marcus",
-            "archetype": "Devoted Submissive",
-            "traits": ["worshipful", "jealous_of_newcomers", "completely_broken"],
-            "role": "Example of total devotion/warning"
+            "id": "rescued_victim",
+            "name": "Sarah Chen",
+            "archetype": "Trafficking Survivor",
+            "traits": ["traumatized", "grateful", "suspicious", "healing"],
+            "role": "Reveals Lilith's other life",
+            "stats": {
+                "trust": 20,
+                "fear": 70,
+                "gratitude": 85
+            }
+        },
+        {
+            "id": "ring_enforcer",
+            "name": "Viktor Kozlov",
+            "archetype": "Dangerous Predator",
+            "traits": ["violent", "calculating", "misogynistic"],
+            "role": "Antagonist threatening Lilith's work",
+            "stats": {
+                "dominance": 90,
+                "cruelty": 95,
+                "intelligence": 70
+            }
         }
     ],
     
@@ -487,28 +616,93 @@ THE_MOTH_AND_FLAME = PresetStory(
         {
             "name": "Velvet Sanctum",
             "type": "nightclub_dungeon",
-            "description": "An underground temple where pain becomes prayer, hidden beneath the city",
-            "areas": ["main_stage", "private_booths", "sanctum_dungeon"]
+            "description": "An underground temple where pain becomes prayer, hidden beneath the city's skin",
+            "areas": {
+                "main_stage": "Where the Queen holds court before her subjects",
+                "throne_room": "Her seat of power, draped in velvet and shadow",
+                "private_booths": "Intimate spaces for personal worship",
+                "sanctum_dungeon": "The deepest level where true devotion is tested",
+                "preparation_chamber": "Where the Queen becomes the Goddess"
+            },
+            "schedule": {
+                "Monday": {"Evening": "open", "Night": "performances", "Late Night": "private sessions"},
+                "Tuesday": {"Evening": "closed", "Night": "private clients only"},
+                "Wednesday": {"Evening": "open", "Night": "grand performance", "Late Night": "exclusive gathering"},
+                "Thursday": {"Evening": "open", "Night": "themed nights"},
+                "Friday": {"Evening": "open", "Night": "the Queen's court", "Late Night": "devotional ceremonies"},
+                "Saturday": {"Evening": "open", "Night": "busiest night", "Late Night": "special sessions"},
+                "Sunday": {"All Day": "closed to public"}
+            }
         },
         {
             "name": "Empty Sanctum",
             "type": "afterhours_venue",
-            "description": "The same space when the music dies and shadows lengthen"
+            "description": "The same space when the music dies and shadows lengthen. Candles gutter, ghosts linger.",
+            "atmosphere": "melancholic",
+            "unique_events": ["mask_removal", "vulnerability_moments"]
         },
         {
             "name": "Private Chambers",
             "type": "personal_space",
-            "description": "Her private sanctuary, where masks can finally fall"
+            "description": "Her private sanctuary where masks can finally fall. Moths dance against windows.",
+            "areas": {
+                "the_mask_room": "Walls lined with porcelain faces - each a broken promise",
+                "writing_desk": "Where letters to ghosts pile like autumn leaves",
+                "bedroom": "Rarely used, too many memories in empty sheets",
+                "hidden_room": "The true heart of her pain"
+            }
+        },
+        {
+            "name": "Safehouse Network",
+            "type": "secret_location",
+            "description": "Hidden passages and safe rooms throughout the city",
+            "areas": {
+                "entrance_points": "Disguised as various businesses",
+                "transition_houses": "Where the saved learn to live again",
+                "medical_station": "For those who arrive broken",
+                "planning_room": "Where the Moth Queen wages her secret war"
+            }
+        }
+    ],
+    
+    # Required conflicts
+    required_conflicts=[
+        {
+            "id": "internal_war",
+            "name": "The Mask and the Woman",
+            "type": "psychological",
+            "description": "Lilith's struggle between her public persona and private self"
+        },
+        {
+            "id": "trust_vs_fear",
+            "name": "The Promise of Staying",
+            "type": "emotional",
+            "description": "Fear of abandonment vs desire for connection"
+        },
+        {
+            "id": "two_worlds",
+            "name": "Queen and Savior",
+            "type": "external",
+            "description": "Balancing her dominatrix life with her rescue work"
+        },
+        {
+            "id": "the_three_words",
+            "name": "Words That Burn",
+            "type": "romantic",
+            "description": "The inability to speak love aloud"
         }
     ],
     
     # Dynamic elements
     dynamic_elements={
-        "minor_npcs": True,  # Other patrons, submissives
-        "side_sessions": True,  # Various BDSM activities
+        "minor_npcs": True,  # Other patrons, submissives, rescued victims
+        "side_sessions": True,  # Various BDSM activities and scenes
         "emotional_progression": True,  # Relationship deepens naturally
         "mask_metaphors": True,  # Various masks and what they represent
-        "poetry_moments": True  # Moments of lyrical beauty
+        "poetry_moments": True,  # Moments of lyrical beauty
+        "underground_missions": True,  # Help with her rescue work
+        "trust_tests": True,  # Various challenges to prove devotion
+        "vulnerability_windows": True  # Rare moments to see beneath
     },
     
     # Key player choice points
@@ -516,10 +710,37 @@ THE_MOTH_AND_FLAME = PresetStory(
         "response_to_vulnerability",  # How you react when she shows weakness
         "promise_to_stay",  # Whether you promise not to disappear
         "depth_of_submission",  # How far you're willing to go
+        "help_or_stay_safe",  # Whether to help with dangerous rescue work
         "speak_truth_or_maintain_silence",  # The three words
+        "moth_or_flame",  # Your role in the dynamic
+        "accept_both_sides",  # Whether you can love all of her
         "final_devotion"  # Your ultimate choice
     ],
     
     flexibility_level=0.3,  # Low flexibility - this is a specific narrative
-    enforce_ending=False  # Multiple endings based on choices
+    enforce_ending=False,  # Multiple endings based on choices
+    
+    # Special story mechanics
+    special_mechanics={
+        "trust_building": {
+            "description": "Complex trust mechanics with specific triggers",
+            "implementation": "Track actions that build/break trust"
+        },
+        "mask_progression": {
+            "description": "Different masks unlock at different trust levels",
+            "types": ["porcelain", "leather", "lace", "none"]
+        },
+        "poetry_interpretation": {
+            "description": "Player must understand poetic dialogue",
+            "reward": "Deeper connection when understood"
+        },
+        "dual_reputation": {
+            "description": "Separate reputation in sanctum vs underground",
+            "balance": "Actions in one affect the other"
+        },
+        "emotional_intensity": {
+            "description": "Tracks the emotional weight of scenes",
+            "climax": "Triggers major story moments"
+        }
+    }
 )
