@@ -290,6 +290,13 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 
 app_is_ready = asyncio.Event()
 
+async def initialize_preset_stories():
+    """Load all preset stories into database on startup"""
+    from story_templates.preset_story_loader import PresetStoryLoader
+    
+    # This will load THE_MOTH_AND_FLAME story
+    await PresetStoryLoader.load_all_preset_stories()
+
 async def initialize_systems(app: Quart):
     logger.info("Starting asynchronous system initializations...")
     # Imports for initialize_systems
@@ -741,14 +748,6 @@ def create_quart_app():
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
-
-    async def initialize_preset_stories():
-        """Load all preset stories into database on startup"""
-        from story_templates.preset_story_loader import PresetStoryLoader
-        from story_templates.additional_preset_stories import THE_FORGOTTEN_PACT
-        
-        await PresetStoryLoader.load_all_preset_stories()
-        await PresetStoryLoader.load_preset_story(THE_FORGOTTEN_PACT)
     
     # --- Register Blueprints ---
     # (Ensure blueprints using async routes correctly use asyncpg)
