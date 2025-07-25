@@ -86,58 +86,287 @@ async def init_singletons() -> None:
 ###############################################################################
 
 @track_performance("get_aggregated_roleplay_context")
-async def get_aggregated_roleplay_context(
-    user_id: int,
-    conversation_id: int,
-    player_name: str = "Chase",
-    current_input: str = "",
-    location: Optional[str] = None
-) -> Dict[str, Any]:
+async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, player_name: str) -> Dict[str, Any]:
     """
-    Optimized drop-in replacement for the original get_aggregated_roleplay_context.
-
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        player_name: Name of the player (default: "Chase")
-        current_input: Current user input for relevance scoring
-        location: Optional location override
-
-    Returns:
-        Aggregated context dictionary
+    Get aggregated roleplay context with preset story support
     """
-    config = await get_config()
-    context_budget = config.get("token_budget", "default_budget", 4000)
-    use_vector_search = config.is_enabled("use_vector_search")
-    use_delta = config.is_enabled("use_incremental_context")
-
-    try:
-        context_data = await get_comprehensive_context(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            input_text=current_input,
-            location=location,
-            context_budget=context_budget,
-            use_vector_search=use_vector_search,
-            use_delta=use_delta
-        )
-        return format_context_for_compatibility(context_data)
-
-    except Exception as e:
-        logger.error(f"Error in get_aggregated_roleplay_context: {e}", exc_info=True)
-        # Fallback to DB if needed
-        try:
-            return await fallback_get_context(user_id, conversation_id, player_name)
-        except Exception as fallback_err:
-            logger.error(f"Error in fallback context retrieval: {fallback_err}", exc_info=True)
-            # Return minimal context to avoid complete failure
-            return {
-                "player_stats": {},
-                "introduced_npcs": [],
-                "unintroduced_npcs": [],
-                "current_roleplay": {},
-                "error": str(e)
+    async with get_db_connection_context() as conn:
+        # Get current roleplay state
+        roleplay_rows = await conn.fetch("""
+            SELECT key, value 
+            FROM CurrentRoleplay 
+            WHERE user_id = $1 AND conversation_id = $2
+        """, user_id, conversation_id)
+        
+        current_roleplay = {}
+        for row in roleplay_rows:
+            try:
+                current_roleplay[row['key']] = json.loads(row['value'])
+            except:
+                current_roleplay[row['key']] = row['value']
+        
+        # Get current location
+        current_location = current_roleplay.get('CurrentLocation', 'Unknown')
+        time_of_day = current_roleplay.get('TimeOfDay', 'Morning')
+        
+        # Get NPCs present at location
+        npc_rows = await conn.fetch("""
+            SELECT npc_id, npc_name, physical_description, personality_traits,
+                   trust, dominance, cruelty, affection, intensity, introduced
+            FROM NPCStats
+            WHERE user_id = $1 AND conversation_id = $2 
+            AND current_location = $3
+        """, user_id, conversation_id, current_location)
+        
+        npcs_present = []
+        for npc in npc_rows:
+            npcs_present.append({
+                'id': npc['npc_id'],
+                'name': npc['npc_name'],
+                'description': npc['physical_description'],
+                'traits': json.loads(npc['personality_traits']) if npc['personality_traits'] else [],
+                'stats': {
+                    'trust': npc['trust'],
+                    'dominance': npc['dominance'],
+                    'cruelty': npc['cruelty'],
+                    'affection': npc['affection'],
+                    'intensity': npc['intensity']
+                },
+                'introduced': npc['introduced']
+            })
+        
+        # Get player stats
+        player_stats_row = await conn.fetchrow("""
+            SELECT corruption, confidence, willpower, obedience, dependency,
+                   lust, mental_resilience, physical_endurance
+            FROM PlayerStats
+            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+        """, user_id, conversation_id, player_name)
+        
+        player_stats = dict(player_stats_row) if player_stats_row else {}
+        
+        # Get active events
+        event_rows = await conn.fetch("""
+            SELECT event_name, description, location, fantasy_level
+            FROM Events
+            WHERE user_id = $1 AND conversation_id = $2
+            AND (
+                (day = $3 AND time_of_day = $4) OR
+                (start_time <= NOW() AND end_time >= NOW())
+            )
+        """, user_id, conversation_id, 
+            current_roleplay.get('CurrentDay', 1),
+            time_of_day)
+        
+        active_events = [dict(row) for row in event_rows]
+        
+        # Get active quests
+        quest_rows = await conn.fetch("""
+            SELECT quest_id, quest_name, status, progress_detail
+            FROM Quests
+            WHERE user_id = $1 AND conversation_id = $2
+            AND status IN ('active', 'in_progress')
+        """, user_id, conversation_id)
+        
+        active_quests = [dict(row) for row in quest_rows]
+        
+        # Build base context
+        result = {
+            'currentRoleplay': current_roleplay,
+            'currentLocation': current_location,
+            'timeOfDay': time_of_day,
+            'playerName': player_name,
+            'playerStats': player_stats,
+            'npcsPresent': npcs_present,
+            'activeEvents': active_events,
+            'activeQuests': active_quests,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Check for preset story
+        preset_info = await check_preset_story(conversation_id)
+        
+        if preset_info and preset_info.get('story_id') == 'the_moth_and_flame':
+            from story_templates.moth.lore import SFBayMothFlamePreset
+            from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
+            
+            # Get location-specific lore
+            location_lore = await get_location_specific_lore(
+                conversation_id, 
+                current_location,
+                preset_info['story_id']
+            )
+            
+            # Add preset-specific context
+            result['preset_story'] = {
+                'active': True,
+                'story_id': 'the_moth_and_flame',
+                'setting': 'San Francisco Bay Area',
+                'year': 2025,
+                'current_act': preset_info.get('current_act', 1),
+                'current_beat': preset_info.get('current_beat'),
+                'story_flags': preset_info.get('story_flags', {}),
+                'consistency_rules': QueenOfThornsConsistencyGuide.get_critical_rules(),
+                'current_location_lore': location_lore,
+                'network_naming': {
+                    'internal': ['the network', 'the garden', 'our people'],
+                    'external': ['The Rose & Thorn Society', 'The Thorn Garden', 'that secret feminist cult']
+                }
             }
+            
+            # Add critical constraints as a separate field for easy access
+            result['preset_constraints'] = """
+CRITICAL CONSTRAINTS FOR THIS STORY:
+1. The network has NO official name - internally called "the network" or "the garden"
+2. The Queen of Thorns identity is ALWAYS ambiguous - never confirm if one person or many
+3. The network controls Bay Area ONLY - other cities have allies, not branches
+4. Transformation takes months/years, never instant
+5. Use the four-layer information model: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
+6. Never place the Queen's private locations precisely
+7. The network cannot operate openly or control everyone
+"""
+            
+            # Add quick reference for generation
+            result['generation_hints'] = {
+                'forbidden_phrases': [
+                    "The Rose & Thorn Society announced",
+                    "The Garden's official",
+                    "Queen [Name]",
+                    "our Seattle chapter",
+                    "instantly transformed"
+                ],
+                'correct_usage': {
+                    'network_reference': 'the network',
+                    'queen_reference': 'The Queen, whoever she is',
+                    'other_cities': 'allied networks in [city]',
+                    'transformation_time': 'months of careful work'
+                }
+            }
+            
+            # Check if we're at a special location
+            if is_preset_special_location(current_location):
+                result['special_location_active'] = True
+                result['location_special_rules'] = get_location_special_rules(current_location)
+        
+        # Generate aggregator text
+        aggregator_text = build_aggregator_text(result)
+        
+        # Enhance aggregator text with preset warnings if active
+        if preset_info:
+            aggregator_text = f"""{aggregator_text}
+
+ACTIVE PRESET STORY: {preset_info.get('story_id')}
+You MUST follow all consistency rules for this preset story.
+{result.get('preset_constraints', '')}
+"""
+        
+        result['aggregatorText'] = aggregator_text
+        
+        return result
+
+
+async def get_location_specific_lore(
+    conversation_id: int, 
+    location_name: str,
+    story_id: str
+) -> Dict[str, Any]:
+    """Get location-specific lore for preset stories"""
+    
+    if story_id != 'the_moth_and_flame':
+        return {}
+    
+    from story_templates.moth.lore import SFBayMothFlamePreset
+    
+    # Get all locations from preset
+    all_locations = SFBayMothFlamePreset.get_specific_locations()
+    
+    # Find matching location
+    location_lower = location_name.lower()
+    matching_location = None
+    
+    for loc in all_locations:
+        if loc['name'].lower() in location_lower or location_lower in loc['name'].lower():
+            matching_location = loc
+            break
+    
+    if not matching_location:
+        # Check districts
+        districts = SFBayMothFlamePreset.get_districts()
+        for district in districts:
+            if district['name'].lower() in location_lower:
+                return {
+                    'district': district,
+                    'type': 'district',
+                    'special_rules': district.get('special_rules', [])
+                }
+        return {}
+    
+    # Get relevant myths for this location
+    all_myths = SFBayMothFlamePreset.get_urban_myths()
+    relevant_myths = [
+        myth for myth in all_myths
+        if any(keyword in location_lower for keyword in ['sanctum', 'garden', 'underground'])
+    ]
+    
+    return {
+        'location': matching_location,
+        'type': 'specific_location',
+        'myths': relevant_myths,
+        'access_level': matching_location.get('access_level', 'public'),
+        'special_mechanics': matching_location.get('special_mechanics', [])
+    }
+
+
+def is_preset_special_location(location: str) -> bool:
+    """Check if location has special preset rules"""
+    location_lower = location.lower()
+    special_locations = [
+        'velvet sanctum',
+        'rose garden café',
+        'butterfly house',
+        'safehouse',
+        'inner garden',
+        'the underground',
+        'financial district - level -5'
+    ]
+    
+    return any(special in location_lower for special in special_locations)
+
+
+def get_location_special_rules(location: str) -> List[str]:
+    """Get special rules for preset locations"""
+    location_lower = location.lower()
+    
+    rules = []
+    
+    if 'velvet sanctum' in location_lower:
+        rules.extend([
+            'sanctuary_rules_apply',
+            'performances_possible',
+            'queen_may_appear',
+            'power_dynamics_heightened'
+        ])
+    elif 'rose garden' in location_lower:
+        rules.extend([
+            'recruitment_possible',
+            'coded_conversations',
+            'network_entry_point'
+        ])
+    elif 'safehouse' in location_lower or 'butterfly house' in location_lower:
+        rules.extend([
+            'no_violence_allowed',
+            'healing_space',
+            'moth_queen_protects',
+            'new_identities_available'
+        ])
+    elif 'level -5' in location_lower:
+        rules.extend([
+            'hidden_power_center',
+            'invitation_only',
+            'extreme_secrecy'
+        ])
+    
+    return rules
 
 
 def format_context_for_compatibility(optimized_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -469,50 +698,129 @@ async def get_optimized_context(
 def build_aggregator_text(aggregated_data: Dict[str, Any]) -> str:
     """
     Build aggregator text from the provided data for display or logging.
+    Includes preset story context when active.
     """
-    if "aggregator_text" in aggregated_data:
+    # If pre-built aggregator text exists, check if we need to enhance it
+    if "aggregator_text" in aggregated_data and not aggregated_data.get("preset_story"):
         return aggregated_data["aggregator_text"]
-
-    current_location = aggregated_data.get("current_location", "Unknown")
-    year = aggregated_data.get("year", "1040")
-    month = aggregated_data.get("month", "6")
-    day = aggregated_data.get("day", "15")
-    time_of_day = aggregated_data.get("time_of_day", "Morning")
-
-    introduced_npcs = aggregated_data.get("introduced_npcs", [])
-
+    
+    # Extract basic information
+    current_location = aggregated_data.get("currentLocation") or aggregated_data.get("current_location", "Unknown")
+    
+    # Handle date/time - check both naming conventions
+    current_roleplay = aggregated_data.get("currentRoleplay") or aggregated_data.get("current_roleplay", {})
+    year = current_roleplay.get("CurrentYear") or aggregated_data.get("year", "1040")
+    month = current_roleplay.get("CurrentMonth") or aggregated_data.get("month", "6")
+    day = current_roleplay.get("CurrentDay") or aggregated_data.get("day", "15")
+    time_of_day = aggregated_data.get("timeOfDay") or aggregated_data.get("time_of_day", "Morning")
+    
+    # Get NPCs - handle both naming conventions
+    introduced_npcs = aggregated_data.get("npcsPresent") or aggregated_data.get("introduced_npcs", [])
+    
+    # Build base text
     date_line = f"- It is {year}, {month} {day}, {time_of_day}.\n"
     location_line = f"- Current location: {current_location}\n"
-
+    
+    # Build NPC section
     npc_lines = ["Introduced NPCs in the area:"]
     for npc in introduced_npcs[:5]:
-        npc_loc = npc.get("current_location", "Unknown")
-        npc_name = npc.get("npc_name", "Unnamed NPC")
-        npc_lines.append(f"  - {npc_name} is at {npc_loc}")
-
+        # Handle different NPC data structures
+        if isinstance(npc, dict):
+            npc_loc = npc.get("current_location", current_location)
+            npc_name = npc.get("name") or npc.get("npc_name", "Unnamed NPC")
+            npc_lines.append(f"  - {npc_name} is at {npc_loc}")
+    
     if introduced_npcs:
         npc_section = "\n".join(npc_lines)
     else:
         npc_section = "No NPCs currently in the area."
-
+    
     text = f"{date_line}{location_line}\n{npc_section}\n"
-
-    environment_desc = aggregated_data.get("current_roleplay", {}).get("EnvironmentDesc")
+    
+    # Add environment description
+    environment_desc = current_roleplay.get("EnvironmentDesc")
     if environment_desc:
         text += f"\nEnvironment:\n{environment_desc}\n"
-
-    player_role = aggregated_data.get("current_roleplay", {}).get("PlayerRole")
+    
+    # Add player role
+    player_role = current_roleplay.get("PlayerRole")
     if player_role:
         text += f"\nPlayer Role:\n{player_role}\n"
-
+    
+    # Add active events if present
+    if aggregated_data.get("activeEvents"):
+        event_names = [event.get("event_name", "Unknown Event") for event in aggregated_data["activeEvents"]]
+        text += f"\nActive Events: {', '.join(event_names)}\n"
+    
+    # Add active quests if present
+    if aggregated_data.get("activeQuests"):
+        quest_names = [quest.get("quest_name", "Unknown Quest") for quest in aggregated_data["activeQuests"]]
+        text += f"\nActive Quests: {', '.join(quest_names)}\n"
+    
+    # Add player stats summary if available
+    if aggregated_data.get("playerStats"):
+        stats = aggregated_data["playerStats"]
+        if stats:
+            dominant_stat = max(stats.items(), key=lambda x: x[1] if isinstance(x[1], (int, float)) else 0)
+            text += f"\nPlayer's dominant trait: {dominant_stat[0]} ({dominant_stat[1]})\n"
+    
+    # ADD PRESET STORY SECTION
+    if aggregated_data.get("preset_story"):
+        preset = aggregated_data["preset_story"]
+        text += f"\n==== PRESET STORY ACTIVE ====\n"
+        text += f"Story: {preset.get('story_id', 'Unknown')}\n"
+        text += f"Setting: {preset.get('setting', 'Unknown')}, Year: {preset.get('year', 'Modern')}\n"
+        text += f"Act {preset.get('current_act', 1)}"
+        
+        if preset.get('current_beat'):
+            text += f", Beat: {preset['current_beat']}"
+        text += "\n"
+        
+        # Add location-specific lore if available
+        if preset.get('current_location_lore'):
+            lore = preset['current_location_lore']
+            if lore.get('type') == 'specific_location':
+                text += f"\nLocation Type: {lore['location'].get('location_type', 'Unknown')}\n"
+                if lore['location'].get('access_level'):
+                    text += f"Access Level: {lore['location']['access_level']}\n"
+            elif lore.get('type') == 'district':
+                text += f"\nDistrict: {lore['district']['name']}\n"
+        
+        # Add any special location rules
+        if aggregated_data.get('location_special_rules'):
+            rules = aggregated_data['location_special_rules']
+            text += f"\nSpecial Rules Active: {', '.join(rules)}\n"
+    
+    # Add preset constraints if active
+    if aggregated_data.get("preset_constraints"):
+        text += f"\n{aggregated_data['preset_constraints']}\n"
+    
+    # Add generation hints if available
+    if aggregated_data.get("generation_hints"):
+        hints = aggregated_data["generation_hints"]
+        text += "\n==== GENERATION REMINDERS ====\n"
+        if hints.get('correct_usage'):
+            text += "Correct usage:\n"
+            for key, value in hints['correct_usage'].items():
+                text += f"  - {key}: {value}\n"
+    
+    # Add context optimization note
     text += "\n\n<!-- Context optimized with unified context system -->"
-
-    has_relevance = any("relevance_score" in npc or "relevance" in npc for npc in introduced_npcs)
+    
+    # Add relevance note if NPCs have relevance scores
+    has_relevance = any(
+        "relevance_score" in npc or "relevance" in npc 
+        for npc in introduced_npcs 
+        if isinstance(npc, dict)
+    )
     if has_relevance:
         text += "\n<!-- NPCs sorted by relevance to current context -->"
-
+    
+    # Add preset story warning if active
+    if aggregated_data.get("preset_story"):
+        text += "\n<!-- PRESET STORY ACTIVE - Consistency rules MUST be followed -->"
+    
     return text
-
 
 ###############################################################################
 # Maintenance and Migration
