@@ -43,62 +43,62 @@ class PresetStory:
     flexibility_level: float = 0.7  # How much deviation is allowed (0-1)
     enforce_ending: bool = True  # Whether to force the preset ending
 
-# Example preset story
-EXAMPLE_PRESET_STORY = PresetStory(
-    id="the_gilded_cage",
-    name="The Gilded Cage",
-    theme="A seemingly perfect town hides a web of control",
-    synopsis="You arrive in Rosehaven seeking a fresh start, but find the town's warmth masks something darker.",
-    
-    acts=[
-        {
-            "act": 1,
-            "name": "Welcome to Paradise",
-            "beats": ["arrival", "first_job", "meet_council", "first_doubt"]
-        },
-        {
-            "act": 2, 
-            "name": "The Silk Threads",
-            "beats": ["obligation_web", "failed_escape", "deeper_involvement", "revelation"]
-        },
-        {
-            "act": 3,
-            "name": "Acceptance or Rebellion",
-            "beats": ["final_choice", "consequences", "ending"]
-        }
-    ],
-    
-    story_beats=[
-        StoryBeat(
-            id="arrival",
-            name="Fresh Start in Rosehaven",
-            description="Player arrives in town, greeted warmly by the Council",
-            trigger_conditions={"game_start": True},
-            required_npcs=["council_leader"],
-            required_locations=["town_square", "council_hall"],
-            narrative_stage="Innocent Beginning",
-            outcomes={"player_reputation": 50, "council_awareness": 10},
-            dialogue_hints=["welcome", "fresh start", "we've been expecting you"],
-            can_skip=False
-        ),
-        # ... more beats
-    ],
-    
-    required_npcs=[
-        {
-            "id": "council_leader",
-            "name": "Victoria Sterling",
-            "archetype": "Mentor",
-            "traits": ["charismatic", "controlling", "maternal"],
-            "role": "Town Council Leader",
-            "narrative_importance": "critical"
-        }
-    ],
-    
-    dynamic_elements={
-        "minor_npcs": True,
-        "side_quests": True,
-        "daily_activities": True,
-        "relationship_dynamics": True
-    }
-)
+# Example preset story - COMMENTED OUT AS IT'S INCOMPLETE
+# EXAMPLE_PRESET_STORY = PresetStory(
+#     id="the_gilded_cage",
+#     name="The Gilded Cage",
+#     theme="A seemingly perfect town hides a web of control",
+#     synopsis="You arrive in Rosehaven seeking a fresh start, but find the town's warmth masks something darker.",
+#     
+#     acts=[
+#         {
+#             "act": 1,
+#             "name": "Welcome to Paradise",
+#             "beats": ["arrival", "first_job", "meet_council", "first_doubt"]
+#         },
+#         {
+#             "act": 2, 
+#             "name": "The Silk Threads",
+#             "beats": ["obligation_web", "failed_escape", "deeper_involvement", "revelation"]
+#         },
+#         {
+#             "act": 3,
+#             "name": "Acceptance or Rebellion",
+#             "beats": ["final_choice", "consequences", "ending"]
+#         }
+#     ],
+#     
+#     story_beats=[
+#         StoryBeat(
+#             id="arrival",
+#             name="Fresh Start in Rosehaven",
+#             description="Player arrives in town, greeted warmly by the Council",
+#             trigger_conditions={"game_start": True},
+#             required_npcs=["council_leader"],
+#             required_locations=["town_square", "council_hall"],
+#             narrative_stage="Innocent Beginning",
+#             outcomes={"player_reputation": 50, "council_awareness": 10},
+#             dialogue_hints=["welcome", "fresh start", "we've been expecting you"],
+#             can_skip=False
+#         ),
+#         # ... more beats
+#     ],
+#     
+#     required_npcs=[
+#         {
+#             "id": "council_leader",
+#             "name": "Victoria Sterling",
+#             "archetype": "Mentor",
+#             "traits": ["charismatic", "controlling", "maternal"],
+#             "role": "Town Council Leader",
+#             "narrative_importance": "critical"
+#         }
+#     ],
+#     
+#     dynamic_elements={
+#         "minor_npcs": True,
+#         "side_quests": True,
+#         "daily_activities": True,
+#         "relationship_dynamics": True
+#     }
+# )
