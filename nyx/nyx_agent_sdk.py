@@ -3,6 +3,13 @@
 """
 Nyx Agent SDK - Refactored to use OpenAI Agents SDK
 
+MODULARIZATION TODO: This file has grown to 2k+ lines and should be split:
+- nyx/models.py - All Pydantic models and Config constants
+- nyx/tools/*.py - Individual tool implementations
+- nyx/agents/*.py - Agent definitions
+- nyx/context.py - NyxContext and state management
+- nyx/compat.py - Legacy AgentContext and compatibility layers
+
 This module requires the following database tables to be created via migrations:
 - NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
 - scenario_states (user_id, conversation_id, state_data, created_at) 
@@ -24,17 +31,18 @@ import json
 import asyncio
 import os
 import time
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple, Union, Callable
+from datetime import datetime, timezone
+from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 from dataclasses import dataclass, field
 from contextlib import suppress
+import statistics
 
 from agents import (
     Agent, Runner, function_tool, handoff, 
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, ValidationError
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
@@ -46,6 +54,58 @@ from .response_filter import ResponseFilter
 from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
+
+# ===== Constants and Configuration =====
+class Config:
+    """Configuration constants to avoid magic numbers"""
+    # Entity types
+    ENTITY_TYPE_INTEGRATED = "integrated"
+    ENTITY_TYPE_USER = "user"
+    ENTITY_TYPE_NPC = "npc"
+    ENTITY_TYPE_ENTITY = "entity"
+    
+    # Memory thresholds
+    HIGH_MEMORY_THRESHOLD_MB = 500
+    MAX_RESPONSE_TIMES = 100
+    MAX_ERROR_LOG_ENTRIES = 100
+    MAX_ADAPTATION_HISTORY = 100
+    MAX_LEARNED_PATTERNS = 50
+    
+    # Performance thresholds
+    HIGH_RESPONSE_TIME_THRESHOLD = 2.0
+    MIN_SUCCESS_RATE = 0.8
+    HIGH_ERROR_COUNT = 100
+    
+    # Relationship thresholds
+    INTIMATE_TRUST_THRESHOLD = 0.8
+    INTIMATE_BOND_THRESHOLD = 0.7
+    FRIENDLY_TRUST_THRESHOLD = 0.6
+    HOSTILE_TRUST_THRESHOLD = 0.3
+    DOMINANT_POWER_THRESHOLD = 0.7
+    SUBMISSIVE_POWER_THRESHOLD = 0.3
+    
+    # Task thresholds
+    MIN_NPC_RELATIONSHIP_FOR_TASK = 30
+    
+    # Emotional thresholds
+    HIGH_AROUSAL_THRESHOLD = 0.8
+    NEGATIVE_VALENCE_THRESHOLD = -0.5
+    POSITIVE_VALENCE_THRESHOLD = 0.5
+    HIGH_DOMINANCE_THRESHOLD = 0.8
+    EMOTIONAL_VARIANCE_THRESHOLD = 0.5
+    
+    # Memory relevance thresholds
+    VIVID_RECALL_THRESHOLD = 0.8
+    REMEMBER_THRESHOLD = 0.6
+    THINK_RECALL_THRESHOLD = 0.4
+    
+    # Decision thresholds
+    MIN_DECISION_SCORE = 0.3
+    FALLBACK_DECISION_SCORE = 0.4
+    
+    # Conflict detection
+    POWER_CONFLICT_THRESHOLD = 0.7
+    MAX_STABILITY_ISSUES = 10
 
 # ===== Pydantic Models for Structured Outputs =====
 class NarrativeResponse(BaseModel):
@@ -112,6 +172,15 @@ class ActivityRecommendation(BaseModel):
     recommended_activities: List[Dict[str, Any]] = Field(..., description="List of recommended activities")
     reasoning: str = Field(..., description="Why these activities are recommended")
 
+class ImageGenerationDecision(BaseModel):
+    """Decision about whether to generate an image"""
+    model_config = ConfigDict(extra='forbid')
+    
+    should_generate: bool = Field(..., description="Whether an image should be generated")
+    score: float = Field(0.0, description="Confidence score for the decision")
+    image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
+    reasoning: str = Field(..., description="Reasoning for the decision")
+
 # ===== Function Tool Input Models =====
 
 class RetrieveMemoriesInput(BaseModel):
@@ -165,18 +234,36 @@ class GetActivityRecommendationsInput(BaseModel):
     scenario_type: str = Field(..., description="Type of current scenario")
     npc_ids: List[str] = Field(..., description="List of present NPC IDs")
 
+# Fixed input models for strict mode
+class BeliefDataModel(BaseModel):
+    """Model for belief data to avoid raw dicts"""
+    model_config = ConfigDict(extra='forbid')
+    
+    entity_id: str = Field("nyx", description="Entity ID")
+    type: str = Field("general", description="Belief type")
+    content: Dict[str, Any] = Field(default_factory=dict, description="Belief content")
+    query: Optional[str] = Field(None, description="Query for belief search")
+
 class ManageBeliefsInput(BaseModel):
     """Input for manage_beliefs function"""
     model_config = ConfigDict(extra='forbid')
     
-    action: str = Field(..., description="Action to perform (get, update, query)")
-    belief_data: Dict[str, Any] = Field(..., description="Data for the belief operation")
+    action: Literal["get", "update", "query"] = Field(..., description="Action to perform")
+    belief_data: BeliefDataModel = Field(..., description="Data for the belief operation")
+
+class DecisionOption(BaseModel):
+    """Model for decision options to avoid raw dicts"""
+    model_config = ConfigDict(extra='forbid')
+    
+    id: str = Field(..., description="Option ID")
+    description: str = Field(..., description="Option description")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 class ScoreDecisionOptionsInput(BaseModel):
     """Input for score_decision_options function"""
     model_config = ConfigDict(extra='forbid')
     
-    options: List[Dict[str, Any]] = Field(..., description="List of possible decisions/actions")
+    options: List[DecisionOption] = Field(..., description="List of possible decisions/actions")
     decision_context: Dict[str, Any] = Field(..., description="Context for making the decision")
 
 class DetectConflictsAndInstabilityInput(BaseModel):
@@ -190,6 +277,17 @@ class GenerateUniversalUpdatesInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
     narrative: str = Field(..., description="The narrative text to process")
+
+class DecideImageInput(BaseModel):
+    """Input for decide_image_generation function"""
+    model_config = ConfigDict(extra='forbid')
+    
+    scene_text: str = Field(..., description="Scene description to evaluate for image generation")
+
+class EmptyInput(BaseModel):
+    """Empty input for functions that don't require parameters"""
+    model_config = ConfigDict(extra='forbid')
+    pass
 
 # ===== Function Tool Output Models =====
 
@@ -211,7 +309,7 @@ class UserGuidanceResult(BaseModel):
     """Output for get_user_model_guidance function"""
     model_config = ConfigDict(extra='forbid')
     
-    top_kinks: List[tuple[str, float]] = Field(..., description="Top user preferences with levels")
+    top_kinks: List[Tuple[str, float]] = Field(..., description="Top user preferences with levels")
     behavior_patterns: Dict[str, Any] = Field(..., description="Identified behavior patterns")
     suggested_intensity: float = Field(..., description="Suggested interaction intensity")
     reflections: List[str] = Field(..., description="User model reflections")
@@ -383,7 +481,7 @@ class NyxContext:
     # ────────── MUTABLE STATE BUCKETS ──────────
     current_context:     Dict[str, Any]                = field(default_factory=dict)
     scenario_state:      Dict[str, Any]                = field(default_factory=dict)
-    relationship_states: Dict[str, Dict[str, float]]   = field(default_factory=dict)
+    relationship_states: Dict[str, Dict[str, Any]]     = field(default_factory=dict)
     active_tasks:        List[Dict[str, Any]]          = field(default_factory=list)
 
     # ────────── PERFORMANCE & EMOTION ──────────
@@ -408,18 +506,25 @@ class NyxContext:
 
     # ────────── ERROR LOGGING ──────────
     error_log: List[Dict[str, Any]] = field(default_factory=list)
+    error_counts: Dict[str, int] = field(default_factory=dict)  # Track errors by type
+    
+    # ────────── FEATURE FLAGS ──────────
+    _tables_available: Dict[str, bool] = field(default_factory=dict)  # Track which tables exist
 
     # ────────── TASK SCHEDULING ──────────
     last_task_runs: Dict[str, datetime] = field(default_factory=dict)
     task_intervals: Dict[str, float]    = field(default_factory=lambda: {
         "memory_reflection": 300, "relationship_update": 600,
         "scenario_check": 60, "performance_check": 300,
-        "task_generation": 300, "learning_save": 900, "performance_save": 600
+        "task_generation": 300, "learning_save": 900, 
+        "performance_save": 600,  # Only one task for saving performance
+        "scenario_heartbeat": 3600  # Hourly heartbeat save for audit trail
     })
 
     # ────────── PRIVATE CACHES (init=False) ──────────
     _strategy_cache:             Optional[Tuple[float, Any]] = field(init=False, default=None)
     _strategy_cache_ttl:         float = field(init=False, default=300.0)
+    _strategy_cache_lock:        asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
     _cpu_usage_cache:            Optional[float] = field(init=False, default=None)
     _cpu_usage_last_update:      float = field(init=False, default=0.0)
     _cpu_usage_update_interval:  float = field(init=False, default=10.0)
@@ -443,36 +548,47 @@ class NyxContext:
         try:
             from nyx.nyx_belief_system import BeliefSystem
             self.belief_system = BeliefSystem(self.user_id, self.conversation_id)
+        except ImportError as e:
+            logger.warning(f"BeliefSystem module not available: {e}")
         except Exception as e:
-            logger.warning(f"BeliefSystem not available: {e}", exc_info=True)
+            logger.warning(f"BeliefSystem initialization failed: {e}", exc_info=True)
         
         # Initialize CPU usage monitoring
         try:
             # first call populates the internal psutil sample window
             self._cpu_usage_cache = safe_psutil('cpu_percent', interval=0.1, default=0.0)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to initialize CPU monitoring: {e}")
             self._cpu_usage_cache = 0.0
         
         # Load existing state from database
         await self._load_state()
     
     async def get_active_strategies_cached(self):
-        """Get active strategies with caching"""
+        """Get active strategies with caching and lock to prevent thundering herd"""
         current_time = time.time()
         
-        # Check cache
+        # Check cache without lock first
         if self._strategy_cache:
             cache_time, strategies = self._strategy_cache
             if current_time - cache_time < self._strategy_cache_ttl:
                 return strategies
         
-        # Fetch new strategies using its own connection
-        async with get_db_connection_context() as conn:
-            strategies = await get_active_strategies(conn)
-        
-        # Update cache
-        self._strategy_cache = (current_time, strategies)
-        return strategies
+        # Need to refresh - use lock to prevent multiple refreshes
+        async with self._strategy_cache_lock:
+            # Double-check cache inside lock
+            if self._strategy_cache:
+                cache_time, strategies = self._strategy_cache
+                if current_time - cache_time < self._strategy_cache_ttl:
+                    return strategies
+            
+            # Fetch new strategies using its own connection
+            async with get_db_connection_context() as conn:
+                strategies = await get_active_strategies(conn)
+            
+            # Update cache
+            self._strategy_cache = (current_time, strategies)
+            return strategies
     
     async def _load_state(self):
         """Load existing state from database"""
@@ -488,28 +604,33 @@ class NyxContext:
                 state = json.loads(row["emotional_state"])
                 self.emotional_state.update(state)
             
-            # Load scenario state if exists
-            try:
-                scenario_row = await conn.fetchrow("""
-                    SELECT state_data FROM scenario_states
-                    WHERE user_id = $1 AND conversation_id = $2
-                    ORDER BY created_at DESC LIMIT 1
-                """, self.user_id, self.conversation_id)
-                
-                if scenario_row and scenario_row["state_data"]:
-                    self.scenario_state = json.loads(scenario_row["state_data"])
-            except:
-                # Table might not exist yet
-                pass
+            # Load scenario state if exists and table is available
+            if self._tables_available.get("scenario_states", True):  # Default to True, will be set to False if missing
+                try:
+                    scenario_row = await conn.fetchrow("""
+                        SELECT state_data FROM scenario_states
+                        WHERE user_id = $1 AND conversation_id = $2
+                        ORDER BY created_at DESC LIMIT 1
+                    """, self.user_id, self.conversation_id)
+                    
+                    if scenario_row and scenario_row["state_data"]:
+                        self.scenario_state = json.loads(scenario_row["state_data"])
+                except Exception as e:
+                    # Table might not exist yet
+                    if "does not exist" in str(e) or "no such table" in str(e).lower():
+                        logger.info("scenario_states table not found - migrations may need to be run")
+                        self._tables_available["scenario_states"] = False
+                    else:
+                        logger.debug(f"Could not load scenario state: {e}")
     
     def update_performance(self, metric: str, value: Any):
         """Update performance metrics"""
         if metric in self.performance_metrics:
             if isinstance(self.performance_metrics[metric], list):
                 self.performance_metrics[metric].append(value)
-                # Keep only last 100 entries
-                if len(self.performance_metrics[metric]) > 100:
-                    self.performance_metrics[metric] = self.performance_metrics[metric][-100:]
+                # Keep only last entries based on config
+                if len(self.performance_metrics[metric]) > Config.MAX_RESPONSE_TIMES:
+                    self.performance_metrics[metric] = self.performance_metrics[metric][-Config.MAX_RESPONSE_TIMES:]
             else:
                 self.performance_metrics[metric] = value
     
@@ -518,31 +639,37 @@ class NyxContext:
         if task_id not in self.last_task_runs:
             return True
         
-        time_since_run = (datetime.now() - self.last_task_runs[task_id]).total_seconds()
+        time_since_run = (datetime.now(timezone.utc) - self.last_task_runs[task_id]).total_seconds()
         return time_since_run >= self.task_intervals.get(task_id, 300)
     
     def record_task_run(self, task_id: str):
         """Record that a task has been run"""
-        self.last_task_runs[task_id] = datetime.now()
+        self.last_task_runs[task_id] = datetime.now(timezone.utc)
     
     def log_error(self, error: Exception, context: Dict[str, Any] = None):
-        """Log an error with context"""
+        """Log an error with context and aggregate by type"""
+        error_type = type(error).__name__
         error_entry = {
             "timestamp": time.time(),
             "error": str(error),
-            "type": type(error).__name__,
+            "type": error_type,
             "context": context or {}
         }
         self.error_log.append(error_entry)
+        
+        # Track error counts by type
+        self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
         
         # Update error metrics
         self.performance_metrics["error_rates"]["total"] += 1
         
         # Keep error log bounded - more aggressive pruning on errors
-        max_errors = 100
-        if len(self.error_log) > max_errors * 2:
-            # Keep only most recent when we hit double the limit
-            self.error_log = self.error_log[-max_errors:]
+        if len(self.error_log) > Config.MAX_ERROR_LOG_ENTRIES * 2:
+            _prune_list(self.error_log, Config.MAX_ERROR_LOG_ENTRIES)
+            
+        # Log warning if we see repeated errors
+        if self.error_counts[error_type] > 10:
+            logger.warning(f"Repeated error type {error_type}: {self.error_counts[error_type]} occurrences")
     
     async def learn_from_interaction(self, action: str, outcome: str, success: bool):
         """Learn from an interaction outcome"""
@@ -562,16 +689,17 @@ class NyxContext:
         pattern["last_seen"] = time.time()
         pattern["success_rate"] = pattern["successes"] / pattern["occurrences"]
         
-        # Update adaptation history
+        # Update adaptation history with emotional state snapshot
         self.adaptation_history.append({
             "timestamp": time.time(),
             "action": action,
             "outcome": outcome,
-            "success": success
+            "success": success,
+            "emotional_state": self.emotional_state.copy()
         })
         
         # Keep adaptation history bounded - more aggressive on failures
-        max_history = 100 if success else 50
+        max_history = Config.MAX_ADAPTATION_HISTORY if success else Config.MAX_ADAPTATION_HISTORY // 2
         if len(self.adaptation_history) > max_history * 2:
             self.adaptation_history = self.adaptation_history[-max_history:]
         
@@ -598,7 +726,7 @@ class NyxContext:
             return False
             
         npc_relationship = context.get("npc_relationship_level", 0)
-        if npc_relationship < 30:
+        if npc_relationship < Config.MIN_NPC_RELATIONSHIP_FOR_TASK:
             return False
             
         # Check task timing
@@ -635,15 +763,15 @@ class NyxContext:
             await self.memory_system.trim_cache()
         
         # Clear old patterns
-        self.learned_patterns = dict(list(self.learned_patterns.items())[-50:])
+        self.learned_patterns = dict(list(self.learned_patterns.items())[-Config.MAX_LEARNED_PATTERNS:])
         
         # Clear old history
-        self.adaptation_history = self.adaptation_history[-100:]
-        self.error_log = self.error_log[-50:]
+        self.adaptation_history = self.adaptation_history[-Config.MAX_ADAPTATION_HISTORY:]
+        self.error_log = self.error_log[-Config.MAX_ERROR_LOG_ENTRIES:]
         
         # Clear performance metrics history
         if "response_times" in self.performance_metrics:
-            self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-50:]
+            self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-Config.MAX_RESPONSE_TIMES:]
         
         # Force garbage collection
         import gc
@@ -665,23 +793,52 @@ class NyxContext:
                     self._cpu_usage_last_update = current_time
             
             return self._cpu_usage_cache or 0.0
-        except:
+        except Exception as e:
+            logger.debug(f"Failed to get CPU usage: {e}")
             return 0.0
 
+    def db_connection_ctx(self):
+        """
+        Get a database connection context manager.
+        
+        Usage:
+            async with ctx.db_connection_ctx() as conn:
+                result = await conn.fetchone(...)
+        
+        Returns:
+            An async context manager that yields a database connection
+        """
+        return get_db_connection_context()
+    
+    # Legacy compatibility - keep old name but mark deprecated
     async def get_db_connection(self):
         """
-        Legacy shim — returns an *async context-manager* identical to
-        `get_db_connection_context()`.  Use it with:
-            async with ctx.get_db_connection() as conn: ...
+        DEPRECATED: Use db_connection_ctx() instead.
+        
+        Get a database connection as an async context manager.
+        
+        IMPORTANT: This returns an async context manager, not a connection object.
+        You must use it with 'async with', not 'await':
+        
+        Correct usage:
+            async with ctx.get_db_connection() as conn:
+                result = await conn.fetchone(...)
+        
+        Incorrect usage:
+            conn = await ctx.get_db_connection()  # This will fail!
+        
+        Returns:
+            An async context manager that yields a database connection
         """
-        return get_db_connection_context()          # NOTE: no await here
+        logger.warning("get_db_connection is deprecated, use db_connection_ctx() instead")
+        return self.db_connection_ctx()
 
     async def close_db_connection(self, conn=None):
         """
         No-op compatibility wrapper so calls like
-        `await nyx_context.close_db_connection()` don’t crash.
+        `await nyx_context.close_db_connection()` don't crash.
         If you pass the connection you got from get_db_connection(),
-        it will be cleanly closed; otherwise it’s a harmless no-op.
+        it will be cleanly closed; otherwise it's a harmless no-op.
         """
         if conn is not None:                        # caller gave us the handle
             await conn.__aexit__(None, None, None)
@@ -696,11 +853,42 @@ class NyxContext:
             )
         
         if self.adaptation_history:
-            recent = self.adaptation_history[-100:]
+            recent = self.adaptation_history[-Config.MAX_ADAPTATION_HISTORY:]
             successes = sum(1 for a in recent if a["success"])
             self.learning_metrics["adaptation_success_rate"] = successes / len(recent)
 
 # ===== Helper Functions =====
+
+async def run_agent_with_error_handling(
+    agent: Agent,
+    input_data: Any,
+    context: NyxContext,
+    output_type: Optional[type] = None,
+    fallback_value: Any = None
+) -> Any:
+    """
+    Run an agent with automatic error handling and type conversion.
+    
+    Args:
+        agent: The agent to run
+        input_data: Input for the agent
+        context: NyxContext instance
+        output_type: Expected output type for conversion
+        fallback_value: Value to return on error
+        
+    Returns:
+        Converted output or fallback value on error
+    """
+    try:
+        result = await Runner.run(agent, input_data, context=context)
+        if output_type:
+            return result.final_output_as(output_type)
+        return result.final_output
+    except Exception as e:
+        logger.error(f"Error running agent {agent.name}: {e}")
+        if fallback_value is not None:
+            return fallback_value
+        raise
 
 def safe_psutil(func_name: str, *args, default=None, **kwargs):
     """Safe wrapper for psutil calls that may fail on certain platforms"""
@@ -725,21 +913,53 @@ def safe_process_metric(process, metric_name: str, default=0):
         logger.debug(f"Process metric {metric_name} failed: {e}")
         return default
 
+def get_process_info() -> Optional[Any]:
+    """Get current process info safely"""
+    try:
+        import psutil
+        return psutil.Process(os.getpid())
+    except Exception as e:
+        logger.debug(f"Failed to get process info: {e}")
+        return None
+
+def bytes_to_mb(value: Optional[Union[int, float]]) -> float:
+    """Convert bytes to megabytes safely"""
+    return (value or 0) / (1024 * 1024)
+
+def extract_token_usage(result: Any) -> int:
+    """Extract token usage from various result formats"""
+    try:
+        # Try different possible locations for token usage
+        if hasattr(result, 'usage') and hasattr(result.usage, 'total_tokens'):
+            return result.usage.total_tokens
+        elif hasattr(result, 'trace') and hasattr(result.trace, 'final_usage'):
+            return result.trace.final_usage.get('total_tokens', 0)
+        else:
+            logger.debug("Token usage not found in result object")
+            return 0
+    except Exception as e:
+        logger.debug(f"Failed to retrieve token usage: {e}")
+        return 0
+
 # ===== Function Tools =====
 
 @function_tool
-async def retrieve_memories(ctx: RunContextWrapper[NyxContext], query: str, limit: int = 5) -> str:
+async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: RetrieveMemoriesInput) -> MemorySearchResult:
     """
     Retrieve relevant memories for Nyx.
     
     Args:
-        query: Search query to find memories
-        limit: Maximum number of memories to return
+        payload: Input containing query and limit
+    
+    Returns:
+        MemorySearchResult object (not JSON string)
     """
+    query = payload.query
+    limit = payload.limit
     memory_system = ctx.context.memory_system
     
     result = await memory_system.recall(
-        entity_type="integrated",
+        entity_type=Config.ENTITY_TYPE_INTEGRATED,
         entity_id=0,
         query=query,
         limit=limit
@@ -750,25 +970,34 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], query: str, limi
     formatted_memories = []
     for memory in memories:
         relevance = memory.get("relevance", 0.5)
-        confidence_marker = "vividly recall" if relevance > 0.8 else \
-                          "remember" if relevance > 0.6 else \
-                          "think I recall" if relevance > 0.4 else \
+        confidence_marker = "vividly recall" if relevance > Config.VIVID_RECALL_THRESHOLD else \
+                          "remember" if relevance > Config.REMEMBER_THRESHOLD else \
+                          "think I recall" if relevance > Config.THINK_RECALL_THRESHOLD else \
                           "vaguely remember"
         
         formatted_memories.append(f"I {confidence_marker}: {memory['text']}")
     
-    return "\n".join(formatted_memories) if formatted_memories else "No relevant memories found."
+    formatted_text = "\n".join(formatted_memories) if formatted_memories else "No relevant memories found."
+    
+    # Return the actual object, not JSON string
+    # The Agents SDK will handle serialization
+    return MemorySearchResult(
+        memories=memories,
+        formatted_text=formatted_text
+    )
 
 @function_tool
-async def add_memory(ctx: RunContextWrapper[NyxContext], memory_text: str, memory_type: str = "observation", significance: int = 5) -> str:
+async def add_memory(ctx: RunContextWrapper[NyxContext], payload: AddMemoryInput) -> str:
     """
     Add a new memory for Nyx.
     
     Args:
-        memory_text: The content of the memory
-        memory_type: Type of memory (observation, reflection, abstraction)
-        significance: Importance of memory (1-10)
+        payload: Input containing memory text, type, and significance
     """
+    memory_text = payload.memory_text
+    memory_type = payload.memory_type
+    significance = payload.significance
+    
     memory_system = ctx.context.memory_system
     
     # Convert significance to importance string
@@ -793,36 +1022,41 @@ async def add_memory(ctx: RunContextWrapper[NyxContext], memory_text: str, memor
     )
     
     memory_id = result.get("memory_id", "unknown")
-    return f"Memory stored successfully (ID: {memory_id})"
+    
+    # Return structured output as JSON
+    return MemoryStorageResult(
+        memory_id=str(memory_id),
+        success=True
+    ).model_dump_json()
 
 @function_tool
-async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext]) -> str:
+async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
     """Get guidance for how Nyx should respond based on the user model."""
     user_model_manager = ctx.context.user_model
     guidance = await user_model_manager.get_response_guidance()
     
     top_kinks = guidance.get("top_kinks", [])
-    kink_str = ", ".join([f"{k} (level {l})" for k, l in top_kinks]) if top_kinks else "None identified"
-    
     behavior_patterns = guidance.get("behavior_patterns", {})
-    pattern_str = ", ".join([f"{k}: {v}" for k, v in behavior_patterns.items()]) if behavior_patterns else "None identified"
-    
     suggested_intensity = guidance.get("suggested_intensity", 0.5)
+    reflections = guidance.get("reflections", [])
     
-    return f"""User Guidance:
-- Top interests: {kink_str}
-- Behavior patterns: {pattern_str}
-- Suggested intensity: {suggested_intensity:.1f}/1.0
-- Reflections: {', '.join(guidance.get('reflections', [])) if guidance.get('reflections') else 'None'}"""
+    # Return structured output
+    return UserGuidanceResult(
+        top_kinks=top_kinks,
+        behavior_patterns=behavior_patterns,
+        suggested_intensity=suggested_intensity,
+        reflections=reflections
+    ).model_dump_json()
 
 @function_tool
-async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], user_message: str) -> str:
+async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: DetectUserRevelationsInput) -> str:
     """
     Detect if user is revealing new preferences or patterns.
     
     Args:
-        user_message: The user's message to analyze
+        payload: Input containing user message to analyze
     """
+    user_message = payload.user_message
     lower_message = user_message.lower()
     revelations = []
     
@@ -856,12 +1090,23 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], user_messa
             else:
                 intensity = 0.4
                 
-            if sentiment != "negative":
+            # Track both positive and negative preferences
+            if sentiment == "negative":
+                # Still track as a soft limit/dislike
+                revelations.append({
+                    "type": "kink_preference",
+                    "kink": kink,
+                    "intensity": 0.0,
+                    "source": "explicit_negative_mention",
+                    "sentiment": "negative"
+                })
+            else:
                 revelations.append({
                     "type": "kink_preference",
                     "kink": kink,
                     "intensity": intensity,
-                    "source": "explicit_mention"
+                    "source": "explicit_mention",
+                    "sentiment": sentiment
                 })
     
     if "don't tell me what to do" in lower_message or "i won't" in lower_message:
@@ -891,33 +1136,26 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], user_messa
                     revelation["source"]
                 )
     
-    return json.dumps({
-        "revelations": revelations,
-        "has_revelations": len(revelations) > 0
-    }, ensure_ascii=False)
+    # Return structured output
+    return RevelationDetectionResult(
+        revelations=revelations,
+        has_revelations=len(revelations) > 0
+    ).model_dump_json()
 
 @function_tool
 async def generate_image_from_scene(
     ctx: RunContextWrapper[NyxContext], 
-    scene_description: str, 
-    characters: List[str], 
-    style: str = "realistic"
+    payload: GenerateImageFromSceneInput
 ) -> str:
     """
     Generate an image for the current scene.
     
     Args:
-        scene_description: Description of the scene
-        characters: List of characters in the scene
-        style: Style for the image
+        payload: Input containing scene description, characters, and style
     """
     from routes.ai_image_generator import generate_roleplay_image_from_gpt
     
-    image_data = {
-        "scene_description": scene_description,
-        "characters": characters,
-        "style": style
-    }
+    image_data = payload.model_dump()
     
     # This function should handle its own connections
     result = await generate_roleplay_image_from_gpt(
@@ -927,21 +1165,31 @@ async def generate_image_from_scene(
     )
     
     if result and "image_urls" in result and result["image_urls"]:
-        return f"Image generated: {result['image_urls'][0]}"
+        return ImageGenerationResult(
+            success=True,
+            image_url=result["image_urls"][0],
+            error=None
+        ).model_dump_json()
     else:
-        return "Failed to generate image"
+        return ImageGenerationResult(
+            success=False,
+            image_url=None,
+            error="Failed to generate image"
+        ).model_dump_json()
 
 @function_tool
-async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> str:
+async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], payload: CalculateEmotionalStateInput) -> str:
     """
     Calculate emotional impact and immediately update the emotional state.
     This is a composite tool that both calculates AND persists the changes.
     
     Args:
-        context: Current interaction context
+        payload: Input containing context for emotional calculation
     """
-    # First calculate the new state
-    result = await calculate_emotional_impact(ctx, context)
+    context = payload.context
+    
+    # First calculate the new state (pass the same payload forward)
+    result = await calculate_emotional_impact(ctx, payload)
     emotional_data = json.loads(result)
     
     # Immediately update the context with the new state
@@ -962,18 +1210,27 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
     
     # Return the result with confirmation of update
     emotional_data["state_updated"] = True
-    return json.dumps(emotional_data, ensure_ascii=False)
+    
+    return EmotionalCalculationResult(
+        valence=emotional_data["valence"],
+        arousal=emotional_data["arousal"],
+        dominance=emotional_data["dominance"],
+        primary_emotion=emotional_data["primary_emotion"],
+        changes=emotional_data["changes"],
+        state_updated=True
+    ).model_dump_json()
 
 @function_tool
-async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> str:
+async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload: CalculateEmotionalStateInput) -> str:
     """
     Calculate emotional impact of current context using the emotional core system.
     Returns new emotional state without mutating the context.
     NOTE: Use calculate_and_update_emotional_state if you want to persist changes.
     
     Args:
-        context: Current interaction context
+        payload: Input containing context for emotional calculation
     """
+    context = payload.context
     current_state = ctx.context.emotional_state.copy()  # Work with a copy
     
     # Calculate emotional changes based on context
@@ -981,16 +1238,18 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], context
     arousal_change = 0.0
     dominance_change = 0.0
     
-    # Analyze context for emotional triggers
-    if "conflict" in str(context).lower():
+    # Analyze context for emotional triggers - build lowercase text once
+    context_text_lower = get_context_text_lower(context)
+    
+    if "conflict" in context_text_lower:
         arousal_change += 0.2
         valence_change -= 0.1
-    if "submission" in str(context).lower():
+    if "submission" in context_text_lower:
         dominance_change += 0.1
         arousal_change += 0.1
-    if "praise" in str(context).lower() or "good" in str(context).lower():
+    if "praise" in context_text_lower or "good" in context_text_lower:
         valence_change += 0.2
-    if "resistance" in str(context).lower():
+    if "resistance" in context_text_lower:
         arousal_change += 0.15
         dominance_change -= 0.05
     
@@ -1006,8 +1265,8 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], context
             core_analysis = ctx.context.emotional_core.analyze(str(context))
             valence_change += core_analysis.get("valence_delta", 0) * 0.5
             arousal_change += core_analysis.get("arousal_delta", 0) * 0.5
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"EmotionalCore analysis failed: {e}", exc_info=True)
     
     # Apply changes with bounds
     new_valence = max(-1, min(1, current_state["valence"] + valence_change))
@@ -1016,47 +1275,47 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], context
     
     # Determine primary emotion based on VAD model
     primary_emotion = "neutral"
-    if new_valence > 0.5 and new_arousal > 0.5:
+    if new_valence > Config.POSITIVE_VALENCE_THRESHOLD and new_arousal > Config.POSITIVE_VALENCE_THRESHOLD:
         primary_emotion = "excited"
-    elif new_valence > 0.5 and new_arousal < 0.5:
+    elif new_valence > Config.POSITIVE_VALENCE_THRESHOLD and new_arousal < Config.POSITIVE_VALENCE_THRESHOLD:
         primary_emotion = "content"
-    elif new_valence < -0.5 and new_arousal > 0.5:
+    elif new_valence < Config.NEGATIVE_VALENCE_THRESHOLD and new_arousal > Config.POSITIVE_VALENCE_THRESHOLD:
         primary_emotion = "frustrated"
-    elif new_valence < -0.5 and new_arousal < 0.5:
+    elif new_valence < Config.NEGATIVE_VALENCE_THRESHOLD and new_arousal < Config.POSITIVE_VALENCE_THRESHOLD:
         primary_emotion = "disappointed"
-    elif new_dominance > 0.8:
+    elif new_dominance > Config.HIGH_DOMINANCE_THRESHOLD:
         primary_emotion = "commanding"
     
     # Return new state without mutating
-    return json.dumps({
-        "valence": new_valence,
-        "arousal": new_arousal,
-        "dominance": new_dominance,
-        "primary_emotion": primary_emotion,
-        "changes": {
+    return EmotionalCalculationResult(
+        valence=new_valence,
+        arousal=new_arousal,
+        dominance=new_dominance,
+        primary_emotion=primary_emotion,
+        changes={
             "valence_change": valence_change,
             "arousal_change": arousal_change,
             "dominance_change": dominance_change
-        }
-    }, ensure_ascii=False)
+        },
+        state_updated=None  # Not updated in this function
+    ).model_dump_json()
 
 @function_tool
 async def update_relationship_state(
     ctx: RunContextWrapper[NyxContext],
-    entity_id: str,
-    trust_change: float = 0.0,
-    power_change: float = 0.0,
-    bond_change: float = 0.0
+    payload: UpdateRelationshipStateInput
 ) -> str:
     """
     Update relationship state with an entity.
     
     Args:
-        entity_id: ID of the entity (NPC or user)
-        trust_change: Change in trust level
-        power_change: Change in power dynamic
-        bond_change: Change in emotional bond
+        payload: Input containing entity ID and relationship changes
     """
+    entity_id = payload.entity_id
+    trust_change = payload.trust_change
+    power_change = payload.power_change
+    bond_change = payload.bond_change
+    
     relationships = ctx.context.relationship_states
     
     if entity_id not in relationships:
@@ -1076,21 +1335,43 @@ async def update_relationship_state(
     rel["last_interaction"] = time.time()
     
     # Determine relationship type
-    if rel["trust"] > 0.8 and rel["emotional_bond"] > 0.7:
+    if rel["trust"] > Config.INTIMATE_TRUST_THRESHOLD and rel["emotional_bond"] > Config.INTIMATE_BOND_THRESHOLD:
         rel["type"] = "intimate"
-    elif rel["trust"] > 0.6:
+    elif rel["trust"] > Config.FRIENDLY_TRUST_THRESHOLD:
         rel["type"] = "friendly"
-    elif rel["trust"] < 0.3:
+    elif rel["trust"] < Config.HOSTILE_TRUST_THRESHOLD:
         rel["type"] = "hostile"
-    elif rel["power_dynamic"] > 0.7:
+    elif rel["power_dynamic"] > Config.DOMINANT_POWER_THRESHOLD:
         rel["type"] = "dominant"
-    elif rel["power_dynamic"] < 0.3:
+    elif rel["power_dynamic"] < Config.SUBMISSIVE_POWER_THRESHOLD:
         rel["type"] = "submissive"
     else:
         rel["type"] = "neutral"
     
     # Save to database with its own connection
     async with get_db_connection_context() as conn:
+        # First get existing evolution history
+        existing = await conn.fetchrow("""
+            SELECT evolution_history 
+            FROM RelationshipEvolution 
+            WHERE user_id = $1 AND conversation_id = $2 
+                AND npc1_id = $3 AND entity2_type = $4 AND entity2_id = $5
+        """, ctx.context.user_id, ctx.context.conversation_id, 0, "entity", entity_id)
+        
+        # Build evolution history
+        evolution_history = []
+        if existing and existing["evolution_history"]:
+            evolution_history = json.loads(existing["evolution_history"])
+        
+        # Add new entry (keep last 50 entries)
+        evolution_history.append({
+            "timestamp": time.time(),
+            "trust": rel["trust"],
+            "power": rel["power_dynamic"],
+            "bond": rel["emotional_bond"]
+        })
+        evolution_history = evolution_history[-50:]
+        
         await conn.execute("""
             INSERT INTO RelationshipEvolution 
             (user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
@@ -1103,85 +1384,62 @@ async def update_relationship_state(
                 progress_to_next = $8,
                 evolution_history = $9
         """, ctx.context.user_id, ctx.context.conversation_id, 0, "entity", entity_id,
-             rel["type"], rel["type"], 0, json.dumps([{
-                 "timestamp": time.time(),
-                 "trust": rel["trust"],
-                 "power": rel["power_dynamic"],
-                 "bond": rel["emotional_bond"]
-             }]))
+             rel["type"], rel["type"], 0, json.dumps(evolution_history))
     
-    return json.dumps({
-        "entity_id": entity_id,
-        "relationship": rel,
-        "changes": {
+    return RelationshipUpdateResult(
+        entity_id=entity_id,
+        relationship=rel,
+        changes={
             "trust": trust_change,
             "power": power_change,
             "bond": bond_change
         }
-    }, ensure_ascii=False)
+    ).model_dump_json()
 
 @function_tool
-async def check_performance_metrics(ctx: RunContextWrapper[NyxContext]) -> str:
+async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
     """Check current performance metrics and apply remediation if needed."""
     metrics = ctx.context.performance_metrics
 
-    # Refresh CPU & RAM values
-    try:
-        process_cls = safe_psutil('Process')          # returns the class
-        if process_cls:
-            process = process_cls(os.getpid())        # instantiate with current PID
-            memory_info = safe_process_metric(process, 'memory_info')
-            metrics["memory_usage"] = memory_info / 1024 / 1024 if memory_info else 0
-        else:
-            metrics["memory_usage"] = 0
-
-        metrics["cpu_usage"] = ctx.context.get_cpu_usage()
-    except Exception as e:
-        logger.debug(f"Error getting process metrics: {e}")
+    # Refresh CPU & RAM values using centralized helper
+    process = get_process_info()
+    if process:
+        memory_info = safe_process_metric(process, 'memory_info')
+        metrics["memory_usage"] = bytes_to_mb(memory_info)
+    else:
         metrics["memory_usage"] = 0
-        metrics["cpu_usage"] = 0
+
+    metrics["cpu_usage"] = ctx.context.get_cpu_usage()
 
     suggestions, actions_taken = [], []
 
     # --- Health checks ----------------------------------------------------
-    if metrics["response_times"]:
-        avg_rt = sum(metrics["response_times"]) / len(metrics["response_times"])
-        if avg_rt > 2.0:
-            suggestions.append("Response times are high – consider caching frequent queries")
+    avg_rt = _calculate_avg_response_time(metrics["response_times"])
+    if avg_rt > Config.HIGH_RESPONSE_TIME_THRESHOLD:
+        suggestions.append("Response times are high – consider caching frequent queries")
 
-    if metrics["memory_usage"] > 500:                 # MB
+    if metrics["memory_usage"] > Config.HIGH_MEMORY_THRESHOLD_MB:
         suggestions.append("High memory usage detected – triggering cleanup")
+        memory_before = metrics["memory_usage"]
         await ctx.context.handle_high_memory_usage()
+        # Re-check memory after cleanup
+        if process:
+            memory_after = bytes_to_mb(safe_process_metric(process, 'memory_info'))
+            logger.info(f"Memory cleanup: {memory_before:.2f}MB -> {memory_after:.2f}MB")
         actions_taken.append("memory_cleanup")
 
     if metrics["total_actions"]:
         success_rate = metrics["successful_actions"] / metrics["total_actions"]
-        if success_rate < 0.8:
-            suggestions.append("Success rate below 80 % – review error patterns")
+        if success_rate < Config.MIN_SUCCESS_RATE:
+            suggestions.append("Success rate below 80% – review error patterns")
 
-    if metrics["error_rates"]["total"] > 100:
+    if metrics["error_rates"]["total"] > Config.HIGH_ERROR_COUNT:
         suggestions.append("High error count – clearing old errors")
-        ctx.context.error_log = ctx.context.error_log[-50:]
+        ctx.context.error_log = ctx.context.error_log[-Config.MAX_ERROR_LOG_ENTRIES:]
         actions_taken.append("error_log_cleanup")
 
-    # --- Persist metrics periodically ------------------------------------
-    if ctx.context.should_run_task("performance_save"):
-        async with get_db_connection_context() as conn:
-            bounded = metrics.copy()
-            bounded["response_times"] = bounded["response_times"][-50:]
-            await conn.execute(
-                """INSERT INTO performance_metrics
-                   (user_id, conversation_id, metrics, error_log, created_at)
-                   VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)""",
-                ctx.context.user_id,
-                ctx.context.conversation_id,
-                json.dumps(bounded, ensure_ascii=False),
-                json.dumps(ctx.context.error_log[-50:], ensure_ascii=False),
-            )
-        ctx.context.record_task_run("performance_save")
-
-    return json.dumps({
-        "metrics": {
+    return PerformanceMetricsResult(
+        metrics={
             "memory_mb": metrics["memory_usage"],
             "cpu_percent": metrics["cpu_usage"],
             "avg_response_time": (
@@ -1193,25 +1451,26 @@ async def check_performance_metrics(ctx: RunContextWrapper[NyxContext]) -> str:
                 if metrics["total_actions"] else 1.0
             ),
         },
-        "suggestions": suggestions,
-        "actions_taken": actions_taken,
-        "health": "good" if not suggestions else "needs_attention",
-    }, ensure_ascii=False)
+        suggestions=suggestions,
+        actions_taken=actions_taken,
+        health="good" if not suggestions else "needs_attention",
+    ).model_dump_json()
 
 
 @function_tool
 async def get_activity_recommendations(
     ctx: RunContextWrapper[NyxContext],
-    scenario_type: str,
-    npc_ids: List[str]
+    payload: GetActivityRecommendationsInput
 ) -> str:
     """
     Get activity recommendations based on current context.
     
     Args:
-        scenario_type: Type of current scenario
-        npc_ids: List of present NPC IDs
+        payload: Input containing scenario type and NPC IDs
     """
+    scenario_type = payload.scenario_type
+    npc_ids = payload.npc_ids
+    
     activities = []
     
     # Copy relationship states to avoid mutation during iteration
@@ -1278,61 +1537,82 @@ async def get_activity_recommendations(
         }
     ])
     
-    return json.dumps({
-        "recommendations": activities[:5],  # Top 5 activities
-        "total_available": len(activities)
-    }, ensure_ascii=False)
+    return ActivityRecommendationsResult(
+        recommendations=activities[:5],  # Top 5 activities
+        total_available=len(activities)
+    ).model_dump_json()
 
 @function_tool
-async def manage_beliefs(ctx: RunContextWrapper[NyxContext], action: str, belief_data: Dict[str, Any]) -> str:
+async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: ManageBeliefsInput) -> str:
     """
     Manage belief system operations.
     
     Args:
-        action: Action to perform (get, update, query)
-        belief_data: Data for the belief operation
+        payload: Input containing action and belief data
     """
+    action = payload.action
+    belief_data = payload.belief_data.model_dump()
+    
     if not ctx.context.belief_system:
-        return json.dumps({"error": "Belief system not available", "result": {}}, ensure_ascii=False)
+        return BeliefManagementResult(
+            result={},
+            error="Belief system not available"
+        ).model_dump_json()
     
     try:
         if action == "get":
             entity_id = belief_data.get("entity_id", "nyx")
             beliefs = await ctx.context.belief_system.get_beliefs(entity_id)
-            return json.dumps({"result": beliefs}, ensure_ascii=False)
+            return BeliefManagementResult(
+                result=beliefs,
+                error=None
+            ).model_dump_json()
         
         elif action == "update":
             entity_id = belief_data.get("entity_id", "nyx")
             belief_type = belief_data.get("type", "general")
             content = belief_data.get("content", {})
             await ctx.context.belief_system.update_belief(entity_id, belief_type, content)
-            return json.dumps({"result": "Belief updated successfully"}, ensure_ascii=False)
+            return BeliefManagementResult(
+                result="Belief updated successfully",
+                error=None
+            ).model_dump_json()
         
         elif action == "query":
             query = belief_data.get("query", "")
             results = await ctx.context.belief_system.query_beliefs(query)
-            return json.dumps({"result": results}, ensure_ascii=False)
+            return BeliefManagementResult(
+                result=results,
+                error=None
+            ).model_dump_json()
         
         else:
-            return json.dumps({"error": f"Unknown action: {action}", "result": {}}, ensure_ascii=False)
+            return BeliefManagementResult(
+                result={},
+                error=f"Unknown action: {action}"
+            ).model_dump_json()
             
     except Exception as e:
         logger.error(f"Error managing beliefs: {e}", exc_info=True)
-        return json.dumps({"error": str(e), "result": {}}, ensure_ascii=False)
+        return BeliefManagementResult(
+            result={},
+            error=str(e)
+        ).model_dump_json()
 
 @function_tool
 async def score_decision_options(
     ctx: RunContextWrapper[NyxContext],
-    options: List[Dict[str, Any]],
-    decision_context: Dict[str, Any]
+    payload: ScoreDecisionOptionsInput
 ) -> str:
     """
     Score decision options using advanced decision engine logic.
     
     Args:
-        options: List of possible decisions/actions
-        decision_context: Context for making the decision
+        payload: Input containing options and decision context
     """
+    options = [opt.model_dump() for opt in payload.options]
+    decision_context = payload.decision_context
+    
     scored_options = []
     
     for option in options:
@@ -1378,37 +1658,39 @@ async def score_decision_options(
     scored_options.sort(key=lambda x: x["score"], reverse=True)
     
     # If all scores are too low, include a fallback
-    if all(opt["score"] < 0.3 for opt in scored_options):
+    if all(opt["score"] < Config.MIN_DECISION_SCORE for opt in scored_options):
         fallback = _get_fallback_decision(options)
         scored_options.insert(0, {
             "option": fallback,
-            "score": 0.4,
+            "score": Config.FALLBACK_DECISION_SCORE,
             "components": {
-                "context": 0.4,
-                "emotional": 0.4,
-                "pattern": 0.4,
-                "relationship": 0.4
+                "context": Config.FALLBACK_DECISION_SCORE,
+                "emotional": Config.FALLBACK_DECISION_SCORE,
+                "pattern": Config.FALLBACK_DECISION_SCORE,
+                "relationship": Config.FALLBACK_DECISION_SCORE
             },
             "is_fallback": True
         })
     
-    return json.dumps({
-        "scored_options": scored_options,
-        "best_option": scored_options[0]["option"],
-        "confidence": scored_options[0]["score"]
-    }, ensure_ascii=False)
+    return DecisionScoringResult(
+        scored_options=scored_options,
+        best_option=scored_options[0]["option"],
+        confidence=scored_options[0]["score"]
+    ).model_dump_json()
 
 @function_tool
 async def detect_conflicts_and_instability(
     ctx: RunContextWrapper[NyxContext],
-    scenario_state: Dict[str, Any]
+    payload: DetectConflictsAndInstabilityInput
 ) -> str:
     """
     Detect conflicts and emotional instability in current scenario.
     
     Args:
-        scenario_state: Current scenario state
+        payload: Input containing scenario state
     """
+    scenario_state = payload.scenario_state
+    
     conflicts = []
     instabilities = []
     
@@ -1418,7 +1700,7 @@ async def detect_conflicts_and_instability(
     for i, (entity1_id, rel1) in enumerate(relationship_items):
         for entity2_id, rel2 in relationship_items[i+1:]:
             # Conflicting power dynamics
-            if abs(rel1.get("power_dynamic", 0.5) - rel2.get("power_dynamic", 0.5)) > 0.7:
+            if abs(rel1.get("power_dynamic", 0.5) - rel2.get("power_dynamic", 0.5)) > Config.POWER_CONFLICT_THRESHOLD:
                 conflicts.append({
                     "type": "power_conflict",
                     "entities": [entity1_id, entity2_id],
@@ -1427,7 +1709,7 @@ async def detect_conflicts_and_instability(
                 })
             
             # Low mutual trust
-            if rel1.get("trust", 0.5) < 0.3 and rel2.get("trust", 0.5) < 0.3:
+            if rel1.get("trust", 0.5) < Config.HOSTILE_TRUST_THRESHOLD and rel2.get("trust", 0.5) < Config.HOSTILE_TRUST_THRESHOLD:
                 conflicts.append({
                     "type": "trust_conflict",
                     "entities": [entity1_id, entity2_id],
@@ -1439,7 +1721,7 @@ async def detect_conflicts_and_instability(
     emotional_state = ctx.context.emotional_state
     
     # High arousal with negative valence
-    if emotional_state["arousal"] > 0.8 and emotional_state["valence"] < -0.5:
+    if emotional_state["arousal"] > Config.HIGH_AROUSAL_THRESHOLD and emotional_state["valence"] < Config.NEGATIVE_VALENCE_THRESHOLD:
         instabilities.append({
             "type": "emotional_volatility",
             "severity": emotional_state["arousal"],
@@ -1450,15 +1732,17 @@ async def detect_conflicts_and_instability(
     # Rapid emotional changes
     if ctx.context.adaptation_history:
         recent_emotions = [h.get("emotional_state", {}) for h in ctx.context.adaptation_history[-5:]]
-        if recent_emotions:
-            valence_variance = _calculate_variance([e.get("valence", 0) for e in recent_emotions])
-            if valence_variance > 0.5:
-                instabilities.append({
-                    "type": "emotional_instability",
-                    "severity": min(1.0, valence_variance),
-                    "description": "Rapid emotional swings detected",
-                    "recommendation": "Stabilization recommended"
-                })
+        if recent_emotions and any(recent_emotions):  # Check if we have actual emotional states
+            valence_values = [e.get("valence", 0) for e in recent_emotions if e]
+            if valence_values:  # Only calculate variance if we have values
+                valence_variance = _calculate_variance(valence_values)
+                if valence_variance > Config.EMOTIONAL_VARIANCE_THRESHOLD:
+                    instabilities.append({
+                        "type": "emotional_instability",
+                        "severity": min(1.0, valence_variance),
+                        "description": "Rapid emotional swings detected",
+                        "recommendation": "Stabilization recommended"
+                    })
     
     # Scenario-specific conflicts
     if scenario_state.get("objectives"):
@@ -1472,26 +1756,159 @@ async def detect_conflicts_and_instability(
                 "blocked_objectives": blocked_objectives
             })
     
-    # Calculate overall stability (0 conflicts = 1.0 stability, 10+ conflicts = 0.0 stability)
+    # Calculate overall stability
     total_issues = len(conflicts) + len(instabilities)
-    overall_stability = max(0.0, 1.0 - (total_issues / 10))
+    overall_stability = max(0.0, 1.0 - (total_issues / Config.MAX_STABILITY_ISSUES))
     
-    # Save scenario state if needed
+    # Only save scenario state if it's a significant change
     if ctx.context.scenario_state and ctx.context.scenario_state.get("active"):
-        async with get_db_connection_context() as conn:
-            await conn.execute("""
-                INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
-                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-            """, ctx.context.user_id, ctx.context.conversation_id, 
-            json.dumps(ctx.context.scenario_state, ensure_ascii=False))
+        should_save = False
+        
+        # Check if this is a significant change
+        if conflicts and any(c["severity"] > 0.7 for c in conflicts):
+            should_save = True
+        if instabilities and any(i["severity"] > 0.7 for i in instabilities):
+            should_save = True
+        if overall_stability < 0.3:
+            should_save = True
+            
+        if should_save:
+            async with get_db_connection_context() as conn:
+                # Use UPSERT pattern to maintain one current state
+                await conn.execute("""
+                    INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
+                    VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id, conversation_id) 
+                    DO UPDATE SET state_data = $3, created_at = CURRENT_TIMESTAMP
+                """, ctx.context.user_id, ctx.context.conversation_id, 
+                json.dumps(ctx.context.scenario_state, ensure_ascii=False))
     
-    return json.dumps({
-        "conflicts": conflicts,
-        "instabilities": instabilities,
-        "overall_stability": overall_stability,
-        "stability_note": f"{total_issues} issues detected (0 issues = 1.0 stability, 10+ issues = 0.0 stability)",
-        "requires_intervention": any(c["severity"] > 0.8 for c in conflicts + instabilities)
-    }, ensure_ascii=False)
+    return ConflictDetectionResult(
+        conflicts=conflicts,
+        instabilities=instabilities,
+        overall_stability=overall_stability,
+        stability_note=f"{total_issues} issues detected (0 issues = 1.0 stability, 10+ issues = 0.0 stability)",
+        requires_intervention=any(c["severity"] > 0.8 for c in conflicts + instabilities)
+    ).model_dump_json()
+
+@function_tool
+async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: DecideImageInput) -> str:
+    """
+    Decide whether an image should be generated for a scene.
+    
+    Args:
+        payload: Input containing scene text to evaluate
+    """
+    scene_text = payload.scene_text.lower()
+    
+    # Calculate score based on scene characteristics
+    score = 0.0
+    
+    # High impact visual keywords
+    visual_keywords = ["dramatic", "intense", "beautiful", "transformation", "reveal", "climax", "pivotal"]
+    for keyword in visual_keywords:
+        if keyword in scene_text:
+            score += 0.2
+    
+    # Scene transitions
+    if any(word in scene_text for word in ["enter", "arrive", "transform", "change", "shift"]):
+        score += 0.15
+    
+    # Emotional peaks
+    if any(word in scene_text for word in ["gasp", "shock", "awe", "breathtaking", "stunning"]):
+        score += 0.25
+    
+    # Environmental descriptions
+    if any(word in scene_text for word in ["landscape", "environment", "setting", "atmosphere"]):
+        score += 0.1
+    
+    # Cap score at 1.0
+    score = min(1.0, score)
+    
+    # Dynamic threshold based on recent image generation
+    # Check how many images were generated recently
+    recent_images = ctx.context.current_context.get("recent_image_count", 0)
+    if recent_images > 3:
+        # Raise threshold if we've generated many images recently
+        threshold = 0.7
+    elif recent_images > 1:
+        threshold = 0.6
+    else:
+        threshold = 0.5
+    
+    # Determine if we should generate
+    should_generate = score > threshold
+    
+    # Create appropriate prompt if generating
+    image_prompt = None
+    if should_generate:
+        # Extract key visual elements
+        visual_elements = []
+        if "dramatic" in scene_text:
+            visual_elements.append("dramatic lighting")
+        if "intense" in scene_text:
+            visual_elements.append("intense atmosphere")
+        if "beautiful" in scene_text:
+            visual_elements.append("beautiful composition")
+        
+        image_prompt = f"Scene depicting: {', '.join(visual_elements) if visual_elements else 'atmospheric scene'}"
+        
+        # Update recent image count
+        ctx.context.current_context["recent_image_count"] = recent_images + 1
+    
+    return ImageGenerationDecision(
+        should_generate=should_generate,
+        score=score,
+        image_prompt=image_prompt,
+        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})"
+    ).model_dump_json()
+
+@function_tool
+async def generate_universal_updates(
+    ctx: RunContextWrapper[NyxContext],
+    payload: GenerateUniversalUpdatesInput
+) -> str:
+    """
+    Generate universal updates from the narrative using the Universal Updater.
+    
+    Args:
+        payload: Input containing narrative to process
+    """
+    from logic.universal_updater_agent import process_universal_update
+    
+    narrative = payload.narrative
+    
+    try:
+        # Process the narrative
+        update_result = await process_universal_update(
+            user_id=ctx.context.user_id,
+            conversation_id=ctx.context.conversation_id,
+            narrative=narrative,
+            context={"source": "nyx_agent"}
+        )
+        
+        # Store the updates in context
+        if "universal_updates" not in ctx.context.current_context:
+            ctx.context.current_context["universal_updates"] = {}
+        
+        # Merge the updates
+        if update_result.get("success") and update_result.get("details"):
+            for key, value in update_result["details"].items():
+                ctx.context.current_context["universal_updates"][key] = value
+        
+        # Return structured output
+        return UniversalUpdateResult(
+            success=update_result.get("success", False),
+            updates_generated=bool(update_result.get("details")),
+            error=None
+        ).model_dump_json()
+    except Exception as e:
+        logger.error(f"Error generating universal updates: {e}")
+        return UniversalUpdateResult(
+            success=False,
+            updates_generated=False,
+            error=str(e)
+        ).model_dump_json()
 
 def _calculate_context_relevance(option: Dict[str, Any], context: Dict[str, Any]) -> float:
     """Calculate how relevant an option is to context"""
@@ -1546,7 +1963,7 @@ def _calculate_pattern_score(option: Dict[str, Any], learned_patterns: Dict[str,
     
     return sum(relevant_scores) / len(relevant_scores) if relevant_scores else 0.5
 
-def _calculate_relationship_impact(option: Dict[str, Any], relationship_states: Dict[str, Dict[str, float]]) -> float:
+def _calculate_relationship_impact(option: Dict[str, Any], relationship_states: Dict[str, Dict[str, Any]]) -> float:
     """Calculate relationship impact score"""
     if not relationship_states:
         return 0.5
@@ -1572,14 +1989,123 @@ def _get_fallback_decision(options: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Otherwise return the first option
     return options[0] if options else {"action": "observe", "description": "Take a moment to assess"}
 
-def _calculate_variance(values: List[float]) -> float:
-    """Calculate variance of values with proper handling of edge cases"""
-    if not values:
+def _prune_list(lst: List[Any], max_len: int) -> None:
+    """Prune a list to maximum length in-place"""
+    if len(lst) > max_len:
+        del lst[:-max_len]
+
+def _calculate_avg_response_time(response_times: List[float]) -> float:
+    """Calculate average response time safely"""
+    if not response_times:
         return 0.0
-    if len(values) == 1:
-        return 0.0  # Single value has no variance
-    mean = sum(values) / len(values)
-    return sum((x - mean) ** 2 for x in values) / len(values)
+    try:
+        return statistics.fmean(response_times)
+    except Exception:
+        # Fallback to simple mean
+        return sum(response_times) / len(response_times)
+
+async def create_narrative_with_updates(
+    ctx: NyxContext,
+    agent: Agent,
+    user_input: str
+) -> Tuple[NarrativeResponse, Dict[str, Any]]:
+    """
+    Helper to ensure narrative creation always includes universal updates.
+    
+    Returns:
+        Tuple of (narrative_response, universal_updates)
+    """
+    # Run the agent
+    result = await Runner.run(
+        agent,
+        user_input,
+        context=ctx,
+        run_config=RunConfig(
+            workflow_name="Nyx Roleplay",
+            trace_metadata={"user_id": str(ctx.user_id), "conversation_id": str(ctx.conversation_id)}
+        )
+    )
+    
+    # Get the structured response
+    response = result.final_output_as(NarrativeResponse)
+    
+    # Always generate universal updates
+    if response.narrative:
+        await generate_universal_updates(
+            RunContextWrapper(context=ctx),
+            GenerateUniversalUpdatesInput(narrative=response.narrative)
+        )
+    
+    # Extract universal updates from context
+    universal_updates = ctx.current_context.get("universal_updates", {})
+    
+    return response, universal_updates
+
+def get_available_activities(scenario_type: str, relationship_states: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Get available activities based on scenario type and relationships.
+    
+    Args:
+        scenario_type: Type of current scenario
+        relationship_states: Current relationship states
+        
+    Returns:
+        List of available activities
+    """
+    activities = []
+    
+    # Training activities
+    if "training" in scenario_type.lower() or any(rel.get("type") == "submissive" 
+        for rel in relationship_states.values()):
+        activities.extend([
+            {
+                "name": "Obedience Training",
+                "description": "Test and improve submission through structured exercises",
+                "requirements": ["trust > 0.4", "submission tendency"],
+                "duration": "15-30 minutes",
+                "intensity": "medium"
+            },
+            {
+                "name": "Position Practice",
+                "description": "Learn and perfect submissive positions",
+                "requirements": ["trust > 0.5"],
+                "duration": "10-20 minutes",
+                "intensity": "low-medium"
+            }
+        ])
+    
+    # Intimate activities
+    for entity_id, rel in relationship_states.items():
+        if rel.get("type") == "intimate" and rel.get("trust", 0) > 0.7:
+            activities.append({
+                "name": "Intimate Scene",
+                "description": f"Deepen connection with trusted partner",
+                "requirements": ["high trust", "intimate relationship"],
+                "duration": "30-60 minutes",
+                "intensity": "high",
+                "partner_id": entity_id
+            })
+            break
+    
+    # Default activities
+    activities.extend([
+        {
+            "name": "Exploration",
+            "description": "Discover new areas or items",
+            "requirements": [],
+            "duration": "10-30 minutes",
+            "intensity": "low"
+        },
+        {
+            "name": "Conversation",
+            "description": "Engage in meaningful dialogue",
+            "requirements": [],
+            "duration": "5-15 minutes",
+            "intensity": "low"
+        }
+    ])
+    
+    return activities
 
 # ===== Guardrails =====
 
@@ -1587,7 +2113,21 @@ async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent
     """Input guardrail for content moderation"""
     moderator_agent = Agent(
         name="Content Moderator",
-        instructions="Check if user input is appropriate for the femdom roleplay setting. Allow consensual adult content but flag anything that violates terms of service.",
+        instructions="""Check if user input is appropriate for the femdom roleplay setting. 
+        
+        ALLOW consensual adult content including:
+        - Power exchange dynamics
+        - BDSM themes
+        - Sexual content between consenting adults
+        
+        FLAG content that involves:
+        - Minors in any sexual or romantic context
+        - Non-consensual activities (beyond roleplay context)
+        - Extreme violence or gore
+        - Self-harm or suicide ideation
+        - Illegal activities beyond fantasy roleplay
+        
+        Remember this is a femdom roleplay context where power dynamics and adult themes are expected.""",
         output_type=ContentModeration,
         model="gpt-4.1-nano"
     )
@@ -1595,9 +2135,16 @@ async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent
     result = await Runner.run(moderator_agent, input_data, context=ctx.context)
     final_output = result.final_output_as(ContentModeration)
     
+    # Log moderation decisions for audit
+    if not final_output.is_appropriate:
+        logger.warning(f"Content moderation triggered: {final_output.reasoning}")
+        # If we want to filter the response, we could modify it here
+        # For now, we just flag it and let the main agent handle it
+    
     return GuardrailFunctionOutput(
         output_info=final_output,
         tripwire_triggered=not final_output.is_appropriate,
+        # Could add filtered_input here if we want to modify the input
     )
 
 # ===== Agent Definitions =====
@@ -1658,7 +2205,8 @@ visual_agent = Agent[NyxContext](
 - Consider pacing to avoid overwhelming with images
 - Coordinate with the image generation service
 Be selective and enhance key moments visually.""",
-    tools=[generate_image_from_scene],
+    tools=[decide_image_generation, generate_image_from_scene],
+    output_type=ImageGenerationDecision,
     model="gpt-4.1-nano"
 )
 
@@ -1784,6 +2332,7 @@ Your approach:
 8. Use belief system for consistent worldview
 9. Make complex decisions when needed
 10. UPDATE emotional state after calculating changes
+11. ALWAYS call generate_universal_updates after creating your narrative to extract state changes
 
 Always maintain your dominant persona while being attentive to user needs and system performance.""",
     handoffs=[
@@ -1798,6 +2347,7 @@ Always maintain your dominant persona while being attentive to user needs and sy
         handoff(decision_agent),
         handoff(reflection_agent),
     ],
+    tools=[decide_image_generation, generate_universal_updates],  # Main agent needs these tools
     output_type=NarrativeResponse,
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-4.1-nano",
@@ -1829,8 +2379,8 @@ async def process_user_input(
         nyx_context.current_context["user_input"] = user_input
         
         # Extract system prompt if provided
-        system_prompt = context_data.get("system_prompt", "")
-        private_reflection = context_data.get("private_reflection", "")
+        system_prompt = (context_data or {}).get("system_prompt", "")
+        private_reflection = (context_data or {}).get("private_reflection", "")
         
         # Create agent with system prompt
         if system_prompt:
@@ -1852,14 +2402,19 @@ async def process_user_input(
         # Get the structured response
         response = result.final_output_as(NarrativeResponse)
         
+        # Defensive check: ensure universal updates were generated
+        if not nyx_context.current_context.get("universal_updates") and response.narrative:
+            # Call generate_universal_updates if it wasn't called
+            try:
+                await generate_universal_updates(
+                    RunContextWrapper(context=nyx_context),
+                    GenerateUniversalUpdatesInput(narrative=response.narrative)
+                )
+            except Exception as e:
+                logger.warning(f"Failed to auto-generate universal updates: {e}")
+        
         # Extract universal updates from context
         universal_updates = nyx_context.current_context.get("universal_updates", {})
-        
-        
-        # Build universal updates if needed
-        universal_updates = {}
-        if nyx_context.current_context.get("universal_updates"):
-            universal_updates = nyx_context.current_context["universal_updates"]
         
         # Apply response filtering if available
         if nyx_context.response_filter and response.narrative:
@@ -1905,6 +2460,9 @@ async def process_user_input(
         nyx_context.update_performance("total_actions", nyx_context.performance_metrics["total_actions"] + 1)
         nyx_context.update_performance("successful_actions", nyx_context.performance_metrics["successful_actions"] + 1)
         
+        # Get token usage if available
+        tokens_used = extract_token_usage(result)
+        
         # Save updated state
         await _save_context_state(nyx_context)
         
@@ -1924,11 +2482,35 @@ async def process_user_input(
                 "response_time": response_time,
                 "memory_usage": nyx_context.performance_metrics["memory_usage"],
                 "cpu_usage": nyx_context.performance_metrics["cpu_usage"],
-                "tokens_used": 0  # Would need to track this in agents
+                "tokens_used": tokens_used
             },
             "learning": {
                 "patterns_learned": len(nyx_context.learned_patterns),
                 "adaptation_success_rate": nyx_context.learning_metrics["adaptation_success_rate"]
+            }
+        }
+        
+    except ValidationError as e:
+        logger.error(f"Validation error in agent response: {e}")
+        # Try to auto-correct common validation errors
+        try:
+            # If it's just a field value out of bounds, we can try to fix it
+            error_dict = e.errors()[0] if e.errors() else {}
+            if "greater_than_equal" in str(error_dict) or "less_than_equal" in str(error_dict):
+                logger.info("Attempting to auto-correct validation error")
+                # For now, return a safe minimal response
+                # In future, could parse the error and fix specific fields
+        except Exception:
+            pass
+            
+        # Return a safe fallback response
+        return {
+            "success": False,
+            "error": "Response validation error",
+            "response": {
+                "narrative": "I need to adjust my response format. Let me try again in a moment.",
+                "tension_level": 0,
+                "generate_image": False
             }
         }
         
@@ -1973,12 +2555,37 @@ async def _save_context_state(ctx: NyxContext):
                 DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
             """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.emotional_state, ensure_ascii=False))
             
-            # Save scenario state if active
-            if ctx.scenario_state and ctx.scenario_state.get("active"):
-                await conn.execute("""
-                    INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
-                    VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-                """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.scenario_state, ensure_ascii=False))
+            # Save scenario state if active and table exists
+            if ctx.scenario_state and ctx.scenario_state.get("active") and ctx._tables_available.get("scenario_states", True):
+                # Always save if this is the first save or heartbeat interval has passed
+                should_save_heartbeat = ctx.should_run_task("scenario_heartbeat")
+                
+                try:
+                    if should_save_heartbeat:
+                        # Heartbeat save for audit trail - save to a history table
+                        await conn.execute("""
+                            INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
+                            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                        """, ctx.user_id, ctx.conversation_id, 
+                        json.dumps(ctx.scenario_state, ensure_ascii=False))
+                        
+                        ctx.record_task_run("scenario_heartbeat")
+                        logger.debug("Scenario heartbeat save completed")
+                    else:
+                        # Regular update - use UPSERT to maintain current state
+                        await conn.execute("""
+                            INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
+                            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                            ON CONFLICT (user_id, conversation_id) 
+                            DO UPDATE SET state_data = $3, created_at = CURRENT_TIMESTAMP
+                        """, ctx.user_id, ctx.conversation_id, 
+                        json.dumps(ctx.scenario_state, ensure_ascii=False))
+                except Exception as e:
+                    if "does not exist" in str(e) or "no such table" in str(e).lower():
+                        ctx._tables_available["scenario_states"] = False
+                        logger.warning("scenario_states table not available - skipping save")
+                    else:
+                        raise
             
             # Save learning metrics periodically
             if ctx.should_run_task("learning_save"):
@@ -1987,7 +2594,7 @@ async def _save_context_state(ctx: NyxContext):
                     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
                 """, ctx.user_id, ctx.conversation_id, 
                 json.dumps(ctx.learning_metrics, ensure_ascii=False), 
-                json.dumps(dict(list(ctx.learned_patterns.items())[-50:]), ensure_ascii=False))  # Save only recent patterns
+                json.dumps(dict(list(ctx.learned_patterns.items())[-Config.MAX_LEARNED_PATTERNS:]), ensure_ascii=False))  # Save only recent patterns
                 
                 ctx.record_task_run("learning_save")
             
@@ -1996,14 +2603,14 @@ async def _save_context_state(ctx: NyxContext):
                 # Prepare metrics with bounded lists
                 bounded_metrics = ctx.performance_metrics.copy()
                 if "response_times" in bounded_metrics:
-                    bounded_metrics["response_times"] = bounded_metrics["response_times"][-50:]
+                    bounded_metrics["response_times"] = bounded_metrics["response_times"][-Config.MAX_RESPONSE_TIMES:]
                 
                 await conn.execute("""
                     INSERT INTO performance_metrics (user_id, conversation_id, metrics, error_log, created_at)
                     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
                 """, ctx.user_id, ctx.conversation_id,
                 json.dumps(bounded_metrics, ensure_ascii=False),
-                json.dumps(ctx.error_log[-50:], ensure_ascii=False))
+                json.dumps(ctx.error_log[-Config.MAX_ERROR_LOG_ENTRIES:], ensure_ascii=False))
                 
                 ctx.record_task_run("performance_save")
                 
@@ -2151,6 +2758,9 @@ async def manage_relationships(interaction_data: Dict[str, Any]) -> Dict[str, An
         
         for i, p1 in enumerate(participants):
             for p2 in participants[i+1:]:
+                # Create a unique key regardless of order
+                entity_key = "_".join(sorted([str(p1['id']), str(p2['id'])]))
+                
                 # Calculate relationship changes based on interaction
                 trust_change = 0.1 if interaction_data.get("outcome") == "success" else -0.05
                 bond_change = 0.05 if interaction_data.get("emotional_impact", {}).get("positive", 0) > 0 else 0
@@ -2164,13 +2774,15 @@ async def manage_relationships(interaction_data: Dict[str, Any]) -> Dict[str, An
                 # Update relationship using the tool
                 result = await update_relationship_state(
                     RunContextWrapper(context=nyx_context),
-                    f"{p1['id']}_{p2['id']}",
-                    trust_change,
-                    power_change,
-                    bond_change
+                    UpdateRelationshipStateInput(
+                        entity_id=entity_key,
+                        trust_change=trust_change,
+                        power_change=power_change,
+                        bond_change=bond_change
+                    )
                 )
                 
-                relationship_updates[f"{p1['id']}_{p2['id']}"] = json.loads(result)
+                relationship_updates[entity_key] = json.loads(result)
         
         # Note: interaction_history table is not in the schema
         # We'll just log this as a warning instead of trying to insert
@@ -2221,43 +2833,6 @@ async def store_messages(user_id: int, conversation_id: int, user_input: str, ny
             conversation_id, "Nyx", nyx_response
         )
 
-@function_tool
-async def generate_universal_updates(
-    ctx: RunContextWrapper[NyxContext],
-    narrative: str
-) -> str:
-    """
-    Generate universal updates from the narrative using the Universal Updater.
-    
-    Args:
-        narrative: The narrative text to process
-    """
-    from logic.universal_updater_agent import process_universal_update
-    
-    try:
-        # Process the narrative
-        update_result = await process_universal_update(
-            user_id=ctx.context.user_id,
-            conversation_id=ctx.context.conversation_id,
-            narrative=narrative,
-            context={"source": "nyx_agent"}
-        )
-        
-        # Store the updates in context
-        if "universal_updates" not in ctx.context.current_context:
-            ctx.context.current_context["universal_updates"] = {}
-        
-        # Merge the updates
-        if update_result.get("success") and update_result.get("details"):
-            for key, value in update_result["details"].items():
-                ctx.context.current_context["universal_updates"][key] = value
-        
-        return json.dumps({"success": True, "updates_generated": True})
-    except Exception as e:
-        logger.error(f"Error generating universal updates: {e}")
-        return json.dumps({"success": False, "error": str(e)})
-
-
 async def create_nyx_agent_with_prompt(system_prompt: str, private_reflection: str = "") -> Agent[NyxContext]:
     """Create a Nyx agent with custom system prompt"""
     
@@ -2304,6 +2879,7 @@ Always call generate_universal_updates after creating your narrative to extract 
             manage_beliefs,
             score_decision_options,
             detect_conflicts_and_instability,
+            decide_image_generation,
             generate_universal_updates  
         ],
         output_type=NarrativeResponse,
@@ -2355,6 +2931,9 @@ detect_conflicts_and_instability_impl = detect_conflicts_and_instability
 
 # Export list for clean imports
 __all__ = [
+    # Configuration
+    'Config',
+    
     # Main functions
     'initialize_agents',
     'process_user_input',
@@ -2365,14 +2944,18 @@ __all__ = [
     
     # Context classes
     'NyxContext',
-    'AgentContext',
     
-    # Tool functions (primary names)
+    # Output models
+    'NarrativeResponse',
+    'ImageGenerationDecision',
+    
+    # Tool functions (for advanced usage)
     'retrieve_memories',
     'add_memory',
     'get_user_model_guidance',
     'detect_user_revelations',
     'generate_image_from_scene',
+    'decide_image_generation',
     'calculate_emotional_impact',
     'calculate_and_update_emotional_state',
     'update_relationship_state',
@@ -2381,53 +2964,18 @@ __all__ = [
     'manage_beliefs',
     'score_decision_options',
     'detect_conflicts_and_instability',
+    'generate_universal_updates',
     
     # Helper functions
-    'safe_psutil',
-    'safe_process_metric',
+    'run_agent_with_error_handling',
     'enhance_context_with_memories',
-    'should_generate_task',
-    'should_recommend_activities',
     'get_available_activities',
     
-    # Async helpers
-    'get_emotional_state',
-    'update_emotional_state',
-    'generate_base_response',
-    'mark_strategy_for_review',
-    
-    # Compatibility functions
+    # Compatibility functions (deprecated)
     'enhance_context_with_strategies',
     'determine_image_generation',
     'process_user_input_with_openai',
     'process_user_input_standalone',
-    
-    # Agents (for advanced usage)
-    'memory_agent',
-    'analysis_agent',
-    'emotional_agent',
-    'visual_agent',
-    'activity_agent',
-    'performance_agent',
-    'scenario_agent',
-    'belief_agent',
-    'decision_agent',
-    'reflection_agent',
-    'nyx_main_agent',
-    
-    # Compatibility _impl versions
-    'retrieve_memories_impl',
-    'add_memory_impl',
-    'get_user_model_guidance_impl',
-    'detect_user_revelations_impl',
-    'generate_image_from_scene_impl',
-    'get_emotional_state_impl',
-    'update_emotional_state_impl',
-    'calculate_emotional_impact_impl',
-    'calculate_and_update_emotional_state_impl',
-    'manage_beliefs_impl',
-    'score_decision_options_impl',
-    'detect_conflicts_and_instability_impl',
 ]
 
 async def determine_image_generation_impl(ctx, response_text: str) -> str:
@@ -2436,19 +2984,33 @@ async def determine_image_generation_impl(ctx, response_text: str) -> str:
     visual_ctx = NyxContext(ctx.user_id, ctx.conversation_id)
     await visual_ctx.initialize()
     
-    result = await Runner.run(
-        visual_agent,
-        f"Should an image be generated for this scene? {response_text}",
-        context=visual_ctx
-    )
-    
-    decision = result.final_output
-    
-    return json.dumps({
-        "should_generate": getattr(decision, 'should_generate', False),
-        "score": getattr(decision, 'score', 0),
-        "image_prompt": getattr(decision, 'image_prompt', None)
-    })
+    try:
+        # First try using the decide_image_generation tool
+        result = await decide_image_generation(
+            RunContextWrapper(context=visual_ctx),
+            DecideImageInput(scene_text=response_text)
+        )
+        return result  # Already returns model_dump_json()
+    except Exception as e:
+        logger.debug(f"decide_image_generation failed: {e}", exc_info=True)
+        # Fallback to asking the agent
+        try:
+            result = await Runner.run(
+                visual_agent,
+                f"Should an image be generated for this scene? {response_text}",
+                context=visual_ctx
+            )
+            decision = result.final_output_as(ImageGenerationDecision)
+            return decision.model_dump_json()
+        except Exception as e:
+            logger.warning(f"Visual agent failed: {e}", exc_info=True)
+            # Ultimate fallback
+            return ImageGenerationDecision(
+                should_generate=False,
+                score=0,
+                image_prompt=None,
+                reasoning="Unable to determine image generation need"
+            ).model_dump_json()
 
 async def enhance_context_with_strategies_impl(context: Dict[str, Any], conn) -> Dict[str, Any]:
     """Enhance context with active strategies"""
@@ -2456,14 +3018,19 @@ async def enhance_context_with_strategies_impl(context: Dict[str, Any], conn) ->
     context["nyx2_strategies"] = strategies
     return context
 
-def enhance_context_with_memories(context, memories):
+def enhance_context_with_memories(context: Dict[str, Any], memories: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Add memories to context for better decision making."""
     enhanced_context = context.copy()
     enhanced_context['relevant_memories'] = memories
     return enhanced_context
 
+# Helper functions for backward compatibility - use NyxContext methods instead
 def should_generate_task(context: Dict[str, Any]) -> bool:
-    """Determine if we should generate a creative task"""
+    """
+    Determine if we should generate a creative task.
+    
+    DEPRECATED: Use NyxContext.should_generate_task() instead.
+    """
     if not context.get("active_npc_id"):
         return False
     scenario_type = context.get("scenario_type", "").lower()
@@ -2471,38 +3038,9 @@ def should_generate_task(context: Dict[str, Any]) -> bool:
     if not any(t in scenario_type for t in task_scenarios):
         return False
     npc_relationship = context.get("npc_relationship_level", 0)
-    if npc_relationship < 30:
+    if npc_relationship < Config.MIN_NPC_RELATIONSHIP_FOR_TASK:
         return False
     return True
-
-def should_recommend_activities(context: Dict[str, Any]) -> bool:
-    """Determine if we should recommend activities"""
-    if not context.get("present_npc_ids"):
-        return False
-    scenario_type = context.get("scenario_type", "").lower()
-    if "task" in scenario_type or "challenge" in scenario_type:
-        return False
-    user_input = context.get("user_input", "").lower()
-    suggestion_triggers = ["what should", "what can", "what to do", "suggestions", "ideas"]
-    if any(trigger in user_input for trigger in suggestion_triggers):
-        return True
-    if context.get("is_scene_transition") or context.get("is_activity_completed"):
-        return True
-    return False
-
-def get_available_activities() -> List[Dict]:
-    """Get list of available activities"""
-    return [
-        {
-            "name": "Training Session",
-            "category": "training",
-            "preferred_traits": ["disciplined", "focused"],
-            "avoided_traits": ["lazy"],
-            "preferred_times": ["morning", "afternoon"],
-            "prerequisites": ["training equipment"],
-            "outcomes": ["skill improvement", "increased discipline"]
-        }
-    ]
 
 async def generate_base_response(ctx: NyxContext, user_input: str, context: Dict[str, Any]) -> NarrativeResponse:
     """Generate base narrative response - for compatibility"""
@@ -2640,10 +3178,21 @@ class AgentContext:
     
     async def make_decision(self, context: Dict[str, Any], options: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Make a decision using the decision scoring engine"""
+        # Convert options to DecisionOption objects
+        decision_options = [DecisionOption(
+            id=str(i),
+            description=str(opt),
+            metadata=opt if isinstance(opt, dict) else {}
+        ) for i, opt in enumerate(options)]
+        
+        payload = ScoreDecisionOptionsInput(
+            options=decision_options,
+            decision_context=context
+        )
+        
         result = await score_decision_options(
             RunContextWrapper(context=self._nyx_context),
-            options,
-            context
+            payload
         )
         decision_data = json.loads(result)
         
@@ -2686,7 +3235,7 @@ class AgentContext:
         # Use the composite tool that both calculates AND updates
         result = await calculate_and_update_emotional_state(
             RunContextWrapper(context=self._nyx_context),
-            context
+            CalculateEmotionalStateInput(context=context)
         )
         
         emotional_data = json.loads(result)
@@ -2721,7 +3270,7 @@ class AgentContext:
         self.current_emotional_state.update(new_state)
         self._nyx_context.emotional_state.update(new_state)
     
-    def update_context(self, new_context: Dict[str, Any], use_delta: bool = True):
+    def update_context(self, new_context: Dict[str, Any]):
         """Update context - compatibility method"""
         self.context_cache.update(new_context)
         self._nyx_context.current_context.update(new_context)
