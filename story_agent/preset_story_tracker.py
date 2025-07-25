@@ -1,6 +1,7 @@
 # story_agent/preset_story_tracker.py
 
-from story_templates.preset_stories import PresetStory
+from typing import Dict, Any, Optional, List
+from story_templates.preset_stories import PresetStory, StoryBeat
 
 
 class PresetStoryTracker:
