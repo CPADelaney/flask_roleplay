@@ -323,6 +323,30 @@ class SFGeopoliticalLore:
                 "current_state": "Heated debate, Queen lobbying against"
             }
         ]
+
+    @staticmethod
+    def get_world_foundation() -> Dict[str, Any]:
+        """Get the base world setting"""
+        return {
+            "world_setting": {
+                "name": "San Francisco Bay Metropolitan Area",
+                "type": "modern_gothic_city",
+                "population": "7.7 million",
+                "established": "1776 (Mission), 1835 (Yerba Buena)",
+                "description": (
+                    "A city of stark contrasts where tech billionaires step over the homeless, "
+                    "where Victorian painted ladies cast shadows on underground dungeons. The fog "
+                    "rolls in each evening like a living thing, obscuring sins and swallowing screams. "
+                    "Beneath the progressive facade thrives an economy of desire, desperation, and "
+                    "dark salvation. They say the city's heart beats strongest after midnight."
+                ),
+                "atmosphere": {
+                    "physical": "Fog-shrouded hills, cold ocean wind, Victorian shadows",
+                    "social": "Tech wealth, artistic rebellion, hidden desperation",
+                    "spiritual": "Lost souls seeking meaning in sensation"
+                }
+            }
+        }
     
     @staticmethod
     def get_notable_figures() -> List[Dict[str, Any]]:
