@@ -176,8 +176,10 @@ async def start_preset_game():
         if not exists:
             return jsonify({"error": f"Preset story '{story_id}' not found"}), 404
     
-    # Queue the task
-    task = process_new_game_preset_task.delay(user_id, {"preset_story_id": story_id})
+    # Queue the task with correct data structure
+    task = process_new_game_preset_task.delay(user_id, {
+        "preset_story_id": story_id  # Make sure this key matches
+    })
     
     return jsonify({
         "status": "processing",
