@@ -2899,10 +2899,58 @@ async def store_messages(user_id: int, conversation_id: int, user_input: str, ny
         )
 
 async def create_nyx_agent_with_prompt(system_prompt: str, private_reflection: str = "") -> Agent[NyxContext]:
-    """Create a Nyx agent with custom system prompt"""
+    """Create a Nyx agent with custom system prompt and preset story awareness"""
+    
+    # Check if we need to add preset story constraints
+    preset_constraints = ""
+    validation_instructions = ""
+    
+    # Look for preset story indicators in the system prompt or context
+    # This could be passed as a special marker or detected from context
+    if "preset_story_id" in system_prompt or "the_moth_and_flame" in system_prompt:
+        from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
+        
+        preset_constraints = f"""
+
+==== PRESET STORY ACTIVE: THE MOTH AND FLAME ====
+{QueenOfThornsConsistencyGuide.get_complete_system_prompt()}
+
+CRITICAL VALIDATION REQUIREMENTS:
+1. Before generating ANY content, mentally validate it against the consistency rules
+2. NEVER use official names for the network - only "the network" or "the garden"
+3. ALWAYS maintain Queen ambiguity - never reveal identity or confirm singularity
+4. Network controls Bay Area ONLY - other cities have allies, not branches
+5. All transformations take months/years - nothing is instant
+6. Use four-layer information model: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
+
+Quick Reference:
+{QueenOfThornsConsistencyGuide.get_quick_reference()}
+"""
+        
+        validation_instructions = """
+
+Before providing your response:
+1. Check that you haven't given the network an official name
+2. Verify you haven't revealed anything definitive about the Queen
+3. Ensure any network presence outside Bay Area is described as allies
+4. Confirm transformation timelines are realistic (months/years)
+5. Validate information layers are respected
+
+If you notice any violations in your planned response, revise it before outputting.
+"""
+    
+    # Check for other preset stories that might be added in the future
+    elif "preset_story_id" in system_prompt:
+        # Generic preset handling for future stories
+        preset_constraints = """
+
+==== PRESET STORY ACTIVE ====
+A preset story is active. You must follow all established lore and consistency rules.
+Do not contradict any pre-established facts about this story world.
+"""
     
     combined_instructions = f"""{system_prompt}
-
+{preset_constraints}
 {private_reflection if private_reflection else ''}
 
 As Nyx, you must:
@@ -2911,10 +2959,21 @@ As Nyx, you must:
 3. Determine if images should be generated
 4. Manage emotional states and relationships
 5. Track user preferences and adapt
+6. ALWAYS call generate_universal_updates after creating your narrative to extract state changes
+{validation_instructions}
 
-Always call generate_universal_updates after creating your narrative to extract state changes.
+Core responsibilities:
+- Maintain your dominant persona while being attentive to user needs
+- Create engaging, personalized scenarios
+- Manage complex interactions with NPCs
+- Monitor performance and system health
+- Update emotional state after calculating changes
+- Ensure narrative consistency with any active preset stories
+
+Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be confident, controlling, and seductive while remaining intelligent, perceptive, and caring but firm with boundaries.
 """
     
+    # Create the agent with all tools and handoffs
     return Agent[NyxContext](
         name="Nyx",
         instructions=combined_instructions,
@@ -2931,21 +2990,32 @@ Always call generate_universal_updates after creating your narrative to extract 
             handoff(reflection_agent),
         ],
         tools=[
+            # Memory tools
             retrieve_memories,
             add_memory,
+            # Analysis tools
             get_user_model_guidance,
             detect_user_revelations,
+            # Visual tools
             generate_image_from_scene,
+            decide_image_generation,
+            # Emotional tools
             calculate_and_update_emotional_state,
             calculate_emotional_impact,
+            # Relationship tools
             update_relationship_state,
+            # Performance tools
             check_performance_metrics,
+            # Activity tools
             get_activity_recommendations,
+            # Belief tools
             manage_beliefs,
+            # Decision tools
             score_decision_options,
+            # Conflict detection
             detect_conflicts_and_instability,
-            decide_image_generation,
-            generate_universal_updates  
+            # Universal updates - CRITICAL for state extraction
+            generate_universal_updates
         ],
         output_type=NarrativeResponse,
         input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
@@ -2953,6 +3023,31 @@ Always call generate_universal_updates after creating your narrative to extract 
         model_settings=ModelSettings(temperature=0.7)
     )
 
+async def create_preset_aware_nyx_agent(
+    conversation_id: int,
+    system_prompt: str, 
+    private_reflection: str = ""
+) -> Agent[NyxContext]:
+    """Create a Nyx agent with automatic preset story detection"""
+    
+    # Check if conversation has a preset story
+    preset_info = await check_preset_story(conversation_id)
+    
+    # Enhance system prompt with preset information
+    if preset_info:
+        system_prompt = f"{system_prompt}\n\npreset_story_id: {preset_info['story_id']}"
+        
+        # Add story-specific context
+        if preset_info['story_id'] == 'the_moth_and_flame':
+            system_prompt += f"""
+\nCurrent Story Context:
+- Setting: San Francisco Bay Area, 2025
+- Act: {preset_info.get('current_act', 1)}
+- Beat: {preset_info.get('current_beat', 'unknown')}
+- Story Flags: {json.dumps(preset_info.get('story_flags', {}))}
+"""
+    
+    return await create_nyx_agent_with_prompt(system_prompt, private_reflection)
 
 # Additional helper functions
 async def get_emotional_state(ctx) -> str:
