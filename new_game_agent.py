@@ -2118,31 +2118,42 @@ class NewGameAgent:
         return location_ids
     
     async def _create_preset_npcs(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> List[int]:
-        """Create NPCs directly from preset data"""
-        from npcs.new_npc_creation import NPCCreationHandler
-        npc_handler = NPCCreationHandler()
+        """Create NPCs directly from preset data using PresetNPCHandler"""
+        from npcs.preset_npc_handler import PresetNPCHandler
+        from story_templates.moth.story_initializer import MothFlameStoryInitializer
+        
         npc_ids = []
+        story_context = {
+            'story_name': preset_data['name'],
+            'story_id': preset_data['id'],
+            'theme': preset_data['theme']
+        }
         
         for npc_data in preset_data.get('required_npcs', []):
-            # For complex NPCs like Lilith, use specialized creation
-            if npc_data.get('id') == 'lilith_ravencroft' or npc_data.get('name') == 'Lilith Ravencroft':
-                from story_templates.moth.story_initializer import MothFlameStoryInitializer
-                npc_id = await MothFlameStoryInitializer._create_lilith_ravencroft(
-                    ctx, ctx.context['user_id'], ctx.context['conversation_id']
-                )
-                npc_ids.append(npc_id)
-            else:
-                # Create standard NPC
-                npc_result = await npc_handler.create_preset_npc(
-                    ctx=ctx,
-                    npc_data=npc_data,
-                    environment_context=preset_data['synopsis']
-                )
-                if npc_result and 'npc_id' in npc_result:
-                    npc_ids.append(npc_result['npc_id'])
+            try:
+                # Special handling for complex NPCs like Lilith
+                if npc_data.get('id') == 'lilith_ravencroft' or npc_data.get('name') == 'Lilith Ravencroft':
+                    # Use the specialized Lilith creator
+                    npc_id = await MothFlameStoryInitializer._create_lilith_ravencroft(
+                        ctx, ctx.context['user_id'], ctx.context['conversation_id']
+                    )
+                    npc_ids.append(npc_id)
+                else:
+                    # Use PresetNPCHandler for all other NPCs
+                    npc_id = await PresetNPCHandler.create_detailed_npc(
+                        ctx=ctx,
+                        npc_data=npc_data,
+                        story_context=story_context
+                    )
+                    npc_ids.append(npc_id)
+                    
+            except Exception as e:
+                logger.error(f"Error creating preset NPC {npc_data.get('name', 'Unknown')}: {e}", exc_info=True)
+                # Continue with other NPCs even if one fails
         
+        logger.info(f"Created {len(npc_ids)} preset NPCs")
         return npc_ids
-    
+        
     async def _create_preset_opening(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> str:
         """Create opening narrative for preset story"""
         # For The Moth and Flame, use its specific opening
