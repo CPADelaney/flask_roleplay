@@ -64,7 +64,7 @@ class KVPair(BaseModel):
     """Key/value record to represent arbitrary dicts in a strict schema world."""
     model_config = ConfigDict(extra='forbid')
     key: str
-    value: JsonValue
+    value: Any
 
 class KVList(BaseModel):
     """Dict-like but strict: a list of KV pairs."""
