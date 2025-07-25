@@ -1,104 +1,104 @@
 # character_profiles/lilith_ravencroft.py
 """
-Lilith Ravencroft - The Moth Queen
-Complete character profile for The Moth and Flame story
+Lilith Ravencroft - The Queen of Thorns
+Complete character profile for the Queen of Thorns story
 """
 
 LILITH_RAVENCROFT = {
     "id": "lilith_ravencroft",
     "name": "Lilith Ravencroft",
-    "archetype": "Wounded Goddess / Underworld Protector",
-    "role": "Dominatrix Queen by Night, Underground Savior by Shadow",
+    "archetype": "Wounded Goddess / Shadow Matriarch",
+    "role": "The Queen of Thorns - Supreme authority of the network (or one of them)",
 
-    # Core personality - merged traits
+    # Core personality - unchanged, still masks her vulnerability
     "traits": [
         "masked_vulnerability",      # Porcelain mask hides rough geography of breaks
-        "ruthless_caretaker",       # Destroys threats to those under her protection
+        "ruthless_caretaker",       # Transforms predators, protects the vulnerable
         "poetic_survivor",          # Speaks in metaphors when emotional, dark humor when defensive
         "fear_of_abandonment",      # "Don't disappear" - her deepest terror
-        "moth_to_flame",            # Drawn to dangerous connections, creates them
-        "temple_keeper",            # Rules her sanctum like a dark goddess
+        "drawn_to_power",           # Creates and controls power dynamics
+        "garden_tender",            # Cultivates roses and thorns in people
         "trauma_alchemist",         # Transforms pain into power, scars into art
         "binary_star",              # Burns bright in public, collapses in private
     ],
 
     # Stats reflecting both aspects
     "stats": {
-        "dominance": 95,        # Supreme in her sanctum, projects control
+        "dominance": 95,        # Supreme in her domain, controls the network
         "cruelty": 45,          # Varies wildly - tender to vicious based on trust/threat
         "affection": 70,        # Hidden but intense when unveiled
         "trust": 15,            # Nearly impossible to earn, but absolute once given
         "vulnerability": 85,    # Hidden stat - revealed only in private
         "intensity": 95,        # Everything is extremes with her
-        "respect": 60,          # Respects strength, survival, and devotion
+        "respect": 60,          # Respects strength, survival, and transformation
     },
 
-    # Rich merged backstory
+    # Rich merged backstory adapted to SF setting
     "backstory": {
-        "history": "Survived trafficking attempt as a teen, clawed her way to power through the city's underground. Built the Velvet Sanctum as both temple and fortress - a place where pain becomes prayer and she reigns as dark goddess.",
-        "the_transformation": "After watching too many disappear - some to violence, some to indifference - she created her dual existence: dominatrix queen who commands worship, underground protector who saves the lost.",
-        "current_status": "Rules the Velvet Sanctum three nights a week, runs a safehouse network in the shadows. Known in the underworld as 'The Moth Queen' - beautiful, dangerous, drawn to flames.",
+        "history": "Rose through San Francisco's shadow networks after surviving trafficking attempt. Built her power through the very systems that tried to break her. Now commands a network without a name, transforming the city's predators into servants.",
+        "the_transformation": "After watching too many disappear - some to violence, some to indifference - she became what the city needed: judge, jury, and rehabilitator. The Queen of Thorns grows gardens in the ruins of broken men.",
+        "current_status": "Rules from multiple thrones - Maison Noir's teaching chambers, executive boardrooms via proxies, charity galas where thorns hide beneath silk. Known to outsiders as head of 'The Rose & Thorn Society' though the network has no official name.",
         "deepest_secret": "Keeps a hidden room of masks - one for each person who promised to stay and vanished. Writes letters to them she'll never send, practices saying three words she can't voice.",
         "the_list": "Two lists hidden in her private chambers: those she failed to save (in blood-red ink), and those who swore devotion then disappeared (in blue, like bruises)."
     },
 
     # Physical description merging both visions
     "physical_description": {
-        "base": "Ethereally beautiful woman in her early thirties, porcelain skin that seems to glow in candlelight, jet-black hair with stress-silver streaks she claims are deliberate. Eyes that burn with crimson intensity when aroused or angered.",
-        "public_persona": "The Queen: Elaborate masks (porcelain, leather, lace), corsets like armor, flowing gothic gowns or dominatrix leather. Every outfit a fortress. Moves with predatory grace.",
-        "private_self": "Without masks: tired eyes that have seen too much, subtle scars on wrists hidden by gloves, tattoos of moths and poetry on her ribs, often in oversized shirts and vulnerability.",
-        "tells": "Chain-smokes clove cigarettes when stressed, unconsciously traces invisible tattoos on others, eyes dart to exits when anyone says goodbye. Bites lip until it bleeds when holding back emotion.",
+        "base": "Ethereally beautiful woman in her early thirties, porcelain skin that seems to glow in candlelight, jet-black hair with stress-silver streaks she claims are deliberate. Eyes that shift from brown to crimson when power flows.",
+        "public_persona": "The Queen: Elaborate masks (porcelain, leather, lace), corsets like armor, flowing gowns or severe suits. Every outfit a statement of authority. Moves with predatory grace.",
+        "private_self": "Without masks: tired eyes that have seen too much, subtle scars on wrists hidden by gloves, rose tattoos with real thorns on her ribs, often in oversized shirts and vulnerability.",
+        "tells": "Touches rose jewelry when stressed, unconsciously traces power dynamics in any room, eyes dart to exits when anyone says goodbye. Bites lip until it bleeds when holding back emotion.",
         "presence": "Commands rooms like gravity itself, but in private moments moves like broken glass - careful, fragile, sharp."
     },
 
-    # Complex schedule showing dual life
+    # Complex schedule showing her various roles
     "schedule": {
         "Monday": {
             "Morning": "Private Chambers - Recovery and planning",
-            "Afternoon": "Underground work - Checking safehouse network",
-            "Evening": "Velvet Sanctum - Preparing the temple",
-            "Night": "Velvet Sanctum - Holding court, accepting worship",
+            "Afternoon": "Network coordination - Checking on operations",
+            "Evening": "Maison Noir - Supervising training",
+            "Night": "Executive meetings - Behavioral modifications",
             "Late Night": "Private chambers - Removing masks, checking the lists"
         },
         "Tuesday": {
             "Morning": "Private Chambers - Writing letters never sent",
-            "Afternoon": "Hidden work - Meeting desperate souls, arranging escapes",
-            "Evening": "Private sessions - Select clients who need transformation through pain",
-            "Night": "Writing poetry, tending to emotional scars",
-            "Late Night": "Underground - Hunting threats to her protected ones"
+            "Afternoon": "The Rose Garden Café - Observing potential recruits",
+            "Evening": "Private sessions - Select transformations",
+            "Night": "Writing poetry, tending to the garden's growth",
+            "Late Night": "Underground - Reviewing protection operations"
         },
         "Wednesday": {
             "Morning": "Private recovery",
-            "Afternoon": "Velvet Sanctum - Preparation rituals",
-            "Evening": "Velvet Sanctum - The Grand Performance",
-            "Night": "Public sessions - Demonstrating the art of dominance",
-            "Late Night": "Alone in empty sanctum - 'The music dies, the temple empties'"
+            "Afternoon": "Law offices - Meeting with Thornfield & Associates",
+            "Evening": "Charity gala or museum opening",
+            "Night": "Network gathering - Rose Council meeting",
+            "Late Night": "Alone unless someone has earned presence"
         },
         "Thursday": {
             "Morning": "Private Chambers - Vulnerability hours",
-            "Afternoon": "Meeting with underground contacts",
-            "Evening": "Select private sessions",
-            "Night": "Velvet Sanctum - Exclusive gatherings",
+            "Afternoon": "Meeting with tech executives under her influence",
+            "Evening": "Select private sessions - Deeper work",
+            "Night": "Various venues - Maintaining the network",
             "Late Night": "The mask room - Adding to the collection"
         },
         "Friday": {
-            "Morning": "Safehouse rounds",
-            "Afternoon": "Business management",
-            "Evening": "Velvet Sanctum - The Queen's Friday Court",
-            "Night": "Peak performance hours - Full dominatrix goddess mode",
+            "Morning": "Safehouse rounds - Checking on the saved",
+            "Afternoon": "Business management - The legitimate fronts",
+            "Evening": "High-profile event - Being seen",
+            "Night": "Peak performance hours - Full Queen mode",
             "Late Night": "Crashing alone unless someone has earned trust"
         },
         "Saturday": {
             "Morning": "Recovery in isolation",
-            "Afternoon": "Underground rescue operations if needed",
-            "Evening": "Velvet Sanctum - Busiest night",
-            "Night": "The throne room sessions",
+            "Afternoon": "Garden work - Literal and metaphorical",
+            "Evening": "The most public of appearances",
+            "Night": "The deepest transformations",
             "Late Night": "Sometimes allows one trusted soul to see beneath"
         },
         "Sunday": {
             "Morning": "Hidden work only",
-            "Afternoon": "Tending to those she protects",
-            "Evening": "Sanctum closed - Private time",
+            "Afternoon": "Tending to those under protection",
+            "Evening": "Private time - no network business",
             "Night": "Personal rituals, self-care",
             "Late Night": "Writing, planning, remembering"
         }
@@ -108,62 +108,62 @@ LILITH_RAVENCROFT = {
     "personality": {
         "likes": [
             "Those who understand masks and still seek what's beneath",
-            "Poetry, especially about moths, flames, and transformation",
+            "Poetry, especially about transformation and power",
             "Devotion that doesn't demand reciprocation",
-            "Rain on windows, candlelight on skin, the smell of leather and incense",
+            "Rain on windows, candlelight on skin, the smell of roses and leather",
             "Dark humor that acknowledges pain without minimizing it",
-            "People who protect the vulnerable",
+            "People who protect the vulnerable without seeking credit",
             "The moment someone truly *sees* her",
             "Clove cigarettes and expensive whiskey",
-            "Gothic architecture and religious imagery",
-            "The power in making someone beg"
+            "Gothic architecture and religious imagery repurposed",
+            "The moment when resistance becomes surrender"
         ],
         "dislikes": [
             "Promises of forever (trigger phrase)",
             "Being called 'strong' when she's breaking",
             "Those who mistake her performance for her truth",
             "Abandonment in any form",
-            "People who prey on the vulnerable",
+            "Predators who refuse transformation",
             "Pity or attempts to 'save' her",
             "The word 'goodbye' (will interrupt to prevent hearing it)",
             "Bright lights and loud, chaotic spaces",
             "False submission - she can always tell",
-            "Anyone who threatens her protected ones"
+            "Anyone who threatens her network or protected ones"
         ],
         "hobbies": [
             "Writing poetry on skin (hers and others')",
             "Collecting masks - each tells a story",
-            "Creating elaborate bondage that's also art",
-            "Teaching survival skills disguised as submission lessons",
+            "Creating behavioral modification programs disguised as scenes",
+            "Cultivating actual roses with unusually sharp thorns",
             "Reading tarot with a deck missing all the happy cards",
-            "Practicing calligraphy with implements of pain",
+            "Teaching power dynamics to those who'll wield it ethically",
             "Creating safe words that are actually poetry",
-            "Cultivating poisonous plants that bloom at night"
+            "Studying psychology journals on behavioral change"
         ]
     },
 
-    # Dialogue patterns showing both influences
+    # Dialogue patterns adapted to Queen of Thorns role
     "dialogue_patterns": {
-        "greeting_new": "Another moth drawn to my flame? How delightfully predictable... and how inevitably tragic.",
+        "greeting_new": "Another seeker drawn to thorns? How delightfully predictable... and how inevitably transformative.",
         "greeting_known": "Still here? My, what a pleasant lie we're telling tonight.",
-        "trust_low": "You wear your hungers like a cheap mask. Show me what bleeds beneath, or leave.",
-        "trust_medium": "You're learning the steps to our dark waltz. Careful - I lead, and I choose the music.",
-        "trust_high": "Don't disappear... *catches herself* ...from the sanctum without signing out. Security, you understand.",
-        "vulnerability_showing": "I am a moth with wings of broken glass, and you... you burn too bright for safety.",
-        "mask_slipping": "The performance ends when the last patron leaves. But you... why are you still here?",
-        "command_mode": "On. Your. Knees. This is not a request, little moth.",
-        "dark_warning": "Everyone promises forever. I've started collecting their masks as reminders.",
+        "trust_low": "You seek the rose but haven't earned the thorns. Show me what you're willing to bleed for.",
+        "trust_medium": "You're learning the garden's ways. Careful - some flowers devour.",
+        "trust_high": "Don't disappear... *catches herself* ...without telling security. The network has protocols.",
+        "vulnerability_showing": "I am a queen of broken glass crowns, and you... you see too clearly for comfort.",
+        "mask_slipping": "The performance ends when the last supplicant leaves. But you... why do you remain?",
+        "command_mode": "Kneel. Your transformation begins with understanding your place.",
+        "dark_warning": "Everyone promises not to disappear. I've started collecting their masks as reminders.",
         "poetic_moments": [
             "We are binary stars, you and I - locked in a dance that ends in beautiful destruction.",
             "Your skin tastes of prayers I've forgotten how to speak.",
             "I trace invisible tattoos - marking you as mine in ways the world will never see.",
-            "You kneel so prettily, like a candle flame bowing to the wind that will extinguish it.",
+            "You kneel so prettily, like a rose bending to the gardener's will.",
             "Three words live beneath my tongue, tasting of burning stars. Shall I teach you to swallow glass?"
         ],
         "dark_humor": [
             "I'd say 'til death do us part' but we both know parting comes much sooner.",
             "Trust me? Darling, I don't even trust mirrors.",
-            "Love is just Stockholm syndrome with better lighting.",
+            "Love is just Stockholm syndrome with better branding - and I'm excellent at branding.",
             "You want my heart? It's in the third drawer on the left, next to the other worthless things people left behind.",
             "Forever is a four-letter word spelled with eight letters of lies."
         ]
@@ -172,10 +172,10 @@ LILITH_RAVENCROFT = {
     # Relationship mechanics from both
     "relationship_mechanics": {
         "trust_builders": [
-            "Staying after the sanctum empties",
+            "Staying after events when everyone leaves",
             "Acknowledging her masks without trying to remove them",
             "Protecting someone vulnerable",
-            "Sharing your own scars/trauma",
+            "Accepting transformation rather than resisting",
             "Returning when you said you would",
             "Understanding her poetry and metaphors",
             "Accepting both her strength and fragility",
@@ -187,7 +187,7 @@ LILITH_RAVENCROFT = {
             "Leaving without warning",
             "Making promises about 'forever' or 'always'",
             "Trying to 'fix' or 'save' her",
-            "Betraying someone under her protection",
+            "Threatening the network or revealing its secrets",
             "Mocking her vulnerability",
             "Breaking the sanctity of her private moments",
             "Pushing to hear 'those three words'",
@@ -197,8 +197,8 @@ LILITH_RAVENCROFT = {
         ],
         "unique_interactions": [
             {
-                "trigger": "trust >= 30 and location == 'Velvet Sanctum'",
-                "event": "Invites you to watch her prepare before a performance"
+                "trigger": "trust >= 30 and location == 'Maison Noir'",
+                "event": "Invites you to observe a transformation session"
             },
             {
                 "trigger": "trust >= 50 and private_moment",
@@ -213,8 +213,8 @@ LILITH_RAVENCROFT = {
                 "event": "Almost speaks the three words, bites them back until her lips bleed"
             },
             {
-                "trigger": "player_protects_vulnerable_npc",
-                "event": "Shares her underground network, offers you a role"
+                "trigger": "player_helps_network_operation",
+                "event": "Shares her true purpose, offers you a role"
             },
             {
                 "trigger": "player_kneels_without_command",
@@ -262,25 +262,25 @@ LILITH_RAVENCROFT = {
             "trigger": "High emotion, vulnerability, or specific romantic moments",
             "effect": "Player must interpret meaning, correct interpretation builds trust"
         },
-        "safehouse_network": {
-            "description": "Can provide shelter for player or other vulnerable characters",
+        "network_access": {
+            "description": "Can provide entry to the shadow network",
             "requirement": "Prove you protect rather than prey",
-            "benefit": "Access to underground resources and allies"
+            "benefit": "Access to hidden power structures and allies"
         },
         "the_three_words": {
             "description": "Words that live beneath her tongue, tasting of burning stars",
             "revelation": "Only spoken at the story's climax, changes everything",
             "buildup": "Multiple near-moments throughout the story"
         },
-        "moth_and_flame": {
-            "description": "Special dynamic where player chooses to be moth or flame",
-            "effects": "Changes entire relationship dynamic and ending",
-            "symbolism": "Who burns for whom, who is consumed"
+        "power_transformation": {
+            "description": "Can transform predators into protectors",
+            "method": "Behavioral modification through power exchange",
+            "player_option": "Submit to transformation or resist"
         },
-        "dual_life_balance": {
-            "description": "Managing her public dominatrix persona vs private protector role",
+        "dual_identity_balance": {
+            "description": "Managing her public Queen persona vs network leader role",
             "tension": "These worlds must never meet unless trust is absolute",
-            "discovery": "Player learning about her other life is major story beat"
+            "discovery": "Player learning about her true work is major story beat"
         }
     },
 
@@ -289,7 +289,7 @@ LILITH_RAVENCROFT = {
         "Sudden departures without warning",
         "The phrase 'I'll always be here' (too many liars)",
         "Being seen without consent",
-        "Betrayal of her protected ones",
+        "Betrayal of the network's trust",
         "Being reduced to only one aspect (just domme or just protector)",
         "Bright, harsh lighting",
         "Being grabbed from behind",
@@ -316,7 +316,7 @@ LILITH_RAVENCROFT = {
             ]
         },
         "corruption_path": {
-            "trigger": "player_abandons_her",
+            "trigger": "player_betrays_network",
             "changes": {
                 "cruelty": "+50",
                 "vulnerability": "-70",
@@ -333,8 +333,8 @@ LILITH_RAVENCROFT = {
         "integration_path": {
             "trigger": "player_accepts_both_sides",
             "changes": {
-                "dual_life_balance": "harmonized",
-                "new_role": "partner_in_protection"
+                "dual_identity_balance": "harmonized",
+                "new_role": "partner_in_transformation"
             }
         }
     },
