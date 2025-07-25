@@ -255,15 +255,15 @@ class SFGeopoliticalLore:
         """Get the power factions in the story"""
         return [
             {
-                "name": "The Rose & Thorn Society",
+                "name": "The Shadow Network (outsiders call it 'The Rose & Thorn Society')",
                 "type": "shadow_matriarchy",
                 "description": (
                     "What began as garden clubs and professional women's associations evolved "
-                    "into something thornier. They meet at charity galas and wine tastings, "
-                    "but their real work happens in private rooms and encrypted channels. "
-                    "The Queen of Thorns coordinates through cut flowers and careful words. "
-                    "Members recognize each other by antique rose pins and the way they hold "
-                    "power - lightly, until they strike."
+                    "into something without a name. Outsiders call it The Rose & Thorn Society, "
+                    "The Garden, or The Thorn Network, but insiders know it has no formal title. "
+                    "They meet at charity galas and wine tastings, but their real work happens "
+                    "in private rooms and encrypted channels. The Queen of Thorns - the only "
+                    "certainty - coordinates through cut flowers and careful words..."
                 ),
                 "territory": "Embedded throughout Bay Area society",
                 "leadership": {
