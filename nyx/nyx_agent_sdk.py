@@ -1,7 +1,7 @@
 # nyx/nyx_agent_sdk.py
 
 """
-Nyx Agent SDK - Refactored to use OpenAI Agents SDK
+Nyx Agent SDK - Refactored to use OpenAI Agents SDK with Strict Typing
 
 MODULARIZATION TODO: This file has grown to 2k+ lines and should be split:
 - nyx/models.py - All Pydantic models and Config constants
@@ -55,6 +55,32 @@ from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
 
+# ===== Utility Types for Strict Schema =====
+
+# Recursive JSON scalar/value type. This is for *values*, not dicts.
+JsonValue = Union[str, int, float, bool, None, List["JsonValue"]]
+
+class KVPair(BaseModel):
+    """Key/value record to represent arbitrary dicts in a strict schema world."""
+    model_config = ConfigDict(extra='forbid')
+    key: str
+    value: JsonValue
+
+class KVList(BaseModel):
+    """Dict-like but strict: a list of KV pairs."""
+    model_config = ConfigDict(extra='forbid')
+    items: List[KVPair] = Field(default_factory=list)
+
+# Resolve forward refs
+KVPair.model_rebuild()
+
+# Helpers for conversion
+def dict_to_kvlist(d: dict) -> KVList:
+    return KVList(items=[KVPair(key=k, value=v) for k, v in d.items()])
+
+def kvlist_to_dict(kv: KVList) -> dict:
+    return {pair.key: pair.value for pair in kv.items}
+
 # ===== Constants and Configuration =====
 class Config:
     """Configuration constants to avoid magic numbers"""
@@ -107,7 +133,87 @@ class Config:
     POWER_CONFLICT_THRESHOLD = 0.7
     MAX_STABILITY_ISSUES = 10
 
+# ===== Core Data Models =====
+
+class MemoryItem(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    id: Optional[str] = Field(None, description="Memory ID if available")
+    text: str = Field(..., description="Memory text")
+    relevance: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score 0-1")
+    tags: List[str] = Field(default_factory=list, description="Memory tags")
+
+class EmotionalChanges(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    valence_change: float
+    arousal_change: float
+    dominance_change: float
+
+class ScoreComponents(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    context: float
+    emotional: float
+    pattern: float
+    relationship: float
+
+class PerformanceNumbers(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    memory_mb: float
+    cpu_percent: float
+    avg_response_time: float
+    success_rate: float
+
+class ConflictItem(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    type: str
+    severity: float
+    description: str
+    entities: Optional[List[str]] = None
+    blocked_objectives: Optional[List[str]] = None
+
+class InstabilityItem(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    type: str
+    severity: float
+    description: str
+    recommendation: Optional[str] = None
+
+class ActivityRec(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str
+    description: str
+    requirements: List[str]
+    duration: str
+    intensity: str
+    partner_id: Optional[str] = None
+
+class RelationshipStateOut(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    trust: float
+    power_dynamic: float
+    emotional_bond: float
+    interaction_count: int
+    last_interaction: float
+    type: str
+
+class RelationshipChanges(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    trust: float
+    power: float
+    bond: float
+
+class DecisionMetadata(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    data: KVList = Field(default_factory=KVList, description="Additional metadata")
+
+class ScoredOption(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    option: 'DecisionOption'  # Forward reference
+    score: float
+    components: ScoreComponents
+    is_fallback: Optional[bool] = False
+
 # ===== Pydantic Models for Structured Outputs =====
+
 class NarrativeResponse(BaseModel):
     """Structured output for Nyx's narrative responses"""
     model_config = ConfigDict(extra='forbid')
@@ -118,7 +224,7 @@ class NarrativeResponse(BaseModel):
     image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
     environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
     time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
-    universal_updates: Optional[Dict[str, Any]] = Field(None, description="Universal updates extracted from narrative")
+    universal_updates: Optional[KVList] = Field(None, description="Universal updates extracted from narrative")
 
 class MemoryReflection(BaseModel):
     """Structured output for memory reflections"""
@@ -152,8 +258,8 @@ class ScenarioDecision(BaseModel):
     
     action: str = Field(..., description="Action to take (advance, maintain, escalate, de-escalate)")
     next_phase: str = Field(..., description="Next scenario phase")
-    tasks: List[Dict[str, Any]] = Field(default_factory=list, description="Tasks to execute")
-    npc_actions: List[Dict[str, Any]] = Field(default_factory=list, description="NPC actions to take")
+    tasks: List[KVList] = Field(default_factory=list, description="Tasks to execute")
+    npc_actions: List[KVList] = Field(default_factory=list, description="NPC actions to take")
     time_advancement: bool = Field(False, description="Whether to advance time after this phase")
 
 class RelationshipUpdate(BaseModel):
@@ -169,7 +275,7 @@ class ActivityRecommendation(BaseModel):
     """Structured output for activity recommendations"""
     model_config = ConfigDict(extra='forbid')
     
-    recommended_activities: List[Dict[str, Any]] = Field(..., description="List of recommended activities")
+    recommended_activities: List[ActivityRec] = Field(..., description="List of recommended activities")
     reasoning: str = Field(..., description="Why these activities are recommended")
 
 class ImageGenerationDecision(BaseModel):
@@ -216,7 +322,7 @@ class CalculateEmotionalStateInput(BaseModel):
     """Input for calculate_and_update_emotional_state and calculate_emotional_impact functions"""
     model_config = ConfigDict(extra='forbid')
     
-    context: Dict[str, Any] = Field(..., description="Current interaction context")
+    context: KVList = Field(..., description="Current interaction context")
 
 class UpdateRelationshipStateInput(BaseModel):
     """Input for update_relationship_state function"""
@@ -234,14 +340,13 @@ class GetActivityRecommendationsInput(BaseModel):
     scenario_type: str = Field(..., description="Type of current scenario")
     npc_ids: List[str] = Field(..., description="List of present NPC IDs")
 
-# Fixed input models for strict mode
 class BeliefDataModel(BaseModel):
     """Model for belief data to avoid raw dicts"""
     model_config = ConfigDict(extra='forbid')
     
     entity_id: str = Field("nyx", description="Entity ID")
     type: str = Field("general", description="Belief type")
-    content: Dict[str, Any] = Field(default_factory=dict, description="Belief content")
+    content: KVList = Field(default_factory=KVList, description="Belief content")
     query: Optional[str] = Field(None, description="Query for belief search")
 
 class ManageBeliefsInput(BaseModel):
@@ -257,20 +362,20 @@ class DecisionOption(BaseModel):
     
     id: str = Field(..., description="Option ID")
     description: str = Field(..., description="Option description")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: DecisionMetadata = Field(default_factory=DecisionMetadata)
 
 class ScoreDecisionOptionsInput(BaseModel):
     """Input for score_decision_options function"""
     model_config = ConfigDict(extra='forbid')
     
     options: List[DecisionOption] = Field(..., description="List of possible decisions/actions")
-    decision_context: Dict[str, Any] = Field(..., description="Context for making the decision")
+    decision_context: KVList = Field(..., description="Context for making the decision")
 
 class DetectConflictsAndInstabilityInput(BaseModel):
     """Input for detect_conflicts_and_instability function"""
     model_config = ConfigDict(extra='forbid')
     
-    scenario_state: Dict[str, Any] = Field(..., description="Current scenario state")
+    scenario_state: KVList = Field(..., description="Current scenario state")
 
 class GenerateUniversalUpdatesInput(BaseModel):
     """Input for generate_universal_updates function"""
@@ -295,7 +400,7 @@ class MemorySearchResult(BaseModel):
     """Output for retrieve_memories function"""
     model_config = ConfigDict(extra='forbid')
     
-    memories: List[Dict[str, Any]] = Field(..., description="List of retrieved memories")
+    memories: List[MemoryItem] = Field(..., description="List of retrieved memories")
     formatted_text: str = Field(..., description="Formatted memory text")
 
 class MemoryStorageResult(BaseModel):
@@ -310,7 +415,7 @@ class UserGuidanceResult(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
     top_kinks: List[Tuple[str, float]] = Field(..., description="Top user preferences with levels")
-    behavior_patterns: Dict[str, Any] = Field(..., description="Identified behavior patterns")
+    behavior_patterns: KVList = Field(..., description="Identified behavior patterns")
     suggested_intensity: float = Field(..., description="Suggested interaction intensity")
     reflections: List[str] = Field(..., description="User model reflections")
 
@@ -318,7 +423,7 @@ class RevelationDetectionResult(BaseModel):
     """Output for detect_user_revelations function"""
     model_config = ConfigDict(extra='forbid')
     
-    revelations: List[Dict[str, Any]] = Field(..., description="Detected revelations")
+    revelations: List[KVList] = Field(..., description="Detected revelations")
     has_revelations: bool = Field(..., description="Whether any revelations were found")
 
 class ImageGenerationResult(BaseModel):
@@ -337,7 +442,7 @@ class EmotionalCalculationResult(BaseModel):
     arousal: float = Field(..., description="New arousal value")
     dominance: float = Field(..., description="New dominance value")
     primary_emotion: str = Field(..., description="Primary emotion label")
-    changes: Dict[str, float] = Field(..., description="Changes applied")
+    changes: EmotionalChanges = Field(..., description="Changes applied")
     state_updated: Optional[bool] = Field(None, description="Whether state was persisted")
 
 class RelationshipUpdateResult(BaseModel):
@@ -345,14 +450,14 @@ class RelationshipUpdateResult(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
     entity_id: str = Field(..., description="Entity ID")
-    relationship: Dict[str, Any] = Field(..., description="Updated relationship state")
-    changes: Dict[str, float] = Field(..., description="Changes applied")
+    relationship: RelationshipStateOut = Field(..., description="Updated relationship state")
+    changes: RelationshipChanges = Field(..., description="Changes applied")
 
 class PerformanceMetricsResult(BaseModel):
     """Output for check_performance_metrics function"""
     model_config = ConfigDict(extra='forbid')
     
-    metrics: Dict[str, float] = Field(..., description="Current performance metrics")
+    metrics: PerformanceNumbers = Field(..., description="Current performance metrics")
     suggestions: List[str] = Field(..., description="Performance improvement suggestions")
     actions_taken: List[str] = Field(..., description="Remediation actions taken")
     health: str = Field(..., description="Overall system health status")
@@ -361,30 +466,30 @@ class ActivityRecommendationsResult(BaseModel):
     """Output for get_activity_recommendations function"""
     model_config = ConfigDict(extra='forbid')
     
-    recommendations: List[Dict[str, Any]] = Field(..., description="Recommended activities")
+    recommendations: List[ActivityRec] = Field(..., description="Recommended activities")
     total_available: int = Field(..., description="Total number of available activities")
 
 class BeliefManagementResult(BaseModel):
     """Output for manage_beliefs function"""
     model_config = ConfigDict(extra='forbid')
     
-    result: Union[Dict[str, Any], str] = Field(..., description="Operation result")
+    result: Union[str, KVList] = Field(..., description="Operation result")
     error: Optional[str] = Field(None, description="Error message if failed")
 
 class DecisionScoringResult(BaseModel):
     """Output for score_decision_options function"""
     model_config = ConfigDict(extra='forbid')
     
-    scored_options: List[Dict[str, Any]] = Field(..., description="Options with scores")
-    best_option: Dict[str, Any] = Field(..., description="Highest scoring option")
+    scored_options: List[ScoredOption] = Field(..., description="Options with scores")
+    best_option: DecisionOption = Field(..., description="Highest scoring option")
     confidence: float = Field(..., description="Confidence in best option")
 
 class ConflictDetectionResult(BaseModel):
     """Output for detect_conflicts_and_instability function"""
     model_config = ConfigDict(extra='forbid')
     
-    conflicts: List[Dict[str, Any]] = Field(..., description="Detected conflicts")
-    instabilities: List[Dict[str, Any]] = Field(..., description="Detected instabilities")
+    conflicts: List[ConflictItem] = Field(..., description="Detected conflicts")
+    instabilities: List[InstabilityItem] = Field(..., description="Detected instabilities")
     overall_stability: float = Field(..., description="Overall stability score (0-1)")
     stability_note: str = Field(..., description="Explanation of stability score")
     requires_intervention: bool = Field(..., description="Whether intervention is needed")
@@ -407,8 +512,8 @@ class ScenarioManagementRequest(BaseModel):
     conversation_id: int = Field(..., description="Conversation ID")
     scenario_id: Optional[str] = Field(None, description="Scenario ID")
     type: str = Field("general", description="Scenario type")
-    participants: List[Dict[str, Any]] = Field(default_factory=list, description="Scenario participants")
-    objectives: List[Dict[str, Any]] = Field(default_factory=list, description="Scenario objectives")
+    participants: List[KVList] = Field(default_factory=list, description="Scenario participants")
+    objectives: List[KVList] = Field(default_factory=list, description="Scenario objectives")
 
 class RelationshipInteractionData(BaseModel):
     """Data for relationship interactions"""
@@ -416,10 +521,10 @@ class RelationshipInteractionData(BaseModel):
     
     user_id: int = Field(..., description="User ID")
     conversation_id: int = Field(..., description="Conversation ID")
-    participants: List[Dict[str, Any]] = Field(..., description="Interaction participants")
+    participants: List[KVList] = Field(..., description="Interaction participants")
     interaction_type: str = Field(..., description="Type of interaction")
     outcome: str = Field(..., description="Interaction outcome")
-    emotional_impact: Optional[Dict[str, Any]] = Field(None, description="Emotional impact data")
+    emotional_impact: Optional[KVList] = Field(None, description="Emotional impact data")
 
 # ===== State Models =====
 
@@ -452,7 +557,7 @@ class PerformanceMetrics(BaseModel):
     response_times: List[float] = Field(default_factory=list)
     memory_usage: float = Field(0.0, ge=0.0)
     cpu_usage: float = Field(0.0, ge=0.0, le=100.0)
-    error_rates: Dict[str, int] = Field(default_factory=lambda: {"total": 0, "recovered": 0, "unrecovered": 0})
+    error_rates: KVList = Field(default_factory=lambda: dict_to_kvlist({"total": 0, "recovered": 0, "unrecovered": 0}))
 
 class LearningMetrics(BaseModel):
     """Learning metrics structure"""
@@ -857,6 +962,10 @@ class NyxContext:
             successes = sum(1 for a in recent if a["success"])
             self.learning_metrics["adaptation_success_rate"] = successes / len(recent)
 
+# Resolve forward references for ScoredOption
+ScoredOption.model_rebuild()
+DecisionOption.model_rebuild()
+
 # ===== Helper Functions =====
 
 async def run_agent_with_error_handling(
@@ -965,22 +1074,29 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Retriev
         limit=limit
     )
     
-    memories = result.get("memories", [])
+    memories_raw = result.get("memories", [])
+    memories = [
+        MemoryItem(
+            id=str(m.get("id") or m.get("memory_id") or ""),
+            text=m["text"],
+            relevance=float(m.get("relevance", 0.0)),
+            tags=m.get("tags", [])
+        )
+        for m in memories_raw
+    ]
     
     formatted_memories = []
     for memory in memories:
-        relevance = memory.get("relevance", 0.5)
+        relevance = memory.relevance
         confidence_marker = "vividly recall" if relevance > Config.VIVID_RECALL_THRESHOLD else \
                           "remember" if relevance > Config.REMEMBER_THRESHOLD else \
                           "think I recall" if relevance > Config.THINK_RECALL_THRESHOLD else \
                           "vaguely remember"
         
-        formatted_memories.append(f"I {confidence_marker}: {memory['text']}")
+        formatted_memories.append(f"I {confidence_marker}: {memory.text}")
     
     formatted_text = "\n".join(formatted_memories) if formatted_memories else "No relevant memories found."
     
-    # Return the actual object, not JSON string
-    # The Agents SDK will handle serialization
     return MemorySearchResult(
         memories=memories,
         formatted_text=formatted_text
@@ -1043,7 +1159,7 @@ async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: E
     # Return structured output
     return UserGuidanceResult(
         top_kinks=top_kinks,
-        behavior_patterns=behavior_patterns,
+        behavior_patterns=dict_to_kvlist(behavior_patterns),
         suggested_intensity=suggested_intensity,
         reflections=reflections
     ).model_dump_json()
@@ -1091,44 +1207,39 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: D
                 intensity = 0.4
                 
             # Track both positive and negative preferences
-            if sentiment == "negative":
-                # Still track as a soft limit/dislike
-                revelations.append({
-                    "type": "kink_preference",
-                    "kink": kink,
-                    "intensity": 0.0,
-                    "source": "explicit_negative_mention",
-                    "sentiment": "negative"
-                })
-            else:
-                revelations.append({
-                    "type": "kink_preference",
-                    "kink": kink,
-                    "intensity": intensity,
-                    "source": "explicit_mention",
-                    "sentiment": sentiment
-                })
+            revelation_data = {
+                "type": "kink_preference",
+                "kink": kink,
+                "intensity": intensity,
+                "source": "explicit_negative_mention" if sentiment == "negative" else "explicit_mention",
+                "sentiment": sentiment
+            }
+            
+            revelations.append(dict_to_kvlist(revelation_data))
     
     if "don't tell me what to do" in lower_message or "i won't" in lower_message:
-        revelations.append({
+        revelation_data = {
             "type": "behavior_pattern",
             "pattern": "resistance",
             "intensity": 0.6,
             "source": "explicit_statement"
-        })
+        }
+        revelations.append(dict_to_kvlist(revelation_data))
     
     if "yes mistress" in lower_message or "i'll obey" in lower_message:
-        revelations.append({
+        revelation_data = {
             "type": "behavior_pattern",
             "pattern": "submission",
             "intensity": 0.8,
             "source": "explicit_statement"
-        })
+        }
+        revelations.append(dict_to_kvlist(revelation_data))
     
     # Save revelations to database if found
     if revelations and ctx.context.user_model:
         # User model will handle its own DB connection
-        for revelation in revelations:
+        for revelation_kv in revelations:
+            revelation = kvlist_to_dict(revelation_kv)
             if revelation["type"] == "kink_preference":
                 await ctx.context.user_model.update_kink_preference(
                     revelation["kink"],
@@ -1186,9 +1297,9 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
     Args:
         payload: Input containing context for emotional calculation
     """
-    context = payload.context
+    context_dict = kvlist_to_dict(payload.context)
     
-    # First calculate the new state (pass the same payload forward)
+    # First calculate the new state
     result = await calculate_emotional_impact(ctx, payload)
     emotional_data = json.loads(result)
     
@@ -1216,7 +1327,11 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
         arousal=emotional_data["arousal"],
         dominance=emotional_data["dominance"],
         primary_emotion=emotional_data["primary_emotion"],
-        changes=emotional_data["changes"],
+        changes=EmotionalChanges(
+            valence_change=emotional_data["changes"]["valence_change"],
+            arousal_change=emotional_data["changes"]["arousal_change"],
+            dominance_change=emotional_data["changes"]["dominance_change"]
+        ),
         state_updated=True
     ).model_dump_json()
 
@@ -1230,7 +1345,7 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
     Args:
         payload: Input containing context for emotional calculation
     """
-    context = payload.context
+    context_dict = kvlist_to_dict(payload.context)
     current_state = ctx.context.emotional_state.copy()  # Work with a copy
     
     # Calculate emotional changes based on context
@@ -1239,7 +1354,7 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
     dominance_change = 0.0
     
     # Analyze context for emotional triggers - build lowercase text once
-    context_text_lower = get_context_text_lower(context)
+    context_text_lower = get_context_text_lower(context_dict)
     
     if "conflict" in context_text_lower:
         arousal_change += 0.2
@@ -1254,7 +1369,7 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
         dominance_change -= 0.05
     
     # Get memory emotional impact
-    memory_impact = await _get_memory_emotional_impact(ctx, context)
+    memory_impact = await _get_memory_emotional_impact(ctx, context_dict)
     valence_change += memory_impact["valence"] * 0.3
     arousal_change += memory_impact["arousal"] * 0.3
     dominance_change += memory_impact["dominance"] * 0.3
@@ -1262,7 +1377,7 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
     # Use EmotionalCore if available for more nuanced analysis
     if ctx.context.emotional_core:
         try:
-            core_analysis = ctx.context.emotional_core.analyze(str(context))
+            core_analysis = ctx.context.emotional_core.analyze(str(context_dict))
             valence_change += core_analysis.get("valence_delta", 0) * 0.5
             arousal_change += core_analysis.get("arousal_delta", 0) * 0.5
         except Exception as e:
@@ -1292,11 +1407,11 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
         arousal=new_arousal,
         dominance=new_dominance,
         primary_emotion=primary_emotion,
-        changes={
-            "valence_change": valence_change,
-            "arousal_change": arousal_change,
-            "dominance_change": dominance_change
-        },
+        changes=EmotionalChanges(
+            valence_change=valence_change,
+            arousal_change=arousal_change,
+            dominance_change=dominance_change
+        ),
         state_updated=None  # Not updated in this function
     ).model_dump_json()
 
@@ -1324,7 +1439,8 @@ async def update_relationship_state(
             "power_dynamic": 0.5,
             "emotional_bond": 0.3,
             "interaction_count": 0,
-            "last_interaction": time.time()
+            "last_interaction": time.time(),
+            "type": "neutral"
         }
     
     rel = relationships[entity_id]
@@ -1388,12 +1504,19 @@ async def update_relationship_state(
     
     return RelationshipUpdateResult(
         entity_id=entity_id,
-        relationship=rel,
-        changes={
-            "trust": trust_change,
-            "power": power_change,
-            "bond": bond_change
-        }
+        relationship=RelationshipStateOut(
+            trust=rel["trust"],
+            power_dynamic=rel["power_dynamic"],
+            emotional_bond=rel["emotional_bond"],
+            interaction_count=rel["interaction_count"],
+            last_interaction=rel["last_interaction"],
+            type=rel["type"]
+        ),
+        changes=RelationshipChanges(
+            trust=trust_change,
+            power=power_change,
+            bond=bond_change
+        )
     ).model_dump_json()
 
 @function_tool
@@ -1439,23 +1562,22 @@ async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload:
         actions_taken.append("error_log_cleanup")
 
     return PerformanceMetricsResult(
-        metrics={
-            "memory_mb": metrics["memory_usage"],
-            "cpu_percent": metrics["cpu_usage"],
-            "avg_response_time": (
+        metrics=PerformanceNumbers(
+            memory_mb=metrics["memory_usage"],
+            cpu_percent=metrics["cpu_usage"],
+            avg_response_time=(
                 sum(metrics["response_times"]) / len(metrics["response_times"])
                 if metrics["response_times"] else 0
             ),
-            "success_rate": (
+            success_rate=(
                 metrics["successful_actions"] / metrics["total_actions"]
                 if metrics["total_actions"] else 1.0
-            ),
-        },
+            )
+        ),
         suggestions=suggestions,
         actions_taken=actions_taken,
         health="good" if not suggestions else "needs_attention",
     ).model_dump_json()
-
 
 @function_tool
 async def get_activity_recommendations(
@@ -1480,61 +1602,61 @@ async def get_activity_recommendations(
     if "training" in scenario_type.lower() or any(rel.get("type") == "submissive" 
         for rel in relationship_states_copy.values()):
         activities.extend([
-            {
-                "name": "Obedience Training",
-                "description": "Test and improve submission through structured exercises",
-                "requirements": ["trust > 0.4", "submission tendency"],
-                "duration": "15-30 minutes",
-                "intensity": "medium"
-            },
-            {
-                "name": "Position Practice",
-                "description": "Learn and perfect submissive positions",
-                "requirements": ["trust > 0.5"],
-                "duration": "10-20 minutes",
-                "intensity": "low-medium"
-            }
+            ActivityRec(
+                name="Obedience Training",
+                description="Test and improve submission through structured exercises",
+                requirements=["trust > 0.4", "submission tendency"],
+                duration="15-30 minutes",
+                intensity="medium"
+            ),
+            ActivityRec(
+                name="Position Practice",
+                description="Learn and perfect submissive positions",
+                requirements=["trust > 0.5"],
+                duration="10-20 minutes",
+                intensity="low-medium"
+            )
         ])
     
     # Social activities
     if npc_ids and len(npc_ids) > 0:
-        activities.append({
-            "name": "Group Dynamics Exercise",
-            "description": "Explore power dynamics with multiple participants",
-            "requirements": ["multiple NPCs present"],
-            "duration": "20-40 minutes",
-            "intensity": "variable"
-        })
+        activities.append(ActivityRec(
+            name="Group Dynamics Exercise",
+            description="Explore power dynamics with multiple participants",
+            requirements=["multiple NPCs present"],
+            duration="20-40 minutes",
+            intensity="variable"
+        ))
     
     # Intimate activities
     for entity_id, rel in relationship_states_copy.items():
         if rel.get("type") == "intimate" and rel.get("trust", 0) > 0.7:
-            activities.append({
-                "name": "Intimate Scene",
-                "description": f"Deepen connection with trusted partner",
-                "requirements": ["high trust", "intimate relationship"],
-                "duration": "30-60 minutes",
-                "intensity": "high",
-                "partner_id": entity_id
-            })
+            activities.append(ActivityRec(
+                name="Intimate Scene",
+                description=f"Deepen connection with trusted partner",
+                requirements=["high trust", "intimate relationship"],
+                duration="30-60 minutes",
+                intensity="high",
+                partner_id=entity_id
+            ))
             break
     
     # Default activities
     activities.extend([
-        {
-            "name": "Exploration",
-            "description": "Discover new areas or items",
-            "requirements": [],
-            "duration": "10-30 minutes",
-            "intensity": "low"
-        },
-        {
-            "name": "Conversation",
-            "description": "Engage in meaningful dialogue",
-            "requirements": [],
-            "duration": "5-15 minutes",
-            "intensity": "low"
-        }
+        ActivityRec(
+            name="Exploration",
+            description="Discover new areas or items",
+            requirements=[],
+            duration="10-30 minutes",
+            intensity="low"
+        ),
+        ActivityRec(
+            name="Conversation",
+            description="Engage in meaningful dialogue",
+            requirements=[],
+            duration="5-15 minutes",
+            intensity="low"
+        )
     ])
     
     return ActivityRecommendationsResult(
@@ -1551,27 +1673,27 @@ async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: ManageBeli
         payload: Input containing action and belief data
     """
     action = payload.action
-    belief_data = payload.belief_data.model_dump()
+    belief_data = payload.belief_data
     
     if not ctx.context.belief_system:
         return BeliefManagementResult(
-            result={},
+            result="",
             error="Belief system not available"
         ).model_dump_json()
     
     try:
         if action == "get":
-            entity_id = belief_data.get("entity_id", "nyx")
+            entity_id = belief_data.entity_id
             beliefs = await ctx.context.belief_system.get_beliefs(entity_id)
             return BeliefManagementResult(
-                result=beliefs,
+                result=dict_to_kvlist(beliefs),
                 error=None
             ).model_dump_json()
         
         elif action == "update":
-            entity_id = belief_data.get("entity_id", "nyx")
-            belief_type = belief_data.get("type", "general")
-            content = belief_data.get("content", {})
+            entity_id = belief_data.entity_id
+            belief_type = belief_data.type
+            content = kvlist_to_dict(belief_data.content)
             await ctx.context.belief_system.update_belief(entity_id, belief_type, content)
             return BeliefManagementResult(
                 result="Belief updated successfully",
@@ -1579,23 +1701,23 @@ async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: ManageBeli
             ).model_dump_json()
         
         elif action == "query":
-            query = belief_data.get("query", "")
+            query = belief_data.query or ""
             results = await ctx.context.belief_system.query_beliefs(query)
             return BeliefManagementResult(
-                result=results,
+                result=dict_to_kvlist(results),
                 error=None
             ).model_dump_json()
         
         else:
             return BeliefManagementResult(
-                result={},
+                result="",
                 error=f"Unknown action: {action}"
             ).model_dump_json()
             
     except Exception as e:
         logger.error(f"Error managing beliefs: {e}", exc_info=True)
         return BeliefManagementResult(
-            result={},
+            result="",
             error=str(e)
         ).model_dump_json()
 
@@ -1610,23 +1732,23 @@ async def score_decision_options(
     Args:
         payload: Input containing options and decision context
     """
-    options = [opt.model_dump() for opt in payload.options]
-    decision_context = payload.decision_context
+    options = payload.options
+    decision_context = kvlist_to_dict(payload.decision_context)
     
     scored_options = []
     
     for option in options:
         # Base score from context relevance
-        context_score = _calculate_context_relevance(option, decision_context)
+        context_score = _calculate_context_relevance(option.model_dump(), decision_context)
         
         # Emotional alignment score
-        emotional_score = _calculate_emotional_alignment(option, ctx.context.emotional_state)
+        emotional_score = _calculate_emotional_alignment(option.model_dump(), ctx.context.emotional_state)
         
         # Pattern-based score
-        pattern_score = _calculate_pattern_score(option, ctx.context.learned_patterns)
+        pattern_score = _calculate_pattern_score(option.model_dump(), ctx.context.learned_patterns)
         
         # Relationship impact score
-        relationship_score = _calculate_relationship_impact(option, ctx.context.relationship_states)
+        relationship_score = _calculate_relationship_impact(option.model_dump(), ctx.context.relationship_states)
         
         # Calculate weighted final score
         weights = {
@@ -1643,39 +1765,40 @@ async def score_decision_options(
             relationship_score * weights["relationship"]
         )
         
-        scored_options.append({
-            "option": option,
-            "score": final_score,
-            "components": {
-                "context": context_score,
-                "emotional": emotional_score,
-                "pattern": pattern_score,
-                "relationship": relationship_score
-            }
-        })
+        scored_options.append(ScoredOption(
+            option=option,
+            score=final_score,
+            components=ScoreComponents(
+                context=context_score,
+                emotional=emotional_score,
+                pattern=pattern_score,
+                relationship=relationship_score
+            )
+        ))
     
     # Sort by score
-    scored_options.sort(key=lambda x: x["score"], reverse=True)
+    scored_options.sort(key=lambda x: x.score, reverse=True)
     
     # If all scores are too low, include a fallback
-    if all(opt["score"] < Config.MIN_DECISION_SCORE for opt in scored_options):
+    if all(opt.score < Config.MIN_DECISION_SCORE for opt in scored_options):
         fallback = _get_fallback_decision(options)
-        scored_options.insert(0, {
-            "option": fallback,
-            "score": Config.FALLBACK_DECISION_SCORE,
-            "components": {
-                "context": Config.FALLBACK_DECISION_SCORE,
-                "emotional": Config.FALLBACK_DECISION_SCORE,
-                "pattern": Config.FALLBACK_DECISION_SCORE,
-                "relationship": Config.FALLBACK_DECISION_SCORE
-            },
-            "is_fallback": True
-        })
+        fallback_scored = ScoredOption(
+            option=fallback,
+            score=Config.FALLBACK_DECISION_SCORE,
+            components=ScoreComponents(
+                context=Config.FALLBACK_DECISION_SCORE,
+                emotional=Config.FALLBACK_DECISION_SCORE,
+                pattern=Config.FALLBACK_DECISION_SCORE,
+                relationship=Config.FALLBACK_DECISION_SCORE
+            ),
+            is_fallback=True
+        )
+        scored_options.insert(0, fallback_scored)
     
     return DecisionScoringResult(
         scored_options=scored_options,
-        best_option=scored_options[0]["option"],
-        confidence=scored_options[0]["score"]
+        best_option=scored_options[0].option,
+        confidence=scored_options[0].score
     ).model_dump_json()
 
 @function_tool
@@ -1689,7 +1812,7 @@ async def detect_conflicts_and_instability(
     Args:
         payload: Input containing scenario state
     """
-    scenario_state = payload.scenario_state
+    scenario_state = kvlist_to_dict(payload.scenario_state)
     
     conflicts = []
     instabilities = []
@@ -1701,33 +1824,33 @@ async def detect_conflicts_and_instability(
         for entity2_id, rel2 in relationship_items[i+1:]:
             # Conflicting power dynamics
             if abs(rel1.get("power_dynamic", 0.5) - rel2.get("power_dynamic", 0.5)) > Config.POWER_CONFLICT_THRESHOLD:
-                conflicts.append({
-                    "type": "power_conflict",
-                    "entities": [entity1_id, entity2_id],
-                    "severity": abs(rel1["power_dynamic"] - rel2["power_dynamic"]),
-                    "description": "Conflicting power dynamics between entities"
-                })
+                conflicts.append(ConflictItem(
+                    type="power_conflict",
+                    entities=[entity1_id, entity2_id],
+                    severity=abs(rel1["power_dynamic"] - rel2["power_dynamic"]),
+                    description="Conflicting power dynamics between entities"
+                ))
             
             # Low mutual trust
             if rel1.get("trust", 0.5) < Config.HOSTILE_TRUST_THRESHOLD and rel2.get("trust", 0.5) < Config.HOSTILE_TRUST_THRESHOLD:
-                conflicts.append({
-                    "type": "trust_conflict",
-                    "entities": [entity1_id, entity2_id],
-                    "severity": 0.7,
-                    "description": "Mutual distrust between entities"
-                })
+                conflicts.append(ConflictItem(
+                    type="trust_conflict",
+                    entities=[entity1_id, entity2_id],
+                    severity=0.7,
+                    description="Mutual distrust between entities"
+                ))
     
     # Check for emotional instability
     emotional_state = ctx.context.emotional_state
     
     # High arousal with negative valence
     if emotional_state["arousal"] > Config.HIGH_AROUSAL_THRESHOLD and emotional_state["valence"] < Config.NEGATIVE_VALENCE_THRESHOLD:
-        instabilities.append({
-            "type": "emotional_volatility",
-            "severity": emotional_state["arousal"],
-            "description": "High arousal with negative emotions",
-            "recommendation": "De-escalation needed"
-        })
+        instabilities.append(InstabilityItem(
+            type="emotional_volatility",
+            severity=emotional_state["arousal"],
+            description="High arousal with negative emotions",
+            recommendation="De-escalation needed"
+        ))
     
     # Rapid emotional changes
     if ctx.context.adaptation_history:
@@ -1737,24 +1860,24 @@ async def detect_conflicts_and_instability(
             if valence_values:  # Only calculate variance if we have values
                 valence_variance = _calculate_variance(valence_values)
                 if valence_variance > Config.EMOTIONAL_VARIANCE_THRESHOLD:
-                    instabilities.append({
-                        "type": "emotional_instability",
-                        "severity": min(1.0, valence_variance),
-                        "description": "Rapid emotional swings detected",
-                        "recommendation": "Stabilization recommended"
-                    })
+                    instabilities.append(InstabilityItem(
+                        type="emotional_instability",
+                        severity=min(1.0, valence_variance),
+                        description="Rapid emotional swings detected",
+                        recommendation="Stabilization recommended"
+                    ))
     
     # Scenario-specific conflicts
     if scenario_state.get("objectives"):
         blocked_objectives = [obj for obj in scenario_state["objectives"] 
                              if obj.get("status") == "blocked"]
         if blocked_objectives:
-            conflicts.append({
-                "type": "objective_conflict",
-                "severity": len(blocked_objectives) / len(scenario_state["objectives"]),
-                "description": f"{len(blocked_objectives)} objectives are blocked",
-                "blocked_objectives": blocked_objectives
-            })
+            conflicts.append(ConflictItem(
+                type="objective_conflict",
+                severity=len(blocked_objectives) / len(scenario_state["objectives"]),
+                description=f"{len(blocked_objectives)} objectives are blocked",
+                blocked_objectives=[str(obj) for obj in blocked_objectives]
+            ))
     
     # Calculate overall stability
     total_issues = len(conflicts) + len(instabilities)
@@ -1765,9 +1888,9 @@ async def detect_conflicts_and_instability(
         should_save = False
         
         # Check if this is a significant change
-        if conflicts and any(c["severity"] > 0.7 for c in conflicts):
+        if conflicts and any(c.severity > 0.7 for c in conflicts):
             should_save = True
-        if instabilities and any(i["severity"] > 0.7 for i in instabilities):
+        if instabilities and any(i.severity > 0.7 for i in instabilities):
             should_save = True
         if overall_stability < 0.3:
             should_save = True
@@ -1788,7 +1911,7 @@ async def detect_conflicts_and_instability(
         instabilities=instabilities,
         overall_stability=overall_stability,
         stability_note=f"{total_issues} issues detected (0 issues = 1.0 stability, 10+ issues = 0.0 stability)",
-        requires_intervention=any(c["severity"] > 0.8 for c in conflicts + instabilities)
+        requires_intervention=any(c.severity > 0.8 for c in conflicts + instabilities)
     ).model_dump_json()
 
 @function_tool
@@ -1910,6 +2033,24 @@ async def generate_universal_updates(
             error=str(e)
         ).model_dump_json()
 
+# ===== Helper Functions for Tools =====
+
+def get_context_text_lower(context: Dict[str, Any]) -> str:
+    """Extract text from context and convert to lowercase for analysis"""
+    text_parts = []
+    for key, value in context.items():
+        if isinstance(value, str):
+            text_parts.append(value)
+        elif isinstance(value, (list, dict)):
+            text_parts.append(str(value))
+    return " ".join(text_parts).lower()
+
+async def _get_memory_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> Dict[str, float]:
+    """Get emotional impact from related memories"""
+    # This is a simplified version - in reality you'd query the memory system
+    # for related memories and analyze their emotional content
+    return {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
+
 def _calculate_context_relevance(option: Dict[str, Any], context: Dict[str, Any]) -> float:
     """Calculate how relevant an option is to context"""
     score = 0.5  # Base score
@@ -1978,16 +2119,20 @@ def _calculate_relationship_impact(option: Dict[str, Any], relationship_states: 
     # Safe options work with any trust level
     return 0.5 + (avg_trust * 0.5)
 
-def _get_fallback_decision(options: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _get_fallback_decision(options: List[DecisionOption]) -> DecisionOption:
     """Get a safe fallback decision - Enhanced with more keywords"""
     # Prefer conversation or observation options
-    safe_words = ["talk", "observe", "wait", "consider", "listen", "pause"]  # Added listen and pause
+    safe_words = ["talk", "observe", "wait", "consider", "listen", "pause"]
     for option in options:
         if any(safe_word in str(option).lower() for safe_word in safe_words):
             return option
     
     # Otherwise return the first option
-    return options[0] if options else {"action": "observe", "description": "Take a moment to assess"}
+    return options[0] if options else DecisionOption(
+        id="fallback",
+        description="Take a moment to assess",
+        metadata=DecisionMetadata()
+    )
 
 def _prune_list(lst: List[Any], max_len: int) -> None:
     """Prune a list to maximum length in-place"""
@@ -2004,108 +2149,16 @@ def _calculate_avg_response_time(response_times: List[float]) -> float:
         # Fallback to simple mean
         return sum(response_times) / len(response_times)
 
-async def create_narrative_with_updates(
-    ctx: NyxContext,
-    agent: Agent,
-    user_input: str
-) -> Tuple[NarrativeResponse, Dict[str, Any]]:
-    """
-    Helper to ensure narrative creation always includes universal updates.
-    
-    Returns:
-        Tuple of (narrative_response, universal_updates)
-    """
-    # Run the agent
-    result = await Runner.run(
-        agent,
-        user_input,
-        context=ctx,
-        run_config=RunConfig(
-            workflow_name="Nyx Roleplay",
-            trace_metadata={"user_id": str(ctx.user_id), "conversation_id": str(ctx.conversation_id)}
-        )
-    )
-    
-    # Get the structured response
-    response = result.final_output_as(NarrativeResponse)
-    
-    # Always generate universal updates
-    if response.narrative:
-        await generate_universal_updates(
-            RunContextWrapper(context=ctx),
-            GenerateUniversalUpdatesInput(narrative=response.narrative)
-        )
-    
-    # Extract universal updates from context
-    universal_updates = ctx.current_context.get("universal_updates", {})
-    
-    return response, universal_updates
-
-def get_available_activities(scenario_type: str, relationship_states: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Get available activities based on scenario type and relationships.
-    
-    Args:
-        scenario_type: Type of current scenario
-        relationship_states: Current relationship states
-        
-    Returns:
-        List of available activities
-    """
-    activities = []
-    
-    # Training activities
-    if "training" in scenario_type.lower() or any(rel.get("type") == "submissive" 
-        for rel in relationship_states.values()):
-        activities.extend([
-            {
-                "name": "Obedience Training",
-                "description": "Test and improve submission through structured exercises",
-                "requirements": ["trust > 0.4", "submission tendency"],
-                "duration": "15-30 minutes",
-                "intensity": "medium"
-            },
-            {
-                "name": "Position Practice",
-                "description": "Learn and perfect submissive positions",
-                "requirements": ["trust > 0.5"],
-                "duration": "10-20 minutes",
-                "intensity": "low-medium"
-            }
-        ])
-    
-    # Intimate activities
-    for entity_id, rel in relationship_states.items():
-        if rel.get("type") == "intimate" and rel.get("trust", 0) > 0.7:
-            activities.append({
-                "name": "Intimate Scene",
-                "description": f"Deepen connection with trusted partner",
-                "requirements": ["high trust", "intimate relationship"],
-                "duration": "30-60 minutes",
-                "intensity": "high",
-                "partner_id": entity_id
-            })
-            break
-    
-    # Default activities
-    activities.extend([
-        {
-            "name": "Exploration",
-            "description": "Discover new areas or items",
-            "requirements": [],
-            "duration": "10-30 minutes",
-            "intensity": "low"
-        },
-        {
-            "name": "Conversation",
-            "description": "Engage in meaningful dialogue",
-            "requirements": [],
-            "duration": "5-15 minutes",
-            "intensity": "low"
-        }
-    ])
-    
-    return activities
+def _calculate_variance(values: List[float]) -> float:
+    """Calculate variance of a list of values"""
+    if len(values) < 2:
+        return 0.0
+    try:
+        return statistics.variance(values)
+    except Exception:
+        # Fallback calculation
+        mean = sum(values) / len(values)
+        return sum((x - mean) ** 2 for x in values) / len(values)
 
 # ===== Guardrails =====
 
@@ -2413,8 +2466,11 @@ async def process_user_input(
             except Exception as e:
                 logger.warning(f"Failed to auto-generate universal updates: {e}")
         
-        # Extract universal updates from context
-        universal_updates = nyx_context.current_context.get("universal_updates", {})
+        # Extract universal updates from context - convert to regular dict for compatibility
+        universal_updates_dict = {}
+        if nyx_context.current_context.get("universal_updates"):
+            if isinstance(nyx_context.current_context["universal_updates"], dict):
+                universal_updates_dict = nyx_context.current_context["universal_updates"]
         
         # Apply response filtering if available
         if nyx_context.response_filter and response.narrative:
@@ -2475,7 +2531,7 @@ async def process_user_input(
                 "image_prompt": response.image_prompt,
                 "environment_update": response.environment_description,
                 "time_advancement": response.time_advancement,
-                "universal_updates": universal_updates  # Include any universal updates
+                "universal_updates": universal_updates_dict  # Include any universal updates
             },
             "memories_used": [],
             "performance": {
@@ -2677,12 +2733,18 @@ async def manage_scenario(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
         nyx_context = NyxContext(user_id, conversation_id)
         await nyx_context.initialize()
         
+        # Convert participants and objectives to KVList
+        participants = [dict_to_kvlist(p) if isinstance(p, dict) else p 
+                      for p in scenario_data.get("participants", [])]
+        objectives = [dict_to_kvlist(o) if isinstance(o, dict) else o 
+                     for o in scenario_data.get("objectives", [])]
+        
         # Update scenario state
         nyx_context.scenario_state = {
             "id": scenario_data.get("scenario_id", f"scenario_{int(time.time())}"),
             "type": scenario_data.get("type", "general"),
-            "participants": scenario_data.get("participants", []),
-            "objectives": scenario_data.get("objectives", []),
+            "participants": participants,
+            "objectives": objectives,
             "current_phase": "initialization",
             "start_time": time.time(),
             "active": True
@@ -2713,11 +2775,11 @@ async def manage_scenario(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "success": True,
             "scenario_state": nyx_context.scenario_state,
-            "initial_tasks": decision.tasks,
+            "initial_tasks": [kvlist_to_dict(task) for task in decision.tasks],
             "coordination_plan": {
                 "action": decision.action,
                 "next_phase": decision.next_phase,
-                "npc_actions": decision.npc_actions
+                "npc_actions": [kvlist_to_dict(action) for action in decision.npc_actions]
             }
         }
         
@@ -2759,7 +2821,10 @@ async def manage_relationships(interaction_data: Dict[str, Any]) -> Dict[str, An
         for i, p1 in enumerate(participants):
             for p2 in participants[i+1:]:
                 # Create a unique key regardless of order
-                entity_key = "_".join(sorted([str(p1['id']), str(p2['id'])]))
+                p1_dict = kvlist_to_dict(p1) if not isinstance(p1, dict) else p1
+                p2_dict = kvlist_to_dict(p2) if not isinstance(p2, dict) else p2
+                
+                entity_key = "_".join(sorted([str(p1_dict.get('id', p1)), str(p2_dict.get('id', p2))]))
                 
                 # Calculate relationship changes based on interaction
                 trust_change = 0.1 if interaction_data.get("outcome") == "success" else -0.05
@@ -3081,6 +3146,72 @@ async def process_user_input_standalone(
     """Process user input standalone"""
     return await process_user_input(user_id, conversation_id, user_input, context_data)
 
+def get_available_activities(scenario_type: str, relationship_states: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Get available activities based on scenario type and relationships.
+    
+    Args:
+        scenario_type: Type of current scenario
+        relationship_states: Current relationship states
+        
+    Returns:
+        List of available activities
+    """
+    activities = []
+    
+    # Training activities
+    if "training" in scenario_type.lower() or any(rel.get("type") == "submissive" 
+        for rel in relationship_states.values()):
+        activities.extend([
+            {
+                "name": "Obedience Training",
+                "description": "Test and improve submission through structured exercises",
+                "requirements": ["trust > 0.4", "submission tendency"],
+                "duration": "15-30 minutes",
+                "intensity": "medium"
+            },
+            {
+                "name": "Position Practice",
+                "description": "Learn and perfect submissive positions",
+                "requirements": ["trust > 0.5"],
+                "duration": "10-20 minutes",
+                "intensity": "low-medium"
+            }
+        ])
+    
+    # Intimate activities
+    for entity_id, rel in relationship_states.items():
+        if rel.get("type") == "intimate" and rel.get("trust", 0) > 0.7:
+            activities.append({
+                "name": "Intimate Scene",
+                "description": f"Deepen connection with trusted partner",
+                "requirements": ["high trust", "intimate relationship"],
+                "duration": "30-60 minutes",
+                "intensity": "high",
+                "partner_id": entity_id
+            })
+            break
+    
+    # Default activities
+    activities.extend([
+        {
+            "name": "Exploration",
+            "description": "Discover new areas or items",
+            "requirements": [],
+            "duration": "10-30 minutes",
+            "intensity": "low"
+        },
+        {
+            "name": "Conversation",
+            "description": "Engage in meaningful dialogue",
+            "requirements": [],
+            "duration": "5-15 minutes",
+            "intensity": "low"
+        }
+    ])
+    
+    return activities
+
 # Legacy AgentContext for full backward compatibility
 class AgentContext:
     """Full backward compatibility with original AgentContext"""
@@ -3182,12 +3313,12 @@ class AgentContext:
         decision_options = [DecisionOption(
             id=str(i),
             description=str(opt),
-            metadata=opt if isinstance(opt, dict) else {}
+            metadata=DecisionMetadata(data=dict_to_kvlist(opt) if isinstance(opt, dict) else DecisionMetadata().data)
         ) for i, opt in enumerate(options)]
         
         payload = ScoreDecisionOptionsInput(
             options=decision_options,
-            decision_context=context
+            decision_context=dict_to_kvlist(context)
         )
         
         result = await score_decision_options(
@@ -3235,7 +3366,7 @@ class AgentContext:
         # Use the composite tool that both calculates AND updates
         result = await calculate_and_update_emotional_state(
             RunContextWrapper(context=self._nyx_context),
-            CalculateEmotionalStateInput(context=context)
+            CalculateEmotionalStateInput(context=dict_to_kvlist(context))
         )
         
         emotional_data = json.loads(result)
