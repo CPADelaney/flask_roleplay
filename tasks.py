@@ -1058,9 +1058,17 @@ async def sweep_and_merge_nyx_split_brains():
 
 @celery_app.task
 @async_task
-async def process_new_game_preset_task(user_id, preset_data):
-    """Process new game creation with preset story"""
+async def process_new_game_preset_task(user_id, conversation_data):
+    """Process new game creation with preset story - bypasses LLM generation"""
     logger.info(f"Starting preset game creation for user {user_id}")
+    
+    # Ensure user_id is int
+    try:
+        if isinstance(user_id, str):
+            user_id = int(user_id)
+    except (ValueError, TypeError) as e:
+        logger.error(f"Invalid user_id format: {user_id}")
+        return {"status": "failed", "error": f"Invalid user_id: {str(e)}"}
     
     agent = NewGameAgent()
     
@@ -1068,10 +1076,15 @@ async def process_new_game_preset_task(user_id, preset_data):
         from lore.core.context import CanonicalContext
         ctx = CanonicalContext(user_id, 0)
         
-        result = await agent.process_new_game_with_preset(
+        preset_story_id = conversation_data.get('preset_story_id')
+        if not preset_story_id:
+            raise ValueError("No preset_story_id provided")
+        
+        # Use the new direct method that bypasses LLM
+        result = await agent.process_preset_game_direct(
             ctx, 
-            preset_data,
-            preset_data['preset_story_id']
+            conversation_data,
+            preset_story_id
         )
         
         return serialize_for_celery(result)
