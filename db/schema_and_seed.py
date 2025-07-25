@@ -25,6 +25,8 @@ import asyncpg
 import asyncio
 from typing import Dict, Any
 
+from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME, MOTH_FLAME_POEMS, STORY_TONE_PROMPT
+
 # Import system prompts for Nyx
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 
@@ -2712,7 +2714,6 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 '''
-from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME, MOTH_FLAME_POEMS, STORY_TONE_PROMPT
 
 async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
     """
