@@ -17,6 +17,8 @@ chatgpt_bp = Blueprint('chatgpt_bp', __name__)
 @chatgpt_bp.route('/chat', methods=['POST'])
 async def chat():
     """Process user message, get GPT response, and handle image generation."""
+    start_time = time.time()
+    
     user_id = session.get('user_id')
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
@@ -29,35 +31,73 @@ async def chat():
         return jsonify({"error": "Missing message or conversation_id"}), 400
     
     try:
+        # Check for preset story
+        preset_info = await PresetStoryManager.check_preset_story(conversation_id)
+        
         # Get conversation context
         conversation_context = await get_conversation_context(user_id, conversation_id)
         
-        # Try to get image-aware prompts, but fall back to regular flow if not available
-        formatted_user_prompt = user_message  # Default to plain user message
+        # Add preset info to context if active
+        if preset_info:
+            conversation_context['preset_story'] = preset_info
+            
+            # Get location-specific lore
+            current_location = await get_current_location(conversation_id)
+            if current_location:
+                location_lore = await PresetStoryManager.get_location_lore(
+                    conversation_id, current_location
+                )
+                conversation_context['location_lore'] = location_lore
+            
+            # Get character constraints if talking to specific NPCs
+            npcs_present = await get_npcs_at_location(conversation_id, current_location)
+            if npcs_present:
+                conversation_context['character_constraints'] = {}
+                for npc in npcs_present:
+                    constraints = await PresetStoryManager.get_character_constraints(
+                        conversation_id, npc['npc_name']
+                    )
+                    if constraints:
+                        conversation_context['character_constraints'][npc['npc_name']] = constraints
+        
+        # Format user prompt - enhanced with preset awareness
+        formatted_user_prompt = user_message
+        
         try:
-            # Only try to use image-aware formatting if the functions exist and work
+            # Try to use image-aware formatting if available
             system_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
+            
+            # Inject preset constraints into system prompt
+            if preset_info:
+                system_prompt = await PresetStoryManager.inject_preset_context(
+                    system_prompt, conversation_id, include_validation=True
+                )
+            
             formatted_user_prompt = format_user_prompt_for_image_awareness(
                 user_message, 
                 conversation_context
             )
-            logging.info("Using image-aware prompts")
+            logging.info("Using preset-aware image prompts")
+            
         except Exception as e:
             logging.info(f"Image prompting not available, using regular flow: {e}")
-            # Fall back to regular system prompt (which is handled internally by get_chatgpt_response)
         
-        # Get response from GPT using the existing function signature
+        # Get response from GPT using the existing function
         try:
-            # Always use unified pipeline
             gpt_response_data = await get_chatgpt_response(
                 conversation_id=conversation_id,
-                aggregator_text="",
+                aggregator_text="",  # Will be built inside the function
                 user_input=user_message,
                 reflection_enabled=data.get('reflection_enabled', False),
-                use_nyx_integration=True  # Force Nyx integration
+                use_nyx_integration=True
             )
         except Exception as e:
             logging.error(f"Error getting GPT response: {e}")
+            await PresetStoryManager.log_generation_metrics(
+                conversation_id, 'chat_response', False, 
+                violations=['generation_failed'], 
+                response_time=time.time() - start_time
+            )
             return jsonify({
                 "error": "Failed to get GPT response",
                 "message": str(e)
@@ -65,19 +105,73 @@ async def chat():
         
         # Handle the response based on type
         if gpt_response_data['type'] == 'function_call':
-            # Extract the narrative from function args
             response_text = gpt_response_data['function_args'].get('narrative', '')
             structured_response = gpt_response_data['function_args']
         else:
-            # Plain text response
             response_text = gpt_response_data.get('response', '')
             structured_response = {'response_text': response_text}
         
-        # Check if we should generate an image (only if image features are available)
+        # Validate response if preset is active
+        validation_passed = True
+        if preset_info and response_text:
+            validation_result = await PresetStoryManager.validate_preset_content(
+                response_text,
+                preset_info['story_id'],
+                conversation_id,
+                'narrative'
+            )
+            
+            if not validation_result['valid']:
+                validation_passed = False
+                logging.warning(
+                    f"Response contains preset violations: {validation_result['violations']}"
+                )
+                
+                # Optionally, try to regenerate with stricter constraints
+                if data.get('auto_fix_violations', True):
+                    # Add violation context to prompt
+                    violation_context = f"\n\nPREVIOUS RESPONSE VIOLATIONS:\n"
+                    for violation in validation_result['violations']:
+                        violation_context += f"- {violation}\n"
+                    violation_context += "\nPlease regenerate without these violations."
+                    
+                    # Retry with enhanced prompt
+                    retry_response = await get_chatgpt_response(
+                        conversation_id=conversation_id,
+                        aggregator_text=violation_context,
+                        user_input=user_message,
+                        reflection_enabled=False,  # Skip reflection on retry
+                        use_nyx_integration=True
+                    )
+                    
+                    if retry_response['type'] == 'function_call':
+                        response_text = retry_response['function_args'].get('narrative', '')
+                        structured_response = retry_response['function_args']
+                    else:
+                        response_text = retry_response.get('response', '')
+                        structured_response = {'response_text': response_text}
+                    
+                    # Validate again
+                    revalidation = await PresetStoryManager.validate_preset_content(
+                        response_text,
+                        preset_info['story_id'],
+                        conversation_id,
+                        'narrative_retry'
+                    )
+                    validation_passed = revalidation['valid']
+        
+        # Log generation metrics
+        await PresetStoryManager.log_generation_metrics(
+            conversation_id, 'chat_response', validation_passed,
+            violations=validation_result.get('violations') if not validation_passed else None,
+            response_time=time.time() - start_time
+        )
+        
+        # Check if we should generate an image
         image_result = None
         image_generation_reason = None
+        
         try:
-            # Check if image generation modules are available
             if 'should_generate_image_for_response' in globals() and 'generate_roleplay_image_from_gpt' in globals():
                 should_generate, reason = await should_generate_image_for_response(
                     user_id, 
@@ -85,28 +179,61 @@ async def chat():
                     structured_response
                 )
                 
-                # Process image generation if needed
+                # Apply special mechanics for image generation
+                if preset_info and not should_generate:
+                    # Check if special mechanics trigger image generation
+                    if await PresetStoryManager.should_apply_special_mechanics(
+                        conversation_id, 'dramatic_moment', 
+                        {'narrative': response_text, 'trust_level': conversation_context.get('trust_level', 0)}
+                    ):
+                        should_generate = True
+                        reason = "Dramatic story moment"
+                
                 if should_generate:
                     print(f"Generating image for scene: {reason}")
+                    
+                    # Enhance image data with preset context
+                    img_data = {
+                        "narrative": response_text,
+                        "image_generation": structured_response.get("image_generation", {
+                            "generate": True, 
+                            "priority": "medium", 
+                            "focus": "balanced",
+                            "framing": "medium_shot", 
+                            "reason": reason
+                        })
+                    }
+                    
+                    # Add preset-specific image hints
+                    if preset_info and preset_info['story_id'] == 'the_moth_and_flame':
+                        img_data['style_hints'] = [
+                            'gothic atmosphere',
+                            'candlelit shadows',
+                            'noir aesthetic',
+                            'San Francisco fog'
+                        ]
+                    
                     image_result = await generate_roleplay_image_from_gpt(
-                        structured_response, 
+                        img_data, 
                         user_id, 
                         conversation_id
                     )
-                    image_generation_reason = reason
                     
-                    # Save information about this image generation
-                    await save_image_generation_info(
-                        user_id,
-                        conversation_id,
-                        reason,
-                        image_result
-                    )
-        except Exception as e:
-            print(f"Image generation not available: {e}")
-            # Continue without image generation
+                    if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                        image_generation_reason = reason
+                        await save_image_generation_info(
+                            user_id,
+                            conversation_id,
+                            reason,
+                            image_result
+                        )
+                    else:
+                        logger.warning(f"Image generation failed: {image_result}")
+                        
+        except Exception as img_err:
+            logger.error(f"Error in image generation: {img_err}", exc_info=True)
         
-        # Save the user message to conversation history
+        # Save messages
         await save_message(
             conversation_id=conversation_id,
             sender="user",
@@ -114,7 +241,6 @@ async def chat():
             structured_content=None
         )
         
-        # Save the assistant response to conversation history
         await save_message(
             conversation_id=conversation_id,
             sender="assistant",
@@ -122,30 +248,72 @@ async def chat():
             structured_content=structured_response
         )
         
-        # Process state updates from the response if it was a function call
+        # Process state updates
         if gpt_response_data['type'] == 'function_call' and 'function_args' in gpt_response_data:
-            # Use the structured response which contains all the state updates
             await process_state_updates(
                 user_id, 
                 conversation_id, 
-                structured_response  # This contains all the update fields
+                structured_response
             )
         
-        # Return complete response to frontend
-        return jsonify({
+        # Build response
+        response_data = {
             "message": response_text,
             "image": image_result,
             "image_generation_reason": image_generation_reason,
             "structured_data": structured_response,
-            "tokens_used": gpt_response_data.get('tokens_used', 0)
-        })
+            "tokens_used": gpt_response_data.get('tokens_used', 0),
+            "validation_passed": validation_passed
+        }
+        
+        # Add preset story info if active
+        if preset_info:
+            response_data['preset_story'] = {
+                'story_id': preset_info['story_id'],
+                'current_act': preset_info.get('current_act'),
+                'current_beat': preset_info.get('current_beat'),
+                'progress': preset_info.get('progress', 0)
+            }
+            
+            # Add any triggered special mechanics
+            if conversation_context.get('location_lore', {}).get('special_mechanics'):
+                response_data['special_mechanics'] = conversation_context['location_lore']['special_mechanics']
+        
+        return jsonify(response_data)
         
     except Exception as e:
-        print(f"Error processing GPT response: {e}")
+        logger.error(f"Error processing chat: {e}", exc_info=True)
         return jsonify({
             "error": "Failed to process response",
             "message": "Something went wrong processing the response."
         }), 500
+
+async def get_current_location(conversation_id: int) -> Optional[str]:
+    """Get current location from CurrentRoleplay"""
+    async with get_db_connection_context() as conn:
+        location = await conn.fetchval("""
+            SELECT value FROM CurrentRoleplay
+            WHERE conversation_id = $1 AND key = 'CurrentLocation'
+        """, conversation_id)
+        
+        return json.loads(location) if location and location.startswith('{') else location
+
+
+async def get_npcs_at_location(conversation_id: int, location: str) -> List[Dict[str, Any]]:
+    """Get NPCs at the current location"""
+    if not location:
+        return []
+        
+    async with get_db_connection_context() as conn:
+        rows = await conn.fetch("""
+            SELECT npc_id, npc_name, trust, current_mask
+            FROM NPCStats
+            WHERE conversation_id = $1 
+            AND current_location = $2
+            AND introduced = true
+        """, conversation_id, location)
+        
+        return [dict(row) for row in rows]
 
 async def get_conversation_context(user_id, conversation_id):
     """Get the conversation context including message history."""
