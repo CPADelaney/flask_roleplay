@@ -2714,6 +2714,39 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 '''
+            ]  # End of sql_commands list
+
+            # Execute commands sequentially
+            logger.info(f"Found {len(sql_commands)} SQL commands for schema creation.")
+            for i, command in enumerate(sql_commands):
+                # Clean up potential leading/trailing whitespace from multi-line strings
+                cleaned_command = command.strip()
+                if not cleaned_command:  # Skip empty strings if any accidentally got in
+                    logger.warning(f"Skipping empty command at index {i}.")
+                    continue
+                try:
+                    logger.debug(f"Executing schema command {i+1}/{len(sql_commands)}...")
+                    await conn.execute(cleaned_command)
+                except asyncpg.PostgresError as e:
+                    logger.error(f"Error executing command {i+1}: {cleaned_command[:100]}... \nError: {e}", exc_info=True)
+                    # Log and continue is generally better for IF NOT EXISTS
+                    logger.warning(f"Continuing schema creation despite error on command {i+1}.")
+                except Exception as e_generic:  # Catch other potential errors like syntax issues
+                    logger.error(f"Non-DB error executing command {i+1}: {cleaned_command[:100]}... \nError: {e_generic}", exc_info=True)
+                    logger.warning(f"Continuing schema creation despite non-DB error on command {i+1}.")
+
+            logger.info("Finished executing schema commands loop.")
+
+        # This log message indicates the 'async with' block completed
+        logger.info("Schema creation process completed (connection released).")
+
+    # Catch errors related to connection acquisition or timeout
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
+        logger.critical(f"Failed to acquire connection or timed out during table creation: {e}", exc_info=True)
+        raise  # Re-raise the exception to indicate failure
+    except Exception as e:
+        logger.critical(f"An unexpected error occurred outside the connection block during table creation: {e}", exc_info=True)
+        raise
 
 # --- Seeding and Initialization Functions ---
 
@@ -2964,29 +2997,6 @@ def categorize_imagery(imagery: str) -> str:
         return "general_imagery"
 
 
-# Update your main initialization to include poem seeding
-async def initialize_all_data():
-    """
-    Asynchronous convenience function to create tables + seed initial data.
-    Updated to include poem seeding for preset stories.
-    """
-    logger.info("Starting full database initialization...")
-    try:
-        await create_all_tables()
-        await seed_initial_data()
-        await seed_initial_vitals()
-        await seed_initial_resources()
-        await initialize_conflict_system()
-        
-        # Seed story poems
-        await seed_story_poems_as_memories("the_moth_and_flame")
-        
-        logger.info("All initialization steps completed successfully!")
-    except Exception as e:
-        logger.critical(f"Full database initialization failed: {e}", exc_info=True)
-        raise
-
-
 # Function to retrieve poem context for a specific conversation
 async def get_poem_context_for_conversation(user_id: int, conversation_id: int, story_id: str) -> Dict[str, Any]:
     """
@@ -3036,39 +3046,7 @@ async def get_poem_context_for_conversation(user_id: int, conversation_id: int, 
             "tone_instructions": instructions,
             "story_id": story_id
         }
-            ]  # End of sql_commands list
 
-            # Execute commands sequentially
-            logger.info(f"Found {len(sql_commands)} SQL commands for schema creation.")
-            for i, command in enumerate(sql_commands):
-                # Clean up potential leading/trailing whitespace from multi-line strings
-                cleaned_command = command.strip()
-                if not cleaned_command:  # Skip empty strings if any accidentally got in
-                    logger.warning(f"Skipping empty command at index {i}.")
-                    continue
-                try:
-                    logger.debug(f"Executing schema command {i+1}/{len(sql_commands)}...")
-                    await conn.execute(cleaned_command)
-                except asyncpg.PostgresError as e:
-                    logger.error(f"Error executing command {i+1}: {cleaned_command[:100]}... \nError: {e}", exc_info=True)
-                    # Log and continue is generally better for IF NOT EXISTS
-                    logger.warning(f"Continuing schema creation despite error on command {i+1}.")
-                except Exception as e_generic:  # Catch other potential errors like syntax issues
-                    logger.error(f"Non-DB error executing command {i+1}: {cleaned_command[:100]}... \nError: {e_generic}", exc_info=True)
-                    logger.warning(f"Continuing schema creation despite non-DB error on command {i+1}.")
-
-            logger.info("Finished executing schema commands loop.")
-
-        # This log message indicates the 'async with' block completed
-        logger.info("Schema creation process completed (connection released).")
-
-    # Catch errors related to connection acquisition or timeout
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
-        logger.critical(f"Failed to acquire connection or timed out during table creation: {e}", exc_info=True)
-        raise  # Re-raise the exception to indicate failure
-    except Exception as e:
-        logger.critical(f"An unexpected error occurred outside the connection block during table creation: {e}", exc_info=True)
-        raise
 
 async def seed_initial_data():
     """
@@ -3131,22 +3109,24 @@ async def seed_initial_resources():
 async def initialize_all_data():
     """
     Asynchronous convenience function to create tables + seed initial data.
+    Updated to include poem seeding for preset stories.
     """
     logger.info("Starting full database initialization...")
     try:
         await create_all_tables()
         await seed_initial_data()
-        # These seeding steps might depend on data created by seed_initial_data
-        # or tables created by create_all_tables, so order matters.
         await seed_initial_vitals()
         await seed_initial_resources()
-        # Conflict system init might have dependencies too
         await initialize_conflict_system()
+        
+        # Seed story poems
+        await seed_story_poems_as_memories("the_moth_and_flame")
+        
         logger.info("All initialization steps completed successfully!")
     except Exception as e:
-        # Catch error from any awaited step above
-        logger.critical(f"Full database initialization failed during one of the steps: {e}", exc_info=True)
-        raise  # Re-raise to signal failure to the caller (main)
+        logger.critical(f"Full database initialization failed: {e}", exc_info=True)
+        raise
+
 
 async def main():
     """Main async function to initialize pool and run setup."""
