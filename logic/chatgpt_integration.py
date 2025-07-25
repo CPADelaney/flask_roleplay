@@ -771,16 +771,15 @@ def retry_with_backoff(
     return decorator
 
 
-@retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,))
 async def get_chatgpt_response(
     conversation_id: int, 
     aggregator_text: str, 
     user_input: str,
     reflection_enabled: bool = False,
-    use_nyx_integration: bool = True  # Default to True for unified pipeline
+    use_nyx_integration: bool = True
 ) -> dict[str, Any]:
     """
-    Get a response from OpenAI with optional Nyx integration.
+    Get a response from OpenAI with optional Nyx integration and preset story support.
     """
     
     # Get user_id from conversation
@@ -806,22 +805,72 @@ async def get_chatgpt_response(
             "tokens_used": 0
         }
 
+    # Check if this conversation uses a preset story
+    preset_info = await check_preset_story(conversation_id)
+    
+    # Build comprehensive context
+    context_data = {
+        "aggregator_text": aggregator_text,
+        "reflection_enabled": reflection_enabled,
+        "conversation_id": conversation_id,
+        "user_id": user_id,
+        "system_prompt": SYSTEM_PROMPT,
+        "private_reflection": PRIVATE_REFLECTION_INSTRUCTIONS,
+        "universal_update_schema": UNIVERSAL_UPDATE_FUNCTION_SCHEMA
+    }
+    
+    # If using a preset story, enhance the system prompt and add constraints
+    if preset_info and preset_info.get('story_id') == 'the_moth_and_flame':
+        from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
+        
+        # Enhance system prompt with consistency rules
+        preset_system_prompt = f"""
+{SYSTEM_PROMPT}
+
+{QueenOfThornsConsistencyGuide.get_complete_system_prompt()}
+
+CRITICAL PRESET STORY CONTEXT:
+- You are currently running the preset story "The Moth and Flame" set in San Francisco Bay Area
+- Current year: 2025
+- You MUST follow ALL consistency rules above. Any deviation will break the story
+- Quick Reference:
+{QueenOfThornsConsistencyGuide.get_quick_reference()}
+
+REMEMBER: 
+- NEVER give the network an official name
+- ALWAYS maintain Queen ambiguity
+- Network controls Bay Area ONLY
+- Transformation takes months/years
+"""
+        context_data["system_prompt"] = preset_system_prompt
+        
+        # Add preset-specific context
+        context_data["preset_context"] = {
+            "story_id": "the_moth_and_flame",
+            "setting": "San Francisco Bay Area",
+            "year": 2025,
+            "preset_active": True,
+            "consistency_validator": QueenOfThornsConsistencyGuide.validate_content
+        }
+        
+        # Enhance aggregator text with preset constraints
+        aggregator_text = f"""{aggregator_text}
+
+PRESET STORY CONSTRAINTS:
+The network has NO official name - refer to it as "the network" or "the garden"
+The Queen of Thorns identity is ALWAYS ambiguous
+The network controls Bay Area ONLY - elsewhere are allies, not branches
+All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
+"""
+
     # 1) If Nyx integration is enabled, use the full Nyx agent system
     if use_nyx_integration:
         try:
             # Import the universal updater
             from logic.universal_updater_agent import process_universal_update
             
-            # Build comprehensive context
-            context_data = {
-                "aggregator_text": aggregator_text,
-                "reflection_enabled": reflection_enabled,
-                "conversation_id": conversation_id,
-                "user_id": user_id,
-                "system_prompt": SYSTEM_PROMPT,
-                "private_reflection": PRIVATE_REFLECTION_INSTRUCTIONS,
-                "universal_update_schema": UNIVERSAL_UPDATE_FUNCTION_SCHEMA
-            }
+            # Pass preset context through to Nyx
+            context_data["preset_info"] = preset_info
             
             # Process through Nyx
             nyx_result = await nyx_process_input(
@@ -834,13 +883,29 @@ async def get_chatgpt_response(
             if nyx_result.get("success"):
                 response_data = nyx_result.get("response", {})
                 
+                # Validate response if preset is active
+                if preset_info and context_data.get("preset_context"):
+                    narrative = response_data.get("narrative", "")
+                    validator = context_data["preset_context"].get("consistency_validator")
+                    
+                    if validator and narrative:
+                        validation_result = validator(narrative)
+                        if not validation_result['valid']:
+                            logger.error(f"Preset violations detected: {validation_result['violations']}")
+                            # Log but don't block - could implement retry logic here
+                            logger.warning("Response may contain preset violations - manual review recommended")
+                
                 # Process any narrative through universal updater
                 if response_data.get("narrative"):
+                    update_context = {"source": "nyx_response"}
+                    if preset_info:
+                        update_context["preset_story_id"] = preset_info.get("story_id")
+                        
                     update_result = await process_universal_update(
                         user_id=user_id,
                         conversation_id=conversation_id,
                         narrative=response_data["narrative"],
-                        context={"source": "nyx_response"}
+                        context=update_context
                     )
                 
                 # Build the expected function call format
@@ -877,17 +942,17 @@ async def get_chatgpt_response(
                     "function_name": "apply_universal_update",
                     "function_args": function_args,
                     "tokens_used": nyx_result.get("performance", {}).get("tokens_used", 0),
-                    "nyx_metrics": nyx_result.get("performance", {})
+                    "nyx_metrics": nyx_result.get("performance", {}),
+                    "preset_story_id": preset_info.get("story_id") if preset_info else None
                 }
             else:
                 # Fall back to regular processing if Nyx fails
                 logger.warning(f"Nyx processing failed: {nyx_result.get('error')}, falling back to regular processing")
-                use_nyx_integration = False  # Fall through to regular processing
+                use_nyx_integration = False
                 
         except Exception as e:
             logger.error(f"Error in Nyx integration: {e}", exc_info=True)
-            use_nyx_integration = False  # Fall through to regular processing
-
+            use_nyx_integration = False
 
     # 2) Regular OpenAI processing (fallback or when Nyx is disabled)
     
@@ -898,25 +963,31 @@ async def get_chatgpt_response(
             image_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
             logger.debug("Using image-aware system prompt")
         except openai.BadRequestError as e:
-            # Model doesn't support vision
             logger.info(f"Model doesn't support vision features: {e}")
             image_prompt = None
         except Exception as e:
             logger.info(f"Could not generate image prompt, using regular prompt: {e}")
             image_prompt = None
     
-    # Use image prompt if available, otherwise use regular SYSTEM_PROMPT
-    primary_system_prompt = image_prompt if image_prompt else SYSTEM_PROMPT
+    # Use preset-enhanced prompt if available, then image prompt, then regular
+    if preset_info and 'system_prompt' in context_data:
+        primary_system_prompt = context_data['system_prompt']
+    elif image_prompt:
+        primary_system_prompt = image_prompt
+    else:
+        primary_system_prompt = SYSTEM_PROMPT
 
     # Get async client from centralized manager
     client = _client_manager.async_client
 
-    # If reflection is OFF, do the single-step call as before
+    # If reflection is OFF, do the single-step call
     if not reflection_enabled:
-        # Build message history (past user & assistant messages), up to 15
         messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
+        
+        # Update system prompt in messages if preset is active
+        if messages and messages[0]['role'] == 'system':
+            messages[0]['content'] = primary_system_prompt
 
-        # Get proper token limit for model
         model = "gpt-4.1-nano"
         max_tokens = await _safe_max_tokens(client, model)
         
@@ -944,23 +1015,30 @@ async def get_chatgpt_response(
             except Exception:
                 logger.exception("Error parsing function call arguments")
 
-            # Optionally ensure scene_data...
+            # Validate narrative if preset is active
+            if preset_info and parsed_args.get("narrative"):
+                from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
+                validation = QueenOfThornsConsistencyGuide.validate_content(parsed_args["narrative"])
+                if not validation['valid']:
+                    logger.error(f"Response violates preset rules: {validation['violations']}")
+
             _ensure_default_scene_data(parsed_args)
 
             return {
                 "type": "function_call",
                 "function_name": fn_name,
                 "function_args": parsed_args,
-                "tokens_used": tokens_used
+                "tokens_used": tokens_used,
+                "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
-
         else:
             return {
                 "type": "text",
                 "function_name": None,
                 "function_args": None,
                 "response": msg.content,
-                "tokens_used": tokens_used
+                "tokens_used": tokens_used,
+                "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
 
     # If reflection is ON, do a two-step approach
@@ -1002,7 +1080,7 @@ DO NOT produce user-facing text here; only the JSON.
         reflection_msg = reflection_response.choices[0].message.content
         reflection_tokens_used = reflection_response.usage.total_tokens
 
-        # Attempt to parse the reflection JSON
+        # Parse reflection JSON
         reflection_notes = ""
         private_goals = []
         predicted_futures = []
@@ -1015,7 +1093,7 @@ DO NOT produce user-facing text here; only the JSON.
             logger.warning("Reflection JSON parse failed. Storing raw text.")
             reflection_notes = reflection_msg
 
-        # Store reflection in memory system if available
+        # Store reflection in memory system
         try:
             memory_bridge = await get_memory_nyx_bridge(user_id, conversation_id)
             await memory_bridge.add_memory(
@@ -1046,7 +1124,6 @@ DO NOT produce user-facing text here; only the JSON.
             {"role": "user", "content": user_input}
         ]
 
-        # Get proper token limit for model
         model = "gpt-4.1-nano"
         max_tokens = await _safe_max_tokens(client, model)
         
@@ -1072,13 +1149,21 @@ DO NOT produce user-facing text here; only the JSON.
             except Exception:
                 logger.exception("Error parsing function call arguments")
 
+            # Validate if preset active
+            if preset_info and parsed_args.get("narrative"):
+                from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
+                validation = QueenOfThornsConsistencyGuide.validate_content(parsed_args["narrative"])
+                if not validation['valid']:
+                    logger.error(f"Response violates preset rules: {validation['violations']}")
+
             _ensure_default_scene_data(parsed_args)
 
             return {
                 "type": "function_call",
                 "function_name": fn_name,
                 "function_args": parsed_args,
-                "tokens_used": (reflection_tokens_used + final_tokens_used)
+                "tokens_used": (reflection_tokens_used + final_tokens_used),
+                "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
         else:
             return {
@@ -1086,8 +1171,49 @@ DO NOT produce user-facing text here; only the JSON.
                 "function_name": None,
                 "function_args": None,
                 "response": final_msg.content,
-                "tokens_used": (reflection_tokens_used + final_tokens_used)
+                "tokens_used": (reflection_tokens_used + final_tokens_used),
+                "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
+
+
+async def check_preset_story(conversation_id: int) -> Optional[Dict[str, Any]]:
+    """Check if conversation is using a preset story"""
+    async with get_db_connection_context() as conn:
+        # Check story_states table
+        story_row = await conn.fetchrow("""
+            SELECT story_id, story_flags, current_act, current_beat
+            FROM story_states 
+            WHERE conversation_id = $1 
+            AND story_id IN ('the_moth_and_flame')
+            ORDER BY started_at DESC
+            LIMIT 1
+        """, conversation_id)
+        
+        if story_row:
+            flags = json.loads(story_row['story_flags']) if story_row['story_flags'] else {}
+            return {
+                'story_id': story_row['story_id'],
+                'uses_sf_preset': flags.get('uses_sf_preset', False),
+                'preset_active': True,
+                'current_act': story_row['current_act'],
+                'current_beat': story_row['current_beat'],
+                'story_flags': flags
+            }
+        
+        # Also check CurrentRoleplay for preset marker
+        preset_marker = await conn.fetchval("""
+            SELECT value FROM CurrentRoleplay
+            WHERE conversation_id = $1 AND key = 'preset_story_id'
+        """, conversation_id)
+        
+        if preset_marker:
+            story_id = json.loads(preset_marker) if isinstance(preset_marker, str) else preset_marker
+            return {
+                'story_id': story_id,
+                'preset_active': True
+            }
+        
+        return None
 
 
 def _clean_function_args(fn_args_str: str) -> str:
