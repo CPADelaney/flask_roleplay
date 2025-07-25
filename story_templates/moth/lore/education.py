@@ -13,78 +13,273 @@ class SFEducationLore:
         """Get educational institutions for SF Bay Area"""
         return [
             {
-                "name": "The Conservatory of Shadows",
-                "system_type": "alternative_education",
+                "name": "University of California, Berkeley",
+                "system_type": "public_research_university",
                 "description": (
-                    "Hidden beneath the California Academy of Sciences, this underground school "
-                    "teaches the arts of dominance, submission, and power exchange. Run by former "
-                    "Velvet Court members, it maintains the old traditions while preparing the next "
-                    "generation. The Moth Queen occasionally guest lectures on consent and protection."
+                    "Top public university famous for protests, Nobel laureates, and "
+                    "radical thinking. The Gender and Women's Studies department is "
+                    "particularly... comprehensive. Certain professors run invitation-only "
+                    "seminars. The Faculty Club has rooms most professors never see. "
+                    "Student organizations range from public activism to very private study groups."
                 ),
-                "target_demographics": ["Adult practitioners", "Underground community", "Those seeking mastery"],
-                "controlled_by": "The Velvet Court Educational Trust",
-                "core_teachings": [
-                    "Consent as sacred law",
-                    "Power exchange dynamics",
-                    "Safety and risk awareness",
-                    "Underground history and traditions",
-                    "Protection of the vulnerable"
+                "target_demographics": ["Bright ambitious students", "Future leaders", "Seekers of truth"],
+                "controlled_by": "UC Regents (publicly), deeper influences privately",
+                "public_teachings": [
+                    "Critical theory and social justice",
+                    "Gender studies and feminist philosophy",
+                    "Psychology and neuroscience",
+                    "Business and law"
                 ],
-                "teaching_methods": ["Mentorship", "Practical workshops", "Ritualized lessons"],
-                "coming_of_age_rituals": "The First Mask Ceremony - earning your place in the underground",
-                "knowledge_restrictions": "Outsiders forbidden, law enforcement especially",
-                "female_leadership_roles": ["Headmistress", "Senior Dominatrixes", "Safety Wardens"],
-                "male_roles": ["Assistant instructors", "Demonstration subjects", "Security"],
-                "gender_specific_teachings": {
-                    "female": ["Dominance arts", "Protective leadership", "Underground governance"],
-                    "male": ["Service protocols", "Protective submission", "Support roles"]
+                "hidden_curricula": [
+                    "Power dynamics practicum in Gender Studies",
+                    "Dominance psychology in Business School",
+                    "Alternative relationship structures in Sociology",
+                    "Applied power exchange in Theater Department"
+                ],
+                "teaching_methods": ["Lectures", "Seminars", "Independent study", "Experiential learning"],
+                "special_programs": {
+                    "Public": "Women's Leadership Certificate",
+                    "Semi-private": "Advanced Power Dynamics Seminar",
+                    "Private": "The Rose Scholars - invitation only",
+                    "Secret": "Direct mentorship with certain professors"
                 },
-                "taboo_subjects": ["Trafficking methods", "Breaking consent", "Exposing the network"],
-                "censorship_level": 8,
-                "censorship_enforcement": "Immediate expulsion and blacklisting"
+                "notable_faculty": [
+                    "Dr. Victoria Chen - Business Psychology",
+                    "Prof. Sarah Thornfield - Women's Studies", 
+                    "Dr. L. Rose - Theater and Performance"
+                ],
+                "student_organizations": {
+                    "Public": "Women in Business, Feminist Alliance",
+                    "Private": "The Garden Society, Power Exchange Study Group"
+                },
+                "knowledge_produced": "Academic papers that reshape thinking about power",
+                "connections_to_network": "Many professors are practitioners or allies"
             },
             {
-                "name": "St. Dominic's Reform School",
-                "system_type": "religious_education",
+                "name": "Stanford University",
+                "system_type": "private_research_university",
                 "description": (
-                    "Catholic school in the Sunset District with a dark reputation. Officially for "
-                    "'troubled' youth, it's known for producing either broken spirits or fierce rebels. "
-                    "Several of the Moth Queen's rescued victims attended here. The rigid discipline "
-                    "and shame-based teaching create perfect future submissives - or revolutionaries."
+                    "Elite institution in the heart of Silicon Valley. The business school "
+                    "produces CEOs who sometimes learn to kneel. Design thinking includes "
+                    "designing power structures. The Psychology department runs experiments "
+                    "in consensual authority. Hoover Tower has levels tourists don't visit."
                 ),
-                "target_demographics": ["Troubled teens", "Court-mandated youth", "Parents' last resort"],
-                "controlled_by": "Archdiocese of San Francisco",
-                "core_teachings": [
-                    "Strict Catholic doctrine",
-                    "Corporal discipline",
-                    "Shame and redemption",
-                    "Gender role enforcement"
+                "target_demographics": ["Future tech leaders", "Old money children", "Power seekers"],
+                "controlled_by": "Board of Trustees with interesting connections",
+                "public_teachings": [
+                    "Entrepreneurship and innovation",
+                    "Leadership and management",
+                    "Human-computer interaction",
+                    "Psychology and neuroscience"
                 ],
-                "teaching_methods": ["Rote learning", "Physical punishment", "Isolation", "Prayer"],
-                "coming_of_age_rituals": "Confirmation under duress",
-                "knowledge_restrictions": "No questioning doctrine, no outside media",
-                "connections_to_story": "Source of trauma for many underground members"
+                "hidden_elements": [
+                    "Executive coaching that includes submission training",
+                    "Consent workshops that go beyond basic",
+                    "Power couple dynamics in relationship counseling",
+                    "Dominance cultivation in women's programs"
+                ],
+                "special_programs": {
+                    "MBA+": "Executive leadership with power dynamics focus",
+                    "Design School": "Designing experiences of control",
+                    "Psychology Labs": "Consensual authority experiments",
+                    "Women's Leadership": "More than lean-in philosophy"
+                },
+                "the_farm_traditions": [
+                    "Full Moon Circle - not about astronomy",
+                    "Rose Garden meetings - invitation only",
+                    "Senior thesis projects in applied dominance",
+                    "Alumni mentorship with specific focus"
+                ],
+                "notable_alumni_programs": "Certain graduates return to teach very specific skills"
             },
             {
-                "name": "Berkeley Underground Studies",
-                "system_type": "informal_education",
+                "name": "California Institute of Integral Studies",
+                "system_type": "private_graduate_school",
                 "description": (
-                    "Anarchist collective near UC Berkeley teaching survival skills, legal rights, "
-                    "and resistance tactics. Secretly funded by the Moth Queen, it helps at-risk "
-                    "youth avoid trafficking. Classes held in rotating locations, communicated "
-                    "through encrypted channels."
+                    "Graduate school for psychology, spirituality, and consciousness studies. "
+                    "Already alternative, but some programs go deeper. Somatic psychology "
+                    "includes power dynamics. Drama therapy uses real dominance. The "
+                    "Consciousness Studies program explores submission as altered state."
                 ),
-                "target_demographics": ["Runaways", "At-risk youth", "Sex workers", "Activists"],
-                "controlled_by": "The Collective (anarchist structure)",
-                "core_teachings": [
-                    "Know your rights",
-                    "Self-defense (physical and legal)",
-                    "Recognizing predators",
-                    "Safe communication",
-                    "Mutual aid networks"
+                "target_demographics": ["Therapists", "Healers", "Consciousness explorers"],
+                "public_programs": [
+                    "Clinical Psychology",
+                    "Somatic Psychology", 
+                    "Drama Therapy",
+                    "Women's Spirituality"
                 ],
-                "teaching_methods": ["Peer education", "Street workshops", "Practical exercises"],
-                "connections_to_underground": "Direct pipeline to safehouse network"
+                "deeper_curriculum": [
+                    "Power dynamics in therapeutic relationship",
+                    "Dominance and submission as healing modalities",
+                    "Sacred sexuality counseling",
+                    "Trauma recovery through controlled power exchange"
+                ],
+                "teaching_methods": [
+                    "Experiential learning",
+                    "Body-based practices",
+                    "Group process",
+                    "Supervised practice"
+                ],
+                "thesis_topics": [
+                    "Consensual power exchange in therapy",
+                    "Female dominance as healing practice",
+                    "Submission as spiritual path",
+                    "The therapeutic value of BDSM"
+                ],
+                "clinical_training": "Placements include alternative healing centers",
+                "faculty_practitioners": "Many professors have interesting private practices"
+            },
+            {
+                "name": "San Francisco State University",
+                "system_type": "public_university",
+                "description": (
+                    "Diverse public university with strong social justice focus. The "
+                    "Human Sexuality Studies program is comprehensive. Women's Studies "
+                    "includes practical applications. The Counseling program teaches "
+                    "interesting intervention techniques. Night classes attract professionals "
+                    "seeking specific education."
+                ),
+                "target_demographics": ["Working professionals", "Diverse students", "Adult learners"],
+                "accessible_education": "Public university with private depths",
+                "notable_programs": [
+                    "Human Sexuality Studies - very comprehensive",
+                    "Women and Gender Studies - practical applications",
+                    "Counseling Psychology - alternative modalities",
+                    "Criminal Justice - understanding all systems"
+                ],
+                "evening_extension": [
+                    "Power Dynamics in Relationships",
+                    "Alternative Sexuality Counseling",
+                    "Women's Self-Defense (psychological too)",
+                    "Leadership Through Dominance (women only)"
+                ],
+                "student_body": "Mix of young students and professionals expanding horizons",
+                "underground_reputation": "Where vanilla professionals get educated"
+            },
+            {
+                "name": "Institute for Advanced Study of Human Sexuality",
+                "system_type": "private_graduate_institution",
+                "description": (
+                    "Graduate school specifically for sexology and sexuality studies. "
+                    "Academic approach to everything including power dynamics. Faculty "
+                    "includes former sex workers, therapists, and practitioners. Thesis "
+                    "projects involve extensive field research. Library contains materials "
+                    "found nowhere else."
+                ),
+                "target_demographics": ["Future sex educators", "Therapists", "Researchers", "Practitioners"],
+                "degree_programs": [
+                    "Sexology",
+                    "Clinical Sexology",
+                    "Sex Education",
+                    "Erotology"
+                ],
+                "specialized_courses": [
+                    "Power Exchange Dynamics",
+                    "Sacred Sexuality Traditions",
+                    "BDSM Theory and Practice",
+                    "Female Dominance Through History"
+                ],
+                "research_areas": [
+                    "Consensual authority structures",
+                    "Neuroscience of dominance/submission",
+                    "Power dynamics in relationships",
+                    "Alternative sexuality counseling"
+                ],
+                "clinical_training": "Internships at very specific venues",
+                "archives": "Historical documents on female dominance",
+                "certification_programs": "Become certified in specific practices"
+            },
+            {
+                "name": "Bay Area Women's Leadership Academy",
+                "system_type": "professional_development",
+                "description": (
+                    "Executive education for women leaders. Six-month programs that "
+                    "transform participants. Public curriculum includes negotiation, "
+                    "presence, and influence. Private curriculum includes psychological "
+                    "dominance, power dynamics, and control techniques. Graduates advance "
+                    "rapidly and maintain strong networks."
+                ),
+                "target_demographics": ["Ambitious professional women", "Future female leaders"],
+                "selection_process": "Application, interview, and psychological assessment",
+                "public_curriculum": [
+                    "Executive Presence",
+                    "Negotiation Skills",
+                    "Strategic Thinking",
+                    "Network Building"
+                ],
+                "advanced_modules": [
+                    "Psychological Leverage",
+                    "Dominance Without Aggression",
+                    "Creating Willing Compliance",
+                    "Power Through Feminine Authority"
+                ],
+                "teaching_methods": [
+                    "Case studies from real situations",
+                    "Role playing with power dynamics",
+                    "Mentorship with successful dominants",
+                    "Practical application assignments"
+                ],
+                "transformation_process": [
+                    "Month 1-2: Recognizing existing power",
+                    "Month 3-4: Developing dominant presence",
+                    "Month 5-6: Applying control techniques",
+                    "Post-graduation: Ongoing mentorship"
+                ],
+                "alumni_network": "Extremely loyal and mutually supportive",
+                "success_metrics": "90% receive promotions within one year"
+            },
+            {
+                "name": "Sacred Heart Preparatory",
+                "system_type": "elite_private_school",
+                "description": (
+                    "Catholic girls' school in Atherton for the ultra-wealthy. Rigorous "
+                    "academics, uniforms, and discipline. But certain teachers cultivate "
+                    "more than minds. The senior retreat includes experiences parents "
+                    "don't hear about. Alumnae networks extend into surprising places."
+                ),
+                "target_demographics": ["Daughters of elite families", "Future women leaders"],
+                "public_face": "Traditional Catholic education with academic excellence",
+                "hidden_curriculum": [
+                    "Power dynamics in all-female environment",
+                    "Leadership through controlled authority",
+                    "Understanding submission to wield dominance",
+                    "The real meaning of 'noblesse oblige'"
+                ],
+                "traditions": [
+                    "Rose Ceremony for seniors",
+                    "Secret societies with specific purposes",
+                    "Mentorship programs with alumnae",
+                    "Retreat experiences that transform"
+                ],
+                "teacher_selection": "Some faculty have very specific backgrounds",
+                "alumnae_influence": "Graduates often enter positions of power",
+                "parent_ignorance": "Families appreciate success, not methods"
+            },
+            {
+                "name": "City College of San Francisco",
+                "system_type": "community_college",
+                "description": (
+                    "Accessible education for all of San Francisco. The Nursing program "
+                    "includes alternative healing. Women's Studies offers practical courses. "
+                    "Evening continuing education includes very specific workshops. More "
+                    "happens in night classes than most realize."
+                ),
+                "target_demographics": ["Everyone", "Working adults", "Career changers"],
+                "accessibility": "Free for SF residents",
+                "interesting_programs": [
+                    "Nursing with alternative modalities",
+                    "Psychology with practical applications",
+                    "Women's Studies with empowerment focus",
+                    "Theater Arts including power dynamics"
+                ],
+                "continuing_education": [
+                    "Assertiveness Training (goes further)",
+                    "Women's Self-Defense (psychological too)",
+                    "Alternative Relationships",
+                    "Power Dynamics in the Workplace"
+                ],
+                "student_diversity": "Every background, many seekers",
+                "gateway_function": "Where many first encounter concepts"
             }
         ]
 
@@ -93,199 +288,721 @@ class SFEducationLore:
         """Get knowledge transmission traditions"""
         return [
             {
-                "name": "The Velvet Protocols",
-                "tradition_type": "oral_tradition",
+                "name": "The Academic Pipeline",
+                "tradition_type": "formal_education",
                 "description": (
-                    "The underground's unwritten rules passed down through mentorship. "
-                    "Covers everything from scene negotiation to recognizing trafficking "
-                    "signs. Each venue has a Protocol Keeper who trains newcomers. "
-                    "Breaking protocol means exile from all underground spaces."
+                    "How power dynamics knowledge moves through universities. Certain "
+                    "professors identify promising students, guide them to specific "
+                    "courses, introduce them to private study groups. Knowledge builds "
+                    "semester by semester until students understand the full picture."
                 ),
-                "knowledge_domain": "Underground safety and ethics",
-                "preservation_method": "Mentorship chains and practical demonstration",
-                "access_requirements": "Vouching by established member, proven trustworthiness",
-                "associated_group": "The Velvet Court",
-                "examples": [
-                    "The Three Taps (emergency signal)",
-                    "Moth Sign (protection needed)",
-                    "Red Night Rules (when cops raid)"
+                "knowledge_domain": "Theoretical understanding of power",
+                "preservation_method": "Academic papers with double meanings",
+                "access_requirements": "Intellectual capacity and psychological readiness",
+                "transmission_path": [
+                    "Introductory gender studies classes",
+                    "Advanced seminars on power",
+                    "Independent study with mentors",
+                    "Invitation to private groups",
+                    "Practical application opportunities"
                 ],
-                "female_gatekeepers": True,
-                "gendered_access": {
-                    "female": "Full protocol training including leadership",
-                    "male": "Service protocols and protection duties"
-                },
-                "matriarchal_reinforcement": "Female dominants as protocol authorities"
+                "key_texts": [
+                    "Published papers on feminist theory",
+                    "Underground bibliographies",
+                    "Mentor-recommended readings",
+                    "Unpublished manuscripts"
+                ],
+                "gatekeepers": "Professors who serve the network"
             },
             {
-                "name": "Trauma Mapping",
-                "tradition_type": "healing_practice",
+                "name": "Mentorship Chains",
+                "tradition_type": "apprenticeship",
                 "description": (
-                    "Body-based healing tradition developed by trafficking survivors. "
-                    "Uses touch, movement, and power exchange to reclaim agency. The "
-                    "Moth Queen learned this from the previous Queen. Practitioners "
-                    "can 'read' trauma in body language and help release it."
+                    "Successful dominant women taking promising protégées. Begins as "
+                    "professional mentoring but deepens. Coffee becomes wine, advice "
+                    "becomes training, mentee becomes practitioner. Each generation "
+                    "teaches the next."
                 ),
-                "knowledge_domain": "Somatic healing through kink",
-                "preservation_method": "Direct body-to-body teaching",
-                "access_requirements": "Must be survivor or proven ally",
-                "associated_group": "The Fog Walkers",
-                "female_gatekeepers": True,
-                "matriarchal_reinforcement": "Female survivors as wisdom keepers"
+                "knowledge_domain": "Practical dominance skills",
+                "transmission_method": "One-on-one teaching and modeling",
+                "selection_process": [
+                    "Mentor observes potential",
+                    "Initial professional relationship",
+                    "Testing for deeper capacity",
+                    "Gradual revelation of true teaching",
+                    "Full initiation into practice"
+                ],
+                "what_is_taught": [
+                    "Reading submissive psychology",
+                    "Projection of authority",
+                    "Manipulation techniques",
+                    "Energy control",
+                    "Network navigation"
+                ],
+                "commitment_required": "Years of dedicated learning",
+                "transformation_offered": "Vanilla to dominant"
             },
             {
-                "name": "The Mask Makers' Art",
-                "tradition_type": "craft_tradition",
+                "name": "Workshop Progressions",
+                "tradition_type": "seminar_based",
                 "description": (
-                    "Creating personas and masks - both physical and psychological - "
-                    "for protection and power. Master mask makers teach selected "
-                    "students how to craft identities that can withstand scrutiny. "
-                    "Used for both underground personas and new identities for rescued."
+                    "Public workshops that lead to private intensives. Communication "
+                    "skills become dominance training. Leadership development includes "
+                    "submission exercises. Each level reveals more. The deepest workshops "
+                    "aren't advertised."
                 ),
-                "knowledge_domain": "Identity crafting and protection",
-                "preservation_method": "Apprenticeship system",
-                "access_requirements": "Artistic skill and absolute discretion",
-                "examples": [
-                    "Legal identity creation",
-                    "Persona development",
-                    "Physical mask crafting",
-                    "Digital identity management"
-                ]
+                "knowledge_domain": "Applied power dynamics",
+                "public_entry_points": [
+                    "Women's empowerment workshops",
+                    "Communication skills training",
+                    "Leadership development",
+                    "Relationship coaching"
+                ],
+                "progression_path": [
+                    "Level 1: Assertiveness and boundaries",
+                    "Level 2: Influence and persuasion",
+                    "Level 3: Power dynamics basics",
+                    "Level 4: Dominance techniques",
+                    "Level 5: Full practitioner training"
+                ],
+                "screening_process": "Each level evaluates for next",
+                "teachers": "Successful practitioners with teaching gift"
+            },
+            {
+                "name": "The Literature Path",
+                "tradition_type": "textual_study",
+                "description": (
+                    "Reading lists that gradually introduce concepts. Begins with "
+                    "feminist theory, progresses through power analysis, includes "
+                    "fiction with coded messages. The right books in the right order "
+                    "create understanding. Some texts only available through network."
+                ),
+                "knowledge_domain": "Intellectual framework for dominance",
+                "starter_texts": [
+                    "Classic feminist theory",
+                    "Power dynamics in literature",
+                    "Psychology of influence",
+                    "Historical female leaders"
+                ],
+                "intermediate_readings": [
+                    "BDSM theory and practice",
+                    "Consent philosophy",
+                    "Energy work texts",
+                    "Biographical accounts"
+                ],
+                "advanced_materials": [
+                    "Unpublished manuscripts",
+                    "Practitioner journals",
+                    "Technical manuals",
+                    "The Rose Gospel"
+                ],
+                "reading_groups": "Book clubs that are much more"
+            },
+            {
+                "name": "Somatic Learning",
+                "tradition_type": "embodied_knowledge",
+                "description": (
+                    "Knowledge transmitted through the body. Dance classes that teach "
+                    "dominance postures. Martial arts that include psychological control. "
+                    "Yoga that cultivates commanding presence. The body learns what "
+                    "the mind might resist."
+                ),
+                "knowledge_domain": "Physical expression of power",
+                "teaching_venues": [
+                    "Dance studios with specific teachers",
+                    "Martial arts dojos with female masters",
+                    "Yoga studios with power focus",
+                    "Private movement coaching"
+                ],
+                "what_body_learns": [
+                    "Dominant posture and presence",
+                    "Energy projection",
+                    "Reading submission in others",
+                    "Physical control techniques",
+                    "Energetic binding"
+                ],
+                "progression_markers": "Changes in how others respond",
+                "master_teachers": "Those whose mere presence commands"
+            },
+            {
+                "name": "The Therapy Route",
+                "tradition_type": "therapeutic_transformation",
+                "description": (
+                    "Therapists who guide clients to understand their true nature. "
+                    "What begins as healing becomes awakening. Trauma work reveals "
+                    "dominant tendencies. Power reclaimed becomes power wielded."
+                ),
+                "knowledge_domain": "Psychological basis of dominance",
+                "therapeutic_modalities": [
+                    "Somatic experiencing with power focus",
+                    "Psychodynamic exploration of control",
+                    "EMDR uncovering dominant nature",
+                    "Group therapy with hierarchy"
+                ],
+                "therapist_selection": "Only certain practitioners capable",
+                "transformation_process": [
+                    "Healing initial wounds",
+                    "Recognizing power patterns",
+                    "Experimenting with dominance",
+                    "Integration and practice",
+                    "Becoming guide for others"
+                ],
+                "ethical_considerations": "Careful boundaries maintained"
             }
         ]
     
     @staticmethod
     def get_underground_languages() -> List[Dict[str, Any]]:
-        """Get languages specific to the SF Bay underground culture"""
+        """Get coded communication systems in educational settings"""
         return [
             {
-                "name": "Moth Tongue",
-                "language_family": "Underground Argot",
+                "name": "Academic Rose",
+                "language_family": "Academic Jargon",
                 "description": (
-                    "A coded language developed in the SF underground, blending English with "
-                    "BDSM terminology, Russian criminal argot, and Cantonese street slang. "
-                    "Emphasizes feminine-dominant grammatical structures where authority "
-                    "words default to feminine forms."
+                    "How power dynamics are discussed in academic settings without "
+                    "alerting vanilla colleagues. Terms from feminist theory that mean "
+                    "more to initiates. Citations that signal deeper knowledge."
                 ),
-                "writing_system": "Modified English with emoji-based ideograms",
-                "primary_regions": ["Mission Underground", "SoMa Shadow District"],
-                "minority_regions": ["Tenderloin Shadows", "Financial District After Hours"],
-                "formality_levels": [
-                    "Street (casual threats and negotiations)",
-                    "Sanctum (formal BDSM protocols)", 
-                    "Court (addressing the Velvet Court)",
-                    "Intimate (between trusted souls)"
-                ],
-                "common_phrases": {
-                    "greeting": "Wings open (I come in peace)",
-                    "farewell": "Until the next flame (never 'goodbye')",
-                    "submission": "I fold my wings",
-                    "dominance": "By my thorns",
-                    "danger": "The collector walks",
-                    "safety": "Fog's blessing"
+                "writing_system": "Standard academic with coded meanings",
+                "primary_usage": ["University settings", "Published papers", "Conferences"],
+                "vocabulary_examples": {
+                    "empowerment": "developing dominance",
+                    "agency": "capacity to control",
+                    "intersectionality": "multiple power vectors",
+                    "praxis": "applied dominance",
+                    "phenomenology": "subjective experience of power"
                 },
-                "difficulty": 7,
-                "relation_to_power": (
-                    "Grammatically enforces female dominance. Male subjects require "
-                    "diminutive markers. Authority verbs conjugate differently for women."
-                ),
-                "dialects": {
-                    "Mission": "More Spanish influence, poetic",
-                    "SoMa": "Tech jargon mixed in, clinical",
-                    "Tenderloin": "Survival focused, terse"
-                }
-            },
-            {
-                "name": "Safehouse Sign",
-                "language_family": "Gestural Language",
-                "description": (
-                    "Silent communication system used in the underground railroad network. "
-                    "Based on ASL but modified for quick, discrete communication. Every "
-                    "gesture can be disguised as casual movement."
-                ),
-                "writing_system": "None - purely gestural",
-                "primary_regions": ["Marina Safehouse", "Butterfly House"],
-                "minority_regions": ["All underground venues"],
-                "formality_levels": [
-                    "Emergency (rapid, urgent)",
-                    "Operational (planning, coordinating)",
-                    "Social (casual underground chat)"
+                "recognition_phrases": [
+                    "Expanding the discourse",
+                    "Embodied knowledge",
+                    "Power-with vs power-over",
+                    "Transformative practice"
                 ],
-                "common_phrases": {
-                    "help_needed": "Touch ear, tap twice",
-                    "danger_near": "Adjust collar, look down",
-                    "safe_to_speak": "Hands flat on table",
-                    "follow_me": "Touch moth jewelry",
-                    "cops_coming": "Check phone, step back"
-                },
+                "citation_codes": "Certain authors signal insider knowledge",
                 "difficulty": 5,
-                "relation_to_power": "Egalitarian - safety transcends hierarchy",
-                "dialects": {
-                    "Protector": "More aggressive, combat-ready",
-                    "Survivor": "Focuses on escape and hiding"
-                }
+                "evolution": "Adapts as mainstream coopts terms"
             },
             {
-                "name": "Velvet Protocols",
-                "language_family": "Ritual Language",
+                "name": "Workshop Speak",
+                "language_family": "Self-Help Dialect",
                 "description": (
-                    "The formal language of power exchange, used in high protocol BDSM "
-                    "scenes. Every word is chosen for impact. Silence is part of the language. "
-                    "The Moth Queen is considered the highest authority on proper usage."
+                    "The progressive language of empowerment workshops that initiates "
+                    "hear differently. What sounds like corporate buzzwords or self-help "
+                    "jargon actually communicates specific power dynamics."
                 ),
-                "writing_system": "Calligraphy for contracts, otherwise spoken",
-                "primary_regions": ["Velvet Sanctum", "Folsom Sanctuary"],
-                "minority_regions": ["Private dungeons throughout the city"],
-                "formality_levels": [
-                    "Training (teaching beginners)",
-                    "Scene (active power exchange)",
-                    "High Protocol (formal ceremonies)",
-                    "Sacred (the deepest submissions)"
-                ],
-                "common_phrases": {
-                    "consent": "I offer myself willingly",
-                    "safeword": "Mercy" / "Red" / "Moth",
-                    "praise": "You please me greatly",
-                    "correction": "You will learn better",
-                    "devotion": "I am yours to command"
+                "primary_usage": ["Professional development", "Workshops", "Coaching"],
+                "double_meanings": {
+                    "executive presence": "dominant energy",
+                    "difficult conversations": "establishing control",
+                    "authentic leadership": "embracing dominant nature",
+                    "stakeholder management": "managing submissives",
+                    "influence without authority": "psychological dominance"
                 },
-                "difficulty": 8,
-                "relation_to_power": (
-                    "Explicitly hierarchical. Dominants speak in imperatives, "
-                    "submissives in requests. The Queen's word is absolute law."
+                "progression_markers": [
+                    "Level 1: Taking up space",
+                    "Level 2: Setting boundaries", 
+                    "Level 3: Directing energy",
+                    "Level 4: Commanding presence",
+                    "Level 5: Natural authority"
+                ],
+                "trainer_codes": "Certain phrases identify allied trainers"
+            },
+            {
+                "name": "Study Group Signaling",
+                "language_family": "Student Communication",
+                "description": (
+                    "How students communicate about hidden study groups and private "
+                    "seminars. Flyers that look normal but contain signals. Online "
+                    "posts with specific emoji combinations."
                 ),
-                "dialects": {
-                    "Old Guard": "Traditional, more formal",
-                    "New School": "More egalitarian, negotiated"
-                }
+                "writing_system": "Mixed media with visual codes",
+                "signal_examples": {
+                    "🌹📚": "Rose study group meeting",
+                    "Advanced dynamics": "Power exchange focus",
+                    "Experiential learning": "Practical application",
+                    "Small group intensive": "Screening required",
+                    "Application required": "Psychological assessment"
+                },
+                "posted_locations": [
+                    "Department bulletin boards",
+                    "Student forums",
+                    "Discord servers",
+                    "Encrypted channels"
+                ],
+                "screening_language": "Questions that reveal understanding"
+            },
+            {
+                "name": "Recommendation Letters",
+                "language_family": "Professional Codes",
+                "description": (
+                    "How mentors communicate about students to other network members. "
+                    "Letters of recommendation that say much more than academic prowess. "
+                    "Specific phrases indicate dominant potential or submissive nature."
+                ),
+                "coded_phrases": {
+                    "natural leader": "dominant tendencies",
+                    "works well under direction": "submissive potential",
+                    "challenges authority appropriately": "switch dynamics",
+                    "exceptional presence": "commands attention",
+                    "would benefit from your guidance": "ready for training"
+                },
+                "reading_method": "Third paragraph contains real message",
+                "network_function": "Passing promising students along"
             }
         ]
     
     @staticmethod
-    def get_language_evolution() -> List[Dict[str, Any]]:
-        """How underground languages evolve"""
+    def get_educational_transformations() -> List[Dict[str, Any]]:
+        """How education changes people in this setting"""
         return [
             {
-                "language": "Moth Tongue",
-                "evolution_stage": "digital_integration",
-                "new_elements": {
-                    "emoji_grammar": {
-                        "🦋": "safety/transformation",
-                        "🕯️": "sanctuary available",
-                        "🌫️": "danger approaching",
-                        "👑": "Queen's protection active",
-                        "🔴": "emergency extraction needed"
-                    },
-                    "code_switching": {
-                        "public_face": "Discussing 'butterfly gardens' or 'moth collecting'",
-                        "true_meaning": "Safehouse locations and victim status",
-                        "example": "'Found rare moth species in Richmond' = 'Victim rescued in Richmond'"
-                    },
-                    "generational_differences": {
-                        "old_guard": "Physical signals and spoken codes",
-                        "new_generation": "Encrypted apps and digital markers",
-                        "bridge_speakers": "Those fluent in both"
-                    }
-                }
+                "transformation_type": "Vanilla to Aware",
+                "typical_path": [
+                    "Enter women's studies class",
+                    "Encounter power dynamics theory",
+                    "Attend optional discussion groups",
+                    "Meet interesting people",
+                    "World view shifts"
+                ],
+                "duration": "One semester to one year",
+                "markers": [
+                    "New vocabulary",
+                    "Different friend groups",
+                    "Changed career goals",
+                    "Increased confidence"
+                ],
+                "support_system": "Other students on same journey"
+            },
+            {
+                "transformation_type": "Aware to Practitioner",
+                "typical_path": [
+                    "Advanced coursework",
+                    "Private study groups",
+                    "Mentorship begins",
+                    "First experiences",
+                    "Skill development"
+                ],
+                "duration": "One to three years",
+                "challenges": [
+                    "Integrating with vanilla life",
+                    "Finding practice partners",
+                    "Developing personal style",
+                    "Ethical considerations"
+                ],
+                "educational_support": [
+                    "Advanced seminars",
+                    "Practitioner mentors",
+                    "Safe practice spaces",
+                    "Peer learning groups"
+                ]
+            },
+            {
+                "transformation_type": "Practitioner to Teacher",
+                "typical_path": [
+                    "Years of practice",
+                    "Recognition by community",
+                    "Teaching assistant roles",
+                    "Develop curriculum",
+                    "Establish reputation"
+                ],
+                "requirements": [
+                    "Deep knowledge",
+                    "Ethical grounding",
+                    "Teaching ability",
+                    "Network endorsement"
+                ],
+                "venues": [
+                    "University positions",
+                    "Workshop leadership",
+                    "Private mentorship",
+                    "Writing/publishing"
+                ]
+            }
+        ]
+    
+    @staticmethod
+    def get_hidden_curricula() -> List[Dict[str, Any]]:
+        """Specific hidden educational programs"""
+        return [
+            {
+                "program_name": "Executive Dominance Training",
+                "cover_identity": "Women's Leadership Development",
+                "institution": "Stanford Business School",
+                "duration": "6-month certificate program",
+                "public_curriculum": [
+                    "Negotiation tactics",
+                    "Executive presence",
+                    "Strategic thinking",
+                    "Team leadership"
+                ],
+                "actual_curriculum": [
+                    "Psychological dominance in boardroom",
+                    "Creating corporate submission",
+                    "Power dynamics in male-dominated fields",
+                    "Feminine authority principles"
+                ],
+                "teaching_methods": [
+                    "Case studies of dominant female leaders",
+                    "Role-playing power scenarios",
+                    "Energy work for presence",
+                    "Practicum in real organizations"
+                ],
+                "selection_criteria": [
+                    "Professional achievement",
+                    "Psychological assessment",
+                    "References from network",
+                    "Interview with practitioners"
+                ],
+                "outcomes": "Graduates report dramatic career advancement"
+            },
+            {
+                "program_name": "The Rose Scholars",
+                "cover_identity": "Interdisciplinary Honors Program",
+                "institution": "UC Berkeley",
+                "duration": "2-year fellowship",
+                "public_description": "Exceptional women studying gender and power",
+                "actual_focus": [
+                    "Historical female dominance",
+                    "Power exchange theory",
+                    "Practical application",
+                    "Network building"
+                ],
+                "activities": [
+                    "Weekly seminars with practitioners",
+                    "Mentorship with established dominants",
+                    "Field research in venues",
+                    "Thesis on power dynamics"
+                ],
+                "benefits": [
+                    "Full tuition coverage",
+                    "Stipend for research",
+                    "Network connections",
+                    "Post-graduation placement"
+                ],
+                "selection_process": "Nomination only"
+            },
+            {
+                "program_name": "Somatic Authority Certification",
+                "cover_identity": "Movement Therapy Training",
+                "institution": "California Institute of Integral Studies",
+                "duration": "2-year program",
+                "public_learning": [
+                    "Body awareness",
+                    "Movement therapy",
+                    "Somatic healing",
+                    "Client relations"
+                ],
+                "deeper_training": [
+                    "Dominance through body presence",
+                    "Reading submission somatically",
+                    "Energy control techniques",
+                    "Physical domination safely"
+                ],
+                "practicum_sites": [
+                    "Women's centers",
+                    "Private practices",
+                    "Underground venues",
+                    "Corporate settings"
+                ],
+                "certification_meaning": "Licensed to practice power"
+            },
+            {
+                "program_name": "Psychology of Power Dynamics",
+                "cover_identity": "Relationship Counseling Specialization",
+                "institution": "San Francisco State University",
+                "duration": "1-year certificate",
+                "public_focus": "Alternative relationship counseling",
+                "actual_content": [
+                    "D/s relationship dynamics",
+                    "Consensual power exchange",
+                    "Therapeutic dominance",
+                    "Couple hierarchy work"
+                ],
+                "clinical_training": [
+                    "Observing D/s couples",
+                    "Facilitating power negotiations",
+                    "Teaching dominance/submission",
+                    "Ethics of power therapy"
+                ],
+                "job_placement": "Therapists for the community"
+            }
+        ]
+    
+    @staticmethod
+    def get_educational_networks() -> List[Dict[str, Any]]:
+        """How educational institutions connect"""
+        return [
+            {
+                "network_name": "Bay Area Gender Studies Consortium",
+                "public_purpose": "Coordinate women's studies programs",
+                "member_institutions": [
+                    "UC Berkeley",
+                    "Stanford",
+                    "San Francisco State",
+                    "Mills College"
+                ],
+                "actual_function": [
+                    "Share information on promising students",
+                    "Coordinate hidden curricula",
+                    "Exchange faculty with specific knowledge",
+                    "Plan progressive programming"
+                ],
+                "communication_methods": [
+                    "Official meetings with subtext",
+                    "Encrypted faculty channels",
+                    "Student exchange programs",
+                    "Joint conferences with private sessions"
+                ],
+                "power_effects": "Creates pipeline across institutions"
+            },
+            {
+                "network_name": "Professional Women's Education Alliance",
+                "public_purpose": "Women's professional development",
+                "actual_purpose": "Coordinate dominance training programs",
+                "members": [
+                    "Corporate training companies",
+                    "Executive coaches",
+                    "University extension programs",
+                    "Private consultants"
+                ],
+                "shared_resources": [
+                    "Curriculum materials",
+                    "Trainer certification",
+                    "Client referrals",
+                    "Best practices"
+                ],
+                "quality_control": "Network vets all trainers"
+            },
+            {
+                "network_name": "Alternative Education Collective",
+                "public_face": "Progressive education reform",
+                "true_mission": "Infiltrate traditional education with power dynamics",
+                "strategies": [
+                    "Place allies in traditional institutions",
+                    "Develop 'innovative' curricula",
+                    "Train teachers in hidden methods",
+                    "Influence education policy"
+                ],
+                "long_term_goal": "Normalize power exchange education"
+            }
+        ]
+    
+    @staticmethod
+    def get_knowledge_gatekeepers() -> List[Dict[str, Any]]:
+        """Those who control access to hidden knowledge"""
+        return [
+            {
+                "gatekeeper_type": "Academic Mentors",
+                "public_role": "Professors and advisors",
+                "actual_function": "Identify and guide potential dominants",
+                "selection_criteria": [
+                    "Intellectual capacity",
+                    "Psychological readiness",
+                    "Natural authority",
+                    "Ethical grounding"
+                ],
+                "methods": [
+                    "Office hours conversations",
+                    "Suggested readings",
+                    "Research opportunities",
+                    "Introduction to others"
+                ],
+                "responsibility": "Ensure knowledge goes to worthy"
+            },
+            {
+                "gatekeeper_type": "Workshop Facilitators",
+                "public_role": "Leadership trainers",
+                "screening_function": "Evaluate participants for advancement",
+                "techniques": [
+                    "Observation during exercises",
+                    "Private conversations",
+                    "Response to suggestions",
+                    "Energy reading"
+                ],
+                "advancement_path": "Invite promising to deeper work"
+            },
+            {
+                "gatekeeper_type": "Librarians and Archivists",
+                "public_role": "Information professionals",
+                "hidden_function": "Control access to restricted materials",
+                "what_they_guard": [
+                    "Historical documents",
+                    "Practitioner writings",
+                    "Technical manuals",
+                    "Network directories"
+                ],
+                "access_methods": "Special collections by referral"
+            },
+            {
+                "gatekeeper_type": "Student Leaders",
+                "public_role": "Club presidents and organizers",
+                "actual_role": "Recruit for hidden study groups",
+                "identification_methods": [
+                    "Watch for interest in power topics",
+                    "Test with subtle suggestions",
+                    "Invite to 'book clubs'",
+                    "Gradual revelation"
+                ],
+                "training": "Previous generation teaches selection"
+            }
+        ]
+    
+    @staticmethod
+    def get_thesis_topics() -> List[Dict[str, Any]]:
+        """Academic work that hides deeper knowledge"""
+        return [
+            {
+                "thesis_title": "Power Dynamics in Victorian Women's Literature",
+                "surface_topic": "Literary analysis of female authors",
+                "actual_research": "Historical dominance techniques encoded in fiction",
+                "key_findings": [
+                    "Coded language in 'proper' novels",
+                    "Power exchange themes hidden in metaphor",
+                    "Network communication through published work",
+                    "Training manuals disguised as fiction"
+                ],
+                "modern_application": "Techniques still work today"
+            },
+            {
+                "thesis_title": "Feminist Approaches to Corporate Leadership",
+                "surface_topic": "Women breaking glass ceilings",
+                "actual_research": "Psychological dominance in business settings",
+                "methodologies": [
+                    "Interviews with dominant female executives",
+                    "Observation of power dynamics",
+                    "Analysis of successful techniques",
+                    "Development of training framework"
+                ],
+                "practical_output": "Used in executive training programs"
+            },
+            {
+                "thesis_title": "Consent Frameworks in Alternative Communities",
+                "surface_topic": "Ethical non-monogamy and BDSM",
+                "deeper_analysis": "How power exchange creates social structure",
+                "field_work": [
+                    "Embedded observation in communities",
+                    "Interviews with practitioners",
+                    "Analysis of power hierarchies",
+                    "Documentation of techniques"
+                ],
+                "contribution": "Academic legitimacy for practices"
+            },
+            {
+                "thesis_title": "The Neuroscience of Authority and Submission",
+                "surface_topic": "Brain responses to hierarchy",
+                "actual_investigation": "How dominance and submission affect neurology",
+                "experiments": [
+                    "fMRI of power exchange",
+                    "Hormone analysis during scenes",
+                    "Long-term brain changes",
+                    "Optimal dominance techniques"
+                ],
+                "implications": "Scientific basis for practice"
+            }
+        ]
+    
+    @staticmethod
+    def get_continuing_education() -> List[Dict[str, Any]]:
+        """Ongoing learning for practitioners"""
+        return [
+            {
+                "program_type": "Advanced Practitioner Workshops",
+                "frequency": "Monthly",
+                "topics": [
+                    "New techniques from research",
+                    "Ethical edge cases",
+                    "Energy work advancement",
+                    "Psychological refinements"
+                ],
+                "teachers": "Visiting experts and elders",
+                "location": "Rotating private venues",
+                "admission": "Proven practitioners only"
+            },
+            {
+                "program_type": "Academic Conferences",
+                "public_face": "Gender studies and sexuality research",
+                "hidden_track": "Invitation-only sessions",
+                "what_happens": [
+                    "Latest research shared",
+                    "Technique demonstrations",
+                    "Network coordination",
+                    "Next generation planning"
+                ],
+                "major_events": [
+                    "Berkeley Gender Symposium",
+                    "Stanford Power Conference",
+                    "SF State Sexuality Studies"
+                ]
+            },
+            {
+                "program_type": "Peer Learning Circles",
+                "structure": "Small groups meeting regularly",
+                "activities": [
+                    "Practice new techniques",
+                    "Discuss challenges",
+                    "Share experiences",
+                    "Mutual mentorship"
+                ],
+                "formation": "Organic from classes/workshops",
+                "evolution": "Some become teaching groups"
+            },
+            {
+                "program_type": "Online Education",
+                "platforms": [
+                    "Encrypted video courses",
+                    "Private Discord servers",
+                    "Coded YouTube content",
+                    "Academic MOOCs with hidden layers"
+                ],
+                "advantages": "Reaches those not in Bay Area",
+                "challenges": "Maintaining security and quality",
+                "innovation": "VR training environments emerging"
+            }
+        ]
+    
+    @staticmethod
+    def get_youth_preparation() -> List[Dict[str, Any]]:
+        """How young women are prepared (ethically)"""
+        return [
+            {
+                "program": "High School Leadership Programs",
+                "appropriate_content": [
+                    "Confidence building",
+                    "Recognizing personal power",
+                    "Healthy boundaries",
+                    "Identifying manipulation"
+                ],
+                "what_is_not_taught": "Actual practice (adults only)",
+                "preparation_offered": [
+                    "Foundation for later learning",
+                    "Protection from predators",
+                    "Understanding of consent",
+                    "Recognition of dynamics"
+                ],
+                "ethical_guidelines": "No practice until 18+"
+            },
+            {
+                "program": "College Freshman Orientation",
+                "public_content": "Adjustment to university life",
+                "subtle_introductions": [
+                    "Campus resources that go deeper",
+                    "Professors to seek out",
+                    "Clubs with dual purposes",
+                    "Senior mentors who know more"
+                ],
+                "safety_focus": "Recognizing and avoiding predators",
+                "pathway_indicated": "For those who show interest"
+            },
+            {
+                "program": "Mother-Daughter Transmission",
+                "informal_education": "Within families touched by network",
+                "what_mothers_teach": [
+                    "Recognition of power dynamics",
+                    "Family stories with hidden meanings",
+                    "Introduction to network members",
+                    "Preparation without practice"
+                ],
+                "timing": "When daughter shows readiness",
+                "variation": "Some families more explicit than others"
             }
         ]
