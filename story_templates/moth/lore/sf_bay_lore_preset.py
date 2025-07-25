@@ -709,11 +709,346 @@ class SFBayMothFlamePreset:
         ]
     
     @staticmethod
-    async def initialize_preset_lore(ctx, user_id: int, conversation_id: int):
-        """Initialize all the preset lore for the story"""
-        logger.info("Initializing SF Bay Area preset lore for The Moth and Flame")
+    def get_educational_systems() -> List[Dict[str, Any]]:
+        """Get educational institutions for SF Bay Area"""
+        return [
+            {
+                "name": "The Conservatory of Shadows",
+                "system_type": "alternative_education",
+                "description": (
+                    "Hidden beneath the California Academy of Sciences, this underground school "
+                    "teaches the arts of dominance, submission, and power exchange. Run by former "
+                    "Velvet Court members, it maintains the old traditions while preparing the next "
+                    "generation. The Moth Queen occasionally guest lectures on consent and protection."
+                ),
+                "target_demographics": ["Adult practitioners", "Underground community", "Those seeking mastery"],
+                "controlled_by": "The Velvet Court Educational Trust",
+                "core_teachings": [
+                    "Consent as sacred law",
+                    "Power exchange dynamics",
+                    "Safety and risk awareness",
+                    "Underground history and traditions",
+                    "Protection of the vulnerable"
+                ],
+                "teaching_methods": ["Mentorship", "Practical workshops", "Ritualized lessons"],
+                "coming_of_age_rituals": "The First Mask Ceremony - earning your place in the underground",
+                "knowledge_restrictions": "Outsiders forbidden, law enforcement especially",
+                "female_leadership_roles": ["Headmistress", "Senior Dominatrixes", "Safety Wardens"],
+                "male_roles": ["Assistant instructors", "Demonstration subjects", "Security"],
+                "gender_specific_teachings": {
+                    "female": ["Dominance arts", "Protective leadership", "Underground governance"],
+                    "male": ["Service protocols", "Protective submission", "Support roles"]
+                },
+                "taboo_subjects": ["Trafficking methods", "Breaking consent", "Exposing the network"],
+                "censorship_level": 8,
+                "censorship_enforcement": "Immediate expulsion and blacklisting"
+            },
+            {
+                "name": "St. Dominic's Reform School",
+                "system_type": "religious_education",
+                "description": (
+                    "Catholic school in the Sunset District with a dark reputation. Officially for "
+                    "'troubled' youth, it's known for producing either broken spirits or fierce rebels. "
+                    "Several of the Moth Queen's rescued victims attended here. The rigid discipline "
+                    "and shame-based teaching create perfect future submissives - or revolutionaries."
+                ),
+                "target_demographics": ["Troubled teens", "Court-mandated youth", "Parents' last resort"],
+                "controlled_by": "Archdiocese of San Francisco",
+                "core_teachings": [
+                    "Strict Catholic doctrine",
+                    "Corporal discipline",
+                    "Shame and redemption",
+                    "Gender role enforcement"
+                ],
+                "teaching_methods": ["Rote learning", "Physical punishment", "Isolation", "Prayer"],
+                "coming_of_age_rituals": "Confirmation under duress",
+                "knowledge_restrictions": "No questioning doctrine, no outside media",
+                "connections_to_story": "Source of trauma for many underground members"
+            },
+            {
+                "name": "Berkeley Underground Studies",
+                "system_type": "informal_education",
+                "description": (
+                    "Anarchist collective near UC Berkeley teaching survival skills, legal rights, "
+                    "and resistance tactics. Secretly funded by the Moth Queen, it helps at-risk "
+                    "youth avoid trafficking. Classes held in rotating locations, communicated "
+                    "through encrypted channels."
+                ),
+                "target_demographics": ["Runaways", "At-risk youth", "Sex workers", "Activists"],
+                "controlled_by": "The Collective (anarchist structure)",
+                "core_teachings": [
+                    "Know your rights",
+                    "Self-defense (physical and legal)",
+                    "Recognizing predators",
+                    "Safe communication",
+                    "Mutual aid networks"
+                ],
+                "teaching_methods": ["Peer education", "Street workshops", "Practical exercises"],
+                "connections_to_underground": "Direct pipeline to safehouse network"
+            }
+        ]
+
+    @staticmethod
+    def get_religious_institutions() -> List[Dict[str, Any]]:
+        """Get religious organizations in SF Bay Area"""
+        return [
+            {
+                "name": "Church of Sacred Flesh",
+                "type": "alternative_spirituality",
+                "founded": "2015",
+                "description": (
+                    "Neo-pagan church in the Mission that sanctifies BDSM as spiritual practice. "
+                    "Founded by ex-Catholic dommes who blend ritual and rope. They provide "
+                    "spiritual counseling for sex workers and host 'confession circles' where "
+                    "shame transforms to power. The Moth Queen is rumored to be a silent patron."
+                ),
+                "leadership": "High Priestess Magdalena - former nun turned dominatrix",
+                "practices": [
+                    "Rope bondage as meditation",
+                    "Pain as transcendence",
+                    "Confession without judgment",
+                    "Sacred sexuality rituals"
+                ],
+                "location": "Converted church on 20th Street",
+                "secrets": "Underground railroad meeting point, hidden basement temple",
+                "connections": ["Velvet Court", "Sex worker unions", "Pagan community"]
+            },
+            {
+                "name": "Grace Cathedral",
+                "type": "episcopal_church",
+                "founded": "1849",
+                "description": (
+                    "Progressive Episcopal cathedral on Nob Hill. The labyrinth provides sanctuary "
+                    "to anyone, no questions asked. Bishop Williams knows about the underground "
+                    "but maintains plausible deniability. Late night 'prayer services' sometimes "
+                    "shelter trafficking victims."
+                ),
+                "leadership": "Bishop Sarah Williams - pragmatic progressive",
+                "practices": [
+                    "Labyrinth sanctuary walks",
+                    "No-questions-asked shelter",
+                    "Progressive theology",
+                    "LGBTQ+ affirmation"
+                ],
+                "location": "Nob Hill",
+                "secrets": "Emergency beacon for safehouse network in bell tower",
+                "connections": ["City government", "Progressive coalitions", "Underground (unofficial)"]
+            },
+            {
+                "name": "Temple of Inanna",
+                "type": "reconstructionist_pagan",
+                "founded": "2008",
+                "description": (
+                    "Sacred sexuality temple in Oakland honoring the Mesopotamian goddess of "
+                    "love and war. Provides ritual space for ethical power exchange and trains "
+                    "sacred intimates. Some graduates work in the underground, using their "
+                    "skills to heal trauma through conscious kink."
+                ),
+                "leadership": "Temple Keeper Ashara - trained in tantra and therapy",
+                "practices": [
+                    "Sacred sexuality training",
+                    "Trauma-informed intimacy",
+                    "Ritual power exchange",
+                    "Monthly public rituals"
+                ],
+                "location": "Oakland warehouse district",
+                "connections": ["Alternative healing community", "Ethical kink educators"]
+            }
+        ]
+
+    @staticmethod
+    def get_knowledge_traditions() -> List[Dict[str, Any]]:
+        """Get knowledge transmission traditions"""
+        return [
+            {
+                "name": "The Velvet Protocols",
+                "tradition_type": "oral_tradition",
+                "description": (
+                    "The underground's unwritten rules passed down through mentorship. "
+                    "Covers everything from scene negotiation to recognizing trafficking "
+                    "signs. Each venue has a Protocol Keeper who trains newcomers. "
+                    "Breaking protocol means exile from all underground spaces."
+                ),
+                "knowledge_domain": "Underground safety and ethics",
+                "preservation_method": "Mentorship chains and practical demonstration",
+                "access_requirements": "Vouching by established member, proven trustworthiness",
+                "associated_group": "The Velvet Court",
+                "examples": [
+                    "The Three Taps (emergency signal)",
+                    "Moth Sign (protection needed)",
+                    "Red Night Rules (when cops raid)"
+                ],
+                "female_gatekeepers": True,
+                "gendered_access": {
+                    "female": "Full protocol training including leadership",
+                    "male": "Service protocols and protection duties"
+                },
+                "matriarchal_reinforcement": "Female dominants as protocol authorities"
+            },
+            {
+                "name": "Trauma Mapping",
+                "tradition_type": "healing_practice",
+                "description": (
+                    "Body-based healing tradition developed by trafficking survivors. "
+                    "Uses touch, movement, and power exchange to reclaim agency. The "
+                    "Moth Queen learned this from the previous Queen. Practitioners "
+                    "can 'read' trauma in body language and help release it."
+                ),
+                "knowledge_domain": "Somatic healing through kink",
+                "preservation_method": "Direct body-to-body teaching",
+                "access_requirements": "Must be survivor or proven ally",
+                "associated_group": "The Fog Walkers",
+                "female_gatekeepers": True,
+                "matriarchal_reinforcement": "Female survivors as wisdom keepers"
+            },
+            {
+                "name": "The Mask Makers' Art",
+                "tradition_type": "craft_tradition",
+                "description": (
+                    "Creating personas and masks - both physical and psychological - "
+                    "for protection and power. Master mask makers teach selected "
+                    "students how to craft identities that can withstand scrutiny. "
+                    "Used for both underground personas and new identities for rescued."
+                ),
+                "knowledge_domain": "Identity crafting and protection",
+                "preservation_method": "Apprenticeship system",
+                "access_requirements": "Artistic skill and absolute discretion",
+                "examples": [
+                    "Legal identity creation",
+                    "Persona development",
+                    "Physical mask crafting",
+                    "Digital identity management"
+                ]
+            }
+        ]
+
+    @staticmethod
+    def get_quest_hooks() -> List[Dict[str, Any]]:
+        """Get story quests and missions"""
+        return [
+            {
+                "quest_name": "The Missing Moths",
+                "quest_giver": "Sarah Chen at the Butterfly House",
+                "location": "Marina Safehouse",
+                "description": (
+                    "Three rescued victims have vanished from the safehouse network. "
+                    "Were they recaptured, or is there a mole in the organization? "
+                    "The Moth Queen needs someone she trusts to investigate quietly."
+                ),
+                "objectives": [
+                    "Interview safehouse staff",
+                    "Check underground contacts",
+                    "Follow the money trail",
+                    "Identify the leak"
+                ],
+                "rewards": ["Deeper trust with Moth Queen", "Access to restricted areas"],
+                "difficulty": 7,
+                "lore_significance": "Reveals corruption within the protection network"
+            },
+            {
+                "quest_name": "The Gilded Trap",
+                "quest_giver": "Anonymous tip at Velvet Sanctum",
+                "location": "Financial District",
+                "description": (
+                    "A tech CEO is hosting a 'private party' that's actually an auction "
+                    "for trafficked victims. The Moth Queen needs evidence and a way "
+                    "to save the victims without revealing her identity."
+                ),
+                "objectives": [
+                    "Infiltrate the CEO's circle",
+                    "Gather video evidence",
+                    "Identify the victims",
+                    "Coordinate the rescue"
+                ],
+                "rewards": ["Major blow to trafficking ring", "Blackmail material"],
+                "difficulty": 9,
+                "lore_significance": "Exposes Silicon Valley's dark connections"
+            },
+            {
+                "quest_name": "The Confession Booth Conspiracy",
+                "quest_giver": "Mistress Raven",
+                "location": "Multiple underground venues",
+                "description": (
+                    "Someone is using the confession booths to gather blackmail on "
+                    "vulnerable people. The sanctity of confession has been violated, "
+                    "and the underground's trust system is at risk."
+                ),
+                "objectives": [
+                    "Investigate compromised booths",
+                    "Trace the surveillance equipment",
+                    "Identify the blackmailer",
+                    "Restore trust in the system"
+                ],
+                "rewards": ["Velvet Court gratitude", "Enhanced reputation"],
+                "difficulty": 6,
+                "lore_significance": "Threatens the underground's core traditions"
+            }
+        ]
+
+    @staticmethod
+    def get_domestic_issues() -> List[Dict[str, Any]]:
+        """Get local political conflicts"""
+        return [
+            {
+                "name": "The Sanctuary City Debate",
+                "issue_type": "political",
+                "description": (
+                    "Mayor Chen pushes to legalize and regulate underground venues, "
+                    "claiming it would improve safety. The Velvet Court opposes this - "
+                    "legitimacy means visibility, regulation means vulnerability. The "
+                    "community is split between safety and autonomy."
+                ),
+                "severity": 8,
+                "status": "escalating",
+                "supporting_factions": ["Progressive politicians", "Some sex workers", "Health advocates"],
+                "opposing_factions": ["The Velvet Court", "Privacy advocates", "Old guard underground"],
+                "neutral_factions": ["SFPD (officially)", "Business community"],
+                "public_opinion": {
+                    "general_public": "45% support, 30% oppose, 25% unaware",
+                    "underground_community": "20% support, 70% oppose, 10% undecided"
+                },
+                "government_response": "Committee hearings scheduled",
+                "potential_resolution": "Compromise on health/safety regulations only"
+            },
+            {
+                "name": "The Port Authority Corruption Scandal",
+                "issue_type": "corruption",
+                "description": (
+                    "Leaked documents suggest Port Commissioner Huang's reforms are "
+                    "a cover - she's redirecting trafficking through 'clean' channels. "
+                    "The Moth Queen has evidence but revealing it exposes her network."
+                ),
+                "severity": 9,
+                "status": "active",
+                "stakes": "Control of trafficking routes through the port",
+                "dilemma": "Expose corruption vs protect underground network"
+            },
+            {
+                "name": "The Mission Gentrification War",
+                "issue_type": "social",
+                "description": (
+                    "Tech money pushes into the Mission, threatening underground venues "
+                    "with rising rents. The Velvet Sanctum's lease is up for renewal. "
+                    "Developer Magnus Thornwood wants the building - and knows what's beneath."
+                ),
+                "severity": 7,
+                "status": "active",
+                "supporting_factions": ["Tech companies", "Developers", "New residents"],
+                "opposing_factions": ["Underground venues", "Latino community", "Artists"],
+                "potential_resolution": "The Moth Queen has dirt on Thornwood"
+            }
+        ]
+
+    @staticmethod
+    async def initialize_complete_sf_preset(ctx, user_id: int, conversation_id: int):
+        """Initialize ALL lore components for SF Bay preset"""
+        logger.info("Initializing complete SF Bay Area preset for The Moth and Flame")
         
-        results = {
+        from lore.core.lore_system import LoreSystem
+        lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+        
+        # Get all preset data
+        preset_data = {
             "world": SFBayMothFlamePreset.get_world_foundation(),
             "districts": SFBayMothFlamePreset.get_districts(),
             "locations": SFBayMothFlamePreset.get_specific_locations(),
@@ -723,11 +1058,50 @@ class SFBayMothFlamePreset:
             "culture": SFBayMothFlamePreset.get_cultural_elements(),
             "landmarks": SFBayMothFlamePreset.get_landmarks(),
             "conflicts": SFBayMothFlamePreset.get_conflicts(),
-            "figures": SFBayMothFlamePreset.get_notable_figures()
+            "figures": SFBayMothFlamePreset.get_notable_figures(),
+            # New additions
+            "education": SFBayMothFlamePreset.get_educational_systems(),
+            "religion": SFBayMothFlamePreset.get_religious_institutions(),
+            "knowledge": SFBayMothFlamePreset.get_knowledge_traditions(),
+            "quests": SFBayMothFlamePreset.get_quest_hooks(),
+            "domestic_issues": SFBayMothFlamePreset.get_domestic_issues()
         }
         
-        return results
-
+        # Initialize through proper managers
+        # Education
+        from lore.managers.education import get_education_manager
+        edu_mgr = await get_education_manager(user_id, conversation_id)
+        for edu_system in preset_data['education']:
+            await edu_mgr.add_educational_system(ctx, **edu_system)
+        
+        for tradition in preset_data['knowledge']:
+            await edu_mgr.add_knowledge_tradition(ctx, **tradition)
+        
+        # Politics
+        from lore.managers.politics import WorldPoliticsManager
+        politics_mgr = WorldPoliticsManager(user_id, conversation_id)
+        await politics_mgr.ensure_initialized()
+        
+        # Create SF as a "nation" for the politics system
+        sf_nation_id = await politics_mgr.add_nation(
+            ctx,
+            name="San Francisco Bay Area",
+            government_type="Municipal Democracy",
+            description="Progressive city with dark underbelly",
+            relative_power=8,
+            matriarchy_level=6,  # Underground is matriarchal
+            population_scale="7.7 million",
+            major_resources=["Tech industry", "Port trade", "Tourism"],
+            major_cities=["San Francisco", "Oakland", "San Jose"],
+            cultural_traits=["Progressive", "Tech-focused", "Diverse", "Underground culture"]
+        )
+        
+        # Add domestic issues
+        for issue in preset_data['domestic_issues']:
+            await politics_mgr.generate_domestic_issues(ctx, sf_nation_id, issue)
+        
+        logger.info("Complete SF Bay preset initialized")
+        return preset_data
 
 # Enhanced story initializer that uses the preset
 class EnhancedMothFlameInitializer:
@@ -738,7 +1112,7 @@ class EnhancedMothFlameInitializer:
         """Initialize the story with full SF Bay Area preset"""
         
         # First, get all the preset data
-        preset_data = await SFBayMothFlamePreset.initialize_preset_lore(
+        preset_data = await SFBayMothFlamePreset.initialize_complete_sf_preset(
             ctx, user_id, conversation_id
         )
         
