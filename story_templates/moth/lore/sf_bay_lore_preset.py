@@ -1040,6 +1040,943 @@ class SFBayMothFlamePreset:
         ]
 
     @staticmethod
+    def get_pantheons() -> List[Dict[str, Any]]:
+        """Get belief systems that function as 'religions' in modern setting"""
+        return [
+            {
+                "name": "The Doctrine of Consensual Exchange",
+                "description": (
+                    "The underground's sacred philosophy that elevates BDSM beyond mere kink "
+                    "into spiritual practice. Power exchange becomes prayer, pain becomes "
+                    "transcendence, and consent becomes the highest sacrament."
+                ),
+                "origin_story": (
+                    "Born from the leather culture of 1970s SoMa, evolved through feminist "
+                    "sex-positive movements and the need to sanctify what society condemns."
+                ),
+                "creation_myth": (
+                    "In the beginning was the Word, and the Word was 'Yes.' From this first "
+                    "consent, all power dynamics flowed. The Goddess of Pain blessed those who "
+                    "could transform suffering into ecstasy."
+                ),
+                "afterlife_beliefs": (
+                    "Subspace is a glimpse of the eternal. Those who master the exchange of "
+                    "power transcend flesh and touch divinity. The ultimate submission is ego death."
+                ),
+                "cosmic_structure": (
+                    "The universe is built on tension - dominance and submission, pain and "
+                    "pleasure, control and surrender. Balance comes not from equality but from "
+                    "conscious exchange."
+                ),
+                "matriarchal_elements": (
+                    "Female dominants are High Priestesses. The feminine holds ultimate power "
+                    "to give or deny consent, to nurture or destroy. Male submission is holy."
+                ),
+                "major_holy_days": [
+                    "Folsom Street Fair - The High Holy Day",
+                    "International Women's Day - Celebration of Female Power",
+                    "Leather Pride Week - Sacred Remembrance"
+                ],
+                "taboos": [
+                    "Breaking consent",
+                    "Outing someone without permission",
+                    "Vanilla-shaming",
+                    "Touching someone's collar without permission"
+                ],
+                "geographical_spread": ["SoMa", "Mission", "Castro"],
+                "dominant_nations": ["Underground SF"],
+                "primary_worshippers": ["BDSM practitioners", "Power exchange couples", "The searching"]
+            },
+            {
+                "name": "The Church of the Wounded Healer",
+                "description": (
+                    "A survivor-founded spiritual movement that sees trauma as a path to "
+                    "transcendence. Scars are scripture, survival is sainthood, and helping "
+                    "others escape is the highest calling."
+                ),
+                "origin_story": (
+                    "Founded by trafficking survivors who found meaning in their pain. They "
+                    "believe their suffering gave them power to save others. The Moth Queen "
+                    "is considered a living saint, though she rejects the title."
+                ),
+                "creation_myth": (
+                    "Every soul chooses its trials before birth. The wounded are the strongest "
+                    "because they chose the hardest paths. Moths are drawn to flames because "
+                    "they remember being stars."
+                ),
+                "afterlife_beliefs": (
+                    "Those who save others are reborn as protectors. Those who prey on the "
+                    "innocent become the hunted in the next life. Karma is actively enforced."
+                ),
+                "cosmic_structure": (
+                    "The universe is a healing journey. Every trauma is a lesson, every scar "
+                    "a medal. The broken places let the light in."
+                ),
+                "matriarchal_elements": (
+                    "Women who survive become mothers to all. Female rage is holy justice. "
+                    "The Divine Feminine protects her children with terrible fury."
+                ),
+                "major_holy_days": [
+                    "Night of Escaped Moths - Anniversary of major rescue",
+                    "Day of Empty Cages - Celebrating freedom",
+                    "Feast of Broken Chains - Honoring liberators"
+                ],
+                "taboos": [
+                    "Victim blaming",
+                    "Revealing safehouse locations",
+                    "Abandoning someone in need",
+                    "Profiting from others' pain"
+                ],
+                "geographical_spread": ["Tenderloin", "Mission", "Scattered safehouses"],
+                "dominant_nations": ["Survivor networks"],
+                "primary_worshippers": ["Survivors", "Protectors", "Social workers", "The saved"]
+            }
+        ]
+    
+    @staticmethod
+    def get_deities() -> List[Dict[str, Any]]:
+        """Get deity-like figures in the modern pantheon"""
+        return [
+            {
+                "name": "The Moth Queen",
+                "gender": "female",
+                "domain": ["Protection", "Transformation", "Dark Salvation", "Power Exchange"],
+                "description": (
+                    "The living goddess of the underground. By day a myth, by night a reality. "
+                    "She rules through devotion, saves through destruction, loves through control. "
+                    "They say she has died and been reborn three times."
+                ),
+                "iconography": "Moth wings, porcelain masks, red velvet, thorns and roses",
+                "holy_symbol": "A moth with human eyes",
+                "sacred_animals": ["Moths", "Black cats", "Ravens"],
+                "sacred_colors": ["Crimson", "Black", "Silver"],
+                "relationships": [
+                    {"deity_name": "The First Queen", "relationship_type": "predecessor"},
+                    {"deity_name": "The Collector", "relationship_type": "nemesis"}
+                ],
+                "rank": 10,
+                "worshippers": ["Submissives", "Survivors", "Protectors", "The lost"],
+                "pantheon_id": 1  # Doctrine of Consensual Exchange
+            },
+            {
+                "name": "The Collector",
+                "gender": "male",
+                "domain": ["Predation", "Greed", "Corruption", "False Power"],
+                "description": (
+                    "The anti-deity, the devourer. Viktor Kozlov elevated to mythic status by "
+                    "those who fear him. He represents all who see people as products. The "
+                    "darkness the Moth Queen fights."
+                ),
+                "iconography": "Chains, cages, hundred dollar bills, empty eyes",
+                "holy_symbol": "A cage with no door",
+                "sacred_animals": ["Vultures", "Hyenas", "Parasites"],
+                "sacred_colors": ["Gold", "Rust", "Bruise purple"],
+                "relationships": [
+                    {"deity_name": "The Moth Queen", "relationship_type": "eternal enemy"},
+                    {"deity_name": "The Broken Judge", "relationship_type": "corrupted"}
+                ],
+                "rank": 8,
+                "worshippers": ["Traffickers", "Corrupt officials", "The greedy"],
+                "pantheon_id": None  # Represents anti-faith
+            },
+            {
+                "name": "The First Queen",
+                "gender": "female",
+                "domain": ["Origin", "Sacrifice", "Foundation", "Memory"],
+                "description": (
+                    "Liberty Chen, the original protector. She who first turned pain into power, "
+                    "victimhood into victory. Her disappearance in 1978 only made her stronger. "
+                    "Some say she still guides from shadows."
+                ),
+                "iconography": "Broken chains, phoenix, old photographs, hidden doors",
+                "holy_symbol": "A key that opens any lock",
+                "sacred_animals": ["Phoenix", "Butterflies emerging from cocoons"],
+                "sacred_colors": ["Sepia", "Gold", "Dawn colors"],
+                "relationships": [
+                    {"deity_name": "The Moth Queen", "relationship_type": "spiritual heir"},
+                    {"deity_name": "Sister Mary Catherine", "relationship_type": "ally"}
+                ],
+                "rank": 9,
+                "worshippers": ["The old guard", "Historians of the underground", "Seekers"],
+                "pantheon_id": 2  # Church of the Wounded Healer
+            }
+        ]
+    
+    @staticmethod
+    def get_religious_practices() -> List[Dict[str, Any]]:
+        """Get ritual practices of the underground faiths"""
+        return [
+            {
+                "name": "The Collar Ceremony",
+                "practice_type": "initiation",
+                "description": (
+                    "The sacred ritual of accepting ownership. More binding than marriage, "
+                    "deeper than blood oaths. The collar is blessed with tears and sealed "
+                    "with a kiss. Breaking this bond is the ultimate betrayal."
+                ),
+                "purpose": "Establishing permanent D/s relationship",
+                "frequency": "Once per lifetime per dominant",
+                "required_elements": ["Collar", "Witnesses", "Vows", "Kneeling"],
+                "performed_by": ["Experienced dominants", "High Priestesses"],
+                "restricted_to": ["Those who've proven worthy"],
+                "deity_id": 1,  # Moth Queen
+                "pantheon_id": 1  # Doctrine of Consensual Exchange
+            },
+            {
+                "name": "Confession in Darkness",
+                "practice_type": "cathartic",
+                "description": (
+                    "Monthly ritual where people confess desires and sins to masked strangers. "
+                    "What's spoken in darkness stays there. The Queen herself sometimes listens, "
+                    "choosing who needs salvation and who needs punishment."
+                ),
+                "purpose": "Release and absolution",
+                "frequency": "First Friday monthly",
+                "required_elements": ["Darkness", "Masks", "Whispered truths"],
+                "performed_by": ["Anyone", "Confessors are volunteers"],
+                "restricted_to": ["Adults only"],
+                "deity_id": 1,
+                "pantheon_id": 1
+            },
+            {
+                "name": "The Moth Release",
+                "practice_type": "memorial",
+                "description": (
+                    "Annual ceremony where survivors release live moths for those who didn't "
+                    "make it. Each moth carries a name, a prayer, a promise to remember. The "
+                    "Queen always releases the first moth in silence."
+                ),
+                "purpose": "Honoring the lost",
+                "frequency": "Annual - April 18th",
+                "required_elements": ["Live moths", "Names of the lost", "Candles"],
+                "performed_by": ["Survivors", "Families", "Protectors"],
+                "restricted_to": ["None - all welcome"],
+                "deity_id": 3,  # The First Queen
+                "pantheon_id": 2  # Church of the Wounded Healer
+            },
+            {
+                "name": "Subspace Meditation",
+                "practice_type": "transcendent",
+                "description": (
+                    "Using controlled pain and breathwork to achieve altered consciousness. "
+                    "Practitioners report visions, out-of-body experiences, and profound "
+                    "spiritual insights. The deeper the submission, the higher the flight."
+                ),
+                "purpose": "Spiritual transcendence through BDSM",
+                "frequency": "As needed",
+                "required_elements": ["Experienced guide", "Safety protocols", "Aftercare"],
+                "performed_by": ["Trained dominants", "Spiritual guides"],
+                "restricted_to": ["Experienced practitioners"],
+                "deity_id": 1,
+                "pantheon_id": 1
+            }
+        ]
+    
+    @staticmethod
+    def get_holy_sites() -> List[Dict[str, Any]]:
+        """Get sacred locations beyond the main venues"""
+        return [
+            {
+                "name": "The Sutro Bath Ruins",
+                "site_type": "ceremonial_ground",
+                "description": (
+                    "The ruins by the sea where major underground decisions are made. The "
+                    "crashing waves mask conversations, the ruins remind all of impermanence. "
+                    "The Moth Queen was crowned here in a ceremony involving all factions."
+                ),
+                "clergy_type": "None - neutral ground",
+                "location_description": "Lands End, where city meets ocean",
+                "deity_id": None,  # Sacred to all
+                "pantheon_id": None,  # Neutral
+                "clergy_hierarchy": ["Gathering of equals"],
+                "pilgrimage_info": "Leaders come here to settle disputes",
+                "miracles_reported": [
+                    "Enemies making peace",
+                    "The fog parting at crucial moments",
+                    "Visions in the pools"
+                ],
+                "restrictions": ["No violence", "No recordings", "Truth only"],
+                "architectural_features": "Natural amphitheater, tidal pools, concrete ruins"
+            },
+            {
+                "name": "The First Safehouse",
+                "site_type": "shrine",
+                "description": (
+                    "The original safehouse Liberty Chen established, now a secret shrine. "
+                    "Hidden in Chinatown, still operational. Those who know can light "
+                    "incense for protection. The walls hold forty years of grateful prayers."
+                ),
+                "clergy_type": "Keepers of Memory",
+                "location_description": "Chinatown basement, unmarked door",
+                "deity_id": 3,  # The First Queen
+                "pantheon_id": 2,  # Church of the Wounded Healer
+                "clergy_hierarchy": ["Elder Keeper", "Memory Holders", "Door Watchers"],
+                "pilgrimage_info": "Survivors come to give thanks",
+                "miracles_reported": [
+                    "Healing touch",
+                    "Prophetic dreams after visiting",
+                    "Protection from pursuers"
+                ],
+                "restrictions": ["Must be brought by one who knows", "No photographs"],
+                "architectural_features": "Hidden altar, wall of photographs, escape tunnel"
+            },
+            {
+                "name": "The Folsom Sanctuary",
+                "site_type": "temple",
+                "description": (
+                    "A former church converted to BDSM temple. Gothic architecture meets "
+                    "dungeon aesthetic. Stained glass windows depict scenes of consensual "
+                    "power exchange. The altar is now a stage for sacred scenes."
+                ),
+                "clergy_type": "Leather Priests/Priestesses",
+                "location_description": "Folsom Street, looks abandoned from outside",
+                "deity_id": 1,  # The Moth Queen
+                "pantheon_id": 1,  # Doctrine of Consensual Exchange
+                "clergy_hierarchy": [
+                    "High Priestess of Pain",
+                    "Masters and Mistresses",
+                    "Acolytes in Training"
+                ],
+                "pilgrimage_info": "Serious practitioners come for blessing",
+                "miracles_reported": [
+                    "Instant subspace",
+                    "Healing through scene work",
+                    "Finding one's true nature"
+                ],
+                "restrictions": ["Strict protocols", "Membership required", "No tourists"],
+                "architectural_features": "Dungeon equipment as religious fixtures"
+            }
+        ]
+    
+    @staticmethod
+    def get_religious_texts() -> List[Dict[str, Any]]:
+        """Get sacred writings and teachings"""
+        return [
+            {
+                "name": "The Velvet Codex",
+                "text_type": "scripture",
+                "description": (
+                    "The underground's bible, written collectively over decades. Part safety "
+                    "manual, part philosophy, part poetry. Contains the sacred protocols, "
+                    "consent frameworks, and wisdom of the community."
+                ),
+                "authorship": "Collective - each generation adds",
+                "key_teachings": [
+                    "Consent is continuous and revocable",
+                    "Pain with purpose transcends suffering",
+                    "The dominant serves the submissive's needs",
+                    "Safe, sane, and consensual above all"
+                ],
+                "restricted_to": ["Initiated members"],
+                "deity_id": 1,
+                "pantheon_id": 1,
+                "notable_passages": [
+                    "Chapter of Knots: rope work as meditation",
+                    "Book of Limits: establishing boundaries",
+                    "Songs of Subspace: ecstatic poetry"
+                ],
+                "age_description": "Begun in 1978, still growing"
+            },
+            {
+                "name": "Letters Never Sent",
+                "text_type": "testimonial",
+                "description": (
+                    "A collection of letters written by the saved to those who saved them. "
+                    "Most are addressed to the Moth Queen, though she claims not to read them. "
+                    "Kept in the safehouse archives as proof that salvation is possible."
+                ),
+                "authorship": "Anonymous survivors",
+                "key_teachings": [
+                    "Gratitude for life restored",
+                    "The power of being believed",
+                    "How one person can change everything",
+                    "Hope in darkness"
+                ],
+                "restricted_to": ["Protectors and survivors"],
+                "deity_id": 3,
+                "pantheon_id": 2,
+                "notable_passages": [
+                    "To the woman who carried me from hell",
+                    "Three years free today",
+                    "Teaching others what you taught me"
+                ],
+                "age_description": "Ongoing collection"
+            },
+            {
+                "name": "The Moth Queen's Journals",
+                "text_type": "apocrypha",
+                "description": (
+                    "Rumored to exist but never confirmed. Said to contain her true thoughts, "
+                    "the names on her lists, and those three words she cannot speak. Some "
+                    "claim to have seen pages, but none can prove it."
+                ),
+                "authorship": "The Moth Queen (allegedly)",
+                "key_teachings": [
+                    "Unknown - speculation only",
+                    "The weight of saving others",
+                    "The cost of power",
+                    "What lies beneath masks"
+                ],
+                "restricted_to": ["No one - if they exist"],
+                "deity_id": 1,
+                "pantheon_id": None,
+                "notable_passages": [
+                    "They all promise not to disappear",
+                    "Saved another tonight, lost myself a little more",
+                    "(The three words, scratched out)"
+                ],
+                "age_description": "Current era"
+            }
+        ]
+    
+    @staticmethod
+    def get_religious_orders() -> List[Dict[str, Any]]:
+        """Get organized groups within the faiths"""
+        return [
+            {
+                "name": "The Order of Broken Dolls",
+                "order_type": "militant",
+                "description": (
+                    "Former victims who've become hunters. They track traffickers, gather "
+                    "evidence, and sometimes take direct action. Named for how they were "
+                    "seen (dolls) and what they became (broken but dangerous)."
+                ),
+                "gender_composition": "female_led",
+                "founding_story": (
+                    "Three survivors met in a safehouse and swore to ensure no one else "
+                    "suffered as they had. They learned to fight, to track, to disappear. "
+                    "Now they are legend."
+                ),
+                "headquarters": "Mobile - they don't stay still",
+                "hierarchy_structure": [
+                    "The Untouchable Three (founders)",
+                    "Hunters (field operatives)",
+                    "Watchers (intelligence)",
+                    "Menders (safehouse staff)"
+                ],
+                "vows": [
+                    "Never forget where we came from",
+                    "Save who we can, avenge who we couldn't",
+                    "Our pain becomes their justice"
+                ],
+                "practices": [
+                    "Combat training",
+                    "Surveillance",
+                    "Extraction operations",
+                    "Trauma counseling"
+                ],
+                "deity_id": 3,  # The First Queen
+                "pantheon_id": 2,
+                "special_abilities": [
+                    "Underground railroad expertise",
+                    "Combat training",
+                    "Disguise and infiltration"
+                ],
+                "notable_members": ["Unknown - they stay anonymous"]
+            },
+            {
+                "name": "The Sanctuary Keepers",
+                "order_type": "protective",
+                "description": (
+                    "Those who maintain and protect the safehouses. They live normal lives "
+                    "as cover - shopkeepers, teachers, nurses - but their true calling is "
+                    "providing sanctuary. They are the infrastructure of salvation."
+                ),
+                "gender_composition": "mixed",
+                "founding_story": (
+                    "When the first safehouse proved insufficient, the Queen recruited "
+                    "civilians willing to risk everything. Each keeper maintains a safe "
+                    "space and asks no questions."
+                ),
+                "headquarters": "Distributed - each safehouse is autonomous",
+                "hierarchy_structure": [
+                    "The Moth Queen (spiritual leader)",
+                    "Regional Coordinators",
+                    "House Keepers",
+                    "Runners (transport between houses)"
+                ],
+                "vows": [
+                    "This house is sanctuary",
+                    "No questions, only safety",
+                    "We are links in an unbreakable chain"
+                ],
+                "practices": [
+                    "Maintaining cover identities",
+                    "First aid and trauma care",
+                    "Document forgery",
+                    "Quick extraction protocols"
+                ],
+                "deity_id": 1,
+                "pantheon_id": 2,
+                "special_abilities": [
+                    "Safe house management",
+                    "Identity creation",
+                    "Medical care",
+                    "Absolute discretion"
+                ],
+                "notable_members": ["Known only by first names"]
+            },
+            {
+                "name": "The Crimson Guard",
+                "order_type": "ceremonial",
+                "description": (
+                    "Elite dominants who've achieved mastery and now teach others. They "
+                    "guard the sacred practices and ensure the old ways aren't lost to "
+                    "commercialization. The Queen's inner circle."
+                ),
+                "gender_composition": "female_led",
+                "founding_story": (
+                    "As BDSM became mainstream, the Queen gathered the most skilled to "
+                    "preserve the spiritual aspects. They are living libraries of technique "
+                    "and protocol."
+                ),
+                "headquarters": "The Velvet Sanctum's hidden floor",
+                "hierarchy_structure": [
+                    "The Queen (Grand Mistress)",
+                    "Cardinals of Pain (master teachers)",
+                    "Crimson Knights (guardians)",
+                    "Scarlet Novices (students)"
+                ],
+                "vows": [
+                    "Preserve the sacred in the profane",
+                    "Technique serves connection",
+                    "We are servants to the power we wield"
+                ],
+                "practices": [
+                    "Advanced technique training",
+                    "Spiritual counseling",
+                    "Protocol preservation",
+                    "Ceremonial scenes"
+                ],
+                "deity_id": 1,
+                "pantheon_id": 1,
+                "special_abilities": [
+                    "Master-level BDSM skills",
+                    "Energy manipulation",
+                    "Psychological insight",
+                    "Ceremonial magic"
+                ],
+                "notable_members": [
+                    "Master Chen - The Queen's right hand",
+                    "Mistress Scarlet - Keeper of Protocols"
+                ]
+            }
+        ]
+    
+    @staticmethod
+    def get_religious_conflicts() -> List[Dict[str, Any]]:
+        """Get theological and practical disputes"""
+        return [
+            {
+                "name": "The Monetization Schism",
+                "conflict_type": "theological",
+                "description": (
+                    "Dispute between those who see BDSM as sacred practice and those who've "
+                    "commercialized it. OnlyFans dominatrixes vs old guard. The Queen stays "
+                    "neutral publicly but enforces standards in her domain."
+                ),
+                "parties_involved": [
+                    "Traditional Leather Community",
+                    "Commercial Sex Workers",
+                    "The Velvet Court (mediating)"
+                ],
+                "core_disagreement": "Can the sacred be sold?",
+                "beginning_date": "2020 - Pandemic lockdowns",
+                "resolution_date": None,
+                "status": "ongoing",
+                "casualties": "Community cohesion",
+                "historical_impact": "Fractured the underground"
+            },
+            {
+                "name": "The Consent Wars",
+                "conflict_type": "doctrinal",
+                "description": (
+                    "Ongoing debate about edge play, consensual non-consent, and where "
+                    "boundaries lie. Some push for absolute safety, others for absolute "
+                    "freedom. Blood has been spilled over protocol violations."
+                ),
+                "parties_involved": [
+                    "Risk-Aware Consensual Kink faction",
+                    "Safe, Sane, Consensual traditionalists",
+                    "Edge Players"
+                ],
+                "core_disagreement": "How much risk is acceptable?",
+                "beginning_date": "2010",
+                "resolution_date": None,
+                "status": "uneasy truce",
+                "casualties": "Several excommunications",
+                "historical_impact": "Created parallel communities"
+            },
+            {
+                "name": "The Succession Question",
+                "conflict_type": "leadership",
+                "description": (
+                    "Who will inherit the Moth Queen's crown? She has no named heir, and "
+                    "various factions position themselves. Some say she cannot die, others "
+                    "prepare for the inevitable. The underground watches nervously."
+                ),
+                "parties_involved": [
+                    "The Crimson Guard",
+                    "The Broken Dolls",
+                    "Various would-be successors"
+                ],
+                "core_disagreement": "Can the Queen be replaced?",
+                "beginning_date": "2023 - After a close call",
+                "resolution_date": None,
+                "status": "simmering",
+                "casualties": "None yet",
+                "historical_impact": "Increasing tension"
+            }
+        ]
+    
+    @staticmethod
+    def get_faction_relationships() -> List[Dict[str, Any]]:
+        """Get detailed faction relationships beyond basic conflicts"""
+        return [
+            {
+                "faction1": "The Velvet Court",
+                "faction2": "SFPD Vice Division",
+                "relationship_type": "uneasy_truce",
+                "description": (
+                    "They pretend we don't exist, we pretend to follow laws. Captain Rodriguez "
+                    "and the Queen have an understanding - she keeps the real criminals out, "
+                    "they don't raid consensual venues."
+                ),
+                "trade_agreements": ["Information for blindness"],
+                "tension_points": ["New cops who don't know the rules"],
+                "collaboration_areas": ["Anti-trafficking operations"]
+            },
+            {
+                "faction1": "The Broken Dolls",
+                "faction2": "The Pacific Ring",
+                "relationship_type": "blood_war",
+                "description": (
+                    "No quarter given. The Dolls hunt Ring members, the Ring puts bounties "
+                    "on Dolls. Bodies turn up in the Bay. This war has rules - no civilians, "
+                    "no families - but otherwise, anything goes."
+                ),
+                "trade_agreements": ["None"],
+                "tension_points": ["Everything"],
+                "collaboration_areas": ["None - kill on sight"]
+            },
+            {
+                "faction1": "Silicon Shadows",
+                "faction2": "The Velvet Court",
+                "relationship_type": "parasitic_symbiosis",
+                "description": (
+                    "Tech money funds the underground, the underground keeps tech's secrets. "
+                    "The Queen has enough blackmail to crash the NASDAQ. They know it, she "
+                    "knows it, everyone pretends it's voluntary patronage."
+                ),
+                "trade_agreements": [
+                    "Money for silence",
+                    "Protection for funding",
+                    "Exclusive access for donations"
+                ],
+                "tension_points": ["New money not understanding protocol"],
+                "collaboration_areas": ["Safehouse funding", "Identity creation tech"]
+            }
+        ]
+    
+    @staticmethod
+    def get_mystical_phenomena() -> List[Dict[str, Any]]:
+        """Get supernatural/psychological phenomena specific to setting"""
+        return [
+            {
+                "name": "Subspace Visions",
+                "phenomenon_type": "psychological",
+                "description": (
+                    "Deep submissives report shared visions during intense scenes. Always "
+                    "featuring moths, flames, and a woman with three faces. Skeptics say "
+                    "it's endorphins, believers say it's divine contact."
+                ),
+                "occurrence_rate": "1 in 100 deep scenes",
+                "affected_groups": ["Experienced submissives", "Natural pain sluts"],
+                "documented_effects": [
+                    "Prophetic dreams",
+                    "Sensing danger to the community",
+                    "Knowing when someone needs help"
+                ],
+                "scholarly_theories": [
+                    "Collective unconscious activation",
+                    "Moth Queen psychic network",
+                    "Brain chemistry creating shared hallucinations"
+                ]
+            },
+            {
+                "name": "The Vanishing",
+                "phenomenon_type": "protective",
+                "description": (
+                    "People fleeing trafficking sometimes simply vanish from pursuit. One "
+                    "moment they're cornered, the next gone. Always near moth graffiti. "
+                    "The saved claim a woman in a mask led them through walls."
+                ),
+                "occurrence_rate": "Dozen times per year",
+                "affected_groups": ["Trafficking victims", "Those who help them"],
+                "documented_effects": [
+                    "Spatial displacement",
+                    "Pursuer memory gaps",
+                    "Moth scales at scene"
+                ],
+                "scholarly_theories": [
+                    "Underground tunnel expertise",
+                    "Mass hypnosis",
+                    "The Queen has supernatural powers"
+                ]
+            },
+            {
+                "name": "Dominant's Intuition",
+                "phenomenon_type": "psychic",
+                "description": (
+                    "Experienced dominants develop uncanny ability to sense limits, needs, "
+                    "and dangers. They know when to push and when to comfort. The Queen's "
+                    "intuition is legendary - she knows your needs before you do."
+                ),
+                "occurrence_rate": "Develops after 5+ years",
+                "affected_groups": ["Serious dominants", "Professional mistresses"],
+                "documented_effects": [
+                    "Knowing safe words before spoken",
+                    "Sensing medical issues",
+                    "Predicting emotional breakthroughs"
+                ],
+                "scholarly_theories": [
+                    "Hypervigilance refinement",
+                    "Pheromone sensitivity",
+                    "Energy work is real"
+                ]
+            }
+        ]
+    
+    @staticmethod
+    def get_underground_economies() -> List[Dict[str, Any]]:
+        """Get economic systems within the underground"""
+        return [
+            {
+                "name": "The Tribute System",
+                "economy_type": "gift_economy",
+                "description": (
+                    "Submissives offer tribute to dominants - not payment but devotion "
+                    "made tangible. Money, service, gifts, all freely given. The Queen's "
+                    "tributes fund safehouses, though tributors don't know this."
+                ),
+                "currency": "Devotion acts",
+                "major_trades": ["Service for attention", "Gifts for time", "Pain for pleasure"],
+                "regulation": "Protocol and tradition",
+                "key_players": ["Dominants", "Devoted submissives", "The Queen"],
+                "estimated_value": "$2-3 million annually"
+            },
+            {
+                "name": "The Safehouse Fund",
+                "economy_type": "shadow_charity",
+                "description": (
+                    "Complex network of donations, blackmail payments, and guilt money "
+                    "that funds rescue operations. Officially doesn't exist. Actually "
+                    "saves hundreds of lives yearly."
+                ),
+                "currency": "Cryptocurrency and cash",
+                "major_trades": ["Silence for funding", "Rescue for donors"],
+                "regulation": "The Moth Queen alone",
+                "key_players": ["Anonymous donors", "Keeper network", "Rescued victims"],
+                "estimated_value": "$10+ million annually"
+            },
+            {
+                "name": "The Skills Exchange",
+                "economy_type": "barter_system",
+                "description": (
+                    "Underground members trade expertise. Rope skills for impact play "
+                    "training, medical knowledge for legal advice. Creates tight bonds "
+                    "and ensures skill preservation."
+                ),
+                "currency": "Time and expertise",
+                "major_trades": ["Training for training", "Services for skills"],
+                "regulation": "Community reputation",
+                "key_players": ["Skilled practitioners", "Eager learners"],
+                "estimated_value": "Invaluable"
+            }
+        ]
+    
+    @staticmethod
+    def get_seasonal_events() -> List[Dict[str, Any]]:
+        """Get regular events beyond daily operations"""
+        return [
+            {
+                "name": "The Harvest Moon Hunt",
+                "event_type": "protective_action",
+                "description": (
+                    "Every harvest moon, the Broken Dolls and allies sweep trafficking "
+                    "locations. A night of coordinated raids. The Queen provides intel, "
+                    "the Dolls provide violence. By dawn, victims are freed."
+                ),
+                "frequency": "Annual - Harvest moon",
+                "participants": ["Broken Dolls", "Moth Queen network", "Sympathetic cops"],
+                "traditions": [
+                    "Silent coordination",
+                    "No killing unless necessary",
+                    "Every saved victim gets a moth pin"
+                ],
+                "typical_outcomes": ["5-20 rescued", "1-3 operations shut down"],
+                "community_impact": "Reminds traffickers they're hunted"
+            },
+            {
+                "name": "Leather Week Pilgrimage",
+                "event_type": "religious_gathering",
+                "description": (
+                    "Annual gathering of the faithful. Public events hide private ceremonies. "
+                    "The Queen holds special court, blessing unions and hearing petitions. "
+                    "New dominants are recognized, new submissives welcomed."
+                ),
+                "frequency": "Annual - September",
+                "participants": ["Entire BDSM community", "Tourists", "Curious vanillas"],
+                "traditions": [
+                    "Blessing of the leathers",
+                    "Collar ceremonies",
+                    "Public demonstrations",
+                    "Private initiations"
+                ],
+                "typical_outcomes": ["Community bonding", "New members initiated"],
+                "community_impact": "Strengthens underground unity"
+            },
+            {
+                "name": "Night of Broken Masks",
+                "event_type": "cathartic_ritual",
+                "description": (
+                    "One night when everyone drops their masks - dominants show vulnerability, "
+                    "submissives show strength. The Queen traditionally removes all masks "
+                    "this night. Role reversals allowed. Emotional breakthrough common."
+                ),
+                "frequency": "Quarterly - Solstices and equinoxes",
+                "participants": ["Sanctum members only"],
+                "traditions": [
+                    "Mask burning ceremony",
+                    "Truth circles",
+                    "Role reversal scenes",
+                    "Group aftercare"
+                ],
+                "typical_outcomes": ["Emotional release", "Deeper connections"],
+                "community_impact": "Prevents burnout, builds trust"
+            }
+        ]
+    
+    @staticmethod
+    def get_specialized_locations() -> List[Dict[str, Any]]:
+        """Get additional specialized underground locations"""
+        return [
+            {
+                "name": "The Chrysalis Medical Center",
+                "location_type": "underground_hospital",
+                "description": (
+                    "Hidden medical facility for those who can't use regular hospitals. "
+                    "Treats trafficking victims, scene injuries, and those needing discretion. "
+                    "Dr. Martinez runs it with volunteer staff who don't ask questions."
+                ),
+                "services": [
+                    "Trauma surgery",
+                    "STI treatment",
+                    "Injury care",
+                    "Mental health support",
+                    "Hormone therapy"
+                ],
+                "location": "Tenderloin basement",
+                "access": "Referral only",
+                "security": "Biometric locks, panic buttons, escape routes"
+            },
+            {
+                "name": "The Identity Forge",
+                "location_type": "document_center",
+                "description": (
+                    "Where new lives are created. Master forgers craft identities that "
+                    "pass any scrutiny. Birth certificates, passports, entire histories. "
+                    "Run by someone known only as 'The Scribe'."
+                ),
+                "services": [
+                    "Complete identity packages",
+                    "Supporting documentation",
+                    "Digital footprint creation",
+                    "Backstory coaching"
+                ],
+                "location": "Moves monthly",
+                "access": "Moth Queen referral only",
+                "security": "If you find it uninvited, it's already gone"
+            },
+            {
+                "name": "The Memory Garden",
+                "location_type": "memorial",
+                "description": (
+                    "Hidden rooftop garden where the lost are remembered. Each plant "
+                    "represents someone who didn't make it out. The Queen tends it "
+                    "personally. Moths breed here naturally."
+                ),
+                "features": [
+                    "Memorial plants",
+                    "Meditation space",
+                    "Memory wall",
+                    "Moth sanctuary"
+                ],
+                "location": "Above the Marina safehouse",
+                "access": "Survivors and family only",
+                "security": "Hidden from street view"
+            }
+        ]
+    
+    @staticmethod
+    def get_communication_networks() -> List[Dict[str, Any]]:
+        """Get how the underground communicates"""
+        return [
+            {
+                "name": "The Moth Signal",
+                "network_type": "emergency",
+                "description": (
+                    "Graffiti moths appear when danger threatens. Different wing positions "
+                    "mean different warnings. A moth with spread wings means safe passage, "
+                    "closed wings mean danger, burning moth means run."
+                ),
+                "coverage": "Citywide",
+                "users": ["Anyone who knows the code"],
+                "security": "Hidden in plain sight",
+                "examples": [
+                    "Moth on safehouse wall = operating",
+                    "Moth with crown = Queen's protection",
+                    "Dead moth = location compromised"
+                ]
+            },
+            {
+                "name": "The Velvet Wire",
+                "network_type": "information",
+                "description": (
+                    "Encrypted app that looks like a dating platform but connects the "
+                    "underground. Messages self-destruct, locations are approximate, "
+                    "identities verified through web of trust."
+                ),
+                "coverage": "Digital",
+                "users": ["Verified underground members"],
+                "security": "End-to-end encryption, onion routing",
+                "examples": [
+                    "Event announcements",
+                    "Safety warnings",
+                    "Resource sharing"
+                ]
+            },
+            {
+                "name": "The Whisper Chain",
+                "network_type": "human",
+                "description": (
+                    "Old-school human network. Messages passed person to person, "
+                    "modified slightly each time for security. By the time cops "
+                    "hear it, it's unrecognizable from the original."
+                ),
+                "coverage": "Underground venues and streets",
+                "users": ["Everyone in the scene"],
+                "security": "Plausible deniability",
+                "examples": [
+                    "Raid warnings",
+                    "New arrival alerts",
+                    "Help requests"
+                ]
+            }
+        ]
+
+
+    @staticmethod
     async def initialize_complete_sf_preset(ctx, user_id: int, conversation_id: int):
         """Initialize ALL lore components for SF Bay preset"""
         logger.info("Initializing complete SF Bay Area preset for The Moth and Flame")
