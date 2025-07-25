@@ -2556,6 +2556,370 @@ class SFBayMothFlamePreset:
                 "bias": "neutral"
             }
         ]
+
+    @staticmethod
+    def get_myth_evolution_scenarios() -> List[Dict[str, Any]]:
+        """How urban myths evolve over time in the SF underground"""
+        return [
+            {
+                "myth_name": "The Fog Mother",
+                "evolution_type": "spreading",
+                "change_description": (
+                    "The myth spreads beyond the Tenderloin. Now Mission techies claim to see her "
+                    "in their Uber rides, and Marina mothers whisper her name when daughters "
+                    "stay out too late."
+                ),
+                "new_variations": [
+                    "She appears in AR/VR spaces, pulling victims from virtual trafficking",
+                    "The fog now carries her voice - a mother's lullaby for the lost",
+                    "Climate change means less fog, weakening her power"
+                ],
+                "believability_change": +2,
+                "spread_rate_change": +3
+            },
+            {
+                "myth_name": "The Tech Bro Harvest",
+                "evolution_type": "intensifying",
+                "change_description": (
+                    "After three CEOs fled the country, the myth gains teeth. Now venture "
+                    "capitalists hire bodyguards specifically trained to spot moth symbols."
+                ),
+                "new_elements": [
+                    "Crypto wallets drained to fund safehouses",
+                    "Dating apps used as hunting grounds",
+                    "AI-generated blackmail from recorded sessions"
+                ],
+                "corporate_response": "Tech companies now screen for 'Queen exposure risk'"
+            }
+        ]
+    
+    @staticmethod
+    def get_cultural_evolution_scenarios() -> List[Dict[str, Any]]:
+        """How underground cultural elements develop"""
+        return [
+            {
+                "element_name": "Confession Night",
+                "evolution_type": "formalization",
+                "change_description": (
+                    "What started as impromptu gatherings now has strict protocols. "
+                    "Professional 'Confessors' trained in both BDSM and therapy emerge."
+                ),
+                "new_practices": [
+                    "Confession licenses issued by Velvet Court",
+                    "Digital confession booths with voice modulation",
+                    "Confession insurance for particularly dangerous admissions"
+                ],
+                "significance_change": +2
+            },
+            {
+                "element_name": "The Moth Migration",
+                "evolution_type": "digitization",
+                "change_description": (
+                    "Pandemic forced the ceremony online. Now global survivors release "
+                    "digital moths in a synchronized AR experience. Physical and virtual "
+                    "merge as participants share coordinates of their salvation."
+                ),
+                "technological_integration": [
+                    "Blockchain verification of survivor stories",
+                    "NFT moths that fund safehouse operations",
+                    "VR support groups for those still healing"
+                ]
+            }
+        ]
+
+    @staticmethod
+    def get_geopolitical_shift_scenarios() -> List[Dict[str, Any]]:
+        """Power dynamics evolution in the Bay Area underground"""
+        return [
+            {
+                "shift_type": "velvet_court_expansion",
+                "description": (
+                    "The Velvet Court's influence spreads to Oakland and San Jose. "
+                    "New venue owners petition for membership, creating a Bay Area "
+                    "underground federation."
+                ),
+                "power_changes": {
+                    "The Moth Queen": "Becomes first among equals rather than absolute ruler",
+                    "Regional Courts": "Oakland Leather Assembly, South Bay Shadows",
+                    "New Tensions": "Traditional SF venues vs suburban expansions"
+                },
+                "trigger_event": "Major trafficking bust creates power vacuum"
+            },
+            {
+                "shift_type": "tech_industry_infiltration",
+                "description": (
+                    "Silicon Shadows members begin placing allies in key tech positions. "
+                    "The underground gains access to surveillance tech, turning the "
+                    "panopticon against itself."
+                ),
+                "new_capabilities": [
+                    "Facial recognition to identify trafficking victims",
+                    "Encrypted communication networks",
+                    "Predictive algorithms for tracking predators"
+                ],
+                "resistance": "Privacy advocates worry about underground surveillance state"
+            }
+        ]
+    
+    @staticmethod
+    def get_language_evolution() -> List[Dict[str, Any]]:
+        """How underground languages evolve"""
+        return [
+            {
+                "language": "Moth Tongue",
+                "evolution_stage": "digital_integration",
+                "new_elements": {
+                    "emoji_grammar": {
+                        "🦋": "safety/transformation",
+                        "🕯️": "sanctuary available",
+                        "🌫️": "danger approaching",
+                        "👑": "Queen's protection active",
+                        "🔴": "emergency extraction needed"
+                    },
+                    "code_switching": {
+                        "public_face": "Discussing 'butterfly gardens' or 'moth collecting'",
+                        "true_meaning": "Safehouse locations and victim status",
+                        "example": "'Found rare moth species in Richmond' = 'Victim rescued in Richmond'"
+                    },
+                    "generational_differences": {
+                        "old_guard": "Physical signals and spoken codes",
+                        "new_generation": "Encrypted apps and digital markers",
+                        "bridge_speakers": "Those fluent in both"
+                    }
+                }
+            }
+        ]
+    
+    @staticmethod
+    def get_underground_economy_evolution() -> List[Dict[str, Any]]:
+        """How the shadow economy adapts"""
+        return [
+            {
+                "economy_name": "The Tribute System",
+                "evolution_type": "cryptocurrency_integration",
+                "changes": {
+                    "old_system": "Cash in envelopes, physical gifts",
+                    "new_system": "Monero donations, NFT tributes, DeFi protocols",
+                    "benefits": "Harder to trace, easier to redistribute to safehouses",
+                    "risks": "Digital trail, volatility affecting safehouse funding"
+                },
+                "new_players": [
+                    "Crypto Dommes teaching blockchain",
+                    "DeFi developers creating 'TributeDAO'",
+                    "Digital artists creating tribute NFTs"
+                ]
+            },
+            {
+                "economy_name": "Skills Exchange",
+                "evolution_type": "professionalization",
+                "changes": {
+                    "certification_system": "Velvet Court now issues skill certifications",
+                    "online_platform": "Encrypted skill-sharing platform launches",
+                    "quality_control": "Peer review system for practitioners",
+                    "expansion": "Legal, medical, tech skills added to traditional BDSM"
+                }
+            }
+        ]
+    
+    @staticmethod
+    def get_expanded_seasonal_events() -> List[Dict[str, Any]]:
+        """More seasonal/cyclical events"""
+        return [
+            {
+                "name": "Summer Fog Festival",
+                "frequency": "Annual - July when fog is thickest",
+                "description": (
+                    "Three nights when the fog rolls in so thick you can't see five feet. "
+                    "The underground celebrates their protector. Every venue becomes a "
+                    "safehouse, every predator knows to stay hidden."
+                ),
+                "traditions": [
+                    "Fog walks - groups move through the city helping the lost",
+                    "Moth releases in the fog",
+                    "Stories of salvation shared in the mist"
+                ],
+                "special_rule": "No enforcement during fog nights - unofficial truce"
+            },
+            {
+                "name": "The Leather Equinox",
+                "frequency": "Biannual - Spring and Fall equinoxes",
+                "description": (
+                    "When day equals night, dominants and submissives exchange roles. "
+                    "The Queen serves, the servants rule. Power structures flip for 24 hours."
+                ),
+                "significance": "Prevents power stagnation, builds empathy",
+                "taboos": [
+                    "Refusing to switch",
+                    "Taking advantage of temporary power",
+                    "Breaking scene during the switch"
+                ]
+            },
+            {
+                "name": "Monthly Safehouse Rotation",
+                "frequency": "Every new moon",
+                "description": (
+                    "Safehouses change entry codes and locations. The underground "
+                    "railroad shifts its tracks. What was safe last month may not be now."
+                ),
+                "logistics": [
+                    "Coded messages in Moth Tongue announce changes",
+                    "Guides stationed at old locations for one night",
+                    "Emergency protocols for those who miss the transition"
+                ]
+            }
+        ]
+    
+    @staticmethod
+    def get_communication_evolution() -> List[Dict[str, Any]]:
+        """How communication networks adapt"""
+        return [
+            {
+                "network": "The Moth Signal",
+                "evolution_stage": "augmented_reality",
+                "changes": {
+                    "old_method": "Physical graffiti moths",
+                    "new_method": "AR moths visible through encrypted apps",
+                    "advantages": "No vandalism charges, dynamic updates, precise GPS",
+                    "preservation": "Physical moths still used for those without tech"
+                },
+                "new_features": [
+                    "Moths animate to show threat direction",
+                    "Color changes indicate threat level",
+                    "Swarm patterns encode complex messages"
+                ]
+            },
+            {
+                "network": "The Whisper Chain",
+                "evolution_stage": "AI_enhancement",
+                "changes": {
+                    "innovation": "AI scrambles messages uniquely for each link",
+                    "benefit": "Even if intercepted, message is gibberish",
+                    "risk": "AI could be compromised or pattern-matched"
+                }
+            }
+        ]
+    
+    @staticmethod
+    def get_figure_evolution_scenarios() -> List[Dict[str, Any]]:
+        """How key figures' stories evolve"""
+        return [
+            {
+                "figure": "Lilith/The Moth Queen",
+                "evolution_path": "legend_crystallization",
+                "changes": [
+                    {
+                        "stage": "Local Mystery",
+                        "reputation": 60,
+                        "description": "Known only in the Mission underground"
+                    },
+                    {
+                        "stage": "Underground Celebrity", 
+                        "reputation": 75,
+                        "description": "Every venue knows her name, not all believe"
+                    },
+                    {
+                        "stage": "Urban Legend",
+                        "reputation": 85,
+                        "description": "Mainstream media mentions 'alleged vigilante'"
+                    },
+                    {
+                        "stage": "Living Myth",
+                        "reputation": 95,
+                        "description": "Multiple people claim to be her, diluting/protecting truth"
+                    }
+                ]
+            },
+            {
+                "figure": "Captain Maria Rodriguez",
+                "evolution_path": "pragmatist_to_ally",
+                "changes": [
+                    {
+                        "stage": "Skeptical Cop",
+                        "trust_with_underground": 20,
+                        "description": "Thinks Moth Queen is criminal playing hero"
+                    },
+                    {
+                        "stage": "Reluctant Pragmatist",
+                        "trust_with_underground": 50,
+                        "description": "Realizes Moth Queen solves cases she can't"
+                    },
+                    {
+                        "stage": "Unofficial Ally",
+                        "trust_with_underground": 80,
+                        "description": "Actively diverts resources from Queen investigations"
+                    }
+                ]
+            }
+        ]
+    
+    @staticmethod
+    def get_world_evolution_scenarios() -> List[Dict[str, Any]]:
+        """Major evolutionary scenarios for the entire setting"""
+        return [
+            {
+                "scenario": "The Great Exposure",
+                "description": "Major news outlet publishes underground expose",
+                "steps": [
+                    {
+                        "phase": "Media Frenzy",
+                        "duration": "1 week",
+                        "effects": [
+                            "Tourist influx to underground venues",
+                            "Police pressure increases",
+                            "Vanilla clients flee"
+                        ]
+                    },
+                    {
+                        "phase": "Underground Lockdown",
+                        "duration": "1 month",
+                        "effects": [
+                            "Venues close or go deeper",
+                            "Trust networks tighten",
+                            "New verification protocols"
+                        ]
+                    },
+                    {
+                        "phase": "Evolution",
+                        "duration": "6 months",
+                        "effects": [
+                            "New venues replace compromised ones",
+                            "Stronger encryption adopted",
+                            "Public face vs true underground splits"
+                        ]
+                    }
+                ]
+            },
+            {
+                "scenario": "The Tech Disruption",
+                "description": "Silicon Valley fully embraces underground culture",
+                "steps": [
+                    {
+                        "phase": "Corporate Adoption",
+                        "effects": [
+                            "HR departments add BDSM policies",
+                            "Power exchange workshops at tech campuses",
+                            "Sanitized version emerges"
+                        ]
+                    },
+                    {
+                        "phase": "Underground Resistance", 
+                        "effects": [
+                            "True underground goes deeper",
+                            "Authentication becomes crucial",
+                            "Commercial vs authentic split"
+                        ]
+                    },
+                    {
+                        "phase": "New Equilibrium",
+                        "effects": [
+                            "Surface-level mainstream version",
+                            "Deep underground preserves truth",
+                            "Middle layer translates between"
+                        ]
+                    }
+                ]
+            }
+        ]
     
     @staticmethod
     async def initialize_complete_sf_preset(ctx, user_id: int, conversation_id: int):
