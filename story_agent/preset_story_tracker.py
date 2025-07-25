@@ -1,5 +1,8 @@
 # story_agent/preset_story_tracker.py
 
+from story_templates.preset_stories import PresetStory
+
+
 class PresetStoryTracker:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
