@@ -637,31 +637,7 @@ class StoryDirectorContext:
                     
                     logger.info(f"Initialized preset story tracker for {progress['story_id']}")
 
-    @function_tool
-    async def check_preset_story_progression(
-        ctx: RunContextWrapper[StoryDirectorContext]
-    ) -> Dict[str, Any]:
-        """Check if preset story beats should trigger"""
-        context = ctx.context
-        
-        if not context.preset_story_tracker:
-            return {"has_preset": False}
-            
-        # Get current game state
-        game_state = await context.get_comprehensive_context()
-        
-        # Check for triggered beats
-        triggered_beat = await context.preset_story_tracker.check_beat_triggers(game_state)
-        
-        if triggered_beat:
-            return {
-                "has_preset": True,
-                "triggered_beat": triggered_beat,
-                "should_override": not triggered_beat.can_skip,
-                "narrative_hints": triggered_beat.dialogue_hints
-            }
-            
-        return {"has_preset": True, "triggered_beat": None}
+
 
     async def handle_override_directive(self, directive: dict) -> dict:
         """Handle an override directive from Nyx"""
@@ -800,6 +776,32 @@ class StoryDirectorContext:
 
 
 # ----- Tool Functions (Updated with Strict Schemas) -----
+
+@function_tool
+async def check_preset_story_progression(
+    ctx: RunContextWrapper[StoryDirectorContext]
+) -> Dict[str, Any]:
+    """Check if preset story beats should trigger"""
+    context = ctx.context
+    
+    if not context.preset_story_tracker:
+        return {"has_preset": False}
+        
+    # Get current game state
+    game_state = await context.get_comprehensive_context()
+    
+    # Check for triggered beats
+    triggered_beat = await context.preset_story_tracker.check_beat_triggers(game_state)
+    
+    if triggered_beat:
+        return {
+            "has_preset": True,
+            "triggered_beat": triggered_beat,
+            "should_override": not triggered_beat.can_skip,
+            "narrative_hints": triggered_beat.dialogue_hints
+        }
+        
+    return {"has_preset": True, "triggered_beat": None}
 
 @function_tool
 async def check_for_conflict_opportunity(ctx: RunContextWrapper[StoryDirectorContext]) -> Dict[str, Any]:
