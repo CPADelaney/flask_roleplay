@@ -2,6 +2,7 @@
 """
 Main story runner that coordinates all components of The Moth and Flame
 Handles initialization, progression, and special mechanics
+Now includes SF Bay preset integration
 """
 
 import logging
@@ -14,6 +15,7 @@ from db.connection import get_db_connection_context
 from story_templates.moth.story_initializer import MothFlameStoryInitializer, MothFlameStoryProgression
 from story_templates.moth.poem_enhanced_generation import PoemEnhancedTextGenerator, integrate_poem_enhancement
 from story_templates.moth.npcs.lilith_mechanics import LilithMechanicsHandler
+from story_templates.moth.sf_bay_lore_preset import SFBayMothFlamePreset, EnhancedMothFlameInitializer
 from memory.wrapper import MemorySystem
 from lore.core import canon
 
@@ -22,13 +24,14 @@ logger = logging.getLogger(__name__)
 class MothFlameStoryRunner:
     """
     Main coordinator for The Moth and Flame story.
-    Manages story state, progression, and special mechanics.
+    Manages story state, progression, special mechanics, and preset lore.
     """
     
-    def __init__(self, user_id: int, conversation_id: int):
+    def __init__(self, user_id: int, conversation_id: int, use_sf_preset: bool = True):
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.story_id = "the_moth_and_flame"
+        self.use_sf_preset = use_sf_preset
         
         # Component handlers
         self.poem_generator = None
@@ -41,13 +44,16 @@ class MothFlameStoryRunner:
         self.story_flags = {}
         self.lilith_npc_id = None
         
+        # Preset data
+        self.preset_data = None
+        
         # Tracking
         self._initialized = False
         self._last_beat_check = None
     
     async def initialize(self) -> Dict[str, Any]:
         """
-        Initialize or resume the story.
+        Initialize or resume the story with optional SF Bay preset.
         
         Returns:
             Dict with initialization status
@@ -67,6 +73,15 @@ class MothFlameStoryRunner:
                     }
                 })()
                 
+                # Load SF Bay preset if requested
+                if self.use_sf_preset:
+                    logger.info("Loading SF Bay Area preset lore")
+                    self.preset_data = await EnhancedMothFlameInitializer.initialize_with_sf_preset(
+                        ctx, self.user_id, self.conversation_id
+                    )
+                    logger.info("SF Bay preset loaded successfully")
+                
+                # Initialize the story
                 init_result = await MothFlameStoryInitializer.initialize_story(
                     ctx, self.user_id, self.conversation_id
                 )
@@ -75,10 +90,21 @@ class MothFlameStoryRunner:
                     return init_result
                 
                 self.lilith_npc_id = init_result['main_npc_id']
+                
+                # If using preset, update story state with setting info
+                if self.use_sf_preset:
+                    await self._store_preset_info()
+                
                 logger.info(f"Story initialized with Lilith ID: {self.lilith_npc_id}")
             else:
                 # Load existing story state
                 await self._load_story_state()
+                
+                # Load preset data if it was used
+                if self.story_flags.get('uses_sf_preset'):
+                    self.use_sf_preset = True
+                    # Preset data isn't stored, but we know it was initialized
+                    
                 logger.info(f"Resumed existing story at Act {self.current_act}, Beat: {self.current_beat}")
             
             # Initialize components
@@ -91,7 +117,8 @@ class MothFlameStoryRunner:
                 "message": "Story ready",
                 "new_story": not story_exists,
                 "current_act": self.current_act,
-                "current_beat": self.current_beat
+                "current_beat": self.current_beat,
+                "setting": "San Francisco Bay Area" if self.use_sf_preset else "Generic Modern City"
             }
             
         except Exception as e:
@@ -101,6 +128,25 @@ class MothFlameStoryRunner:
                 "error": str(e),
                 "message": "Failed to initialize story"
             }
+    
+    async def _store_preset_info(self):
+        """Store that this story uses the SF preset"""
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """
+                UPDATE story_states
+                SET story_flags = story_flags || $4
+                WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                """,
+                self.user_id, self.conversation_id, self.story_id,
+                json.dumps({
+                    "uses_sf_preset": True,
+                    "setting": "San Francisco Bay Area",
+                    "preset_initialized": datetime.now().isoformat()
+                })
+            )
+        
+        self.story_flags['uses_sf_preset'] = True
     
     async def _check_story_exists(self) -> bool:
         """Check if story already exists for this user/conversation"""
@@ -155,6 +201,55 @@ class MothFlameStoryRunner:
             self.user_id, self.conversation_id
         )
     
+    async def get_current_location_lore(self) -> Dict[str, Any]:
+        """Get lore for current location if using preset"""
+        if not self.use_sf_preset:
+            return {}
+        
+        from lore.managers.local_lore import get_location_lore
+        
+        # Get player's current location
+        async with get_db_connection_context() as conn:
+            current_loc = await conn.fetchval(
+                """
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
+                """,
+                self.user_id, self.conversation_id
+            )
+        
+        if not current_loc:
+            return {}
+        
+        # Map to location ID
+        ctx = self.create_context()
+        location_id = await self._ensure_location_exists(ctx, current_loc)
+        
+        # Get all lore for this location
+        lore_result = await get_location_lore(ctx, location_id)
+        
+        return lore_result.model_dump()
+    
+    async def _ensure_location_exists(self, ctx, location_name: str) -> int:
+        """Ensure a location exists and return its ID"""
+        from lore.core import canon
+        
+        async with get_db_connection_context() as conn:
+            location_id = await canon.find_or_create_location(
+                ctx, conn, location_name
+            )
+            
+        return location_id
+    
+    def create_context(self):
+        """Create a context object for function calls"""
+        return type('Context', (), {
+            'context': {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            }
+        })()
+    
     async def process_player_action(
         self, 
         player_input: str, 
@@ -180,6 +275,14 @@ class MothFlameStoryRunner:
             context = await self._build_action_context(
                 player_input, current_location, scene_context
             )
+            
+            # If using preset, enhance context with location lore
+            if self.use_sf_preset:
+                location_lore = await self.get_current_location_lore()
+                context['location_lore'] = location_lore
+                
+                # Check if we're in a special preset location
+                context['special_location'] = self._check_special_location(current_location)
             
             # Check for story beat triggers
             beat_trigger = await self._check_beat_triggers(context)
@@ -213,6 +316,35 @@ class MothFlameStoryRunner:
                 "error": str(e),
                 "message": "Failed to process action"
             }
+    
+    def _check_special_location(self, location: str) -> Optional[Dict[str, Any]]:
+        """Check if we're in a special preset location"""
+        if not self.use_sf_preset:
+            return None
+        
+        location_lower = location.lower()
+        
+        # Check for key locations
+        if 'velvet sanctum' in location_lower:
+            return {
+                "type": "main_venue",
+                "special_rules": ["sanctuary_possible", "performances", "throne_room"],
+                "atmosphere": "gothic_temple"
+            }
+        elif 'butterfly house' in location_lower:
+            return {
+                "type": "safehouse",
+                "special_rules": ["no_violence", "healing_space", "new_identities"],
+                "atmosphere": "hope_and_recovery"
+            }
+        elif 'fog' in location_lower and any(word in location_lower for word in ['night', 'thick', 'heavy']):
+            return {
+                "type": "fog_sanctuary",
+                "special_rules": ["enhanced_protection", "easier_escapes", "moth_queen_stronger"],
+                "atmosphere": "protective_shroud"
+            }
+        
+        return None
     
     async def _build_action_context(
         self, 
@@ -253,6 +385,7 @@ class MothFlameStoryRunner:
             'story_act': self.current_act,
             'story_beat': self.current_beat,
             'story_flags': self.story_flags,
+            'uses_sf_preset': self.use_sf_preset,
             'timestamp': datetime.now()
         }
         
@@ -295,6 +428,11 @@ class MothFlameStoryRunner:
         """Check if location is private"""
         location_lower = location.lower()
         private_keywords = ['private', 'chambers', 'bedroom', 'personal', 'hidden']
+        
+        # Add SF-specific private locations if using preset
+        if self.use_sf_preset:
+            private_keywords.extend(['level -5', 'butterfly house', 'safehouse'])
+        
         return any(keyword in location_lower for keyword in private_keywords)
     
     async def _check_beat_triggers(self, context: Dict[str, Any]) -> Optional[str]:
@@ -352,6 +490,11 @@ class MothFlameStoryRunner:
             }
         }
         
+        # Add SF-specific atmosphere if using preset
+        if self.use_sf_preset and context.get('special_location'):
+            intro_context['atmosphere']['location_type'] = context['special_location']['type']
+            intro_context['atmosphere']['special_rules'] = context['special_location'].get('special_rules', [])
+        
         enhanced_desc = await self.poem_generator.enhance_scene_description(
             beat.description,
             context.get('current_location', 'general'),
@@ -402,6 +545,15 @@ class MothFlameStoryRunner:
         identity_result = await self.lilith_mechanics.check_dual_identity_reveal(context)
         if identity_result.get('reveal_possible'):
             results['identity_reveal'] = identity_result
+        
+        # SF preset-specific checks
+        if self.use_sf_preset and context.get('special_location'):
+            if context['special_location']['type'] == 'fog_sanctuary':
+                results['fog_protection'] = {
+                    'active': True,
+                    'description': "The fog swirls protectively around you both",
+                    'trust_bonus': 10
+                }
         
         return results
     
@@ -461,14 +613,27 @@ class MothFlameStoryRunner:
             if 'trauma_trigger' in mechanics_results:
                 response['trauma_response'] = mechanics_results['trauma_trigger']['description']
                 response['mood_override'] = 'defensive'
+            
+            if 'fog_protection' in mechanics_results:
+                response['environmental_effect'] = mechanics_results['fog_protection']
         
         # Add current story context
         response['story_context'] = {
             'act': self.current_act,
             'beat': self.current_beat,
             'trust_level': context.get('trust_level', 0),
-            'current_mask': context.get('current_mask', 'Unknown')
+            'current_mask': context.get('current_mask', 'Unknown'),
+            'setting': 'San Francisco Bay Area' if self.use_sf_preset else 'Generic City'
         }
+        
+        # Add location-specific elements if using preset
+        if self.use_sf_preset and context.get('location_lore'):
+            relevant_myths = [
+                myth for myth in context['location_lore'].get('myths', [])
+                if 'moth' in myth.get('name', '').lower() or 'queen' in myth.get('name', '').lower()
+            ]
+            if relevant_myths:
+                response['location_myths'] = relevant_myths
         
         return response
     
@@ -537,6 +702,13 @@ class MothFlameStoryRunner:
         
         if context.get('story_beat') in beat_intensities:
             intensity += beat_intensities[context['story_beat']]
+        
+        # SF preset location intensity
+        if self.use_sf_preset and context.get('special_location'):
+            if context['special_location']['type'] == 'main_venue':
+                intensity += 0.1  # Velvet Sanctum always intense
+            elif context['special_location']['type'] == 'safehouse':
+                intensity -= 0.1  # Safehouses are calmer
         
         return min(1.0, intensity)
     
@@ -699,7 +871,7 @@ class MothFlameStoryRunner:
                 if row:
                     lilith_state = dict(row)
         
-        return {
+        status = {
             'story_id': self.story_id,
             'current_act': self.current_act,
             'current_beat': self.current_beat,
@@ -710,5 +882,16 @@ class MothFlameStoryRunner:
                 'dual_identity_revealed': self.story_flags.get('dual_identity_revealed', False),
                 'three_words_spoken': self.story_flags.get('three_words_spoken', False),
                 'moth_flame_established': self.story_flags.get('moth_flame_dynamic') != 'unestablished'
-            }
+            },
+            'setting': 'San Francisco Bay Area' if self.use_sf_preset else 'Generic Modern City'
         }
+        
+        # Add preset-specific status if applicable
+        if self.use_sf_preset:
+            status['sf_elements'] = {
+                'fog_nights_available': True,
+                'safehouse_network_discovered': self.story_flags.get('dual_identity_revealed', False),
+                'velvet_court_awareness': self.story_flags.get('velvet_court_known', False)
+            }
+        
+        return status
