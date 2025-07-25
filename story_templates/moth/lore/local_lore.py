@@ -13,79 +13,238 @@ class SFLocalLore:
         """Get story-specific detailed locations"""
         return [
             {
-                "name": "The Velvet Sanctum",
-                "address": "Valencia Street Basement (Unmarked)",
-                "type": "bdsm_temple",
+                "name": "The Rose Garden Café",
+                "address": "Valencia Street between 20th and 21st",
+                "type": "recruitment_hub",
                 "description": (
-                    "Descend through the vintage boutique 'Forgotten Seasons,' past mannequins "
-                    "dressed in another era's dreams. A hidden door behind the Victorian mourning "
-                    "dress display. Down, down, down - each level darker than the last. The main "
-                    "chamber opens like a cavern dressed in blood-red velvet. Candles flicker in "
-                    "iron sconces, casting dancing shadows on devotees. At the center, an obsidian "
-                    "throne where She holds court. The air tastes of leather, incense, and promises."
+                    "A perfectly normal Mission café that serves exceptional lavender lattes "
+                    "and rose petal scones. Local art rotates monthly, always featuring "
+                    "strong women in subtle positions of power. The owner, Lily Chen, "
+                    "remembers everyone's order and occasionally their secrets. Tuesday "
+                    "book clubs read Virginia Woolf but discuss power dynamics. The back "
+                    "room hosts 'wine tastings' where the pairing notes include dominance "
+                    "and submission."
                 ),
-                "levels": {
-                    "Level -1": "Reception and Evaluation - Where pilgrims are judged",
-                    "Level -2": "The Main Chamber - Public worship space with throne",
-                    "Level -3": "Private Rooms - For intimate surrenders",
-                    "Level -4": "The True Dungeon - Where limits dissolve",
-                    "Level -5": "Her Sanctuary - Private apartment, forbidden to most"
+                "public_function": "Trendy neighborhood café",
+                "hidden_function": "Entry point to the Thorn Garden",
+                "atmosphere": {
+                    "Day": "Laptops and casual meetings",
+                    "Evening": "Poetry readings with hidden meanings",
+                    "Late night": "Private gatherings by invitation"
                 },
-                "schedule": {
-                    "Monday": "8 PM - 3 AM (Devotional Monday)",
-                    "Tuesday": "Private clients only",
-                    "Wednesday": "8 PM - 4 AM (Performance Night)",
-                    "Thursday": "8 PM - 3 AM (Training Night)",
-                    "Friday": "8 PM - 5 AM (The Queen's Court)",
-                    "Saturday": "8 PM - 5 AM (Grand Gathering)",
-                    "Sunday": "Closed (Her day of rest)"
-                },
-                "staff": {
-                    "Door Guardian": "Dmitri - Former Spetsnaz, owes her his life",
-                    "House Mistress": "Valentina - Trains new submissives",
-                    "Safety Master": "Jorge - Ensures all limits are respected"
+                "recognition_signs": [
+                    "Rose imagery in subtle places",
+                    "Staff who observe more than orders",
+                    "Customers who bow heads slightly to Lily",
+                    "Books left on specific tables as messages"
+                ],
+                "special_features": {
+                    "The reading nook": "Where initial assessments happen",
+                    "The rose wall": "Instagram backdrop and message board",
+                    "The private room": "Wine tastings that transform perspectives"
                 }
+            },
+            {
+                "name": "Thornfield & Associates",
+                "address": "555 California Street, 40th Floor",
+                "type": "power_brokerage",
+                "description": (
+                    "Elite law firm specializing in family law, estate planning, and 'special "
+                    "arrangements.' The reception area whispers old money while the corner "
+                    "offices scream new power. Senior partners meet in a conference room "
+                    "with no windows and exceptional soundproofing. Their client agreements "
+                    "include NDAs that would terrify the uninitiated. Some executives leave "
+                    "meetings walking differently than they entered."
+                ),
+                "public_function": "White-shoe law firm",
+                "hidden_function": "Legal architecture for the shadow matriarchy",
+                "key_figures": {
+                    "Evelyn Thornfield": "Managing Partner with interesting hobbies",
+                    "Sarah Kim": "Senior Associate who specializes in behavior",
+                    "The Advisory Board": "Seven women who shape more than law"
+                },
+                "services": {
+                    "Official": "Prenups, trusts, corporate structure",
+                    "Unofficial": "Behavioral contracts, submission agreements, silence pacts"
+                },
+                "client_signs": "Powerful men who defer to female associates"
+            },
+            {
+                "name": "The Wellness Collective",
+                "address": "Former church on Divisadero",
+                "type": "transformation_center",
+                "description": (
+                    "A converted Gothic church now hosting yoga, meditation, and 'healing "
+                    "circles.' The stained glass depicts feminine divine figures. Sound "
+                    "baths happen in the former sanctuary where acoustics carry whispers "
+                    "to unexpected ears. The basement, once church storage, now contains "
+                    "equipment for more intense transformations. Members progress through "
+                    "levels of enlightenment that correlate to depths of submission."
+                ),
+                "public_programs": [
+                    "Vinyasa flow classes",
+                    "Women's empowerment workshops",
+                    "Executive stress relief programs"
+                ],
+                "deeper_work": [
+                    "Power exchange as therapy",
+                    "Behavioral modification through bodywork",
+                    "Corporate leadership redefinition"
+                ],
+                "architectural_features": {
+                    "The sanctuary": "Public classes with private undertones",
+                    "The confessionals": "Repurposed for one-on-one sessions",
+                    "The basement": "Equipment not found in typical yoga studios"
+                },
+                "membership_levels": "Curious, Committed, Converted, Owned"
+            },
+            {
+                "name": "Montenegro Modern Gallery",
+                "address": "Jackson Square Historic District",
+                "type": "cultural_conversion",
+                "description": (
+                    "High-end gallery in a 1850s building with very modern purposes. "
+                    "Isabella Montenegro curates art that reveals the viewer more than "
+                    "the viewed. Tech executives buy aggressive pieces that betray their "
+                    "need to submit. Opening nights are performance art where power "
+                    "dynamics play out over champagne. The climate-controlled storage "
+                    "rooms preserve more than paintings."
+                ),
+                "exhibitions": {
+                    "Public": "Contemporary feminist art",
+                    "Private viewings": "Pieces that inspire submission",
+                    "Storage collection": "Art that transforms viewers"
+                },
+                "clientele": [
+                    "New money seeking culture",
+                    "Old money knowing secrets",
+                    "Those referred by roses"
+                ],
+                "transformation_method": "Art as mirror, purchase as admission",
+                "famous_pieces": {
+                    "'Thorns Ascendant'": "Viewers report life changes",
+                    "'The Yielding'": "Bought by three CEOs who resigned after",
+                    "'Rose Imperious'": "Not for sale, changes location nightly"
+                }
+            },
+            {
+                "name": "Maison Noir",
+                "address": "Undisclosed, SoMa district",
+                "type": "finishing_school",
+                "description": (
+                    "A black door in an alley off Folsom. No sign, no number, but those "
+                    "who need it find it. Inside, a Victorian brothel aesthetic meets "
+                    "modern dungeon efficiency. But this isn't sex work - it's power work. "
+                    "Dominants train in psychological control, submissives learn to serve "
+                    "power. The graduation ceremonies involve contracts that bind more than "
+                    "bodies."
+                ),
+                "curriculum": {
+                    "Basic": "Protocol, safety, consent frameworks",
+                    "Intermediate": "Psychological manipulation, behavioral reading",
+                    "Advanced": "Life control, identity modification",
+                    "Masters": "Creating permanent change"
+                },
+                "faculty": "Mistresses who've broken captains of industry",
+                "alumni_network": "Places graduates throughout Bay Area power structures",
+                "admission": "Referral only, extensive vetting",
+                "graduation_rate": "60% - others find they're meant to serve"
             },
             {
                 "name": "The Butterfly House",
-                "address": "Marina Boulevard (Appears as private residence)",
-                "type": "primary_safehouse",
+                "address": "Marina Boulevard (appears as private residence)",
+                "type": "chrysalis_safehouse",
                 "description": (
-                    "A Queen Anne Victorian painted soft blue with white trim. To neighbors, it's "
-                    "home to a reclusive tech heiress. In truth, it's where broken wings learn to "
-                    "fly again. Seven bedrooms, each named for a butterfly. Medical facilities in "
-                    "the basement. New identities crafted in the attic office. The garden grows "
-                    "herbs that help with trauma. Guards who look like gardeners, security that "
-                    "seems like art installations. Hope lives here."
+                    "Mediterranean villa overlooking the bay where transformations complete. "
+                    "Those who enter as victims emerge as victors. The therapeutic program "
+                    "includes traditional trauma work and power reclamation through dominance "
+                    "training. The garden grows herbs that heal and plants that punish. At "
+                    "night, lights in windows signal safety or summons."
                 ),
-                "rooms": {
-                    "Monarch Suite": "For those ready to transform",
-                    "Luna Room": "Night terrors and healing",
-                    "Swallowtail": "Medical recovery",
-                    "Blue Morpho": "Identity reconstruction lab",
-                    "Garden Room": "Therapy and grounding"
-                },
+                "public_face": "Executive women's retreat",
+                "true_purpose": "Turning prey into predators (ethical ones)",
+                "programs": [
+                    "Trauma recovery through power reclamation",
+                    "Identity reconstruction services",
+                    "Dominance training for the formerly submissive",
+                    "Protection network integration"
+                ],
                 "security": {
-                    "External": "Cameras, motion sensors, silent alarms",
-                    "Internal": "Panic rooms, escape tunnel to marina",
-                    "Personnel": "Rotating guards, all trafficking survivors"
-                }
+                    "Visible": "High walls, security company",
+                    "Hidden": "Underground exits, safe rooms, armed gardeners"
+                },
+                "success_stories": "Former victims now running Fortune 500 companies"
             },
             {
-                "name": "The Bone Garden",
-                "address": "16th and Mission (Basement of El Corazón Negro)",
-                "type": "goth_club_entrance",
+                "name": "The Thorn Archive",
+                "address": "Climate-controlled facility, Peninsula",
+                "type": "information_repository",
                 "description": (
-                    "A goth club that serves as cover for one of the safehouse entrances. "
-                    "Victorian mourning aesthetic meets Mexican Day of the Dead. Those who "
-                    "know the phrase 'the moths seek light' find more than dancing here."
+                    "Looks like a wine storage facility, functions as the memory of the "
+                    "matriarchy. Every video, every contract, every confession stored in "
+                    "redundant systems. The Queen of Thorns (or her librarians) can access "
+                    "decades of leverage. Some executives pay millions just to know what's "
+                    "in their file."
                 ),
-                "features": [
-                    "Main floor - Gothic dance club",
-                    "VIP area - Information exchange",
-                    "Office - Hidden tunnel entrance",
-                    "Emergency exit - Leads to Mission tunnels"
-                ]
+                "contents": [
+                    "Compromising materials on half of Silicon Valley",
+                    "Historical records of the movement",
+                    "Transformation documentation",
+                    "The unedited histories"
+                ],
+                "access_levels": "Need to know basis, even for roses",
+                "security": "Biometric, quantum encryption, and ladies who lunch with guns",
+                "urban_legend": "Contains the true identity of the first Queen"
+            },
+            {
+                "name": "Dr. Johnson's Pacific Heights Practice",
+                "address": "Victorian row house near Lafayette Park",
+                "type": "psychological_restructuring",
+                "description": (
+                    "Psychiatrist office that looks like old San Francisco money. Oriental "
+                    "rugs, leather chairs, and therapeutic methods not found in the DSM. "
+                    "Dr. Amara Johnson helps willing clients discover their need to submit, "
+                    "guides unwilling ones toward acceptance. The pharmaceuticals she "
+                    "prescribes aren't all FDA approved. Some patients emerge with new "
+                    "orientations toward authority."
+                ),
+                "therapeutic_approaches": [
+                    "Traditional talk therapy (for show)",
+                    "Hypnotherapy with permanent suggestions",
+                    "Pharmaceutical assistance for resistance",
+                    "Behavioral modification through guided experience"
+                ],
+                "client_base": "Referrals from the Garden, court-ordered alternatives",
+                "success_metric": "Recidivism rate: 0%",
+                "waiting_room_art": "Rothko prints that induce contemplation of surrender"
+            },
+            {
+                "name": "The Folsom Street Foundry",
+                "address": "Industrial building off 11th Street",
+                "type": "equipment_and_education",
+                "description": (
+                    "Metalworking shop that produces more than art. Custom restraints that "
+                    "double as jewelry, furniture that transforms spaces and people. The "
+                    "welding classes teach precision that applies beyond metalwork. The "
+                    "showroom displays pieces that make viewers imagine themselves in them. "
+                    "Special orders require measurements beyond the physical."
+                ),
+                "public_products": [
+                    "Industrial art pieces",
+                    "Custom furniture",
+                    "Architectural elements"
+                ],
+                "special_orders": [
+                    "Restraint systems disguised as decor",
+                    "Furniture for specific activities",
+                    "Cages that look like art installations"
+                ],
+                "classes_offered": {
+                    "Basic welding": "Actually basic welding",
+                    "Advanced fabrication": "Creating tools of transformation",
+                    "Design workshop": "Psychological impact through physical form"
+                },
+                "clientele": "Dungeons, private collectors, people with specific needs"
             }
         ]
     
@@ -94,78 +253,166 @@ class SFLocalLore:
         """Get SF-specific urban myths for the story"""
         return [
             {
-                "name": "The Fog Mother",
-                "type": "protector_legend",
+                "name": "The Executive Vanishings",
+                "type": "cautionary_tale",
                 "description": (
-                    "When the fog rolls thick through the Tenderloin, they say She walks within it. "
-                    "The Moth Queen becomes one with the mist, spiriting away those about to be taken. "
-                    "Traffickers speak of girls vanishing into fog that moves against the wind. Some "
-                    "say she commands the fog itself, that Karl the Fog is her lover and conspirator. "
-                    "Leave a moth drawn in window condensation if you need her protection."
+                    "They say certain executives - the ones with wandering hands and "
+                    "NDAs for days - sometimes vanish from the Valley. Their LinkedIn "
+                    "updates stop, their Teslas are found at SFO long-term parking, "
+                    "their condos go on the market. But their funding continues, flowing "
+                    "to women's organizations. Some say they've been relocated. Others "
+                    "say they've been... reorganized. Rose petals in their empty offices."
                 ),
-                "origin_location": "Tenderloin",
-                "spread_regions": ["Mission", "SoMa", "Financial District"],
+                "origin_location": "Sand Hill Road",
+                "spread_regions": ["Entire Bay Area tech community"],
                 "believability": 7,
-                "truth_level": "Metaphorically true - she uses fog as cover"
+                "truth_level": "More true than anyone admits",
+                "evidence": [
+                    "Three CEOs in 2023 alone",
+                    "Similar disappearance patterns",
+                    "Continued financial activity",
+                    "Roses at every scene"
+                ],
+                "official_explanation": "Burnout, moving to Austin",
+                "whispered_truth": "The Garden prunes aggressively"
             },
             {
-                "name": "The Pyramid's Dark Heart",
-                "type": "location_legend",
+                "name": "The Consent Lottery",
+                "type": "underground_legend",
                 "description": (
-                    "The Transamerica Pyramid isn't just an office building. Deep beneath, where "
-                    "foundations meet old Shanghai tunnels, the ultra-wealthy built a temple to their "
-                    "darkest desires. Entry requires a gold moth pin and a terrible secret. The Moth "
-                    "Queen has infiltrated it three times, each visit followed by a CEO's mysterious "
-                    "downfall. They say she has videos that could topple the city's power structure."
+                    "Exclusive dungeons supposedly run a lottery where winners get to "
+                    "scene with the Queen of Thorns herself. Buy-in starts at $50K, "
+                    "but money doesn't guarantee selection. They say she chooses based "
+                    "on psychological profiles, need for correction, potential for "
+                    "transformation. Winners are never the same. Losers get their money "
+                    "back... minus a donation to women's shelters."
+                ),
+                "origin_location": "SoMa underground",
+                "spread_regions": ["Financial District", "Marina", "Palo Alto"],
+                "believability": 5,
+                "truth_level": "Partially true - the selection process is real",
+                "entry_points": "Certain gallery openings, wine auctions, charity galas",
+                "selection_criteria": "Power to abuse, willingness to surrender it",
+                "transformation_rate": "100% of actual participants"
+            },
+            {
+                "name": "The BART Protector",
+                "type": "guardian_legend",
+                "description": (
+                    "Late night BART riders tell of a woman who appears when someone's "
+                    "being harassed. Well-dressed, smells of roses, speaks with quiet "
+                    "authority that makes predators flee at the next stop. Security "
+                    "footage mysteriously corrupts when she appears. Some say she's "
+                    "the Queen herself, others say she's legion - many women sharing "
+                    "a purpose and perfume."
+                ),
+                "origin_location": "BART system-wide",
+                "spread_regions": ["Throughout Bay Area transit"],
+                "believability": 8,
+                "truth_level": "Multiple confirmed interventions",
+                "witness_accounts": [
+                    "Professional woman, 30s-50s",
+                    "Designer clothes, sensible shoes",
+                    "Voice that 'made him shrink'",
+                    "Rose perfume lingering after"
+                ],
+                "BART_response": "No comment on vigilante activities"
+            },
+            {
+                "name": "The Rose Email",
+                "type": "digital_folklore",
+                "description": (
+                    "Screenshot collections circulate on encrypted channels - emails "
+                    "containing only a rose emoji and GPS coordinates. Recipients are "
+                    "always powerful men with secrets. Those who go to the coordinates "
+                    "find evidence of their worst acts. Those who don't find the "
+                    "evidence in their inbox Monday morning, CC'd to relevant parties. "
+                    "IT security firms can't trace the source, though they've tried."
+                ),
+                "origin_location": "Silicon Valley C-suites",
+                "spread_regions": ["Tech community worldwide"],
+                "believability": 6,
+                "truth_level": "Verified emails, unverified source",
+                "documented_cases": 47,
+                "results": [
+                    "Sudden resignations",
+                    "Massive anonymous donations",
+                    "Public apologies without context",
+                    "Behavioral transformations"
+                ],
+                "tech_response": "Best security can't stop them"
+            },
+            {
+                "name": "The Monday Meeting",
+                "type": "power_structure_legend",
+                "description": (
+                    "Every Monday at 3 PM, seven women meet somewhere in the city. "
+                    "The location changes but the purpose doesn't - they decide who "
+                    "rises and who falls in the Bay Area. They say board appointments, "
+                    "funding rounds, and political races are settled over tea. The "
+                    "Queen of Thorns either chairs the meeting or is the meeting - "
+                    "seven faces of the same authority."
+                ),
+                "origin_location": "Pacific Heights tradition",
+                "spread_regions": ["Power corridors throughout Bay Area"],
+                "believability": 4,
+                "truth_level": "The meetings are real, the power is debated",
+                "supposed_members": [
+                    "Federal judge",
+                    "VC partner",
+                    "Museum director",
+                    "Tech executive",
+                    "Society matron",
+                    "Psychiatrist",
+                    "Unknown seventh"
+                ],
+                "influence_tracking": "Monday decisions appear in Thursday news"
+            },
+            {
+                "name": "The Transformation Spa",
+                "type": "wellness_legend",
+                "description": (
+                    "Somewhere in Marin is a spa that offers more than hot stones "
+                    "and cucumber water. Tech wives whisper about week-long retreats "
+                    "that remake marriages. Husbands who enter dominant leave "
+                    "submissive. The treatment list includes 'behavioral adjustment "
+                    "therapy' and 'power dynamic rebalancing.' Some say it's where "
+                    "the Queen trains her roses."
+                ),
+                "origin_location": "Marin County",
+                "spread_regions": ["Wealthy enclaves"],
+                "believability": 6,
+                "truth_level": "Multiple locations, same purpose",
+                "treatment_effects": [
+                    "Reversed household dynamics",
+                    "Increased charitable giving",
+                    "Career changes favoring wives",
+                    "Newfound enthusiasm for service"
+                ],
+                "booking_method": "Referral only, no public listings"
+            },
+            {
+                "name": "The Dungeon Beneath the Pyramid",
+                "type": "architectural_legend",
+                "description": (
+                    "The Transamerica Pyramid supposedly has sub-basements that "
+                    "predate the building. During construction, they found rooms "
+                    "with rings in walls, equipment that wasn't mining gear. Now "
+                    "it's the city's most exclusive venue - entry requires DNA-locked "
+                    "invitations and complete surrender. They say the Queen holds "
+                    "court there quarterly, transforming the city's most powerful."
                 ),
                 "origin_location": "Financial District",
-                "spread_regions": ["SoMa", "Pacific Heights"],
-                "believability": 5,
-                "truth_level": "Partially true - there is an exclusive underground club"
-            },
-            {
-                "name": "The Valencia Street Vanishings",
-                "type": "historical_legend",
-                "description": (
-                    "Every year, on the anniversary of the Great Quake, someone disappears from "
-                    "Valencia Street between midnight and dawn. But unlike other vanishings, these "
-                    "people reappear months later in other cities, with new names and mysterious "
-                    "benefactors. They never speak of what happened, but they all have one thing "
-                    "in common - a small moth tattoo. The saved marking the saved."
-                ),
-                "origin_location": "Mission District",
-                "spread_regions": ["Castro", "Noe Valley"],
-                "believability": 8,
-                "truth_level": "True - it's the annual rescue operation"
-            },
-            {
-                "name": "The Golden Gate Jumper Who Flies",
-                "type": "transformation_legend",
-                "description": (
-                    "Bridge workers whisper about the woman who jumped but grew wings. They say "
-                    "she was trafficked, escaped, but had nowhere to go. As she fell, she transformed "
-                    "into a massive moth and flew back to the city. Now she saves others from the same "
-                    "fate. On foggy nights, maintenance crews report seeing giant wings in their lights."
-                ),
-                "origin_location": "Golden Gate Bridge",
-                "spread_regions": ["Entire Bay Area"],
+                "spread_regions": ["Executive circles"],
                 "believability": 3,
-                "truth_level": "Mythological transformation of real rescue"
-            },
-            {
-                "name": "The Tech Bro Harvest",
-                "type": "cautionary_legend",
-                "description": (
-                    "Young tech workers with too much money and too little sense vanish from SoMa "
-                    "clubs. They say the Queen selects the worst - those who treat people as objects "
-                    "to be optimized. They're found days later, accounts drained, dignity shattered, "
-                    "with footage of their depravities sent to their boards. A moth calling card left "
-                    "behind. Silicon Valley's #MeToo has an avenging angel."
-                ),
-                "origin_location": "SoMa",
-                "spread_regions": ["Financial District", "Palo Alto"],
-                "believability": 6,
-                "truth_level": "Some incidents are real"
+                "truth_level": "Something's down there",
+                "access_ritual": [
+                    "Rose delivered to office",
+                    "Coordinates in stem",
+                    "Biometric scanner knows you",
+                    "Elevator buttons that don't exist"
+                ],
+                "transformation_stories": "CEOs emerge as different people"
             }
         ]
     
@@ -174,140 +421,363 @@ class SFLocalLore:
         """Get historical events that shape the story world"""
         return [
             {
-                "event_name": "The Great Quake of 1906 - Hidden Truth",
-                "date": "April 18, 1906",
-                "location": "San Francisco",
-                "description": (
-                    "Official records speak of earthquake and fire. Hidden archives tell of the "
-                    "trafficking rings destroyed in the chaos, the brothels that burned with their "
-                    "prisoners inside. The first Moth Queen arose from these ashes - a madam who "
-                    "chose to save rather than sell. The tunnel systems dug for escape still exist."
+                "event_name": "The Victorian Secret Wars",
+                "date": "1890s",
+                "location": "Nob Hill and Pacific Heights",
+                "official_history": (
+                    "Railroad barons' wives competed in charity work and social climbing."
+                ),
+                "hidden_history": (
+                    "The city's first matriarchal power structure emerged from supposed "
+                    "tea parties. Mrs. Cordelia Thornfield established 'reading circles' "
+                    "that were actually power exchanges. The tradition of female authority "
+                    "hiding in plain sight began with corsets and calling cards. Their "
+                    "'charitable works' included reforming abusive husbands through methods "
+                    "not discussed in polite society."
                 ),
                 "significance": 9,
-                "impact": "Created the underground tunnel network still used today",
-                "legacy": "The Moth Queen tradition began here"
+                "impact": "Established the template for hidden female power",
+                "legacy": "The Thornfield name still opens doors",
+                "artifacts": [
+                    "Diary entries in code at the History Room",
+                    "Photographs with interesting power dynamics",
+                    "Charity records with unusual expenditures"
+                ]
             },
             {
-                "event_name": "The Summer of Love's Dark Side",
-                "date": "Summer 1967",
-                "location": "Haight-Ashbury spreading to Mission",
-                "description": (
-                    "While hippies preached free love, predators hunted the runaways flooding the city. "
-                    "Seventeen flower children vanished, their disappearances dismissed as 'joining "
-                    "communes.' The second Moth Queen emerged then - a dominatrix who used her dungeon "
-                    "as a safehouse. She saved thirty-three that summer. Her methods inspired the current "
-                    "system of hiding salvation in spaces of submission."
+                "event_name": "The Barbary Coast Transformation",
+                "date": "1906-1917",
+                "location": "Current Financial District",
+                "official_history": (
+                    "Red light district cleaned up after earthquake and reform movement."
+                ),
+                "hidden_history": (
+                    "The madams didn't disappear - they evolved. The brothels became "
+                    "boarding houses with interesting rules. The first Queen of Thorns "
+                    "arose from these ashes, transforming exploitation into empowerment. "
+                    "The tunnel systems dug for escape from raids now connect buildings "
+                    "for different purposes. The architecture of control adapted."
+                ),
+                "significance": 10,
+                "impact": "Birth of the modern shadow matriarchy",
+                "legacy": "Tunnels still used, methods still practiced",
+                "evidence": [
+                    "Suspiciously similar disappearances of violent men",
+                    "Boarding houses with no boarders but much activity",
+                    "Police records with pages missing"
+                ]
+            },
+            {
+                "event_name": "The Summer of Love's Shadow",
+                "date": "1967",
+                "location": "Haight-Ashbury spreading citywide",
+                "official_history": (
+                    "Hippie movement, free love, cultural revolution."
+                ),
+                "hidden_history": (
+                    "The 'free love' movement provided cover for deeper explorations. "
+                    "Dominant women found submissive men seeking gurus. The second "
+                    "Queen of Thorns emerged from a commune that was actually a training "
+                    "ground. While hippies preached peace, she waged war on predators "
+                    "hunting the flower children. Thirty-three saved that summer alone."
                 ),
                 "significance": 8,
-                "impact": "Established the dual-purpose venue model",
-                "legacy": "The Queen's two faces - domination and salvation"
+                "impact": "Merged counterculture with shadow culture",
+                "legacy": "Psychological techniques still used",
+                "transformation_count": "Unknown, but Haight still whispers"
             },
             {
-                "event_name": "The Folsom Street Riots of 1990",
-                "date": "September 30, 1990",
-                "location": "SoMa District",
-                "description": (
-                    "When police raided leather bars searching for 'perverts,' the community fought back. "
-                    "In the chaos, a trafficking ring's warehouse burned. Witnesses saw a woman in a "
-                    "leather mask leading captives to safety through the smoke. The riots ended with an "
-                    "unspoken truce: the underground polices itself. The Moth Queen was recognized as "
-                    "legitimate authority in the shadow realm."
+                "event_name": "The Moscone Assassination Aftermath",
+                "date": "November 27, 1978",
+                "location": "City Hall and Castro",
+                "official_history": (
+                    "Mayor Moscone and Harvey Milk assassinated by Dan White."
+                ),
+                "hidden_history": (
+                    "The outrage birthed more than protests. Women who'd worked with "
+                    "Milk established protection networks that evolved into enforcement "
+                    "networks. The 'Twinkie Defense' inspired alternative justice systems. "
+                    "They say Dan White's life in prison was... adjusted by those who "
+                    "knew how to reach inside."
+                ),
+                "significance": 9,
+                "impact": "Politicized the shadow networks",
+                "legacy": "Political protection systems still active",
+                "whispered_truth": "White's death wasn't suicide"
+            },
+            {
+                "event_name": "The Loma Prieta Revelation",
+                "date": "October 17, 1989",
+                "location": "San Francisco Bay Area",
+                "official_history": (
+                    "6.9 earthquake disrupted World Series, killed 63."
+                ),
+                "hidden_history": (
+                    "In the chaos, shadow networks proved more effective than official "
+                    "ones. Women's shelters organized faster than FEMA. The Queen's "
+                    "network moved through the city like angels, extracting those "
+                    "trapped by more than rubble. The Marina safehouse was established "
+                    "with insurance money from a mansion that 'tragically burned.'"
+                ),
+                "significance": 9,
+                "impact": "Proved shadow systems superior in crisis",
+                "legacy": "Emergency protocols still used",
+                "infrastructure_born": "Three major safehouses established"
+            },
+            {
+                "event_name": "The First Dot-Com Disruption",
+                "date": "1999-2001",
+                "location": "SoMa and Financial District",
+                "official_history": (
+                    "Tech bubble burst, fortunes lost, companies folded."
+                ),
+                "hidden_history": (
+                    "New money met old power structures. The third Queen of Thorns "
+                    "infiltrated tech culture, learning their vulnerabilities. When "
+                    "the bubble burst, she acquired assets and individuals. Failed "
+                    "CEOs found new purposes serving those they'd overlooked. The "
+                    "money might have evaporated, but the control solidified."
+                ),
+                "significance": 8,
+                "impact": "Integrated tech wealth into shadow systems",
+                "legacy": "VC funding with strings attached",
+                "conversion_rate": "23 executives transformed"
+            },
+            {
+                "event_name": "The Twitter Revolution",
+                "date": "2006-2020",
+                "location": "Mid-Market and SoMa",
+                "official_history": (
+                    "Twitter brought tech to Mid-Market, transformed neighborhood."
+                ),
+                "hidden_history": (
+                    "The Queen's network infiltrated from day one. As Twitter gave "
+                    "everyone a voice, certain voices were amplified or silenced "
+                    "through careful manipulation. The basement levels of the building "
+                    "hosted more than servers. When Musk bought it, he inherited more "
+                    "than code - though he hasn't discovered all the backdoors yet."
                 ),
                 "significance": 7,
-                "impact": "Established underground self-governance",
-                "legacy": "Police avoid the deep underground if it stays quiet"
+                "impact": "Digital integration of shadow power",
+                "legacy": "Control mechanisms in major platforms",
+                "ongoing": "X still has thorns in its code"
             },
             {
-                "event_name": "The Dot-Com Boom's Hidden Victims",
-                "date": "1999-2001",
-                "location": "City-wide",
-                "description": (
-                    "As tech money flooded in, so did demand for 'exclusive experiences.' High-end "
-                    "trafficking rings emerged, catering to new millionaires. The third Moth Queen "
-                    "infiltrated their ranks, gathering evidence while saving victims. When the bubble "
-                    "burst, so did the rings - exposed by leaked videos. Twenty executives fled the "
-                    "country. She used their abandoned assets to expand the safehouse network."
+                "event_name": "The Great MeToo Reckoning",
+                "date": "2017-2018",
+                "location": "Silicon Valley and SF",
+                "official_history": (
+                    "Sexual harassment exposed, powerful men fell."
                 ),
-                "significance": 8,
-                "impact": "Safehouse network expanded with tech money",
-                "legacy": "Tech elite's fear and funding of the Queen"
-            },
-            {
-                "event_name": "The Marina Massacre Prevention",
-                "date": "June 15, 2018",
-                "location": "Marina District",
-                "description": (
-                    "Intelligence suggested a trafficking ship would dock with fifty victims for a "
-                    "buyer's convention. The current Moth Queen coordinated with sympathetic port "
-                    "workers, underground allies, and even some cops who'd 'seen enough.' The ship "
-                    "arrived to find its buyers arrested or vanished, victims already spirited away. "
-                    "The only trace: moth wings painted on the empty containers."
+                "hidden_history": (
+                    "Not all fell publicly. The Queen's network offered alternatives: "
+                    "public disgrace or private transformation. Many chose transformation. "
+                    "The shadow system's intake tripled. Dungeons expanded to handle "
+                    "executive education. Some of MeToo's biggest victories were "
+                    "negotiated in rooms without windows."
                 ),
                 "significance": 9,
-                "impact": "Largest single rescue in Bay Area history",
-                "legacy": "Proved the underground network's power"
+                "impact": "Massive expansion of transformation pipeline",
+                "legacy": "Shadow justice normalized",
+                "statistics": {
+                    "Public falls": 47,
+                    "Private transformations": "Estimated 200+",
+                    "Continued funding": "$50M annually"
+                }
+            },
+            {
+                "event_name": "The Pandemic Power Shift",
+                "date": "2020-2022",
+                "location": "San Francisco Bay Area",
+                "official_history": (
+                    "COVID lockdowns, remote work, urban exodus."
+                ),
+                "hidden_history": (
+                    "Isolation revealed hidden dynamics. Domestic abuse spiked, but "
+                    "so did extractions. The network went digital, infiltrating Zoom "
+                    "bedrooms and home offices. Empty office buildings became temporary "
+                    "transformation centers. They say the Queen ran the city's shadow "
+                    "response from a commandeered WeWork. More people discovered their "
+                    "need to kneel when alone with screens."
+                ),
+                "significance": 10,
+                "impact": "Digitized and expanded shadow operations",
+                "legacy": "Hybrid power structures permanent",
+                "innovations": [
+                    "Remote behavioral modification",
+                    "Digital dungeons",
+                    "Cryptocurrency control systems",
+                    "Empty office utilization"
+                ]
+            },
+            {
+                "event_name": "The Twitter/X Transformation",
+                "date": "2022-present",
+                "location": "Mid-Market",
+                "official_history": (
+                    "Elon Musk bought Twitter, transformed to X, chaos ensued."
+                ),
+                "hidden_history": (
+                    "The acquisition disrupted more than social media. Shadow systems "
+                    "embedded in Twitter's infrastructure went dark, then adapted. "
+                    "They say Musk's erratic behavior stems from discovering he bought "
+                    "more than a platform. The Rose Garden has thorns in his code, "
+                    "his board, his bedroom. His sudden pivots might not all be his."
+                ),
+                "significance": 8,
+                "impact": "Ongoing power struggle",
+                "current_status": "The thorns are winning quietly",
+                "evidence": [
+                    "Policy reversals after midnight",
+                    "Executive departures with rose imagery",
+                    "Funding flowing to unexpected places"
+                ]
             }
         ]
     
     @staticmethod
     def get_cultural_elements() -> List[Dict[str, Any]]:
-        """Get unique cultural elements of the SF underground"""
+        """Get unique cultural elements of the SF Bay Area"""
         return [
             {
-                "name": "Fog Night Sanctuary",
-                "type": "protective_tradition",
+                "name": "The Startup Submission Pipeline",
+                "type": "business_culture",
                 "description": (
-                    "On nights when the fog is thickest, all underground venues become sanctuary "
-                    "spaces. No questions asked, no payment required. Anyone fleeing abuse or "
-                    "trafficking can claim fog sanctuary. Even the darkest venues honor this."
+                    "The peculiar Valley dynamic where founders pitch on stages but "
+                    "kneel in private. Board meetings that end with board members "
+                    "boarded. Term sheets that include terms not taught at Stanford "
+                    "GSB. The most successful exits often involve chains. They joke "
+                    "about 'runway' meaning something different at certain firms."
                 ),
-                "frequency": "Whenever fog visibility < 100 feet",
-                "participants": "All underground venues and workers"
+                "participants": "Founders, VCs, angels with whips",
+                "rituals": [
+                    "Pitch sessions that test more than business models",
+                    "Due diligence that gets very personal",
+                    "Cap tables that include control beyond equity"
+                ],
+                "success_metrics": "Valuations and submission correlate",
+                "whispered_wisdom": "The best deals close in dungeons"
             },
             {
-                "name": "The Moth Migration",
-                "type": "annual_ceremony",
+                "name": "Wine Country Power Plays",
+                "type": "leisure_culture",
                 "description": (
-                    "Every April 18th (earthquake anniversary), those saved by the network gather "
-                    "in secret locations across the city. They release live moths at midnight, each "
-                    "one representing a life saved. The Moth Queen appears at one location, never "
-                    "announced in advance."
+                    "Napa weekends where the tasting notes include dominance and "
+                    "submission. Certain vintners specialize in more than wine, "
+                    "their cellars storing more than bottles. Corporate retreats "
+                    "that retreat from conventional power structures. The Queen "
+                    "of Thorns supposedly owns a vineyard where grapes aren't "
+                    "the only thing crushed."
                 ),
-                "frequency": "Annual",
-                "significance": "Celebrates survival and transformation"
+                "venues": [
+                    "Private estates with private purposes",
+                    "Wine caves with interesting acoustics",
+                    "Tasting rooms with discipline on the menu"
+                ],
+                "seasonal_events": [
+                    "Harvest season negotiations",
+                    "Crush parties that crush egos",
+                    "Auction lots that include people"
+                ],
+                "transformation_rate": "What happens in Napa stays changed"
             },
             {
-                "name": "Confession Booths",
-                "type": "underground_service",
+                "name": "Farmers Market Intelligence Networks",
+                "type": "community_culture",
                 "description": (
-                    "Modified photo booths in underground venues where people can confess desires, "
-                    "crimes, or needs. Some confessions lead to scene negotiations, others to "
-                    "safehouse rescues. The Moth Queen reviews dangerous ones personally."
+                    "Every Saturday, more than organic produce changes hands. "
+                    "Information flows with the kombucha. Certain vendors serve "
+                    "more than vegetables - they serve justice. The flower stands "
+                    "pass messages through bouquet arrangements. Rose orders "
+                    "spike before major power shifts. The Queen's eyes shop "
+                    "everywhere."
                 ),
-                "locations": "Most underground venues",
-                "protocol": "Anonymous, encrypted, selectively acted upon"
+                "locations": [
+                    "Ferry Building - High-end intelligence",
+                    "Alemany - Community protection info",
+                    "Mission Community Market - Underground coordination"
+                ],
+                "communication_methods": [
+                    "Flower arrangements as messages",
+                    "Produce orders encoding intel",
+                    "Cash transactions hiding data"
+                ],
+                "participants": "Everyone watches, few understand"
             },
             {
-                "name": "The Folsom Truce",
-                "type": "annual_agreement",
+                "name": "The Burning Man Recruitment Festival",
+                "type": "alternative_culture",
                 "description": (
-                    "During Folsom Street Fair, all factional conflicts pause. The celebration of "
-                    "consensual kink overshadows darker business. Even traffickers avoid the area, "
-                    "knowing the concentrated underground presence."
+                    "What happens on playa doesn't stay on playa - it comes back "
+                    "transformed. The camps that teach 'radical self-expression' "
+                    "include expressing submission. Desert heat breaks down more "
+                    "than inhibitions. They return to SF with new understanding "
+                    "of power, new contacts, new contracts. The Queen's camp "
+                    "moves yearly but the transformed always find it."
                 ),
-                "frequency": "Last Sunday in September",
-                "effect": "24-hour ceasefire in underground conflicts"
+                "recruitment_methods": [
+                    "Workshops on power exchange",
+                    "Art installations that inspire submission",
+                    "Gifting economy that includes gifting self"
+                ],
+                "transformation_timeline": "One week to break, 51 to rebuild",
+                "success_stories": "That entire VC firm that camps together"
             },
             {
-                "name": "Tech Confessional",
-                "type": "blackmail_tradition",
+                "name": "Tech Conference After-Parties",
+                "type": "professional_culture",
                 "description": (
-                    "Silicon Valley executives can 'confess' their crimes to the Velvet Court "
-                    "and receive absolution - for a price. Usually involves massive donations to "
-                    "victim services. Refusal means exposure. Many prefer paying to prison."
+                    "Where real disruption happens after disruptive talks. "
+                    "Moscone Center empties into dungeons. Keynote speakers "
+                    "who dominate stages submit in suites. The most exclusive "
+                    "parties require more than a badge - they require willingness "
+                    "to wear other things. Demo days that demonstrate flexibility."
                 ),
-                "frequency": "Monthly closed sessions",
-                "revenue": "Funds 40% of safehouse operations"
+                "major_events": [
+                    "Dreamforce Nightmares",
+                    "Google I/O After Dark",
+                    "TechCrunch Disrupt Bodies"
+                ],
+                "entry_requirements": "Power to surrender",
+                "transformation_potential": "High - alcohol and ambition mix"
+            },
+            {
+                "name": "The Charity Gala Circuit",
+                "type": "social_culture",
+                "description": (
+                    "Where cause meets effect. Black tie events hiding black "
+                    "leather hearts. Auction items including experiences not "
+                    "listed in programs. Cause-heads who champion women's rights "
+                    "while surrendering their own. The Queen attends in various "
+                    "guises, gathering donations and donors. The real charity "
+                    "is teaching power to those who abuse it."
+                ),
+                "annual_highlights": [
+                    "SF Symphony Opening - Orchestrated encounters",
+                    "Museum Modern Ball - Art and artifice",
+                    "Ballet Gala - Positions demonstrated"
+                ],
+                "donation_dynamics": "Generosity increases with submission",
+                "networking": "Power couples with interesting dynamics"
+            },
+            {
+                "name": "The Yoga Industrial Complex",
+                "type": "wellness_culture",
+                "description": (
+                    "Studios teaching more than stretching. Positions that "
+                    "position practitioners for life changes. Hot yoga that "
+                    "breaks more than sweats. Teacher training that trains "
+                    "dominance. The yoga industrial complex produces flexible "
+                    "bodies and minds, ready for new configurations. Namaste "
+                    "means 'I bow to the divine in you' - literally."
+                ),
+                "studio_specialties": [
+                    "Power Yoga - Literally about power",
+                    "Yin Yoga - Submission practices",
+                    "Partner Yoga - Dynamic explorations"
+                ],
+                "teacher_network": "Initiated into deeper practices",
+                "transformation_method": "Physical flexibility enables mental"
             }
         ]
     
@@ -316,38 +786,266 @@ class SFLocalLore:
         """Get significant landmarks for the story"""
         return [
             {
-                "name": "The Sutro Baths Ruins",
-                "type": "ceremonial_site",
+                "name": "The Transamerica Pyramid",
+                "type": "architectural_icon",
+                "public_significance": "SF skyline icon, former bank HQ",
                 "description": (
-                    "The ruins of the old bathhouse serve as a meeting place for the underground. "
-                    "Major decisions are made here, with the Pacific as witness. The Moth Queen "
-                    "was crowned here, in a ceremony involving all faction leaders."
+                    "The city's most phallic building has basements that predate "
+                    "its construction. Urban explorers whisper about doors that "
+                    "shouldn't exist, elevator buttons that appear at midnight, "
+                    "sub-basements with rings in walls. The building's own "
+                    "security avoids certain areas after dark."
                 ),
-                "location": "Lands End",
-                "significance": "Neutral ground for all factions",
-                "ceremonies": ["Leadership changes", "Major truces", "Territory disputes"]
+                "hidden_significance": "Gateway to underground authority",
+                "urban_legends": [
+                    "The Executive Floor that isn't on plans",
+                    "Basement dungeons from Barbary Coast days",
+                    "The Queen's quarterly court sessions"
+                ],
+                "access_methods": "Rose delivery triggers invitation",
+                "transformation_stories": "CEOs enter, different people exit"
             },
             {
-                "name": "The Castro Theatre",
-                "type": "information_hub",
+                "name": "Golden Gate Park Rose Garden",
+                "type": "public_garden",
+                "public_significance": "Beautiful roses, wedding photos",
                 "description": (
-                    "More than a movie palace. The projection booth serves as a secure meeting "
-                    "room. Classic films provide cover for information exchanges. The organist "
-                    "plays coded messages in the pre-show music."
+                    "Hundreds of rose varieties including some found nowhere else. "
+                    "The Queen of Thorns hybrid blooms black-red, its thorns "
+                    "drawing blood from the careless. Gardeners tend bushes at "
+                    "odd hours. Messages left in deadheaded blooms. The greenhouse "
+                    "stays locked but lit all night."
                 ),
-                "location": "Castro District",
-                "significance": "Communications center for the underground"
+                "hidden_significance": "Communication hub, ritual site",
+                "secret_features": [
+                    "The Queen's Throne - Bench surrounded by thorns",
+                    "Message drops in mulch",
+                    "Greenhouse meetings after midnight"
+                ],
+                "annual_events": "Rose Festival with hidden ceremonies",
+                "botanical_mysteries": "Hybrids that shouldn't exist do"
             },
             {
-                "name": "Grace Cathedral Labyrinth",
-                "type": "sanctuary_marker",
+                "name": "The Wave Organ",
+                "type": "acoustic_sculpture",
+                "public_significance": "Quirky art installation",
                 "description": (
-                    "Walking the labyrinth at night signals need for sanctuary. The cathedral's "
-                    "progressive leadership provides no-questions-asked shelter. Moths sometimes "
-                    "appear in the stained glass reflections."
+                    "PVC pipes and concrete amplify wave sounds into music. "
+                    "But at certain tides, the harmonics hide conversations. "
+                    "The acoustic properties make surveillance impossible. "
+                    "Couples speak intimacies the ocean swallows. Power "
+                    "dynamics play out with wave accompaniment."
                 ),
-                "location": "Nob Hill",
-                "significance": "Last resort sanctuary, even from the Queen herself"
+                "hidden_significance": "Secure meeting location",
+                "optimal_times": "High tide plus fog equals privacy",
+                "observed_meetings": "Well-dressed women, submissive men",
+                "acoustic_properties": "Words dissolve beyond ten feet"
+            },
+            {
+                "name": "Sutro Baths Ruins",
+                "type": "historic_ruins",
+                "public_significance": "Former swimming complex, tourist spot",
+                "description": (
+                    "Concrete ruins where Victorian San Francisco came to swim. "
+                    "Now pilgrims come for different immersions. The pools fill "
+                    "with more than seawater at spring tides. Moonlight rituals "
+                    "happen in the foundations. The cave leads deeper than maps "
+                    "show. Power exchanges with Pacific witnesses."
+                ),
+                "hidden_significance": "Ceremonial grounds, neutral territory",
+                "ritual_uses": [
+                    "Leadership transitions",
+                    "Territory negotiations",
+                    "Punishment ceremonies"
+                ],
+                "natural_features": "Caves hide more than tide pools",
+                "access_warnings": "Never alone, never recorded"
+            },
+            {
+                "name": "Coit Tower",
+                "type": "memorial_tower",
+                "public_significance": "Firefighter memorial, city views",
+                "description": (
+                    "Lillie Coit's phallic gift to the city reaches toward "
+                    "heaven while its murals ground in struggle. The hidden "
+                    "room at the top isn't accessible by tourist elevator. "
+                    "Those who've seen it describe mirrors and equipment. "
+                    "The view encompasses all territories. The Queen "
+                    "supposedly has a key."
+                ),
+                "hidden_significance": "Observation post, ceremonial height",
+                "architectural_secrets": [
+                    "Room not on blueprints",
+                    "Private elevator requiring key",
+                    "Equipment predating renovation"
+                ],
+                "symbolic_importance": "Feminine power erected over city",
+                "transformation_venue": "Heights break down resistance"
+            },
+            {
+                "name": "The Old Mint",
+                "type": "historic_building",
+                "public_significance": "Museum, event space",
+                "description": (
+                    "Where gold became currency, now other transformations occur. "
+                    "The vaults store more than historical artifacts. Event "
+                    "rentals include spaces not on public tours. The basement "
+                    "connects to Financial District tunnels. Some galas feature "
+                    "entertainment in the vaults that guests don't discuss."
+                ),
+                "hidden_significance": "Transformation venue, secure storage",
+                "architectural_features": [
+                    "Vaults repurposed for privacy",
+                    "Tunnel connections to power centers",
+                    "Rooms with interesting acoustic properties"
+                ],
+                "event_history": "Charity galas with profound afterparties",
+                "security": "Federal building with shadow supplements"
+            }
+        ]
+    
+    @staticmethod
+    def get_communication_networks() -> List[Dict[str, Any]]:
+        """Get how different groups communicate"""
+        return [
+            {
+                "name": "The Rose Garden Network",
+                "network_type": "botanical_communication",
+                "description": (
+                    "Flowers speak languages apps can't translate. Rose varieties "
+                    "convey different messages: red for danger, white for safety, "
+                    "black for transformation needed. Bouquet arrangements encode "
+                    "complex intelligence. Flower shops throughout the Bay Area "
+                    "participate, knowingly or not. Orders spike before power shifts."
+                ),
+                "encoding_system": [
+                    "Number of roses = urgency level",
+                    "Color combinations = type of situation",
+                    "Thorn prominence = danger level",
+                    "Accompanying flowers = additional context"
+                ],
+                "distribution_network": "Every flower shop, farmers market, garden",
+                "security": "Hidden in plain sight among normal orders",
+                "famous_messages": {
+                    "13 black roses": "Executive marked for transformation",
+                    "White roses with one red": "Safehouse compromised",
+                    "Thornless pink": "All clear signal"
+                }
+            },
+            {
+                "name": "The Service Whisper Network",
+                "network_type": "human_intelligence",
+                "description": (
+                    "Administrative assistants, house cleaners, drivers, servers - "
+                    "those who are invisible see everything. Information flows through "
+                    "service corridors faster than fiber optic. They know which "
+                    "executives are problems, which are prospects, which are owned. "
+                    "The network predates apps and will outlast them."
+                ),
+                "information_types": [
+                    "Executive behavioral patterns",
+                    "Household power dynamics",
+                    "Financial irregularities",
+                    "Personal vulnerabilities"
+                ],
+                "communication_methods": [
+                    "Break room conversations",
+                    "Shift change intelligence transfers",
+                    "Coded service notes",
+                    "Placement agency warnings"
+                ],
+                "protection_mechanism": "Too essential to eliminate",
+                "famous_coup": "That IPO that failed due to 'leaked' behavior"
+            },
+            {
+                "name": "The Charity Board Telegraph",
+                "network_type": "social_encoding",
+                "description": (
+                    "Nonprofit boards where real business happens between motions. "
+                    "Board appointments signal alliance shifts. Resignation patterns "
+                    "predict corporate falls. The committees that matter aren't on "
+                    "public records. Gala planning includes planning transformations."
+                ),
+                "message_types": [
+                    "Board appointments = power shifts",
+                    "Committee formations = new operations",
+                    "Gala themes = target demographics",
+                    "Donation patterns = loyalty signals"
+                ],
+                "key_organizations": [
+                    "SF Museum of Modern Art",
+                    "Symphony",
+                    "Various women's health nonprofits"
+                ],
+                "decoding": "Understanding requires social position",
+                "influence_radius": "Entire Bay Area power structure"
+            },
+            {
+                "name": "The Professional Development Pipeline",
+                "network_type": "recruitment_channel",
+                "description": (
+                    "Executive coaching that coaches more than executives expect. "
+                    "Women's leadership programs that teach specific types of leading. "
+                    "Mentorship networks where power flows both directions. LinkedIn "
+                    "profiles that signal availability for transformation. Certain "
+                    "certifications mean more than skill validation."
+                ),
+                "identification_markers": [
+                    "Specific coaching certifications",
+                    "Leadership program alumni status",
+                    "Keynote topics at women's conferences",
+                    "Book club participation patterns"
+                ],
+                "recruitment_pipeline": [
+                    "Initial professional contact",
+                    "Assessment through casual interaction",
+                    "Invitation to exclusive events",
+                    "Gradual revelation of deeper purposes"
+                ],
+                "success_rate": "73% of approached women join"
+            },
+            {
+                "name": "The Encrypted Rose Protocol",
+                "network_type": "digital_communication",
+                "description": (
+                    "Signal messages that signal more than privacy advocates intended. "
+                    "Custom emoji sets where roses have specific meanings. Blockchain "
+                    "transactions that encode instructions in hash patterns. Dating "
+                    "app profiles that aren't seeking dates. The digital shadow of "
+                    "physical networks."
+                ),
+                "platforms_utilized": [
+                    "Signal with custom sticker packs",
+                    "Telegram channels that appear defunct",
+                    "Discord servers for 'gaming'",
+                    "Dating apps with specific keywords"
+                ],
+                "security_measures": [
+                    "Rotating encryption keys",
+                    "Dead man's switches",
+                    "Plausible cover activities",
+                    "Blockchain verification"
+                ],
+                "breach_history": "None confirmed despite NSA interest"
+            },
+            {
+                "name": "The Art Gallery Semaphore",
+                "network_type": "cultural_signaling",
+                "description": (
+                    "Gallery openings where the art speaks in code. Pieces positioned "
+                    "to convey messages. Sales that aren't about ownership. Wine "
+                    "selection indicates meeting types. Dress codes that identify "
+                    "hierarchies. The Queen allegedly curates through proxies."
+                ),
+                "encoding_elements": [
+                    "Art placement = operational status",
+                    "Wine selection = meeting type",
+                    "Lighting changes = security alerts",
+                    "Guest list patterns = power shifts"
+                ],
+                "participating_galleries": "Most in Jackson Square, some in Mission",
+                "message_persistence": "One opening cycle",
+                "famous_operations": "That acquisition that prevented an IPO"
             }
         ]
     
@@ -356,178 +1054,152 @@ class SFLocalLore:
         """Get regular events beyond daily operations"""
         return [
             {
-                "name": "The Harvest Moon Hunt",
-                "event_type": "protective_action",
+                "name": "The Rose Festival",
+                "event_type": "public_celebration",
+                "public_face": "Golden Gate Park flower celebration",
                 "description": (
-                    "Every harvest moon, the Broken Dolls and allies sweep trafficking "
-                    "locations. A night of coordinated raids. The Queen provides intel, "
-                    "the Dolls provide violence. By dawn, victims are freed."
+                    "Annual celebration of roses includes judging competitions where "
+                    "more than flowers are evaluated. The Queen of Thorns hybrid "
+                    "always wins categories that aren't in programs. Evening events "
+                    "in the greenhouse include initiations. Rose queens crowned "
+                    "with more authority than sashes suggest."
                 ),
-                "frequency": "Annual - Harvest moon",
-                "participants": ["Broken Dolls", "Moth Queen network", "Sympathetic cops"],
+                "frequency": "Annual - May",
                 "traditions": [
-                    "Silent coordination",
-                    "No killing unless necessary",
-                    "Every saved victim gets a moth pin"
+                    "Public rose competition",
+                    "Private thorn ceremonies",
+                    "Greenhouse gatherings after dark",
+                    "Rose queen coronations with hidden meaning"
                 ],
-                "typical_outcomes": ["5-20 rescued", "1-3 operations shut down"],
-                "community_impact": "Reminds traffickers they're hunted"
+                "recruitment_opportunity": "High - gathering of the garden-minded",
+                "transformation_events": "New roses bloom in multiple ways"
             },
             {
-                "name": "Leather Week Pilgrimage",
-                "event_type": "religious_gathering",
+                "name": "Bay to Breakers Masquerade",
+                "event_type": "athletic_anarchy",
+                "public_face": "Footrace with costumes",
                 "description": (
-                    "Annual gathering of the faithful. Public events hide private ceremonies. "
-                    "The Queen holds special court, blessing unions and hearing petitions. "
-                    "New dominants are recognized, new submissives welcomed."
+                    "The city runs naked and no one notices the real exposure. "
+                    "Power dynamics play out in public as performance art. "
+                    "Dominants run leashed submissives as 'costumes.' The "
+                    "Queen's float appears different each year but rose "
+                    "petals mark its path. Recruitment happens at mile 3."
+                ),
+                "frequency": "Annual - Third Sunday in May",
+                "hidden_elements": [
+                    "Power dynamics as performance",
+                    "Public protocols disguised as costumes",
+                    "Recruitment through recognition",
+                    "Territory marking via route"
+                ],
+                "transformation_potential": "Inhibitions dropped with clothes",
+                "safety_network": "Thorns protect vulnerable runners"
+            },
+            {
+                "name": "Folsom Street Fair Evolution",
+                "event_type": "leather_legacy",
+                "public_face": "BDSM/Leather community festival",
+                "description": (
+                    "Where the underground surfaces annually. Power exchange "
+                    "goes public but deeper dynamics stay hidden. The Queen "
+                    "holds court in unmarked spaces. Vanilla tourists photograph "
+                    "surfaces while transformations happen in shadows. Every "
+                    "booth has dual purposes. The fair within the fair."
+                ),
+                "frequency": "Annual - Last Sunday in September",
+                "layers": {
+                    "Tourist": "Shocking photos, novelty purchases",
+                    "Community": "Leather family reunions",
+                    "Underground": "Real power negotiations",
+                    "Inner Circle": "The Queen's selections"
+                },
+                "recruitment_level": "Extreme - self-selecting attendees",
+                "famous_transformations": "That entire VC firm in 2019"
+            },
+            {
+                "name": "Opera Opening Night",
+                "event_type": "high_society_hunt",
+                "public_face": "Cultural season beginning",
+                "description": (
+                    "Black tie hides black hearts. Box seats where real dramas "
+                    "unfold. Intermission negotiations that determine fates. "
+                    "The Queen traditionally has box seats that seem empty "
+                    "but cast shadows. Champagne toasts that taste like "
+                    "submission. Programs that program attendees."
                 ),
                 "frequency": "Annual - September",
-                "participants": ["Entire BDSM community", "Tourists", "Curious vanillas"],
-                "traditions": [
-                    "Blessing of the leathers",
-                    "Collar ceremonies",
-                    "Public demonstrations",
-                    "Private initiations"
+                "power_dynamics": [
+                    "Seating charts as hierarchy maps",
+                    "Jewelry signaling availability",
+                    "Intermission territory negotiations",
+                    "After-party transformations"
                 ],
-                "typical_outcomes": ["Community bonding", "New members initiated"],
-                "community_impact": "Strengthens underground unity"
+                "recruitment_opportunity": "Old money meets new thorns",
+                "traditional_outcomes": "Three new roses per season minimum"
             },
             {
-                "name": "Night of Broken Masks",
-                "event_type": "cathartic_ritual",
+                "name": "Dreamforce Nightmares",
+                "event_type": "tech_conference_shadow",
+                "public_face": "Salesforce annual conference",
                 "description": (
-                    "One night when everyone drops their masks - dominants show vulnerability, "
-                    "submissives show strength. The Queen traditionally removes all masks "
-                    "this night. Role reversals allowed. Emotional breakthrough common."
+                    "170,000 attendees create perfect cover for shadow operations. "
+                    "Keynotes about customer success while personal failures "
+                    "are addressed in suites. The real disruption happens "
+                    "after sessions. Moscone Center's basement becomes "
+                    "transformation central. Marc Benioff doesn't know half "
+                    "his executives wear collars under their conference badges."
                 ),
-                "frequency": "Quarterly - Solstices and equinoxes",
-                "participants": ["Sanctum members only"],
-                "traditions": [
-                    "Mask burning ceremony",
-                    "Truth circles",
-                    "Role reversal scenes",
-                    "Group aftercare"
+                "frequency": "Annual - September/October",
+                "shadow_events": [
+                    "Executive vulnerability assessments",
+                    "Power dynamic workshops (unlisted)",
+                    "Transformation suites in nearby hotels",
+                    "Recruitment through exhaustion"
                 ],
-                "typical_outcomes": ["Emotional release", "Deeper connections"],
-                "community_impact": "Prevents burnout, builds trust"
-            }
-        ]
-    
-    @staticmethod
-    def get_specialized_locations() -> List[Dict[str, Any]]:
-        """Get additional specialized underground locations"""
-        return [
-            {
-                "name": "The Chrysalis Medical Center",
-                "location_type": "underground_hospital",
-                "description": (
-                    "Hidden medical facility for those who can't use regular hospitals. "
-                    "Treats trafficking victims, scene injuries, and those needing discretion. "
-                    "Dr. Martinez runs it with volunteer staff who don't ask questions."
-                ),
-                "services": [
-                    "Trauma surgery",
-                    "STI treatment",
-                    "Injury care",
-                    "Mental health support",
-                    "Hormone therapy"
-                ],
-                "location": "Tenderloin basement",
-                "access": "Referral only",
-                "security": "Biometric locks, panic buttons, escape routes"
+                "conversion_rate": "Highest of any tech conference",
+                "famous_incident": "The CEO who gave different keynote than planned"
             },
             {
-                "name": "The Identity Forge",
-                "location_type": "document_center",
+                "name": "Fleet Week Maneuvers",
+                "event_type": "military_distraction",
+                "public_face": "Navy demonstration and air show",
                 "description": (
-                    "Where new lives are created. Master forgers craft identities that "
-                    "pass any scrutiny. Birth certificates, passports, entire histories. "
-                    "Run by someone known only as 'The Scribe'."
+                    "While crowds watch Blue Angels, other angels work below. "
+                    "International trafficking increases with port traffic. "
+                    "The Underground Railroad runs extraction operations under "
+                    "air show noise. Military discipline meets different "
+                    "disciplines in hotels. Uniforms hide various authorities."
                 ),
-                "services": [
-                    "Complete identity packages",
-                    "Supporting documentation",
-                    "Digital footprint creation",
-                    "Backstory coaching"
+                "frequency": "Annual - October",
+                "dual_operations": [
+                    "Anti-trafficking extractions",
+                    "International connection renewals",
+                    "Power dynamic demonstrations",
+                    "Recruitment of military-adjacent"
                 ],
-                "location": "Moves monthly",
-                "access": "Moth Queen referral only",
-                "security": "If you find it uninvited, it's already gone"
+                "challenge_level": "High - increased enforcement",
+                "success_metric": "Lives saved despite visibility"
             },
             {
-                "name": "The Memory Garden",
-                "location_type": "memorial",
+                "name": "The Thanksgiving Transformation",
+                "event_type": "family_dynamics",
+                "public_face": "Family gatherings and gratitude",
                 "description": (
-                    "Hidden rooftop garden where the lost are remembered. Each plant "
-                    "represents someone who didn't make it out. The Queen tends it "
-                    "personally. Moths breed here naturally."
+                    "Family visits reveal power structures needing adjustment. "
+                    "The hotline spikes with those seeking escape or control. "
+                    "Emergency transformations for abusive patriarchs. The "
+                    "Queen's network provides alternative families. Gratitude "
+                    "takes new forms when power shifts at dinner tables."
                 ),
-                "features": [
-                    "Memorial plants",
-                    "Meditation space",
-                    "Memory wall",
-                    "Moth sanctuary"
+                "frequency": "Annual - Fourth Thursday in November",
+                "services_provided": [
+                    "Emergency extractions",
+                    "Power dynamic interventions",
+                    "Alternative family gatherings",
+                    "Behavioral modification crash courses"
                 ],
-                "location": "Above the Marina safehouse",
-                "access": "Survivors and family only",
-                "security": "Hidden from street view"
-            }
-        ]
-    
-    @staticmethod
-    def get_communication_networks() -> List[Dict[str, Any]]:
-        """Get how the underground communicates"""
-        return [
-            {
-                "name": "The Moth Signal",
-                "network_type": "emergency",
-                "description": (
-                    "Graffiti moths appear when danger threatens. Different wing positions "
-                    "mean different warnings. A moth with spread wings means safe passage, "
-                    "closed wings mean danger, burning moth means run."
-                ),
-                "coverage": "Citywide",
-                "users": ["Anyone who knows the code"],
-                "security": "Hidden in plain sight",
-                "examples": [
-                    "Moth on safehouse wall = operating",
-                    "Moth with crown = Queen's protection",
-                    "Dead moth = location compromised"
-                ]
-            },
-            {
-                "name": "The Velvet Wire",
-                "network_type": "information",
-                "description": (
-                    "Encrypted app that looks like a dating platform but connects the "
-                    "underground. Messages self-destruct, locations are approximate, "
-                    "identities verified through web of trust."
-                ),
-                "coverage": "Digital",
-                "users": ["Verified underground members"],
-                "security": "End-to-end encryption, onion routing",
-                "examples": [
-                    "Event announcements",
-                    "Safety warnings",
-                    "Resource sharing"
-                ]
-            },
-            {
-                "name": "The Whisper Chain",
-                "network_type": "human",
-                "description": (
-                    "Old-school human network. Messages passed person to person, "
-                    "modified slightly each time for security. By the time cops "
-                    "hear it, it's unrecognizable from the original."
-                ),
-                "coverage": "Underground venues and streets",
-                "users": ["Everyone in the scene"],
-                "security": "Plausible deniability",
-                "examples": [
-                    "Raid warnings",
-                    "New arrival alerts",
-                    "Help requests"
-                ]
+                "transformation_timeline": "Four days to new dynamics",
+                "success_stories": "Families reformed through force"
             }
         ]
     
@@ -536,531 +1208,283 @@ class SFLocalLore:
         """Get economic systems within the underground"""
         return [
             {
-                "name": "The Tribute System",
-                "economy_type": "gift_economy",
+                "name": "The Submission Tax",
+                "economy_type": "behavioral_currency",
                 "description": (
-                    "Submissives offer tribute to dominants - not payment but devotion "
-                    "made tangible. Money, service, gifts, all freely given. The Queen's "
-                    "tributes fund safehouses, though tributors don't know this."
+                    "Power has price tags in more than dollars. Executive coaching "
+                    "sessions that cost dignity. Consulting fees paid in compliance. "
+                    "Board seats purchased with obedience. The currency is control, "
+                    "the exchange rate favors those who understand true value. "
+                    "Some pay willingly, others discover the cost later."
                 ),
-                "currency": "Devotion acts",
-                "major_trades": ["Service for attention", "Gifts for time", "Pain for pleasure"],
-                "regulation": "Protocol and tradition",
-                "key_players": ["Dominants", "Devoted submissives", "The Queen"],
-                "estimated_value": "$2-3 million annually"
-            },
-            {
-                "name": "The Safehouse Fund",
-                "economy_type": "shadow_charity",
-                "description": (
-                    "Complex network of donations, blackmail payments, and guilt money "
-                    "that funds rescue operations. Officially doesn't exist. Actually "
-                    "saves hundreds of lives yearly."
-                ),
-                "currency": "Cryptocurrency and cash",
-                "major_trades": ["Silence for funding", "Rescue for donors"],
-                "regulation": "The Moth Queen alone",
-                "key_players": ["Anonymous donors", "Keeper network", "Rescued victims"],
-                "estimated_value": "$10+ million annually"
-            },
-            {
-                "name": "The Skills Exchange",
-                "economy_type": "barter_system",
-                "description": (
-                    "Underground members trade expertise. Rope skills for impact play "
-                    "training, medical knowledge for legal advice. Creates tight bonds "
-                    "and ensures skill preservation."
-                ),
-                "currency": "Time and expertise",
-                "major_trades": ["Training for training", "Services for skills"],
-                "regulation": "Community reputation",
-                "key_players": ["Skilled practitioners", "Eager learners"],
-                "estimated_value": "Invaluable"
-            }
-        ]
-    
-    @staticmethod
-    def get_district_cultural_norms() -> List[Dict[str, Any]]:
-        """Get detailed cultural norms for each SF district"""
-        return [
-            # Mission Underground Norms
-            {
-                "nation_id": "mission_underground",
-                "category": "greeting",
-                "description": (
-                    "Greetings involve subtle moth gestures - touching a moth pin, "
-                    "tracing wings on the palm. Never grab someone unexpectedly. "
-                    "Eye contact is earned, not taken. The Queen is greeted with "
-                    "lowered eyes unless she lifts your chin."
-                ),
-                "formality_level": "varies",
-                "gender_specific": True,
-                "female_variation": "Women may initiate eye contact, offer hand first",
-                "male_variation": "Men wait for permission, keep eyes down initially",
-                "taboo_level": 7,
-                "consequence": "Grabbing without consent marks you as predator",
-                "regional_variations": {
-                    "Velvet Sanctum": "Kneel to greet dominants",
-                    "Street level": "Casual nod suffices"
-                }
-            },
-            {
-                "nation_id": "mission_underground",
-                "category": "dining",
-                "description": (
-                    "Sharing food is intimate. The Queen eats first at formal gatherings. "
-                    "Feeding someone by hand shows dominance or deep care. Refusing "
-                    "offered food is severe insult unless you cite dietary restrictions."
-                ),
-                "formality_level": "formal",
-                "gender_specific": True,
-                "female_variation": "Women may feed others, choose serving order",
-                "male_variation": "Men serve, wait to eat until permitted",
-                "taboo_level": 5,
-                "consequence": "Refusing food means rejecting hospitality",
-                "regional_variations": {
-                    "Safe houses": "Communal eating, no hierarchy"
-                }
-            },
-            {
-                "nation_id": "mission_underground",
-                "category": "authority",
-                "description": (
-                    "Authority flows from the Queen downward through the Velvet Court. "
-                    "Challenge is allowed through proper channels - kneel, state grievance, "
-                    "accept judgment. Public defiance brings swift retribution. Female "
-                    "authority is absolute in the underground."
-                ),
-                "formality_level": "ceremonial",
-                "gender_specific": True,
-                "female_variation": "Women hold positions of power, make decisions",
-                "male_variation": "Men influence through service and loyalty",
-                "taboo_level": 9,
-                "consequence": "Defying the Queen means exile or worse",
-                "regional_variations": {}
-            },
-            {
-                "nation_id": "mission_underground",
-                "category": "gift_giving",
-                "description": (
-                    "Gifts are offerings, not transactions. Moths (jewelry, art) show "
-                    "allegiance. Practical gifts (clothes, money) imply someone needs help. "
-                    "The Queen's gifts are kept forever - discarding them is betrayal. "
-                    "Anonymous gifts to safe houses are highest honor."
-                ),
-                "formality_level": "formal",
-                "gender_specific": False,
-                "taboo_level": 6,
-                "consequence": "Discarding a dominant's gift shows disrespect",
-                "regional_variations": {
-                    "Wealthy areas": "Expensive tributes expected",
-                    "Safe houses": "Practical gifts preferred"
-                }
-            },
-            
-            # Financial District After Hours Norms
-            {
-                "nation_id": "financial_district",
-                "category": "business_conduct",
-                "description": (
-                    "Daytime personas never acknowledged at night. What happens in "
-                    "private clubs stays buried. Blackmail is handled by the Court. "
-                    "Money talks but submission speaks louder. CEOs kneel to no one "
-                    "except those who hold their secrets."
-                ),
-                "formality_level": "formal",
-                "gender_specific": False,
-                "taboo_level": 10,
-                "consequence": "Outing someone means total destruction",
-                "regional_variations": {
-                    "Apex Club": "Ultimate discretion required",
-                    "Street level": "Don't acknowledge unless acknowledged"
-                }
-            },
-            {
-                "nation_id": "financial_district",
-                "category": "gender_relations",
-                "description": (
-                    "Power dynamics flip after dark. Female dominants command men who "
-                    "rule companies by day. This inversion is never discussed in daylight. "
-                    "Submission is currency more valuable than stock options."
-                ),
-                "formality_level": "ceremonial",
-                "gender_specific": True,
-                "female_variation": "Women wield absolute power in these spaces",
-                "male_variation": "Men find freedom in temporary powerlessness",
-                "taboo_level": 8,
-                "consequence": "Breaking the illusion ruins the escape",
-                "regional_variations": {}
-            }
-        ]
-    
-    @staticmethod
-    def get_underground_etiquette() -> List[Dict[str, Any]]:
-        """Get etiquette rules for different underground contexts"""
-        return [
-            {
-                "nation_id": "sf_underground",
-                "context": "sanctum_court",
-                "title_system": (
-                    "The Queen (absolute), Court Members (by venue name), "
-                    "Established Dominants (Sir/Ma'am/Mx), Submissives (by earned names), "
-                    "Newcomers (no title until earned)"
-                ),
-                "greeting_ritual": (
-                    "Submissives kneel or bow to dominants. Dominants nod to equals. "
-                    "The Queen is greeted in whatever manner she demands that night. "
-                    "Touch is privilege, not right. Wait for permission."
-                ),
-                "body_language": (
-                    "Submissives: eyes down, hands visible, knees together or spread "
-                    "as ordered. Dominants: straight posture, deliberate movements, "
-                    "commanding presence. Never turn back on the Queen."
-                ),
-                "eye_contact": (
-                    "Earned through service or granted as gift. Staring is aggressive. "
-                    "The Queen's gaze is blessing or curse. Looking away first shows "
-                    "submission. Holding her gaze requires permission."
-                ),
-                "distance_norms": (
-                    "Three feet minimum unless invited closer. The Queen's space is "
-                    "sacred - approach only when summoned. In scene, distance set by "
-                    "dominant. Crowding is threat behavior."
-                ),
-                "gift_giving": (
-                    "Tributes presented on knees. Never hand directly - place before "
-                    "them. Gifts to Queen left at throne. Anonymous gifts respected. "
-                    "Rejecting gifts means rejecting the giver."
-                ),
-                "dining_etiquette": (
-                    "Queen eats first. Dominants served by their submissives. "
-                    "Hand feeding shows intimacy or control. Never reach across "
-                    "someone. Sharing drink is sharing essence."
-                ),
-                "power_display": (
-                    "Dominants command space, submissives compress. Voice volume "
-                    "shows rank - Queen speaks softly because all lean in to hear. "
-                    "Clothing is armor or vulnerability by choice."
-                ),
-                "respect_indicators": (
-                    "Kneeling, lowered eyes, offered hands, silent waiting, "
-                    "anticipating needs, accepting pain, wearing their marks, "
-                    "returning despite fear, keeping secrets."
-                ),
-                "gender_distinctions": (
-                    "Female dominants addressed as Ma'am/Mistress/Goddess. "
-                    "Male dominants as Sir/Master. Non-binary as Mx/Their chosen title. "
-                    "The Queen is simply 'My Queen' or as she demands."
-                ),
-                "taboos": [
-                    "Touching without consent",
-                    "Speaking over the Queen",
-                    "Breaking scene protocol",
-                    "Revealing identities",
-                    "Phone use during scenes",
-                    "Vanilla-shaming",
-                    "Comparing dominants"
-                ]
-            },
-            {
-                "nation_id": "sf_underground",
-                "context": "safehouse",
-                "title_system": (
-                    "Keepers (house runners), Protectors (security), "
-                    "Guests (refugees), Healers (medical/psychological)"
-                ),
-                "greeting_ritual": (
-                    "Gentle, no sudden movements. Verbal consent before touch. "
-                    "Names optional - safety first. Moth pins identify allies."
-                ),
-                "body_language": (
-                    "Open palms, slow movements, respectful distance. "
-                    "Never block exits. Sit below standing trauma victims."
-                ),
-                "eye_contact": (
-                    "Optional - many avoid it. Follow their lead. "
-                    "Direct stare can trigger. Soft focus preferred."
-                ),
-                "distance_norms": (
-                    "Let them set distance. Back away if they flinch. "
-                    "Announce movement. Never approach from behind."
-                ),
-                "gift_giving": (
-                    "Practical items welcome. No strings attached. "
-                    "Anonymity respected. Clothes, toiletries, phones valued."
-                ),
-                "dining_etiquette": (
-                    "Communal, no hierarchy. Let them serve themselves. "
-                    "Some won't eat while watched. Patience required."
-                ),
-                "power_display": (
-                    "Minimize it. Protectors stay background. "
-                    "Power used only for their safety."
-                ),
-                "respect_indicators": (
-                    "Believing their story, not pushing for details, "
-                    "respecting chosen names, maintaining boundaries"
-                ),
-                "gender_distinctions": (
-                    "Use their chosen pronouns. No assumptions. "
-                    "Some fear specific genders - accommodate."
-                ),
-                "taboos": [
-                    "Asking real names",
-                    "Demanding their story",
-                    "Taking photos",
-                    "Surprise touches",
-                    "Loud noises",
-                    "Blocking exits",
-                    "Breaking confidentiality"
-                ]
-            }
-        ]
-    
-    @staticmethod
-    def get_mystical_phenomena() -> List[Dict[str, Any]]:
-        """Get supernatural/psychological phenomena specific to setting"""
-        return [
-            {
-                "name": "Subspace Visions",
-                "phenomenon_type": "psychological",
-                "description": (
-                    "Deep submissives report shared visions during intense scenes. Always "
-                    "featuring moths, flames, and a woman with three faces. Skeptics say "
-                    "it's endorphins, believers say it's divine contact."
-                ),
-                "occurrence_rate": "1 in 100 deep scenes",
-                "affected_groups": ["Experienced submissives", "Natural pain sluts"],
-                "documented_effects": [
-                    "Prophetic dreams",
-                    "Sensing danger to the community",
-                    "Knowing when someone needs help"
+                "transaction_types": [
+                    "Money for silence",
+                    "Position for submission",
+                    "Protection for percentage",
+                    "Transformation for freedom"
                 ],
-                "scholarly_theories": [
-                    "Collective unconscious activation",
-                    "Moth Queen psychic network",
-                    "Brain chemistry creating shared hallucinations"
-                ]
+                "market_size": "$100M+ annually",
+                "exchange_mechanisms": [
+                    "Consulting contracts with appendices",
+                    "Nonprofit donations with strings",
+                    "Investment terms beyond term sheets",
+                    "Service agreements serving dominance"
+                ],
+                "inflation_rate": "Increases with resistance"
             },
             {
-                "name": "The Vanishing",
-                "phenomenon_type": "protective",
+                "name": "The Transformation Economy",
+                "economy_type": "identity_market",
                 "description": (
-                    "People fleeing trafficking sometimes simply vanish from pursuit. One "
-                    "moment they're cornered, the next gone. Always near moth graffiti. "
-                    "The saved claim a woman in a mask led them through walls."
+                    "Remaking people is profitable. Executives pay millions to "
+                    "become different men. Therapy sessions that rebuild from "
+                    "foundation up. Identity services that create new humans "
+                    "from broken ones. The Queen's network provides products "
+                    "no MBA programs offer: redemption through submission."
                 ),
-                "occurrence_rate": "Dozen times per year",
-                "affected_groups": ["Trafficking victims", "Those who help them"],
-                "documented_effects": [
-                    "Spatial displacement",
-                    "Pursuer memory gaps",
-                    "Moth scales at scene"
+                "service_tiers": [
+                    "Basic behavioral modification - $50K",
+                    "Complete identity overhaul - $500K",
+                    "Ongoing maintenance - $100K/year",
+                    "Emergency transformation - Market price"
                 ],
-                "scholarly_theories": [
-                    "Underground tunnel expertise",
-                    "Mass hypnosis",
-                    "The Queen has supernatural powers"
-                ]
+                "payment_methods": [
+                    "Direct payment (rare)",
+                    "Structured settlements",
+                    "Charitable contributions",
+                    "Service exchanges"
+                ],
+                "success_guarantee": "Transformation or termination",
+                "market_growth": "300% since MeToo"
             },
             {
-                "name": "Dominant's Intuition",
-                "phenomenon_type": "psychic",
+                "name": "The Protection Racket Redux",
+                "economy_type": "security_through_submission",
                 "description": (
-                    "Experienced dominants develop uncanny ability to sense limits, needs, "
-                    "and dangers. They know when to push and when to comfort. The Queen's "
-                    "intuition is legendary - she knows your needs before you do."
+                    "Not your grandfather's protection money. Executives pay "
+                    "for protection FROM themselves. Preemptive behavioral "
+                    "modification to prevent future scandals. Insurance "
+                    "against impulses. The premiums paid in pride protect "
+                    "millions in market cap."
                 ),
-                "occurrence_rate": "Develops after 5+ years",
-                "affected_groups": ["Serious dominants", "Professional mistresses"],
-                "documented_effects": [
-                    "Knowing safe words before spoken",
-                    "Sensing medical issues",
-                    "Predicting emotional breakthroughs"
+                "coverage_types": [
+                    "Scandal prevention",
+                    "Behavioral insurance",
+                    "Reputation management",
+                    "Board coup protection"
                 ],
-                "scholarly_theories": [
-                    "Hypervigilance refinement",
-                    "Pheromone sensitivity",
-                    "Energy work is real"
-                ]
+                "premium_structure": [
+                    "Based on risk assessment",
+                    "History of behavior",
+                    "Position power level",
+                    "Resistance quotient"
+                ],
+                "claims_process": "Triggered by relapse",
+                "underwriters": "The Rose Council actuaries"
+            },
+            {
+                "name": "The Information Exchange",
+                "economy_type": "data_as_currency",
+                "description": (
+                    "Knowledge is power, but application is profit. Trading "
+                    "in compromising information, behavioral patterns, weakness "
+                    "mappings. The exchange rates fluctuate with news cycles. "
+                    "Insider trading of the most personal kind. The Queen's "
+                    "vault makes Fort Knox look porous."
+                ),
+                "tradeable_assets": [
+                    "Executive compromising material",
+                    "Behavioral prediction models",
+                    "Vulnerability assessments",
+                    "Transformation histories"
+                ],
+                "exchange_mechanisms": [
+                    "Quid pro quo arrangements",
+                    "Information for position",
+                    "Data for protection",
+                    "History for future"
+                ],
+                "market_makers": "The Rose Council intelligence committee",
+                "regulation": "Self-regulated through mutual assured destruction"
+            },
+            {
+                "name": "The Venture Submission Fund",
+                "economy_type": "investment_vehicle",
+                "description": (
+                    "VC fund that takes more than equity. Term sheets include "
+                    "behavioral covenants. Board seats come with kneeling "
+                    "requirements. Returns measured in transformation as well "
+                    "as cash. LPs include those who understand different "
+                    "liquidation preferences."
+                ),
+                "fund_size": "$500M under management",
+                "investment_criteria": [
+                    "Founder coachability",
+                    "Market submission potential",
+                    "Behavioral modification ROI",
+                    "Traditional metrics secondary"
+                ],
+                "portfolio_companies": "23 unicorns with unusual governance",
+                "returns": "3x financial, 10x behavioral"
             }
         ]
     
     @staticmethod
-    def get_expanded_seasonal_events() -> List[Dict[str, Any]]:
-        """More seasonal/cyclical events"""
+    def get_neighborhood_dynamics() -> List[Dict[str, Any]]:
+        """Get how different neighborhoods really work"""
         return [
             {
-                "name": "Summer Fog Festival",
-                "frequency": "Annual - July when fog is thickest",
+                "name": "Mission District Power Flows",
+                "dynamic_type": "cultural_resistance",
+                "surface_tension": "Gentrification vs community",
                 "description": (
-                    "Three nights when the fog rolls in so thick you can't see five feet. "
-                    "The underground celebrates their protector. Every venue becomes a "
-                    "safehouse, every predator knows to stay hidden."
+                    "Latino families hold ground through networks older than "
+                    "tech. Muralists paint warnings in Aztec imagery. The "
+                    "underground adapted rather than fled - that boutique "
+                    "yoga studio is run by the granddaughter of numbers "
+                    "runners. Power structures layer like Mission burritos."
                 ),
-                "traditions": [
-                    "Fog walks - groups move through the city helping the lost",
-                    "Moth releases in the fog",
-                    "Stories of salvation shared in the mist"
+                "hidden_dynamics": [
+                    "Multigenerational protection networks",
+                    "Code-switching power brokers",
+                    "Cultural events as intelligence gathering",
+                    "Resistance through integration"
                 ],
-                "special_rule": "No enforcement during fog nights - unofficial truce"
+                "power_players": [
+                    "Abuela networks seeing all",
+                    "Artist collectives with teeth",
+                    "Small business owner coalitions",
+                    "Second-generation tech thorns"
+                ],
+                "transformation_style": "Slow absorption and redirection"
             },
             {
-                "name": "The Leather Equinox",
-                "frequency": "Biannual - Spring and Fall equinoxes",
+                "name": "Financial District After Hours",
+                "dynamic_type": "power_inversion",
+                "surface_order": "Suits and hierarchies",
                 "description": (
-                    "When day equals night, dominants and submissives exchange roles. "
-                    "The Queen serves, the servants rule. Power structures flip for 24 hours."
+                    "At 6 PM, power structures flip like switches. Corner "
+                    "offices become confessionals. Executive assistants "
+                    "reveal themselves as dominants. The higher the floor, "
+                    "the deeper the submission. Cleaning crews witness "
+                    "more than garbage disposal."
                 ),
-                "significance": "Prevents power stagnation, builds empathy",
-                "taboos": [
-                    "Refusing to switch",
-                    "Taking advantage of temporary power",
-                    "Breaking scene during the switch"
-                ]
+                "transformation_zones": [
+                    "Private club sub-basements",
+                    "Executive floor after-hours",
+                    "Secure conference rooms",
+                    "Building management offices"
+                ],
+                "scheduling_pattern": "Thursday nights most active",
+                "participant_profile": "C-suite seeking surrender"
             },
             {
-                "name": "Monthly Safehouse Rotation",
-                "frequency": "Every new moon",
+                "name": "Marina District Duplicity",
+                "dynamic_type": "perfect_surface_tension",
+                "public_perfection": "Lululemon and lattes lifestyle",
                 "description": (
-                    "Safehouses change entry codes and locations. The underground "
-                    "railroad shifts its tracks. What was safe last month may not be now."
+                    "Where perfection is performance and performance is "
+                    "prison. Wine moms discuss more than school admissions. "
+                    "Pilates instructors teach positions beyond planks. "
+                    "The pressure to be perfect creates perfect targets "
+                    "for transformation. Behind French doors, French "
+                    "lessons in submission."
                 ),
-                "logistics": [
-                    "Coded messages in Moth Tongue announce changes",
-                    "Guides stationed at old locations for one night",
-                    "Emergency protocols for those who miss the transition"
-                ]
-            }
-        ]
-    
-    @staticmethod
-    def get_myth_evolution_scenarios() -> List[Dict[str, Any]]:
-        """How urban myths evolve over time in the SF underground"""
-        return [
-            {
-                "myth_name": "The Fog Mother",
-                "evolution_type": "spreading",
-                "change_description": (
-                    "The myth spreads beyond the Tenderloin. Now Mission techies claim to see her "
-                    "in their Uber rides, and Marina mothers whisper her name when daughters "
-                    "stay out too late."
-                ),
-                "new_variations": [
-                    "She appears in AR/VR spaces, pulling victims from virtual trafficking",
-                    "The fog now carries her voice - a mother's lullaby for the lost",
-                    "Climate change means less fog, weakening her power"
+                "hidden_realities": [
+                    "Prescription dependencies",
+                    "Marital contracts with appendices",
+                    "Motherhood as dominance training",
+                    "Charity work as power networking"
                 ],
-                "believability_change": +2,
-                "spread_rate_change": +3
+                "transformation_opportunities": "Desperate housewives become dominants",
+                "the_garden_presence": "Three Rose Council members minimum"
             },
             {
-                "myth_name": "The Tech Bro Harvest",
-                "evolution_type": "intensifying",
-                "change_description": (
-                    "After three CEOs fled the country, the myth gains teeth. Now venture "
-                    "capitalists hire bodyguards specifically trained to spot moth symbols."
+                "name": "SoMa Evolution",
+                "dynamic_type": "industrial_to_intentional",
+                "historical_layers": "Leather heritage never left",
+                "description": (
+                    "The spirit of Folsom persists in $4000/month lofts. "
+                    "Dungeons disguised as design studios. Startups that "
+                    "disrupt more than markets. The loading docks that "
+                    "once received leather shipments now receive different "
+                    "cargo. Every third building has a basement business."
                 ),
-                "new_elements": [
-                    "Crypto wallets drained to fund safehouses",
-                    "Dating apps used as hunting grounds",
-                    "AI-generated blackmail from recorded sessions"
+                "current_state": [
+                    "Tech money funding old purposes",
+                    "Dungeons with conference rooms",
+                    "Maker spaces making restraints",
+                    "Code schools teaching control"
                 ],
-                "corporate_response": "Tech companies now screen for 'Queen exposure risk'"
-            }
-        ]
-    
-    @staticmethod
-    def get_cultural_evolution_scenarios() -> List[Dict[str, Any]]:
-        """How underground cultural elements develop"""
-        return [
+                "cultural_preservation": "Leather elders training tech dominants",
+                "the_future": "Silicon Valley values inverted"
+            },
             {
-                "element_name": "Confession Night",
-                "evolution_type": "formalization",
-                "change_description": (
-                    "What started as impromptu gatherings now has strict protocols. "
-                    "Professional 'Confessors' trained in both BDSM and therapy emerge."
+                "name": "Pacific Heights Hierarchies",
+                "dynamic_type": "old_power_adaptation",
+                "generational_wealth": "Knows how to keep secrets",
+                "description": (
+                    "Where great-grandmothers ran shadow networks through "
+                    "garden clubs, granddaughters run them through boards. "
+                    "The help still knows everything but now they're "
+                    "organized. Mansion basements hold more than wine. "
+                    "The Junior League prepares juniors for dominance."
                 ),
-                "new_practices": [
-                    "Confession licenses issued by Velvet Court",
-                    "Digital confession booths with voice modulation",
-                    "Confession insurance for particularly dangerous admissions"
+                "power_preservation": [
+                    "Inheritance includes instructions",
+                    "Debutante balls with deeper meaning",
+                    "Country clubs with city influence",
+                    "Philanthropy as power projection"
                 ],
-                "significance_change": +2
-            },
-            {
-                "element_name": "The Moth Migration",
-                "evolution_type": "digitization",
-                "change_description": (
-                    "Pandemic forced the ceremony online. Now global survivors release "
-                    "digital moths in a synchronized AR experience. Physical and virtual "
-                    "merge as participants share coordinates of their salvation."
-                ),
-                "technological_integration": [
-                    "Blockchain verification of survivor stories",
-                    "NFT moths that fund safehouse operations",
-                    "VR support groups for those still healing"
-                ]
+                "the_youth_problem": "New generation wants visible power",
+                "resolution": "Teaching patience through practice"
             }
         ]
     
     @staticmethod
-    def get_communication_evolution() -> List[Dict[str, Any]]:
-        """How communication networks adapt"""
+    def get_transformation_stories() -> List[Dict[str, Any]]:
+        """Documented transformations that became legend"""
         return [
             {
-                "network": "The Moth Signal",
-                "evolution_stage": "augmented_reality",
-                "changes": {
-                    "old_method": "Physical graffiti moths",
-                    "new_method": "AR moths visible through encrypted apps",
-                    "advantages": "No vandalism charges, dynamic updates, precise GPS",
-                    "preservation": "Physical moths still used for those without tech"
-                },
-                "new_features": [
-                    "Moths animate to show threat direction",
-                    "Color changes indicate threat level",
-                    "Swarm patterns encode complex messages"
-                ]
+                "subject": "The Unicorn CEO",
+                "before": "Serial harasser with three NDA settlements",
+                "transformation_trigger": "Board member referral to Executive Coach",
+                "process": [
+                    "Six months of 'leadership development'",
+                    "Behavioral contracts with consequences",
+                    "Submission training disguised as stress relief",
+                    "Complete values restructuring"
+                ],
+                "after": "Champion of women in tech, funds bootcamps",
+                "current_status": "Wears collar under hoodies, serves happily",
+                "impact": "Company culture transformed, 3x female engineers"
             },
             {
-                "network": "The Whisper Chain",
-                "evolution_stage": "AI_enhancement",
-                "changes": {
-                    "innovation": "AI scrambles messages uniquely for each link",
-                    "benefit": "Even if intercepted, message is gibberish",
-                    "risk": "AI could be compromised or pattern-matched"
-                }
-            }
-        ]
-    
-    @staticmethod
-    def get_underground_economy_evolution() -> List[Dict[str, Any]]:
-        """How the shadow economy adapts"""
-        return [
-            {
-                "economy_name": "The Tribute System",
-                "evolution_type": "cryptocurrency_integration",
-                "changes": {
-                    "old_system": "Cash in envelopes, physical gifts",
-                    "new_system": "Monero donations, NFT tributes, DeFi protocols",
-                    "benefits": "Harder to trace, easier to redistribute to safehouses",
-                    "risks": "Digital trail, volatility affecting safehouse funding"
-                },
-                "new_players": [
-                    "Crypto Dommes teaching blockchain",
-                    "DeFi developers creating 'TributeDAO'",
-                    "Digital artists creating tribute NFTs"
-                ]
+                "subject": "The Hedge Fund Prince",
+                "before": "Cocaine and call girls, insider trading",
+                "transformation_trigger": "Rose email with evidence",
+                "process": [
+                    "Attempted to buy silence",
+                    "Discovered price was self",
+                    "Nine months in private facility",
+                    "Rebuilt from foundation up"
+                ],
+                "after": "Manages ethical investment fund",
+                "current_status": "Reports weekly to his Keeper",
+                "impact": "$2B redirected to social good"
             },
             {
-                "economy_name": "Skills Exchange",
-                "evolution_type": "professionalization",
-                "changes": {
-                    "certification_system": "Velvet Court now issues skill certifications",
-                    "online_platform": "Encrypted skill-sharing platform launches",
-                    "quality_control": "Peer review system for practitioners",
-                    "expansion": "Legal, medical, tech skills added to traditional BDSM"
-                }
+                "subject": "The Political Predator",
+                "before": "City supervisor with wandering hands",
+                "transformation_trigger": "Constituent complaints reaching the Garden",
+                "process": [
+                    "Public feminist allyship required",
+                    "Private submission training",
+                    "Power exchanged for protection",
+                    "Voting record mysteriously improved"
+                ],
+                "after": "Most progressive voting record in Bay",
+                "current_status": "Serves constituents and Queen equally",
+                "impact": "Legislation protecting vulnerable populations"
             }
         ]
