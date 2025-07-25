@@ -13,97 +13,111 @@ class SFGeopoliticalLore:
         """Get the main districts/locations"""
         return [
             {
-                "name": "The Mission Underground",
-                "type": "entertainment_district",
+                "name": "The Mission District",
+                "type": "cultural_hub",
                 "description": (
-                    "Beneath the Mission District's trendy surface lies the true underground. "
-                    "Former speakeasies and bomb shelters converted to temples of desire. The "
-                    "Velvet Sanctum reigns here, three levels below a vintage clothing boutique "
-                    "on Valencia Street. The district's Latino heritage mixes with gothic subculture, "
-                    "creating a unique aesthetic of Día de los Muertos meets dark romance."
+                    "Historic Latino neighborhood fighting gentrification. Murals cover every "
+                    "available wall, telling stories of struggle and celebration. Tech workers "
+                    "in $4000/month studios live next to families who've been here for generations. "
+                    "Valencia Street hosts trendy restaurants and vintage shops. But certain "
+                    "boutiques have back rooms that only special clients know about."
                 ),
                 "notable_features": [
-                    "The Velvet Sanctum - Lilith's domain",
-                    "The Bone Garden - Goth club and safehouse entry",
-                    "Dolores Park After Dark - Where deals are made",
-                    "The Mission tunnels - Escape routes and hideaways"
+                    "Dolores Park - Weekend gatherings and hidden meetings",
+                    "Valencia Street - Boutiques with secret purposes",
+                    "Mission murals - Some contain coded messages",
+                    "BART stations - Where different worlds collide"
                 ],
-                "areas": [
-                    "Valencia Street (Surface) - Hip boutiques hiding secrets",
-                    "The Catacombs - Underground club network",
-                    "16th Street Station - Transit hub and trafficking danger zone",
-                    "The Old Mission - Sanctuary that doesn't ask questions"
-                ],
-                "demographics": "Artists, rebels, night workers, lost youth",
-                "danger_level": "High after 2 AM"
+                "demographics": "Latino families, artists, tech workers, activists",
+                "hidden_element": "Certain shops cater to... specialized clientele"
             },
             {
-                "name": "SoMa Shadow District",
-                "type": "industrial_nightlife",
+                "name": "South of Market (SoMa)",
+                "type": "tech_industrial",
                 "description": (
-                    "South of Market transforms after dark. Warehouses that house startups by day "
-                    "become dungeons and underground fight clubs by night. The leather culture that "
-                    "once defined Folsom Street evolved into something darker. Here, power is "
-                    "exchanged like cryptocurrency, and consent is the only law that matters."
+                    "Former warehouses converted to tech offices and luxury lofts. By day, "
+                    "it's all startups and artisanal coffee. The Giants' stadium brings crowds "
+                    "on game days. But industrial spaces hide more than server farms. Some "
+                    "CEOs have interests beyond quarterly earnings."
                 ),
                 "notable_features": [
-                    "The Power Exchange - Infamous multi-level dungeon",
-                    "Folsom Street Fair grounds - Annual celebration of kink",
-                    "Abandoned Twitter building - Now a haven for the displaced",
-                    "The Loading Dock - Where 'shipments' arrive"
+                    "Oracle Park - Giants baseball and corporate boxes",
+                    "Salesforce Tower - Tallest building, highest secrets",
+                    "Museum of Modern Art - Public face of culture",
+                    "Converted warehouses - Not all are offices"
                 ],
-                "demographics": "Tech workers' dark sides, leather community, sex workers"
+                "demographics": "Tech workers, urban professionals, artists",
+                "hidden_element": "Private clubs in unmarked buildings"
             },
             {
-                "name": "Tenderloin Shadows",
-                "type": "red_light_district",
+                "name": "Tenderloin",
+                "type": "urban_struggle",
                 "description": (
-                    "The city's most honest district - it doesn't hide what it is. Here, "
-                    "desperation and survival create their own economy. The Moth Queen's "
-                    "safehouse network has three hidden entrances here, disguised as "
-                    "massage parlors and SRO hotels. Every corner has eyes, every alley "
-                    "holds a story of someone who didn't make it out."
+                    "The city's most honest neighborhood - poverty, addiction, and survival "
+                    "in plain sight. Social services struggle to help. Vietnamese restaurants "
+                    "serve authentic pho. Some people disappear here, but others find unexpected "
+                    "protection. Certain apartments are safer than they appear."
                 ),
                 "notable_features": [
-                    "The Phoenix Hotel - Safehouse disguised as SRO",
-                    "Aunt Charlie's - Historic gay bar and info hub",
-                    "The Screening Room - Where girls are 'evaluated'",
-                    "St. Anthony's - Soup kitchen that shelters more than the hungry"
+                    "Glide Memorial Church - Feeds body and soul",
+                    "Little Saigon - Authentic food, watchful eyes",
+                    "SRO hotels - More than just cheap housing",
+                    "Street corners - Information exchanges"
                 ],
-                "demographics": "The desperate, the hunted, the hunters"
+                "demographics": "Low-income residents, immigrants, social workers",
+                "hidden_element": "Underground protection networks"
             },
             {
-                "name": "Financial District After Hours",
-                "type": "hidden_playground",
+                "name": "Financial District",
+                "type": "corporate_center",
                 "description": (
-                    "When the markets close, another economy opens. Private clubs in penthouses, "
-                    "CEOs who kneel in Armani suits, venture capitalists funding their darkest "
-                    "fantasies. The Moth Queen has clients here who pay in cryptocurrency and "
-                    "guilt. Some fund her safehouses to ease their consciences."
+                    "Skyscrapers housing banks, law firms, and tech headquarters. Power lunches "
+                    "at $200/plate restaurants. After the markets close, different transactions "
+                    "begin. Some executives seek experiences their boards would never approve."
                 ),
                 "notable_features": [
-                    "The Apex Club - 40th floor, members only",
-                    "Montgomery Station - Where worlds collide",
-                    "The Pyramid's Shadow - Urban legend says there's a dungeon beneath"
+                    "Transamerica Pyramid - Iconic architecture",
+                    "Embarcadero Center - Shopping and secrets",
+                    "Union Square - Luxury retail therapy",
+                    "Private clubs - Members only"
                 ],
-                "demographics": "The powerful seeking to submit"
+                "demographics": "Executives, lawyers, financial professionals",
+                "hidden_element": "Power dynamics that flip after dark"
             },
             {
-                "name": "The Marina Safehouse",
-                "type": "rescue_network",
+                "name": "Marina District",
+                "type": "wealthy_residential",
                 "description": (
-                    "Behind the wealthy facade of the Marina District, the Moth Queen "
-                    "maintains her most secure safehouse. A mansion overlooking the bay, "
-                    "donated by a tech heiress who survived trafficking. New identities "
-                    "are crafted here, escape routes to new lives begin at this dock."
+                    "Pastel houses with bay views, young professionals jogging past. "
+                    "Wine bars and yoga studios on every corner. Perfect facades hide "
+                    "imperfect lives. Some of the most expensive real estate shelters "
+                    "unexpected residents."
                 ),
                 "notable_features": [
-                    "The Butterfly House - Main safehouse",
-                    "Marina Green - Dead drop location",
-                    "The Yacht Club - Unexpected ally",
-                    "Palace of Fine Arts - Meeting spot"
+                    "Marina Green - Joggers and dog walkers",
+                    "Chestnut Street - Shopping and dining",
+                    "Palace of Fine Arts - Beautiful ruins",
+                    "Private residences - Not all they seem"
                 ],
-                "demographics": "The saved, the saviors, the reborn"
+                "demographics": "Wealthy professionals, trust fund kids",
+                "hidden_element": "Safe houses in plain sight"
+            },
+            {
+                "name": "Oakland",
+                "type": "diverse_urban",
+                "description": (
+                    "Across the bay, more affordable but rapidly gentrifying. Strong African "
+                    "American and artist communities. Lake Merritt provides urban nature. "
+                    "The port brings international connections - not all legitimate."
+                ),
+                "notable_features": [
+                    "Lake Merritt - Urban oasis with secrets",
+                    "Jack London Square - Waterfront dining and more",
+                    "Fruitvale - Latino community strength",
+                    "Port of Oakland - Global connections"
+                ],
+                "demographics": "Diverse working class, artists, activists",
+                "hidden_element": "Alternative power structures"
             }
         ]
     
@@ -112,173 +126,177 @@ class SFGeopoliticalLore:
         """Get the power factions in the story"""
         return [
             {
-                "name": "The Velvet Court",
-                "type": "underground_authority",
+                "name": "Tech Elite Network",
+                "type": "corporate_power",
                 "description": (
-                    "The alliance of underground venue owners who maintain order in SF's shadow economy. "
-                    "Led by the Moth Queen and six other venue owners. They ensure consent, safety, and "
-                    "silence. Cross them, and you'll never work in the city's darkness again. They have "
-                    "judges who visit, cops who look away, and tech executives who fund them out of guilt."
+                    "CEOs, VCs, and founders who shape the Bay Area's economy. They disrupt "
+                    "industries by day and seek other disruptions by night. Some fund causes "
+                    "their boards would never approve. Guilt and desire make strange bedfellows."
                 ),
-                "territory": "Mission Underground, SoMa Shadow District",
-                "leadership": {
-                    "The Moth Queen": "Velvet Sanctum",
-                    "Master Chen": "The Jade Chamber",
-                    "Mistress Raven": "Corvus House",
-                    "The Twins": "Gemini Gardens",
-                    "Iron Hans": "The Foundry",
-                    "Lady Midnight": "The Twilight Room",
-                    "The Architect": "The Blueprint"
+                "territory": "Financial District, Palo Alto, Marina",
+                "key_figures": {
+                    "Public faces": "Featured in TechCrunch",
+                    "Private interests": "Known to very few"
                 },
-                "resources": [
-                    "Underground venues",
-                    "Information network", 
-                    "Safehouse system",
-                    "Blackmail archives",
-                    "Private security force"
-                ],
-                "goals": [
-                    "Protect consensual adult activities",
-                    "Eliminate trafficking",
-                    "Maintain the underground's independence"
-                ],
-                "enemies": ["Trafficking rings", "Moral crusaders", "Corrupt cops"]
-            },
-            {
-                "name": "The Pacific Ring",
-                "type": "trafficking_syndicate",
-                "description": (
-                    "International trafficking organization using SF's ports. Run by Viktor Kozlov and "
-                    "his lieutenants. They see the city as a gateway to profit, people as products. "
-                    "Connected to corrupt port officials and some tech companies needing 'clean' staff. "
-                    "At war with the Moth Queen since she cost them millions."
-                ),
-                "territory": "Port of SF, Parts of Tenderloin, Hidden warehouses",
-                "leadership": {
-                    "Viktor 'The Collector' Kozlov": "Russian connection",
-                    "Jimmy Tran": "Vietnamese pipeline", 
-                    "Maria Santos": "Latin American routes",
-                    "The Broker": "Tech industry connections"
-                },
-                "resources": [
-                    "Shipping routes",
-                    "Corrupt officials",
-                    "International connections",
-                    "Venture capital fronts"
-                ],
-                "enemies": ["The Moth Queen", "The Velvet Court", "FBI Task Force"]
-            },
-            {
-                "name": "The Fog Walkers",
-                "type": "rescue_network",
-                "description": (
-                    "The Moth Queen's extended network of protectors and allies. Former victims who've "
-                    "become saviors, sympathetic officials, underground railroad operators. They use "
-                    "the city's fog as cover and metaphor. Identified by moth tattoos in hidden places."
-                ),
-                "territory": "City-wide, strongest in Mission and Tenderloin",
-                "membership": [
-                    "Trafficking survivors",
-                    "Safehouse operators",
-                    "Sympathetic medical staff",
-                    "Document forgers",
-                    "Underground railroad conductors"
-                ],
-                "resources": [
-                    "Safehouses",
-                    "Escape routes",
-                    "New identity creators",
-                    "Emergency funds",
-                    "Information network"
-                ],
-                "symbols": ["Moth tattoos", "Fog metaphors", "Light signals"]
-            },
-            {
-                "name": "The Silicon Shadows",
-                "type": "tech_elite_cabal",
-                "description": (
-                    "Tech executives and VCs who partake in the underground's offerings. Some are "
-                    "genuine enthusiasts of BDSM culture, others are predators with money. The Moth "
-                    "Queen cultivates the former and blackmails the latter. Their guilt-money funds "
-                    "many safehouses, though they don't know it."
-                ),
-                "territory": "Financial District, Pacific Heights, Palo Alto",
-                "notable_members": [
-                    "Anonymous CEO who donated the Marina safehouse",
-                    "The venture capitalist who funds new identities",
-                    "The security executive who provides intel",
-                    "The judge who ensures certain cases disappear"
-                ],
                 "resources": [
                     "Vast wealth",
-                    "Political influence",
-                    "Technology access",
-                    "Legal protection"
+                    "Political connections",
+                    "Media influence",
+                    "Private security"
+                ],
+                "goals": [
+                    "Maintain public image",
+                    "Pursue private interests",
+                    "Avoid scandal"
+                ],
+                "hidden_nature": "Some seek experiences that would tank stock prices"
+            },
+            {
+                "name": "The Thorn Garden",
+                "type": "shadow_network",
+                "description": (
+                    "An invitation-only society of powerful women who've learned that true "
+                    "power isn't always visible. They meet in book clubs, wine tastings, "
+                    "charity boards - but these are just the surface. The Queen of Thorns "
+                    "coordinates their deeper purposes."
+                ),
+                "territory": "Hidden throughout the Bay Area",
+                "leadership": {
+                    "The Queen of Thorns": "Identity unknown",
+                    "The Roses": "Her inner circle",
+                    "Gardeners": "Those who tend to problems"
+                },
+                "resources": [
+                    "Information networks",
+                    "Legitimate businesses as fronts",
+                    "Loyalty beyond question",
+                    "Ways to apply pressure"
+                ],
+                "goals": [
+                    "Protect the vulnerable",
+                    "Punish the predatory",
+                    "Maintain the masquerade"
+                ],
+                "hidden_nature": "What looks like networking is actually power-broking"
+            },
+            {
+                "name": "Bay Area Housing Coalition",
+                "type": "activist_network",
+                "description": (
+                    "Fighting the housing crisis through protests, policy, and direct action. "
+                    "They occupy empty buildings, protect tent cities, and expose slumlords. "
+                    "Some members have unexpected allies in high places."
+                ),
+                "territory": "Wherever housing justice is needed",
+                "leadership": "Rotating collective leadership",
+                "resources": [
+                    "Grassroots organizing",
+                    "Legal support",
+                    "Media connections",
+                    "Hidden donors"
+                ],
+                "goals": [
+                    "Affordable housing for all",
+                    "Tenant protections",
+                    "Community over profit"
                 ]
             },
             {
-                "name": "SFPD Vice Division - The Pragmatists",
-                "type": "law_enforcement",
+                "name": "Old Money Families",
+                "type": "traditional_power",
                 "description": (
-                    "The cops who've learned to work with the underground's rules. They know the "
-                    "Moth Queen does their job better than they can. An unspoken agreement: she "
-                    "keeps the real criminals out, they don't dig too deep into consensual activities."
+                    "Families who built San Francisco - railroad, shipping, banking dynasties. "
+                    "They watch tech money with amusement and disdain. Their charity galas "
+                    "and private clubs maintain older traditions. Some matriarchs remember "
+                    "when women's power had to be entirely hidden."
                 ),
-                "leadership": "Captain Maria Rodriguez - 20-year veteran who's 'seen enough'",
+                "territory": "Pacific Heights, Nob Hill, Atherton",
+                "key_families": [
+                    "Names on hospital wings",
+                    "Museum benefactors",
+                    "Silent partners"
+                ],
+                "resources": [
+                    "Generational wealth",
+                    "Political connections",
+                    "Cultural institutions",
+                    "Family secrets"
+                ]
+            },
+            {
+                "name": "International Trade Syndicate",
+                "type": "criminal_network",
+                "description": (
+                    "Using the ports of Oakland and SF for smuggling. Everything from "
+                    "counterfeit goods to worse. They see the Bay as a gateway to profit. "
+                    "But certain shipments have been mysteriously disrupted lately."
+                ),
+                "territory": "Port areas, warehouses, distribution networks",
+                "operations": [
+                    "Import/export fronts",
+                    "Warehouse networks",
+                    "Transportation companies",
+                    "Money laundering"
+                ],
+                "enemies": ["Law enforcement", "The Thorn Garden", "Rival syndicates"]
+            },
+            {
+                "name": "SFPD and Law Enforcement",
+                "type": "official_power",
+                "description": (
+                    "Trying to maintain order in a city of extremes. Some cops are corrupt, "
+                    "some are crusaders, most just want to survive their shift. A few have "
+                    "learned that some problems solve themselves if you look the other way."
+                ),
+                "territory": "Citywide jurisdiction",
                 "factions": {
-                    "The Blind": "Look the other way entirely",
-                    "The Watchers": "Monitor but don't interfere",
-                    "The Crusaders": "Still trying to 'clean up' the city"
+                    "By the book": "Follow procedure",
+                    "Pragmatists": "Choose their battles",
+                    "Corrupted": "On various payrolls"
                 }
             }
         ]
     
     @staticmethod
     def get_faction_relationships() -> List[Dict[str, Any]]:
-        """Get detailed faction relationships beyond basic conflicts"""
+        """Get detailed faction relationships"""
         return [
             {
-                "faction1": "The Velvet Court",
-                "faction2": "SFPD Vice Division",
-                "relationship_type": "uneasy_truce",
+                "faction1": "Tech Elite Network",
+                "faction2": "The Thorn Garden",
+                "relationship_type": "complex_interdependence",
                 "description": (
-                    "They pretend we don't exist, we pretend to follow laws. Captain Rodriguez "
-                    "and the Queen have an understanding - she keeps the real criminals out, "
-                    "they don't raid consensual venues."
+                    "Some tech elites unknowingly fund Thorn Garden operations through "
+                    "charitable donations. Others are more directly involved, seeking "
+                    "experiences they can't find elsewhere. The Garden keeps their secrets "
+                    "- for a price."
                 ),
-                "trade_agreements": ["Information for blindness"],
-                "tension_points": ["New cops who don't know the rules"],
-                "collaboration_areas": ["Anti-trafficking operations"]
+                "public_face": "Charity partnerships",
+                "hidden_reality": "Power games and mutual benefit"
             },
             {
-                "faction1": "The Broken Dolls",
-                "faction2": "The Pacific Ring",
-                "relationship_type": "blood_war",
+                "faction1": "The Thorn Garden",
+                "faction2": "International Trade Syndicate",
+                "relationship_type": "shadow_war",
                 "description": (
-                    "No quarter given. The Dolls hunt Ring members, the Ring puts bounties "
-                    "on Dolls. Bodies turn up in the Bay. This war has rules - no civilians, "
-                    "no families - but otherwise, anything goes."
+                    "The Garden disrupts trafficking operations without revealing themselves. "
+                    "Shipments go missing, key players vanish, plans leak to authorities. "
+                    "The Syndicate suspects but can't prove the Garden's involvement."
                 ),
-                "trade_agreements": ["None"],
-                "tension_points": ["Everything"],
-                "collaboration_areas": ["None - kill on sight"]
+                "public_face": "No known connection",
+                "hidden_reality": "The Queen of Thorns hunts predators"
             },
             {
-                "faction1": "Silicon Shadows",
-                "faction2": "The Velvet Court",
-                "relationship_type": "parasitic_symbiosis",
+                "faction1": "Old Money Families",
+                "faction2": "Tech Elite Network",
+                "relationship_type": "generational_tension",
                 "description": (
-                    "Tech money funds the underground, the underground keeps tech's secrets. "
-                    "The Queen has enough blackmail to crash the NASDAQ. They know it, she "
-                    "knows it, everyone pretends it's voluntary patronage."
+                    "Old money sees new money as crass and destructive. Tech elite see "
+                    "old families as outdated obstacles. But in certain private clubs, "
+                    "they find common ground in shared... interests."
                 ),
-                "trade_agreements": [
-                    "Money for silence",
-                    "Protection for funding",
-                    "Exclusive access for donations"
-                ],
-                "tension_points": ["New money not understanding protocol"],
-                "collaboration_areas": ["Safehouse funding", "Identity creation tech"]
+                "public_face": "Polite disdain",
+                "hidden_reality": "More connections than either admits"
             }
         ]
     
@@ -287,280 +305,142 @@ class SFGeopoliticalLore:
         """Get ongoing conflicts in the story world"""
         return [
             {
-                "name": "The Shadow War",
-                "type": "underground_conflict",
+                "name": "The Housing Wars",
+                "type": "socioeconomic",
                 "description": (
-                    "The ongoing battle between the Moth Queen's network and the Pacific Ring. "
-                    "Fought in darkness with rescues, raids, and retributions. Bodies are rarely "
-                    "found, but moth wings appear on trafficking sites before they burn."
+                    "Tech money drives out long-time residents. Homeless camps cleared "
+                    "for development. Activists fight back with protests and occupations. "
+                    "Some tech workers secretly fund resistance. The city bleeds culture "
+                    "for profit."
                 ),
-                "factions": ["The Velvet Court + Fog Walkers", "The Pacific Ring"],
-                "stakes": "Control of human trafficking in the Bay Area",
-                "current_state": "Active warfare, Queen winning but at great cost"
+                "factions": ["Tech companies", "Real estate developers", "Housing activists", "Residents"],
+                "stakes": "The soul of San Francisco",
+                "current_state": "Escalating tensions"
             },
             {
-                "name": "The Tech Reckoning",
-                "type": "blackmail_war",
+                "name": "The Shadow Economy",
+                "type": "hidden_conflict",
                 "description": (
-                    "The Moth Queen's systematic exposure of tech predators. Using their own "
-                    "surveillance technology against them. Three CEOs have fled the country, "
-                    "two have 'committed suicide,' five fund safehouses to avoid exposure."
+                    "Beneath legitimate business, power flows through hidden channels. "
+                    "The Thorn Garden protects some, punishes others. Corporate executives "
+                    "with dark interests. A careful balance that could explode if exposed."
                 ),
-                "factions": ["The Velvet Court", "Silicon Shadows predator faction"],
-                "stakes": "Cleanup of tech industry abuse",
-                "current_state": "Queen holds devastating evidence"
+                "factions": ["The Thorn Garden", "Hidden predators", "Unknowing public"],
+                "stakes": "Maintaining the masquerade",
+                "current_state": "Delicate balance"
             },
             {
-                "name": "The Sanctuary Debate",
-                "type": "political_conflict",
+                "name": "Port Control",
+                "type": "criminal",
                 "description": (
-                    "City government debates legalizing the underground venues. The Velvet Court "
-                    "opposes it - legitimacy means regulation, visibility, vulnerability. Better "
-                    "to rule in shadow than serve in light."
+                    "International syndicates fight for smuggling routes. Corruption reaches "
+                    "into port authority and city hall. The Thorn Garden disrupts the worst "
+                    "operations while authorities play catch-up."
                 ),
-                "factions": ["Progressive politicians", "The Velvet Court", "Conservative groups"],
-                "stakes": "Future of the underground's independence",
-                "current_state": "Heated debate, Queen lobbying against"
+                "factions": ["Trade syndicates", "Law enforcement", "The Thorn Garden"],
+                "stakes": "Control of trafficking routes",
+                "current_state": "Three-way chess game"
             }
         ]
 
-    @staticmethod
-    def get_world_foundation() -> Dict[str, Any]:
-        """Get the base world setting"""
-        return {
-            "world_setting": {
-                "name": "San Francisco Bay Metropolitan Area",
-                "type": "modern_gothic_city",
-                "population": "7.7 million",
-                "established": "1776 (Mission), 1835 (Yerba Buena)",
-                "description": (
-                    "A city of stark contrasts where tech billionaires step over the homeless, "
-                    "where Victorian painted ladies cast shadows on underground dungeons. The fog "
-                    "rolls in each evening like a living thing, obscuring sins and swallowing screams. "
-                    "Beneath the progressive facade thrives an economy of desire, desperation, and "
-                    "dark salvation. They say the city's heart beats strongest after midnight."
-                ),
-                "atmosphere": {
-                    "physical": "Fog-shrouded hills, cold ocean wind, Victorian shadows",
-                    "social": "Tech wealth, artistic rebellion, hidden desperation",
-                    "spiritual": "Lost souls seeking meaning in sensation"
-                }
-            }
-        }
-    
     @staticmethod
     def get_notable_figures() -> List[Dict[str, Any]]:
         """Get important NPCs beyond the main cast"""
         return [
             {
-                "name": "Captain Maria Rodriguez",
-                "role": "SFPD Vice - The Pragmatist",
-                "description": (
-                    "20-year veteran who learned the hard way that some wars can't be won with "
-                    "badges and guns. Has an understanding with the Moth Queen - she handles the "
-                    "real monsters, Maria handles the paperwork. Lost her partner to traffickers."
+                "name": "Victoria Chen",
+                "role": "Tech CEO / Hidden Thorn",
+                "public_persona": (
+                    "Founded a successful fintech startup. Regular speaker at women in tech "
+                    "events. Philanthropist focused on girls' education. Soft-spoken, professional, "
+                    "always perfectly put together."
                 ),
-                "relationship_to_queen": "Uneasy alliance",
-                "influence": "Keeps cops away from Queen's operations"
+                "hidden_nature": (
+                    "High-ranking member of the Thorn Garden. Uses her company's resources "
+                    "to track financial crimes. Has a private floor in her building that "
+                    "employees can't access. Those who know her true nature don't speak of it."
+                ),
+                "influence": "Controls information and money flows"
             },
             {
-                "name": "Chen Wei",
-                "role": "Master of the Jade Chamber",
-                "description": (
-                    "Lilith's closest ally in the Velvet Court. Runs high-end BDSM experiences "
-                    "for the Pacific Heights crowd. Former Triad, went legitimate. His venue "
-                    "connects to three safehouse tunnels."
+                "name": "Detective Maria Rodriguez",
+                "role": "SFPD - Special Victims Unit",
+                "public_persona": (
+                    "20-year veteran known for being tough but fair. Solved several high-profile "
+                    "cases. Divorced, two kids in college. Drinks too much coffee, works too late."
                 ),
-                "relationship_to_queen": "Trusted ally, occasional lover",
-                "influence": "Controls Chinatown underground"
+                "hidden_nature": (
+                    "Has learned some cases solve themselves if she waits. Occasionally receives "
+                    "anonymous tips that pan out perfectly. Suspects but doesn't investigate "
+                    "certain patterns. Pragmatist who chooses her battles."
+                ),
+                "influence": "Can make problems disappear or appear"
             },
             {
-                "name": "Dr. Sarah Martinez",
-                "role": "Underground Medic",
-                "description": (
-                    "ER doctor at SF General who moonlights patching up trafficking victims. "
-                    "No questions asked, no records kept. The Queen saved her sister in 2019. "
-                    "Now she saves others."
+                "name": "Evelyn Thornfield",
+                "role": "Society Matron / The Queen's Voice",
+                "public_persona": (
+                    "Old money philanthropist in her 60s. Sits on museum boards, hosts charity "
+                    "galas. Married to a federal judge. Known for her rose garden in Pacific Heights."
                 ),
-                "relationship_to_queen": "Owes life debt",
-                "influence": "Medical care for victims"
+                "hidden_nature": (
+                    "One of the Queen of Thorns' most trusted advisors. Her charity events "
+                    "are recruiting grounds. Her 'book club' makes decisions that affect "
+                    "the entire city. Even her husband doesn't know."
+                ),
+                "influence": "Connects old power to new purposes"
             },
             {
-                "name": "The Architect",
-                "role": "Mystery Power Broker",
-                "description": (
-                    "Unknown member of the Velvet Court who designs escape routes and safehouses. "
-                    "Some say it's a tech billionaire, others a city planner. Only the Queen knows "
-                    "their true identity."
+                "name": "James Morrison",
+                "role": "Venture Capitalist / Useful Fool",
+                "public_persona": (
+                    "Partner at top Sand Hill Road firm. Funded three unicorns. Married "
+                    "with kids in private school. Weekend warrior cyclist. Ted Talks about "
+                    "disruption."
                 ),
-                "relationship_to_queen": "Inner circle",
-                "influence": "Infrastructure of salvation"
+                "hidden_nature": (
+                    "Seeks experiences his wife would never understand. Thinks he's found "
+                    "discrete services. Doesn't realize he's being managed, his desires "
+                    "channeled into useful directions. His 'donations' fund many things."
+                ),
+                "influence": "Wealth directed by others"
             },
             {
-                "name": "Sister Catherine Ng",
-                "role": "Progressive Nun",
-                "description": (
-                    "Runs a shelter in the Tenderloin that doesn't check IDs or immigration status. "
-                    "Provides cover stories for rescued victims. Thinks the Queen does God's work, "
-                    "even if the methods are unorthodox."
+                "name": "Dr. Sarah Kim",
+                "role": "ER Doctor / Underground Healer",
+                "public_persona": (
+                    "Trauma surgeon at SF General. Published researcher. Volunteers at "
+                    "free clinics. Professional, compassionate, always exhausted."
                 ),
-                "relationship_to_queen": "Spiritual advisor of sorts",
-                "influence": "Religious sanctuary network"
+                "hidden_nature": (
+                    "Treats injuries no questions asked. Has a network that brings her "
+                    "special cases. Owes the Queen of Thorns a debt that can never be "
+                    "repaid. Her oath includes more than 'do no harm.'"
+                ),
+                "influence": "Heals what shouldn't be seen"
             }
         ]
     
     @staticmethod
-    def get_geopolitical_shift_scenarios() -> List[Dict[str, Any]]:
-        """Power dynamics evolution in the Bay Area underground"""
-        return [
-            {
-                "shift_type": "velvet_court_expansion",
+    def get_world_foundation() -> Dict[str, Any]]:
+        """Get the base world setting"""
+        return {
+            "world_setting": {
+                "name": "San Francisco Bay Area 2025",
+                "type": "modern_metropolis",
+                "population": "7.7 million",
                 "description": (
-                    "The Velvet Court's influence spreads to Oakland and San Jose. "
-                    "New venue owners petition for membership, creating a Bay Area "
-                    "underground federation."
+                    "A region of stunning beauty and stark contrasts. Tech wealth creates "
+                    "gleaming towers while tent cities grow in their shadows. Progressive "
+                    "ideals clash with capitalist reality. The fog rolls in each evening, "
+                    "blurring the lines between what's seen and what's hidden. Beneath "
+                    "the surface of artisanal coffee shops and billion-dollar valuations, "
+                    "older powers flow through new channels."
                 ),
-                "power_changes": {
-                    "The Moth Queen": "Becomes first among equals rather than absolute ruler",
-                    "Regional Courts": "Oakland Leather Assembly, South Bay Shadows",
-                    "New Tensions": "Traditional SF venues vs suburban expansions"
-                },
-                "trigger_event": "Major trafficking bust creates power vacuum"
-            },
-            {
-                "shift_type": "tech_industry_infiltration",
-                "description": (
-                    "Silicon Shadows members begin placing allies in key tech positions. "
-                    "The underground gains access to surveillance tech, turning the "
-                    "panopticon against itself."
-                ),
-                "new_capabilities": [
-                    "Facial recognition to identify trafficking victims",
-                    "Encrypted communication networks",
-                    "Predictive algorithms for tracking predators"
-                ],
-                "resistance": "Privacy advocates worry about underground surveillance state"
+                "atmosphere": {
+                    "physical": "Hills, bay views, Karl the Fog, earthquake country",
+                    "social": "Innovation and inequality, diversity and displacement",
+                    "hidden": "Power games played behind progressive facades"
+                }
             }
-        ]
-    
-    @staticmethod
-    def get_world_evolution_scenarios() -> List[Dict[str, Any]]:
-        """Major evolutionary scenarios for the entire setting"""
-        return [
-            {
-                "scenario": "The Great Exposure",
-                "description": "Major news outlet publishes underground expose",
-                "steps": [
-                    {
-                        "phase": "Media Frenzy",
-                        "duration": "1 week",
-                        "effects": [
-                            "Tourist influx to underground venues",
-                            "Police pressure increases",
-                            "Vanilla clients flee"
-                        ]
-                    },
-                    {
-                        "phase": "Underground Lockdown",
-                        "duration": "1 month",
-                        "effects": [
-                            "Venues close or go deeper",
-                            "Trust networks tighten",
-                            "New verification protocols"
-                        ]
-                    },
-                    {
-                        "phase": "Evolution",
-                        "duration": "6 months",
-                        "effects": [
-                            "New venues replace compromised ones",
-                            "Stronger encryption adopted",
-                            "Public face vs true underground splits"
-                        ]
-                    }
-                ]
-            },
-            {
-                "scenario": "The Tech Disruption",
-                "description": "Silicon Valley fully embraces underground culture",
-                "steps": [
-                    {
-                        "phase": "Corporate Adoption",
-                        "effects": [
-                            "HR departments add BDSM policies",
-                            "Power exchange workshops at tech campuses",
-                            "Sanitized version emerges"
-                        ]
-                    },
-                    {
-                        "phase": "Underground Resistance", 
-                        "effects": [
-                            "True underground goes deeper",
-                            "Authentication becomes crucial",
-                            "Commercial vs authentic split"
-                        ]
-                    },
-                    {
-                        "phase": "New Equilibrium",
-                        "effects": [
-                            "Surface-level mainstream version",
-                            "Deep underground preserves truth",
-                            "Middle layer translates between"
-                        ]
-                    }
-                ]
-            }
-        ]
-    
-    @staticmethod
-    def get_figure_evolution_scenarios() -> List[Dict[str, Any]]:
-        """How key figures' stories evolve"""
-        return [
-            {
-                "figure": "Lilith/The Moth Queen",
-                "evolution_path": "legend_crystallization",
-                "changes": [
-                    {
-                        "stage": "Local Mystery",
-                        "reputation": 60,
-                        "description": "Known only in the Mission underground"
-                    },
-                    {
-                        "stage": "Underground Celebrity", 
-                        "reputation": 75,
-                        "description": "Every venue knows her name, not all believe"
-                    },
-                    {
-                        "stage": "Urban Legend",
-                        "reputation": 85,
-                        "description": "Mainstream media mentions 'alleged vigilante'"
-                    },
-                    {
-                        "stage": "Living Myth",
-                        "reputation": 95,
-                        "description": "Multiple people claim to be her, diluting/protecting truth"
-                    }
-                ]
-            },
-            {
-                "figure": "Captain Maria Rodriguez",
-                "evolution_path": "pragmatist_to_ally",
-                "changes": [
-                    {
-                        "stage": "Skeptical Cop",
-                        "trust_with_underground": 20,
-                        "description": "Thinks Moth Queen is criminal playing hero"
-                    },
-                    {
-                        "stage": "Reluctant Pragmatist",
-                        "trust_with_underground": 50,
-                        "description": "Realizes Moth Queen solves cases she can't"
-                    },
-                    {
-                        "stage": "Unofficial Ally",
-                        "trust_with_underground": 80,
-                        "description": "Actively diverts resources from Queen investigations"
-                    }
-                ]
-            }
-        ]
+        }
