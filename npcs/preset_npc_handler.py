@@ -137,3 +137,92 @@ class PresetNPCHandler:
             })
         
         return patterns
+    
+    @staticmethod
+    def _get_initial_location(npc_data: Dict[str, Any]) -> str:
+        """Get initial location for NPC"""
+        # Check various fields where location might be stored
+        return (npc_data.get('current_location') or 
+                npc_data.get('initial_location') or
+                npc_data.get('default_location') or
+                'Town Square')
+    
+    @staticmethod
+    def _create_initial_memories(npc_data: Dict[str, Any]) -> list:
+        """Create initial memory entries for NPC"""
+        memories = []
+        
+        # Add any preset memories
+        if 'memories' in npc_data:
+            for memory in npc_data['memories']:
+                if isinstance(memory, str):
+                    memories.append({
+                        'text': memory,
+                        'importance': 0.8,
+                        'timestamp': 'founding'
+                    })
+                elif isinstance(memory, dict):
+                    memories.append(memory)
+        
+        # Add role-based memories
+        if 'role' in npc_data:
+            memories.append({
+                'text': f"I am {npc_data['role']} in this place.",
+                'importance': 0.6,
+                'timestamp': 'founding'
+            })
+        
+        return memories
+    
+    @staticmethod
+    async def _add_special_mechanics(ctx, npc_id: int, mechanics: Dict[str, Any], lore_system):
+        """Add special mechanics as NPC metadata"""
+        from db.connection import get_db_connection_context
+        
+        async with get_db_connection_context() as conn:
+            # Store special mechanics in a dedicated table or as JSON metadata
+            for mechanic_type, mechanic_data in mechanics.items():
+                await conn.execute("""
+                    INSERT INTO npc_special_mechanics 
+                    (user_id, conversation_id, npc_id, mechanic_type, mechanic_data)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (user_id, conversation_id, npc_id, mechanic_type)
+                    DO UPDATE SET mechanic_data = EXCLUDED.mechanic_data
+                """, ctx.context['user_id'], ctx.context['conversation_id'], 
+                    npc_id, mechanic_type, json.dumps(mechanic_data))
+    
+    @staticmethod
+    async def _add_backstory_memories(ctx, npc_id: int, backstory: Dict[str, Any], lore_system):
+        """Add backstory elements as NPC memories"""
+        from memory.wrapper import MemorySystem
+        
+        memory_system = await MemorySystem.get_instance(
+            ctx.context['user_id'], ctx.context['conversation_id']
+        )
+        
+        # Add different backstory elements as memories
+        for key, value in backstory.items():
+            if isinstance(value, str):
+                await memory_system.add_memory(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=value,
+                    importance=0.9,
+                    tags=[f"backstory_{key}", "founding_memory"]
+                )
+    
+    @staticmethod
+    async def _setup_relationship_mechanics(ctx, npc_id: int, mechanics: Dict[str, Any], lore_system):
+        """Set up relationship tracking mechanics"""
+        # Store trust builders/breakers and other relationship mechanics
+        updates = {
+            'relationship_mechanics': json.dumps(mechanics)
+        }
+        
+        await lore_system.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="NPCStats",
+            entity_identifier=npc_id,
+            updates=updates,
+            reason="Setting up relationship mechanics"
+        )
