@@ -2,6 +2,7 @@
 """
 Handles Lilith's special mechanics during gameplay
 Manages masks, poetry moments, trust dynamics, and the three words
+Adapted for the Queen of Thorns / Shadow Network setting
 """
 
 import json
@@ -120,8 +121,8 @@ class LilithMechanicsHandler:
             slippage_chance += 0.2
             slippage_reasons.append("growing trust")
         
-        # Location-based
-        if "private" in location or "chamber" in location:
+        # Location-based (updated for SF setting)
+        if any(loc in location for loc in ["private", "chamber", "rose garden", "inner sanctum"]):
             slippage_chance += 0.3
             slippage_reasons.append("private setting")
         
@@ -131,7 +132,7 @@ class LilithMechanicsHandler:
             slippage_reasons.append("high emotion")
         
         # Trigger words in player action
-        trigger_words = ["love", "stay", "promise", "forever", "disappear", "leave"]
+        trigger_words = ["love", "stay", "promise", "forever", "disappear", "leave", "network", "queen"]
         if any(word in player_action for word in trigger_words):
             slippage_chance += 0.5
             slippage_reasons.append("triggered response")
@@ -150,13 +151,13 @@ class LilithMechanicsHandler:
             # Determine what shows through
             if trust > 70:
                 result["revealed"] = "vulnerability"
-                result["description"] = "For a moment, the mask slips. You see exhaustion and fear flicker across her features before she catches herself."
+                result["description"] = "For a moment, the mask slips. You see exhaustion and the weight of countless saved and lost flicker across her features before she catches herself."
             elif emotional_intensity > 0.8:
                 result["revealed"] = "raw_emotion"
-                result["description"] = "Her carefully constructed facade cracks. Raw emotion bleeds through - pain, longing, desperate need."
+                result["description"] = "Her carefully constructed facade cracks. Raw emotion bleeds through - pain from those she couldn't save, longing for someone who won't vanish."
             else:
                 result["revealed"] = "humanity"
-                result["description"] = "The goddess persona wavers. Beneath, you glimpse a woman holding herself together by will alone."
+                result["description"] = "The Queen persona wavers. Beneath, you glimpse a woman carrying the weight of an entire shadow network on her shoulders."
             
             # Update mask integrity
             await self._update_mask_integrity(mask_data['mask_integrity'] - 10)
@@ -171,65 +172,95 @@ class LilithMechanicsHandler:
         
         return result
     
-    async def _get_next_appropriate_mask(self, trust: int, context: Dict[str, Any]) -> Optional[str]:
-        """Determine appropriate mask based on trust and context"""
-        mask_data = self._current_state['mechanics'].get('mask_system', {})
-        available_masks = mask_data.get('available_masks', [])
+    async def check_network_revelation(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Check if player should discover her role in the network
         
-        # Sort by trust requirement
-        eligible_masks = [
-            m for m in available_masks 
-            if m['trust_required'] <= trust
-        ]
+        Args:
+            context: Current scene context
+            
+        Returns:
+            Dict with network revelation details
+        """
+        trust = self._current_state['stats']['trust']
+        location = context.get('location', '').lower()
         
-        if not eligible_masks:
-            return None
+        # Already revealed?
+        story_flags = await self._get_story_flags()
+        if story_flags.get('network_identity_revealed', False):
+            return {"reveal_possible": False, "already_known": True}
         
-        # Context-based selection
-        if context.get('threat_detected'):
-            return "Leather Predator"
-        elif context.get('is_private') and trust > 60:
-            return "Lace Vulnerability"
-        elif trust > 85 and context.get('emotional_intensity', 0) > 0.8:
-            return "No Mask"
+        # Check conditions
+        reveal_chance = 0
+        reveal_reasons = []
         
-        # Default to highest eligible
-        return eligible_masks[-1]['name']
+        if trust > 60:
+            reveal_chance += 0.3
+            reveal_reasons.append("trust established")
+        if any(loc in location for loc in ["rose garden", "thornfield", "safehouse"]):
+            reveal_chance += 0.5
+            reveal_reasons.append("network location")
+        if context.get('witnessed_transformation', False):
+            reveal_chance += 0.7
+            reveal_reasons.append("saw behavioral modification")
+        if context.get('helped_vulnerable_person', False):
+            reveal_chance += 0.4
+            reveal_reasons.append("demonstrated protection instinct")
+        
+        if random.random() < reveal_chance:
+            return {
+                "reveal_possible": True,
+                "reveal_type": "discovered" if "safehouse" in location else "confessed",
+                "reveal_reasons": reveal_reasons,
+                "description": (
+                    "The woman before you isn't just a dominant playing with power. She's the Queen of Thorns - "
+                    "or one of them. Leader of a network without a name, transforming predators into protectors, "
+                    "saving those who need saving. What outsiders call 'The Rose & Thorn Society' is so much more."
+                ),
+                "network_access_offered": trust > 70
+            }
+        
+        return {"reveal_possible": False, "chance": reveal_chance}
     
-    async def _update_mask_integrity(self, new_integrity: int):
-        """Update mask integrity in database"""
-        async with get_db_connection_context() as conn:
-            mask_data = self._current_state['mechanics'].get('mask_system', {})
-            mask_data['mask_integrity'] = max(0, min(100, new_integrity))
-            
-            await conn.execute(
-                """
-                UPDATE npc_special_mechanics
-                SET mechanic_data = $4
-                WHERE user_id = $1 AND conversation_id = $2 
-                AND npc_id = $3 AND mechanic_type = 'mask_system'
-                """,
-                self.user_id, self.conversation_id, self.npc_id,
-                json.dumps(mask_data)
-            )
-            
-            self._current_state['mechanics']['mask_system'] = mask_data
-    
-    async def _change_mask(self, new_mask: str):
-        """Change current mask"""
-        canon_ctx = type('CanonicalContext', (), {
-            'user_id': self.user_id,
-            'conversation_id': self.conversation_id
-        })()
+    async def check_transformation_witness(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Check if player witnesses a predator transformation session
         
-        async with get_db_connection_context() as conn:
-            await canon.update_entity_canonically(
-                canon_ctx, conn, "NPCStats", self.npc_id,
-                {"current_mask": new_mask},
-                f"Lilith changes mask to {new_mask}"
-            )
+        Args:
+            context: Current scene context
             
-        self._current_state['current_mask'] = new_mask
+        Returns:
+            Dict with transformation scene details
+        """
+        if self._current_state['stats']['trust'] < 40:
+            return {"witness_possible": False, "trust_too_low": True}
+        
+        location = context.get('location', '').lower()
+        suitable_locations = ["maison noir", "private chambers", "executive office", "therapy room"]
+        
+        if not any(loc in location for loc in suitable_locations):
+            return {"witness_possible": False, "wrong_location": True}
+        
+        if context.get('executive_present', False) or context.get('predator_identified', False):
+            return {
+                "witness_possible": True,
+                "transformation_type": "behavioral_modification",
+                "subject": context.get('subject_name', 'A tech executive'),
+                "method": "power_exchange_therapy",
+                "description": (
+                    "You watch as she systematically breaks down his predatory patterns, replacing them with "
+                    "submission and service. It's brutal, beautiful, and utterly transformative. This is how "
+                    "the garden grows - turning those who would harm into those who heal."
+                ),
+                "player_reaction_options": [
+                    "fascination",
+                    "horror",
+                    "understanding",
+                    "arousal"
+                ]
+            }
+        
+        return {"witness_possible": False}
     
     async def check_poetry_moment(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -284,61 +315,35 @@ class LilithMechanicsHandler:
         emotion = context.get('lilith_emotion', 'neutral')
         trust = self._current_state['stats']['trust']
         
-        # Query poem database for appropriate lines
-        async with get_db_connection_context() as conn:
-            lines = await conn.fetch(
-                """
-                SELECT memory_text
-                FROM unified_memories
-                WHERE user_id = $1 AND conversation_id = $2
-                AND entity_type = 'story_source'
-                AND memory_type = 'key_imagery'
-                AND metadata->>'associated_themes' ? $3
-                LIMIT 5
-                """,
-                self.user_id, self.conversation_id, emotion
-            )
-            
-            poetry_lines = [row['memory_text'] for row in lines]
-            
-            # Add character-specific variations
-            if emotion == "vulnerability" and trust > 60:
-                poetry_lines.extend([
-                    "I am a moth with wings of broken glass, and you... you burn too bright for safety.",
-                    "Between heartbeats, I practice genuflection. You are my unopened letter.",
-                    "The mask now heavy in my trembling hands, I wonder if you see the ruins beneath."
-                ])
-            elif emotion == "fear":
-                poetry_lines.extend([
-                    "Don't disappear. The words taste of copper and old promises.",
-                    "Everyone swears forever. I collect their masks as reminders.",
-                    "You are the tide, and I the shore that fears your leaving."
-                ])
-            elif emotion == "passion":
-                poetry_lines.extend([
-                    "Your skin tastes of prayers I've forgotten how to speak.",
-                    "I trace invisible tattoos - marking you as mine in ways the world will never see.",
-                    "We are binary stars, locked in a dance that ends in beautiful destruction."
-                ])
-            
-            return poetry_lines[:3]  # Return top 3 most relevant
-    
-    async def _update_poetry_tracking(self, poetry_used: List[Dict]):
-        """Update poetry usage tracking"""
-        async with get_db_connection_context() as conn:
-            poetry_data = self._current_state['mechanics'].get('poetry_triggers', {})
-            poetry_data['poetry_used'] = poetry_used[-20:]  # Keep last 20
-            
-            await conn.execute(
-                """
-                UPDATE npc_special_mechanics
-                SET mechanic_data = $4
-                WHERE user_id = $1 AND conversation_id = $2 
-                AND npc_id = $3 AND mechanic_type = 'poetry_triggers'
-                """,
-                self.user_id, self.conversation_id, self.npc_id,
-                json.dumps(poetry_data)
-            )
+        # Character-specific variations for Queen of Thorns
+        poetry_lines = []
+        
+        if emotion == "vulnerability" and trust > 60:
+            poetry_lines.extend([
+                "I am a garden of broken glass roses, and you... you tend me too gently for safety.",
+                "Between heartbeats, I practice saying three words. They taste of thorns and starlight.",
+                "The crown grows heavy when no one sees you wear it."
+            ])
+        elif emotion == "fear":
+            poetry_lines.extend([
+                "Don't disappear. The words taste of copper and every promise broken.",
+                "Everyone swears they'll stay to see the roses bloom. I keep their masks as mulch.",
+                "You are morning dew, and I the thorn that fears the sun."
+            ])
+        elif emotion == "passion":
+            poetry_lines.extend([
+                "Your skin tastes of prayers I've taught predators to speak.",
+                "I plant gardens in the ruins of what you were, cultivate submission where dominance grew wild.",
+                "We are binary stars, locked in orbits that remake the universe between us."
+            ])
+        elif emotion == "power":
+            poetry_lines.extend([
+                "Kneel, and I will show you how thorns can be tender.",
+                "I transform wolves into roses, one petal-soft submission at a time.",
+                "The network has no name, but my touch leaves invisible tattoos."
+            ])
+        
+        return poetry_lines[:3]  # Return top 3 most relevant
     
     async def check_three_words_moment(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -369,7 +374,7 @@ class LilithMechanicsHandler:
                 return {
                     "three_words_possible": False,
                     "near_miss": True,
-                    "reaction": "She opens her mouth, three syllables on her tongue, but bites down until copper fills her mouth.",
+                    "reaction": "She opens her mouth, three syllables rising like thorns through her throat, but she swallows them back down with practiced pain.",
                     "trust_needed": trust_threshold - trust,
                     "emotion_needed": emotional_threshold - emotional_intensity
                 }
@@ -382,20 +387,23 @@ class LilithMechanicsHandler:
         
         if "love" in player_action or "i love you" in player_action:
             triggers_present.append("player_confession")
-        if context.get('location', '') == "Private Chambers":
+        if context.get('location', '') in ["Private Chambers", "The Inner Garden", "The Mask Room"]:
             triggers_present.append("private_setting")
         if context.get('mask_removed', False):
             triggers_present.append("no_mask")
-        if context.get('crisis_resolved', False):
+        if context.get('network_crisis_resolved', False):
             triggers_present.append("after_crisis")
+        if context.get('transformation_completed_together', False):
+            triggers_present.append("shared_purpose")
         
         if len(triggers_present) >= 2:  # Need multiple triggers
             return {
                 "three_words_possible": True,
                 "triggers": triggers_present,
                 "buildup_description": (
-                    "Something shifts in her eyes. The words that have lived beneath her tongue "
-                    "for so long rise like moths toward flame. Her lips part, trembling."
+                    "Something shifts in her eyes - all masks falling at once. The words that have lived "
+                    "beneath her tongue for so long rise like prayers through thorns. Her lips part, trembling "
+                    "with the weight of a crown she never meant to share."
                 ),
                 "requires_player_response": True
             }
@@ -406,31 +414,49 @@ class LilithMechanicsHandler:
             "triggers_needed": 2 - len(triggers_present)
         }
     
-    async def _track_near_miss(self, context: Dict[str, Any]):
-        """Track when the three words almost emerge"""
-        async with get_db_connection_context() as conn:
-            three_words_data = self._current_state['mechanics'].get('three_words', {})
-            near_misses = three_words_data.get('near_speaking_moments', [])
+    async def check_trust_test(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Check if Lilith needs to test player's loyalty to the network
+        
+        Args:
+            context: Current scene context
             
-            near_misses.append({
-                "timestamp": datetime.now().isoformat(),
-                "trust": self._current_state['stats']['trust'],
-                "context": context.get('scene_type', 'unknown'),
-                "trigger": context.get('player_action', '')[:100]
-            })
-            
-            three_words_data['near_speaking_moments'] = near_misses[-10:]  # Keep last 10
-            
-            await conn.execute(
-                """
-                UPDATE npc_special_mechanics
-                SET mechanic_data = $4
-                WHERE user_id = $1 AND conversation_id = $2 
-                AND npc_id = $3 AND mechanic_type = 'three_words'
-                """,
-                self.user_id, self.conversation_id, self.npc_id,
-                json.dumps(three_words_data)
-            )
+        Returns:
+            Dict with trust test details
+        """
+        trust = self._current_state['stats']['trust']
+        
+        if trust < 40 or trust > 80:
+            return {"test_needed": False}
+        
+        test_triggers = []
+        if context.get('asked_about_network', False):
+            test_triggers.append("curiosity_about_network")
+        if context.get('witnessed_transformation', False):
+            test_triggers.append("saw_too_much")
+        if context.get('met_other_network_members', False):
+            test_triggers.append("expanding_connections")
+        
+        if len(test_triggers) >= 1:
+            return {
+                "test_needed": True,
+                "test_type": random.choice([
+                    "loyalty_choice",
+                    "secret_keeping",
+                    "participation_request"
+                ]),
+                "triggers": test_triggers,
+                "description": (
+                    "She watches you with calculating eyes. 'The garden has many secrets,' she says softly. "
+                    "'Some tend roses, others become them. Which are you, I wonder?'"
+                ),
+                "consequences": {
+                    "pass": "Deeper network access",
+                    "fail": "Memory modification or exile"
+                }
+            }
+        
+        return {"test_needed": False}
     
     async def speak_three_words(self, player_response: str) -> Dict[str, Any]:
         """
@@ -451,33 +477,36 @@ class LilithMechanicsHandler:
             outcome = "mutual_confession"
             her_words = "I love you"
             aftermath = (
-                "The words taste of burning stars as they finally escape. 'I love you,' she breathes, "
-                "each syllable a butterfly emerging from a chrysalis of fear. 'I've loved you since you "
-                "first refused to disappear.' Tears trace silver paths down her cheeks."
+                "The words escape like butterflies through thorns. 'I love you,' she breathes, each syllable "
+                "a thorn pulled from her throat. 'I've loved you since you first knelt in my garden and chose "
+                "to bloom rather than wither.' Tears trace silver paths down her cheeks, watering seeds "
+                "planted in secret."
             )
-        elif any(word in response_lower for word in ["stay", "never leave", "always here"]):
+        elif any(word in response_lower for word in ["stay", "never leave", "tend your garden", "serve"]):
             outcome = "promise_response"
             her_words = "I love you"
             aftermath = (
-                "Your promise breaks something in her. 'I love you,' she whispers, the words barely "
-                "audible. 'God help me, I love you. I've bitten these words back so many times I forgot "
-                "they could be spoken without bleeding.'"
+                "Your promise breaks the last lock. 'I love you,' she whispers, the words barely audible, "
+                "like roses blooming in winter. 'God help me, I love you. Every mask I wear, every thorn "
+                "I grow, every predator I transform - it's all been searching for someone who could see "
+                "the garden and choose to stay.'"
             )
-        elif any(word in response_lower for word in ["wait", "don't", "scared"]):
+        elif any(word in response_lower for word in ["wait", "don't", "scared", "not ready"]):
             outcome = "fear_reflected"
             her_words = "[unspoken]"
             aftermath = (
-                "She sees her own fear reflected in your eyes and the words die unborn. Her mouth "
-                "closes, the three syllables swallowed back down. 'I... I can't. Not if you're not "
-                "ready to hear them. They'll keep. They've kept this long.'"
+                "She sees her own fear reflected and the words wilt unborn. Her mouth closes, the three "
+                "syllables swallowed like thorns. 'I... I understand. The garden asks much of those who "
+                "would tend it. Perhaps... perhaps some roses are meant to grow in solitude.'"
             )
         else:
             outcome = "spoken_into_void"
             her_words = "I love you"
             aftermath = (
-                "'I love you.' The words fall into the space between you like stones into dark water. "
-                "She doesn't wait for a response, turning away. 'There. Now you know what lives beneath "
-                "my tongue. What you do with that knowledge is your choice.'"
+                "'I love you.' The words fall like rose petals onto marble - beautiful, futile, final. "
+                "She doesn't wait for a response, turning away to face the masks on her walls. 'There. "
+                "Now you know what grows beneath the thorns. Whether you stay to tend this garden or "
+                "flee from its shadows... that choice was always yours.'"
             )
         
         # Update database
@@ -502,8 +531,109 @@ class LilithMechanicsHandler:
             "her_words": her_words,
             "aftermath": aftermath,
             "relationship_change": "deepened" if trust_change > 0 else "complicated",
-            "new_dynamic": "words_between_us"
+            "new_dynamic": "words_between_us",
+            "network_impact": "Your position in the garden is forever changed"
         }
+    
+    async def get_dialogue_style(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Get appropriate dialogue style based on current state
+        
+        Args:
+            context: Current scene context
+            
+        Returns:
+            Dict with dialogue guidance
+        """
+        trust = self._current_state['stats']['trust']
+        mask = self._current_state['current_mask']
+        emotion = context.get('lilith_emotion', 'neutral')
+        
+        # Base patterns from character data
+        patterns = self._current_state.get('dialogue_patterns', {})
+        
+        # Determine pattern based on trust
+        if trust < 30:
+            pattern_key = "trust_low"
+        elif trust < 60:
+            pattern_key = "trust_medium"  
+        elif trust < 85:
+            pattern_key = "trust_high"
+        else:
+            pattern_key = "vulnerability_showing"
+        
+        base_pattern = patterns.get(pattern_key, "")
+        
+        # Modify based on mask
+        style_modifiers = {
+            "Porcelain Goddess": {
+                "tone": "commanding",
+                "formality": "high",
+                "vulnerability": "none",
+                "sample_phrases": ["Kneel before the thorns", "You may approach", "The garden has rules"]
+            },
+            "Leather Predator": {
+                "tone": "dangerous", 
+                "formality": "medium",
+                "vulnerability": "none",
+                "sample_phrases": ["Predators become prey here", "Test me and be transformed", "Come. Now."]
+            },
+            "Lace Vulnerability": {
+                "tone": "soft_edges",
+                "formality": "low",
+                "vulnerability": "glimpses",
+                "sample_phrases": ["Please...", "The garden grows lonely", "Don't vanish like morning dew"]
+            },
+            "No Mask": {
+                "tone": "raw",
+                "formality": "none",
+                "vulnerability": "complete",
+                "sample_phrases": ["I'm drowning in roses", "Hold me", "Why did you stay when others fled?"]
+            }
+        }
+        
+        style = style_modifiers.get(mask, style_modifiers["Porcelain Goddess"])
+        
+        # Add poetry if applicable
+        poetry_check = await self.check_poetry_moment(context)
+        
+        # Add network-specific language
+        network_phrases = []
+        if context.get('network_topic', False):
+            network_phrases = [
+                "The garden tends itself",
+                "Thorns protect the roses", 
+                "We transform through cultivation",
+                "The network has no name but infinite reach"
+            ]
+        
+        return {
+            "base_pattern": base_pattern,
+            "style": style,
+            "emotion": emotion,
+            "poetry_suggested": poetry_check.get('poetry_moment', False),
+            "poetry_lines": poetry_check.get('suggested_lines', []),
+            "special_phrases": self._get_special_phrases(trust, emotion),
+            "network_phrases": network_phrases,
+            "forbidden_words": ["goodbye", "leave", "forever"] if trust < 50 else []
+        }
+    
+    def _get_special_phrases(self, trust: int, emotion: str) -> List[str]:
+        """Get Lilith's special phrases based on state"""
+        phrases = []
+        
+        if emotion == "fear":
+            phrases.extend(["Don't disappear", "Stay in the garden", "Promise me"])
+        elif emotion == "passion":
+            phrases.extend(["Mine to cultivate", "Bloom for me", "Marked by thorns"])
+        elif emotion == "vulnerability" and trust > 60:
+            phrases.extend(["I can't lose another", "Help me tend them", "Why do you remain?"])
+        elif emotion == "dominant":
+            phrases.extend(["Kneel", "Submit to transformation", "Let me remake you"])
+        elif emotion == "protective":
+            phrases.extend(["The garden protects its own", "No one hurts my roses", "Safe here"])
+        
+        return phrases
     
     async def _mark_words_spoken(self, outcome: str, words: str, player_response: str):
         """Mark the three words as spoken in database"""
@@ -555,6 +685,123 @@ class LilithMechanicsHandler:
             
         self._current_state['stats']['trust'] = new_trust
     
+    async def _get_story_flags(self) -> Dict[str, Any]:
+        """Get current story flags"""
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT story_flags
+                FROM story_states
+                WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                """,
+                self.user_id, self.conversation_id, "the_queen_of_thorns"
+            )
+            
+            return json.loads(row['story_flags']) if row else {}
+    
+    async def _get_next_appropriate_mask(self, trust: int, context: Dict[str, Any]) -> Optional[str]:
+        """Determine appropriate mask based on trust and context"""
+        mask_data = self._current_state['mechanics'].get('mask_system', {})
+        available_masks = mask_data.get('available_masks', [])
+        
+        # Sort by trust requirement
+        eligible_masks = [
+            m for m in available_masks 
+            if m['trust_required'] <= trust
+        ]
+        
+        if not eligible_masks:
+            return None
+        
+        # Context-based selection
+        if context.get('threat_detected') or context.get('predator_present'):
+            return "Leather Predator"
+        elif context.get('is_private') and trust > 60:
+            return "Lace Vulnerability"
+        elif trust > 85 and context.get('emotional_intensity', 0) > 0.8:
+            return "No Mask"
+        
+        # Default to highest eligible
+        return eligible_masks[-1]['name']
+    
+    async def _update_mask_integrity(self, new_integrity: int):
+        """Update mask integrity in database"""
+        async with get_db_connection_context() as conn:
+            mask_data = self._current_state['mechanics'].get('mask_system', {})
+            mask_data['mask_integrity'] = max(0, min(100, new_integrity))
+            
+            await conn.execute(
+                """
+                UPDATE npc_special_mechanics
+                SET mechanic_data = $4
+                WHERE user_id = $1 AND conversation_id = $2 
+                AND npc_id = $3 AND mechanic_type = 'mask_system'
+                """,
+                self.user_id, self.conversation_id, self.npc_id,
+                json.dumps(mask_data)
+            )
+            
+            self._current_state['mechanics']['mask_system'] = mask_data
+    
+    async def _change_mask(self, new_mask: str):
+        """Change current mask"""
+        canon_ctx = type('CanonicalContext', (), {
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id
+        })()
+        
+        async with get_db_connection_context() as conn:
+            await canon.update_entity_canonically(
+                canon_ctx, conn, "NPCStats", self.npc_id,
+                {"current_mask": new_mask},
+                f"Lilith changes mask to {new_mask}"
+            )
+            
+        self._current_state['current_mask'] = new_mask
+    
+    async def _update_poetry_tracking(self, poetry_used: List[Dict]):
+        """Update poetry usage tracking"""
+        async with get_db_connection_context() as conn:
+            poetry_data = self._current_state['mechanics'].get('poetry_triggers', {})
+            poetry_data['poetry_used'] = poetry_used[-20:]  # Keep last 20
+            
+            await conn.execute(
+                """
+                UPDATE npc_special_mechanics
+                SET mechanic_data = $4
+                WHERE user_id = $1 AND conversation_id = $2 
+                AND npc_id = $3 AND mechanic_type = 'poetry_triggers'
+                """,
+                self.user_id, self.conversation_id, self.npc_id,
+                json.dumps(poetry_data)
+            )
+    
+    async def _track_near_miss(self, context: Dict[str, Any]):
+        """Track when the three words almost emerge"""
+        async with get_db_connection_context() as conn:
+            three_words_data = self._current_state['mechanics'].get('three_words', {})
+            near_misses = three_words_data.get('near_speaking_moments', [])
+            
+            near_misses.append({
+                "timestamp": datetime.now().isoformat(),
+                "trust": self._current_state['stats']['trust'],
+                "context": context.get('scene_type', 'unknown'),
+                "trigger": context.get('player_action', '')[:100]
+            })
+            
+            three_words_data['near_speaking_moments'] = near_misses[-10:]  # Keep last 10
+            
+            await conn.execute(
+                """
+                UPDATE npc_special_mechanics
+                SET mechanic_data = $4
+                WHERE user_id = $1 AND conversation_id = $2 
+                AND npc_id = $3 AND mechanic_type = 'three_words'
+                """,
+                self.user_id, self.conversation_id, self.npc_id,
+                json.dumps(three_words_data)
+            )
+    
     async def check_trauma_trigger(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Check if current context triggers trauma response
@@ -580,30 +827,30 @@ class LilithMechanicsHandler:
         responses = {
             "sudden departures": {
                 "reaction": "panic",
-                "description": "Her whole body goes rigid. 'No. No, you don't get to leave like that. Not like the others.'"
+                "description": "Her whole body goes rigid. 'No. No, you don't get to leave like that. Not like the others. Not after I've shown you the garden.'"
             },
             "i'll always be here": {
                 "reaction": "bitter_laugh", 
-                "description": "She laughs, but it's all broken glass. 'They all say that. Right until they don't.'"
+                "description": "She laughs, but it's all thorns and no roses. 'They all say that. Right until the garden asks too much.'"
             },
             "being seen without consent": {
                 "reaction": "rage",
-                "description": "Her eyes flash dangerous crimson. 'You do NOT look at me without permission. Ever.'"
+                "description": "Her eyes flash dangerous crimson. 'You do NOT look beneath the mask without permission. The Queen chooses her revelations.'"
             },
             "betrayal": {
                 "reaction": "shutdown",
-                "description": "Something dies in her eyes. The mask becomes her face. 'I see. How predictable.'"
+                "description": "Something dies in her eyes. The mask becomes her face. 'I see. Another moth burned by getting too close.'"
             },
             "bright_lights": {
                 "reaction": "anxiety",
-                "description": "She flinches from the brightness, hand moving instinctively to adjust a mask that isn't there."
+                "description": "She flinches from the brightness, hand moving to adjust a mask that isn't there. 'Shadows are kinder to gardens like mine.'"
             }
         }
         
         primary_trigger = triggered[0]
         response = responses.get(primary_trigger, {
             "reaction": "defensive",
-            "description": "Old wounds flare. Her walls slam back into place."
+            "description": "Old wounds flare. Her walls slam back into place like thorns erupting from skin."
         })
         
         return {
@@ -612,148 +859,5 @@ class LilithMechanicsHandler:
             "reaction": response["reaction"],
             "description": response["description"],
             "trust_impact": -10,
-            "suggestion": "Proceed very carefully. She's retreating into old patterns."
+            "suggestion": "Proceed very carefully. She's retreating into protective thorns."
         }
-    
-    async def check_dual_identity_reveal(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Check if player should discover her Moth Queen identity
-        
-        Args:
-            context: Current scene context
-            
-        Returns:
-            Dict with dual identity details
-        """
-        trust = self._current_state['stats']['trust']
-        location = context.get('location', '').lower()
-        
-        # Already revealed?
-        story_flags = await self._get_story_flags()
-        if story_flags.get('dual_identity_revealed', False):
-            return {"reveal_possible": False, "already_known": True}
-        
-        # Check conditions
-        reveal_chance = 0
-        if trust > 60:
-            reveal_chance += 0.3
-        if "safehouse" in location:
-            reveal_chance += 0.5
-        if context.get('helped_vulnerable_npc', False):
-            reveal_chance += 0.4
-        if context.get('witnessed_rescue', False):
-            reveal_chance += 0.7
-        
-        if random.random() < reveal_chance:
-            return {
-                "reveal_possible": True,
-                "reveal_type": "discovered" if "safehouse" in location else "confessed",
-                "description": (
-                    "The woman before you isn't just a dominatrix playing with power. She's something more - "
-                    "a protector, a savior, a warrior fighting a war in the shadows. The Moth Queen isn't just "
-                    "a title. It's a mission."
-                )
-            }
-        
-        return {"reveal_possible": False, "chance": reveal_chance}
-    
-    async def _get_story_flags(self) -> Dict[str, Any]:
-        """Get current story flags"""
-        async with get_db_connection_context() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT story_flags
-                FROM story_states
-                WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
-                """,
-                self.user_id, self.conversation_id, "the_moth_and_flame"
-            )
-            
-            return json.loads(row['story_flags']) if row else {}
-    
-    async def get_dialogue_style(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Get appropriate dialogue style based on current state
-        
-        Args:
-            context: Current scene context
-            
-        Returns:
-            Dict with dialogue guidance
-        """
-        trust = self._current_state['stats']['trust']
-        mask = self._current_state['current_mask']
-        emotion = context.get('lilith_emotion', 'neutral')
-        
-        # Base patterns from character data
-        patterns = self._current_state.get('dialogue_patterns', {})
-        
-        # Determine pattern based on trust
-        if trust < 30:
-            pattern_key = "trust_low"
-        elif trust < 60:
-            pattern_key = "trust_medium"  
-        elif trust < 85:
-            pattern_key = "trust_high"
-        else:
-            pattern_key = "vulnerability_showing"
-        
-        base_pattern = patterns.get(pattern_key, "")
-        
-        # Modify based on mask
-        style_modifiers = {
-            "Porcelain Goddess": {
-                "tone": "commanding",
-                "formality": "high",
-                "vulnerability": "none",
-                "sample_phrases": ["On your knees", "You may speak", "Dismissed"]
-            },
-            "Leather Predator": {
-                "tone": "dangerous", 
-                "formality": "medium",
-                "vulnerability": "none",
-                "sample_phrases": ["Don't test me", "You'll regret that", "Come here. Now."]
-            },
-            "Lace Vulnerability": {
-                "tone": "soft_edges",
-                "formality": "low",
-                "vulnerability": "glimpses",
-                "sample_phrases": ["Please...", "I need...", "Don't go"]
-            },
-            "No Mask": {
-                "tone": "raw",
-                "formality": "none",
-                "vulnerability": "complete",
-                "sample_phrases": ["I'm terrified", "Hold me", "Why did you stay?"]
-            }
-        }
-        
-        style = style_modifiers.get(mask, style_modifiers["Porcelain Goddess"])
-        
-        # Add poetry if applicable
-        poetry_check = await self.check_poetry_moment(context)
-        
-        return {
-            "base_pattern": base_pattern,
-            "style": style,
-            "emotion": emotion,
-            "poetry_suggested": poetry_check.get('poetry_moment', False),
-            "poetry_lines": poetry_check.get('suggested_lines', []),
-            "special_phrases": self._get_special_phrases(trust, emotion),
-            "forbidden_words": ["goodbye", "leave", "forever"] if trust < 50 else []
-        }
-    
-    def _get_special_phrases(self, trust: int, emotion: str) -> List[str]:
-        """Get Lilith's special phrases based on state"""
-        phrases = []
-        
-        if emotion == "fear":
-            phrases.extend(["Don't disappear", "Stay", "Please"])
-        elif emotion == "passion":
-            phrases.extend(["Mine", "Marked", "Burn for me"])
-        elif emotion == "vulnerability" and trust > 60:
-            phrases.extend(["I can't", "Help me", "Why"])
-        elif emotion == "dominant":
-            phrases.extend(["Kneel", "Beg", "Show me"])
-        
-        return phrases
