@@ -4,7 +4,10 @@ import json
 import logging
 from typing import List, Dict, Any
 from db.connection import get_db_connection_context
-from story_templates.preset_stories import PresetStory, EXAMPLE_PRESET_STORY
+from story_templates.preset_stories import PresetStory
+from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
+# Optionally add other stories:
+# from story_templates.the_velvet_rebellion import THE_VELVET_REBELLION
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +73,11 @@ class PresetStoryLoader:
     @staticmethod
     async def load_all_preset_stories():
         """Load all available preset stories"""
-        # Add all your preset stories here
+        # Using The Moth and Flame as the main story
         preset_stories = [
-            EXAMPLE_PRESET_STORY,
-            # Add more preset stories as you create them
+            THE_MOTH_AND_FLAME,
+            # Uncomment to add more stories:
+            # THE_VELVET_REBELLION,
         ]
         
         for story in preset_stories:
