@@ -2829,7 +2829,7 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
                 lines = poem_text.strip().split('\n')
                 title = lines[0] if lines else "Untitled"
                 
-                # Insert full poem
+                # Insert full poem - PASS PYTHON OBJECTS DIRECTLY
                 await conn.execute(
                     """
                     INSERT INTO unified_memories
@@ -2843,15 +2843,15 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
                     0,               # System-level (conversation_id = 0)
                     poem_text,
                     "gothic_poem",
-                    json.dumps(["poetry", "tone_reference", story_id, poem_id, "gothic", "romantic"]),  # Convert to JSON string
+                    ["poetry", "tone_reference", story_id, poem_id, "gothic", "romantic"],  # Pass list directly
                     10,              # Maximum significance
-                    json.dumps({     # Convert to JSON string
+                    {                # Pass dict directly
                         "poem_id": poem_id,
                         "poem_title": title,
                         "story_id": story_id,
                         "usage": "tone_and_imagery_reference",
                         "themes": ["masks", "vulnerability", "devotion", "abandonment"]
-                    })
+                    }
                 )
                 
                 # Extract and store key imagery separately for quick access
@@ -2868,14 +2868,14 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
                         0, 0, 0,
                         imagery,
                         "poetic_imagery",
-                        json.dumps(["imagery", story_id, poem_id, "metaphor"]),  # Convert to JSON string
+                        ["imagery", story_id, poem_id, "metaphor"],  # Pass list directly
                         9,  # High significance
-                        json.dumps({    # Convert to JSON string
+                        {    # Pass dict directly
                             "source_poem": poem_id,
                             "story_id": story_id,
                             "imagery_index": i,
                             "imagery_type": categorize_imagery(imagery)
-                        })
+                        }
                     )
         
         # Seed the tone instructions
@@ -2902,14 +2902,14 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
                     0, 0, 0,
                     tone_prompt,
                     "writing_instructions",
-                    json.dumps(["instructions", "tone", "style", story_id, "gothic", "poetry"]),  # Convert to JSON string
+                    ["instructions", "tone", "style", story_id, "gothic", "poetry"],  # Pass list directly
                     10,
-                    json.dumps({    # Convert to JSON string
+                    {    # Pass dict directly
                         "story_id": story_id,
                         "instruction_type": "tone_and_style_guide",
                         "apply_to": "all_story_content",
                         "priority": "high"
-                    })
+                    }
                 )
         
         logger.info(f"Seeded {len(poems)} poems and tone instructions for {story_id}")
