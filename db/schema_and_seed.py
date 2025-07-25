@@ -2525,7 +2525,7 @@ async def create_all_tables():
                 ADD CONSTRAINT fk_localhistories_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 ADD CONSTRAINT fk_localhistories_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
                 ''',
-'''
+                '''
                 ALTER TABLE Locations 
                     ALTER COLUMN notable_features TYPE JSONB USING to_jsonb(notable_features),
                     ALTER COLUMN hidden_aspects TYPE JSONB USING to_jsonb(hidden_aspects),
@@ -2714,6 +2714,52 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 '''
+
+# --- Seeding and Initialization Functions ---
+
+async def seed_initial_vitals():
+    """Asynchronously seed initial player vitals using asyncpg."""
+    logger.info("Seeding initial player vitals...")
+    rows_affected = 0
+    try:
+        async with get_db_connection_context() as conn:
+            # Use a transaction for the read-then-write pattern
+            async with conn.transaction():
+                # Fetch distinct players who need seeding
+                player_rows = await conn.fetch("""
+                    SELECT DISTINCT user_id, conversation_id FROM PlayerStats
+                    WHERE player_name = 'Chase'
+                """)
+
+                if not player_rows:
+                    logger.info("No players found requiring initial vitals seeding.")
+                    return
+
+                # Insert for each player directly without prepared statement
+                count = 0
+                for row in player_rows:
+                    result = await conn.execute("""
+                        INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
+                        VALUES ($1, $2, 'Chase', 100, 100)
+                        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+                    """, row['user_id'], row['conversation_id'])
+                    
+                    # Check if rows were affected
+                    if result.endswith(" 1"):
+                        count += 1
+                rows_affected = count
+
+        logger.info(f"Seeded initial vitals for {rows_affected} players (others may have existed).")
+
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error seeding initial vitals: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error seeding vitals: {e}", exc_info=True)
+
+async def initialize_conflict_system():
+    """Asynchronously initialize the conflict system by seeding initial data."""
+    await seed_initial_vitals()  # Call the async version
+    logger.info("Conflict system initialized (vitals seeded).")
 
 async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
     """
@@ -3023,52 +3069,6 @@ async def get_poem_context_for_conversation(user_id: int, conversation_id: int, 
     except Exception as e:
         logger.critical(f"An unexpected error occurred outside the connection block during table creation: {e}", exc_info=True)
         raise
-
-# --- Seeding and Initialization Functions ---
-
-async def seed_initial_vitals():
-    """Asynchronously seed initial player vitals using asyncpg."""
-    logger.info("Seeding initial player vitals...")
-    rows_affected = 0
-    try:
-        async with get_db_connection_context() as conn:
-            # Use a transaction for the read-then-write pattern
-            async with conn.transaction():
-                # Fetch distinct players who need seeding
-                player_rows = await conn.fetch("""
-                    SELECT DISTINCT user_id, conversation_id FROM PlayerStats
-                    WHERE player_name = 'Chase'
-                """)
-
-                if not player_rows:
-                    logger.info("No players found requiring initial vitals seeding.")
-                    return
-
-                # Insert for each player directly without prepared statement
-                count = 0
-                for row in player_rows:
-                    result = await conn.execute("""
-                        INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
-                        VALUES ($1, $2, 'Chase', 100, 100)
-                        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-                    """, row['user_id'], row['conversation_id'])
-                    
-                    # Check if rows were affected
-                    if result.endswith(" 1"):
-                        count += 1
-                rows_affected = count
-
-        logger.info(f"Seeded initial vitals for {rows_affected} players (others may have existed).")
-
-    except (asyncpg.PostgresError, ConnectionError) as e:
-        logger.error(f"Error seeding initial vitals: {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"Unexpected error seeding vitals: {e}", exc_info=True)
-
-async def initialize_conflict_system():
-    """Asynchronously initialize the conflict system by seeding initial data."""
-    await seed_initial_vitals()  # Call the async version
-    logger.info("Conflict system initialized (vitals seeded).")
 
 async def seed_initial_data():
     """
