@@ -132,6 +132,42 @@ class SFBayQueenOfThornsPreset:
     def get_educational_systems() -> List[Dict[str, Any]]:
         """Get educational institutions for SF Bay Area"""
         return SFEducationLore.get_educational_systems()
+
+    @staticmethod
+    def get_generation_constraints() -> Dict[str, Any]:
+        """Get constraints for dynamic content generation"""
+        return {
+            "critical_rules": QueenOfThornsConsistencyGuide.get_critical_rules(),
+            "layer_model": QueenOfThornsConsistencyGuide.get_layer_model(),
+            "quick_reference": {
+                "network_names": ["the network", "the garden", "our people"],
+                "queen_references": ["The Queen", "whoever she is", "our leader"],
+                "geographic_scope": "Bay Area control, elsewhere influence only"
+            }
+        }
+    
+    @staticmethod
+    def get_system_prompt_additions() -> str:
+        """Additional instructions for LLM generation"""
+        return """
+CRITICAL CONSISTENCY RULES FOR QUEEN OF THORNS SETTING:
+
+1. NEVER give the organization an official name. Always refer to it as "the network" or note that outsiders call it various names.
+
+2. NEVER reveal the Queen's identity or confirm if she's one person or many.
+
+3. ALWAYS use the four-layer model for information:
+   - Public: What everyone sees
+   - Semi-Private: What members know
+   - Hidden: What the network controls
+   - Deep Secret: Ultimate mysteries
+
+4. The network controls the Bay Area ONLY. Other cities have allies, not branches.
+
+5. Transformation takes months or years, never instant.
+
+When generating content, maintain noir sensibility, moral ambiguity, and the mystery that makes the network powerful.
+"""
     
     @staticmethod
     def get_complete_world_state() -> Dict[str, Any]:
