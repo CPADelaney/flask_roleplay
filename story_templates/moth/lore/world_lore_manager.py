@@ -80,21 +80,23 @@ class SFBayQueenOfThornsPreset:
         
         # Add some additional detail about how factions hide
         for faction in factions:
-            if faction['name'] == 'The Thorn Garden':
-                faction['hiding_methods'] = [
-                    "Book clubs discussing Victorian literature",
-                    "Wine tastings in Napa estates",
-                    "Charity boards for women's causes",
-                    "Professional development workshops",
-                    "Garden societies and botanical groups"
-                ]
-                faction['recognition_signs'] = [
-                    "Rose-themed jewelry worn subtly",
-                    "Specific phrases in conversation",
-                    "Knowledge of particular flowers",
-                    "Connections that seem coincidental",
-                    "Power that flows without explanation"
-                ]
+            if 'Rose' in faction['name'] and 'Thorn' in faction['name']:
+                faction['name'] = 'The Shadow Network (various names)'
+                faction['type'] = 'shadow_matriarchy'
+                faction['description'] = (
+                    "A powerful network of women operating in San Francisco's shadows. "
+                    "Outsiders call it many names - The Rose & Thorn Society, The Garden, "
+                    "The Thorn Network - but insiders know it has no formal name. What "
+                    "everyone agrees on: it's led by someone called the Queen of Thorns, "
+                    "and her reach extends wherever power needs checking. The Rose Council, "
+                    "seven senior dominants, handles regional operations while the Queen "
+                    "remains beautifully mysterious."
+                )
+                faction['naming_note'] = (
+                    "The lack of official name is intentional - makes it harder to investigate "
+                    "or infiltrate. Different cells might not even know they're part of the "
+                    "same network."
+                )
                 
         return factions
     
@@ -453,20 +455,33 @@ class SFBayQueenOfThornsPreset:
     
     @staticmethod
     def get_network_structure() -> Dict[str, Any]:
-        """How the Thorn Garden network is organized"""
+        """How the shadow network is organized"""
         return {
+            "identity": {
+                "formal_name": "None - the organization has no official name",
+                "outsider_names": [
+                    "The Rose & Thorn Society",
+                    "The Thorn Garden", 
+                    "The Rose Network",
+                    "The Shadow Matriarchy",
+                    "The Garden"
+                ],
+                "insider_reference": "Simply 'the network' or 'the garden'",
+                "only_certainty": "Led by someone known as the Queen of Thorns",
+                "mystery_level": "Even many members don't know if there's a formal name"
+            },
             "leadership": {
                 "The_Queen_of_Thorns": {
                     "nature": "Role/person/principle - deliberately unclear",
-                    "selection": "Unknown - appointed/evolved/earned",
-                    "powers": "Final word, protection, direction",
-                    "limitations": "Must serve the garden's growth",
-                    "succession": "Great mystery causing tension"
+                    "known_facts": "Female, commands absolute loyalty, protects the vulnerable",
+                    "unknown_facts": "Identity, selection process, true extent of power",
+                    "succession": "Great mystery - unclear if role passes or person changes"
                 },
                 "The_Rose_Council": {
-                    "composition": "Seven senior dominants",
-                    "selection": "Queen's choice with network approval",
-                    "responsibilities": "Regional coordination, major decisions",
+                    "composition": "Seven senior dominant women",
+                    "selection": "Queen's choice with network approval", 
+                    "responsibilities": "Regional coordination, major decisions, advisory role",
+                    "knowledge_level": "Know more than most, but not everything",
                     "meeting_schedule": "Quarterly at changing locations"
                 },
                 "Regional_Thorns": {
@@ -475,6 +490,13 @@ class SFBayQueenOfThornsPreset:
                     "authority": "Handle all but major issues",
                     "reporting": "To Council quarterly"
                 }
+            },
+            "geographic_scope": {
+                "primary_territory": "San Francisco Bay Area - absolute control",
+                "secondary_influence": "Major tech hubs - Seattle, Austin, NYC, LA",
+                "mechanism": "Tech diaspora carries practices and connections",
+                "international": "Allied networks, not direct subsidiaries",
+                "growth_pattern": "Following tech money and cultural influence"
             },
             "membership_levels": {
                 "Seedlings": {
