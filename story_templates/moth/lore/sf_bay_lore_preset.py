@@ -1974,8 +1974,589 @@ class SFBayMothFlamePreset:
                 ]
             }
         ]
+    
+    @staticmethod
+    def get_underground_languages() -> List[Dict[str, Any]]:
+        """Get languages specific to the SF Bay underground culture"""
+        return [
+            {
+                "name": "Moth Tongue",
+                "language_family": "Underground Argot",
+                "description": (
+                    "A coded language developed in the SF underground, blending English with "
+                    "BDSM terminology, Russian criminal argot, and Cantonese street slang. "
+                    "Emphasizes feminine-dominant grammatical structures where authority "
+                    "words default to feminine forms."
+                ),
+                "writing_system": "Modified English with emoji-based ideograms",
+                "primary_regions": ["Mission Underground", "SoMa Shadow District"],
+                "minority_regions": ["Tenderloin Shadows", "Financial District After Hours"],
+                "formality_levels": [
+                    "Street (casual threats and negotiations)",
+                    "Sanctum (formal BDSM protocols)", 
+                    "Court (addressing the Velvet Court)",
+                    "Intimate (between trusted souls)"
+                ],
+                "common_phrases": {
+                    "greeting": "Wings open (I come in peace)",
+                    "farewell": "Until the next flame (never 'goodbye')",
+                    "submission": "I fold my wings",
+                    "dominance": "By my thorns",
+                    "danger": "The collector walks",
+                    "safety": "Fog's blessing"
+                },
+                "difficulty": 7,
+                "relation_to_power": (
+                    "Grammatically enforces female dominance. Male subjects require "
+                    "diminutive markers. Authority verbs conjugate differently for women."
+                ),
+                "dialects": {
+                    "Mission": "More Spanish influence, poetic",
+                    "SoMa": "Tech jargon mixed in, clinical",
+                    "Tenderloin": "Survival focused, terse"
+                }
+            },
+            {
+                "name": "Safehouse Sign",
+                "language_family": "Gestural Language",
+                "description": (
+                    "Silent communication system used in the underground railroad network. "
+                    "Based on ASL but modified for quick, discrete communication. Every "
+                    "gesture can be disguised as casual movement."
+                ),
+                "writing_system": "None - purely gestural",
+                "primary_regions": ["Marina Safehouse", "Butterfly House"],
+                "minority_regions": ["All underground venues"],
+                "formality_levels": [
+                    "Emergency (rapid, urgent)",
+                    "Operational (planning, coordinating)",
+                    "Social (casual underground chat)"
+                ],
+                "common_phrases": {
+                    "help_needed": "Touch ear, tap twice",
+                    "danger_near": "Adjust collar, look down",
+                    "safe_to_speak": "Hands flat on table",
+                    "follow_me": "Touch moth jewelry",
+                    "cops_coming": "Check phone, step back"
+                },
+                "difficulty": 5,
+                "relation_to_power": "Egalitarian - safety transcends hierarchy",
+                "dialects": {
+                    "Protector": "More aggressive, combat-ready",
+                    "Survivor": "Focuses on escape and hiding"
+                }
+            },
+            {
+                "name": "Velvet Protocols",
+                "language_family": "Ritual Language",
+                "description": (
+                    "The formal language of power exchange, used in high protocol BDSM "
+                    "scenes. Every word is chosen for impact. Silence is part of the language. "
+                    "The Moth Queen is considered the highest authority on proper usage."
+                ),
+                "writing_system": "Calligraphy for contracts, otherwise spoken",
+                "primary_regions": ["Velvet Sanctum", "Folsom Sanctuary"],
+                "minority_regions": ["Private dungeons throughout the city"],
+                "formality_levels": [
+                    "Training (teaching beginners)",
+                    "Scene (active power exchange)",
+                    "High Protocol (formal ceremonies)",
+                    "Sacred (the deepest submissions)"
+                ],
+                "common_phrases": {
+                    "consent": "I offer myself willingly",
+                    "safeword": "Mercy" / "Red" / "Moth",
+                    "praise": "You please me greatly",
+                    "correction": "You will learn better",
+                    "devotion": "I am yours to command"
+                },
+                "difficulty": 8,
+                "relation_to_power": (
+                    "Explicitly hierarchical. Dominants speak in imperatives, "
+                    "submissives in requests. The Queen's word is absolute law."
+                ),
+                "dialects": {
+                    "Old Guard": "Traditional, more formal",
+                    "New School": "More egalitarian, negotiated"
+                }
+            }
+        ]
 
+    @staticmethod
+    def get_district_cultural_norms() -> List[Dict[str, Any]]:
+        """Get detailed cultural norms for each SF district"""
+        return [
+            # Mission Underground Norms
+            {
+                "nation_id": "mission_underground",
+                "category": "greeting",
+                "description": (
+                    "Greetings involve subtle moth gestures - touching a moth pin, "
+                    "tracing wings on the palm. Never grab someone unexpectedly. "
+                    "Eye contact is earned, not taken. The Queen is greeted with "
+                    "lowered eyes unless she lifts your chin."
+                ),
+                "formality_level": "varies",
+                "gender_specific": True,
+                "female_variation": "Women may initiate eye contact, offer hand first",
+                "male_variation": "Men wait for permission, keep eyes down initially",
+                "taboo_level": 7,
+                "consequence": "Grabbing without consent marks you as predator",
+                "regional_variations": {
+                    "Velvet Sanctum": "Kneel to greet dominants",
+                    "Street level": "Casual nod suffices"
+                }
+            },
+            {
+                "nation_id": "mission_underground",
+                "category": "dining",
+                "description": (
+                    "Sharing food is intimate. The Queen eats first at formal gatherings. "
+                    "Feeding someone by hand shows dominance or deep care. Refusing "
+                    "offered food is severe insult unless you cite dietary restrictions."
+                ),
+                "formality_level": "formal",
+                "gender_specific": True,
+                "female_variation": "Women may feed others, choose serving order",
+                "male_variation": "Men serve, wait to eat until permitted",
+                "taboo_level": 5,
+                "consequence": "Refusing food means rejecting hospitality",
+                "regional_variations": {
+                    "Safe houses": "Communal eating, no hierarchy"
+                }
+            },
+            {
+                "nation_id": "mission_underground",
+                "category": "authority",
+                "description": (
+                    "Authority flows from the Queen downward through the Velvet Court. "
+                    "Challenge is allowed through proper channels - kneel, state grievance, "
+                    "accept judgment. Public defiance brings swift retribution. Female "
+                    "authority is absolute in the underground."
+                ),
+                "formality_level": "ceremonial",
+                "gender_specific": True,
+                "female_variation": "Women hold positions of power, make decisions",
+                "male_variation": "Men influence through service and loyalty",
+                "taboo_level": 9,
+                "consequence": "Defying the Queen means exile or worse",
+                "regional_variations": {}
+            },
+            {
+                "nation_id": "mission_underground",
+                "category": "gift_giving",
+                "description": (
+                    "Gifts are offerings, not transactions. Moths (jewelry, art) show "
+                    "allegiance. Practical gifts (clothes, money) imply someone needs help. "
+                    "The Queen's gifts are kept forever - discarding them is betrayal. "
+                    "Anonymous gifts to safe houses are highest honor."
+                ),
+                "formality_level": "formal",
+                "gender_specific": False,
+                "taboo_level": 6,
+                "consequence": "Discarding a dominant's gift shows disrespect",
+                "regional_variations": {
+                    "Wealthy areas": "Expensive tributes expected",
+                    "Safe houses": "Practical gifts preferred"
+                }
+            },
+            
+            # Financial District After Hours Norms
+            {
+                "nation_id": "financial_district",
+                "category": "business_conduct",
+                "description": (
+                    "Daytime personas never acknowledged at night. What happens in "
+                    "private clubs stays buried. Blackmail is handled by the Court. "
+                    "Money talks but submission speaks louder. CEOs kneel to no one "
+                    "except those who hold their secrets."
+                ),
+                "formality_level": "formal",
+                "gender_specific": False,
+                "taboo_level": 10,
+                "consequence": "Outing someone means total destruction",
+                "regional_variations": {
+                    "Apex Club": "Ultimate discretion required",
+                    "Street level": "Don't acknowledge unless acknowledged"
+                }
+            },
+            {
+                "nation_id": "financial_district",
+                "category": "gender_relations",
+                "description": (
+                    "Power dynamics flip after dark. Female dominants command men who "
+                    "rule companies by day. This inversion is never discussed in daylight. "
+                    "Submission is currency more valuable than stock options."
+                ),
+                "formality_level": "ceremonial",
+                "gender_specific": True,
+                "female_variation": "Women wield absolute power in these spaces",
+                "male_variation": "Men find freedom in temporary powerlessness",
+                "taboo_level": 8,
+                "consequence": "Breaking the illusion ruins the escape",
+                "regional_variations": {}
+            }
+        ]
 
+    @staticmethod
+    def get_underground_etiquette() -> List[Dict[str, Any]]:
+        """Get etiquette rules for different underground contexts"""
+        return [
+            {
+                "nation_id": "sf_underground",
+                "context": "sanctum_court",
+                "title_system": (
+                    "The Queen (absolute), Court Members (by venue name), "
+                    "Established Dominants (Sir/Ma'am/Mx), Submissives (by earned names), "
+                    "Newcomers (no title until earned)"
+                ),
+                "greeting_ritual": (
+                    "Submissives kneel or bow to dominants. Dominants nod to equals. "
+                    "The Queen is greeted in whatever manner she demands that night. "
+                    "Touch is privilege, not right. Wait for permission."
+                ),
+                "body_language": (
+                    "Submissives: eyes down, hands visible, knees together or spread "
+                    "as ordered. Dominants: straight posture, deliberate movements, "
+                    "commanding presence. Never turn back on the Queen."
+                ),
+                "eye_contact": (
+                    "Earned through service or granted as gift. Staring is aggressive. "
+                    "The Queen's gaze is blessing or curse. Looking away first shows "
+                    "submission. Holding her gaze requires permission."
+                ),
+                "distance_norms": (
+                    "Three feet minimum unless invited closer. The Queen's space is "
+                    "sacred - approach only when summoned. In scene, distance set by "
+                    "dominant. Crowding is threat behavior."
+                ),
+                "gift_giving": (
+                    "Tributes presented on knees. Never hand directly - place before "
+                    "them. Gifts to Queen left at throne. Anonymous gifts respected. "
+                    "Rejecting gifts means rejecting the giver."
+                ),
+                "dining_etiquette": (
+                    "Queen eats first. Dominants served by their submissives. "
+                    "Hand feeding shows intimacy or control. Never reach across "
+                    "someone. Sharing drink is sharing essence."
+                ),
+                "power_display": (
+                    "Dominants command space, submissives compress. Voice volume "
+                    "shows rank - Queen speaks softly because all lean in to hear. "
+                    "Clothing is armor or vulnerability by choice."
+                ),
+                "respect_indicators": (
+                    "Kneeling, lowered eyes, offered hands, silent waiting, "
+                    "anticipating needs, accepting pain, wearing their marks, "
+                    "returning despite fear, keeping secrets."
+                ),
+                "gender_distinctions": (
+                    "Female dominants addressed as Ma'am/Mistress/Goddess. "
+                    "Male dominants as Sir/Master. Non-binary as Mx/Their chosen title. "
+                    "The Queen is simply 'My Queen' or as she demands."
+                ),
+                "taboos": [
+                    "Touching without consent",
+                    "Speaking over the Queen",
+                    "Breaking scene protocol",
+                    "Revealing identities",
+                    "Phone use during scenes",
+                    "Vanilla-shaming",
+                    "Comparing dominants"
+                ]
+            },
+            {
+                "nation_id": "sf_underground",
+                "context": "safehouse",
+                "title_system": (
+                    "Keepers (house runners), Protectors (security), "
+                    "Guests (refugees), Healers (medical/psychological)"
+                ),
+                "greeting_ritual": (
+                    "Gentle, no sudden movements. Verbal consent before touch. "
+                    "Names optional - safety first. Moth pins identify allies."
+                ),
+                "body_language": (
+                    "Open palms, slow movements, respectful distance. "
+                    "Never block exits. Sit below standing trauma victims."
+                ),
+                "eye_contact": (
+                    "Optional - many avoid it. Follow their lead. "
+                    "Direct stare can trigger. Soft focus preferred."
+                ),
+                "distance_norms": (
+                    "Let them set distance. Back away if they flinch. "
+                    "Announce movement. Never approach from behind."
+                ),
+                "gift_giving": (
+                    "Practical items welcome. No strings attached. "
+                    "Anonymity respected. Clothes, toiletries, phones valued."
+                ),
+                "dining_etiquette": (
+                    "Communal, no hierarchy. Let them serve themselves. "
+                    "Some won't eat while watched. Patience required."
+                ),
+                "power_display": (
+                    "Minimize it. Protectors stay background. "
+                    "Power used only for their safety."
+                ),
+                "respect_indicators": (
+                    "Believing their story, not pushing for details, "
+                    "respecting chosen names, maintaining boundaries"
+                ),
+                "gender_distinctions": (
+                    "Use their chosen pronouns. No assumptions. "
+                    "Some fear specific genders - accommodate."
+                ),
+                "taboos": [
+                    "Asking real names",
+                    "Demanding their story",
+                    "Taking photos",
+                    "Surprise touches",
+                    "Loud noises",
+                    "Blocking exits",
+                    "Breaking confidentiality"
+                ]
+            }
+        ]
+
+    @staticmethod
+    def get_district_religious_distribution() -> List[Dict[str, Any]]:
+        """Get religious distribution by district"""
+        return [
+            {
+                "nation_id": "mission_underground",
+                "state_religion": False,
+                "primary_pantheon_id": "doctrine_consensual_exchange",
+                "pantheon_distribution": {
+                    "doctrine_consensual_exchange": 60,
+                    "church_wounded_healer": 30,
+                    "traditional_catholic": 5,
+                    "other": 5
+                },
+                "religiosity_level": 8,
+                "religious_tolerance": 9,
+                "religious_leadership": "The Moth Queen as High Priestess (unofficial)",
+                "religious_laws": {
+                    "consent_absolute": "Breaking consent is highest sin",
+                    "sanctuary_sacred": "Safe houses are holy ground",
+                    "moth_protection": "Those marked by moths are protected"
+                },
+                "religious_holidays": [
+                    "Folsom Street Fair - High Holy Days",
+                    "Night of Moths - April 18",
+                    "Longest Night - Winter Solstice ceremonies"
+                ],
+                "religious_conflicts": [
+                    "Old Guard vs New School practices",
+                    "Sacred vs commercial sexuality"
+                ],
+                "religious_minorities": [
+                    "Catholics who blend traditions",
+                    "Tech pagans seeking transcendence"
+                ]
+            },
+            {
+                "nation_id": "financial_district",
+                "state_religion": False,
+                "primary_pantheon_id": None,
+                "pantheon_distribution": {
+                    "secular": 40,
+                    "church_personal_revelation": 30,
+                    "doctrine_consensual_exchange": 20,
+                    "traditional": 10
+                },
+                "religiosity_level": 4,
+                "religious_tolerance": 6,
+                "religious_leadership": "Money itself as deity, pleasure as prayer",
+                "religious_laws": {
+                    "discretion_absolute": "Privacy is sacred",
+                    "power_inversion": "Night inverts day hierarchies"
+                },
+                "religious_holidays": [
+                    "Quarterly earnings (joke but not)",
+                    "Private festival dates"
+                ],
+                "religious_conflicts": [
+                    "Guilt vs liberation",
+                    "Public morality vs private desire"
+                ],
+                "religious_minorities": [
+                    "True believers seeking meaning in sensation"
+                ]
+            }
+        ]
+    
+    @staticmethod
+    def get_regional_religious_practices() -> List[Dict[str, Any]]:
+        """Get regional variations of religious practices"""
+        return [
+            {
+                "nation_id": "mission_underground",
+                "practice_id": "collar_ceremony",
+                "regional_variation": (
+                    "Mission collar ceremonies include Day of Dead imagery. "
+                    "Collars often feature marigolds or sugar skulls alongside "
+                    "traditional moths. The Queen blesses with copal incense."
+                ),
+                "importance": 10,
+                "frequency": "Monthly on new moons",
+                "local_additions": "Mezcal toast, ancestor acknowledgment",
+                "gender_differences": "Women collar anyone, men only collar men"
+            },
+            {
+                "nation_id": "soma_shadow",
+                "practice_id": "collar_ceremony",
+                "regional_variation": (
+                    "SoMa ceremonies are more theatrical, often public. "
+                    "Industrial aesthetic - metal collars, chain rituals. "
+                    "The Queen appears via video screen if not present."
+                ),
+                "importance": 8,
+                "frequency": "During major scene nights",
+                "local_additions": "Leather family witnesses, bootblacking ritual",
+                "gender_differences": "More egalitarian, focus on protocol over gender"
+            },
+            {
+                "nation_id": "marina_safehouse",
+                "practice_id": "moth_release",
+                "regional_variation": (
+                    "Releases happen at Marina Green overlooking the bay. "
+                    "Each moth carries a small LED so they glow in the dark. "
+                    "Survivors choose moth colors based on their journey."
+                ),
+                "importance": 10,
+                "frequency": "Quarterly, plus special occasions",
+                "local_additions": "Boat ceremony for those lost at sea",
+                "gender_differences": "None - grief transcends all"
+            }
+        ]
+    
+    @staticmethod
+    def apply_sf_matriarchal_themes(content: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply matriarchal themes to SF-specific content"""
+        
+        # Apply to myths
+        for myth in content.get('myths', []):
+            myth['matriarchal_elements'] = []
+            
+            if 'moth queen' in myth['name'].lower():
+                myth['matriarchal_elements'].extend([
+                    'female_savior_figure',
+                    'protective_mother_archetype',
+                    'feminine_power_over_predators'
+                ])
+                
+            if 'fog mother' in myth['name'].lower():
+                myth['matriarchal_elements'].extend([
+                    'nature_as_feminine_protector',
+                    'mother_earth_manifestation'
+                ])
+        
+        # Apply to factions
+        for faction in content.get('factions', []):
+            if faction['type'] == 'underground_authority':
+                faction['matriarchal_structure'] = {
+                    'leadership': 'Absolute feminine authority',
+                    'succession': 'Female to female',
+                    'male_roles': 'Protectors and servants'
+                }
+        
+        # Apply to religious elements
+        for religion in content.get('religious_institutions', []):
+            religion['feminine_divine_aspect'] = True
+            religion['matriarchal_interpretation'] = (
+                "Even traditional faiths acknowledge feminine divine power "
+                "in this underground context"
+            )
+        
+        return content
+
+    @staticmethod
+    def get_conflict_news_cycles() -> List[Dict[str, Any]]:
+        """Get news articles for major conflicts"""
+        return [
+            # The Shadow War News
+            {
+                "conflict_id": "shadow_war",
+                "headline": "Three More Trafficking Victims Found Safe",
+                "content": (
+                    "SAN FRANCISCO - Three women reported missing from the Tenderloin "
+                    "district were found safe this morning, according to anonymous sources. "
+                    "The women, whose identities are being protected, showed signs of "
+                    "attempted trafficking but had somehow escaped their captors.\n\n"
+                    
+                    "'They kept saying a woman in a mask saved them,' reported one "
+                    "emergency worker who requested anonymity. 'They all had these "
+                    "little moth pins. Weird, right?'\n\n"
+                    
+                    "This marks the fifth such incident this month. SFPD Vice Division "
+                    "Captain Maria Rodriguez stated, 'We're investigating all leads,' "
+                    "but notably did not deny rumors of an underground protection network.\n\n"
+                    
+                    "The Russian mob's trafficking operations have seen significant "
+                    "disruption lately. Sources suggest someone is systematically "
+                    "targeting their operations. Viktor Kozlov could not be reached "
+                    "for comment, though associates report he's 'very concerned about "
+                    "pest control.'"
+                ),
+                "publication_date": "2025-07-20",
+                "source_nation": "sf_underground",
+                "bias": "pro_defender"
+            },
+            {
+                "conflict_id": "shadow_war",
+                "headline": "Businessman Kozlov Decries 'Vigilante Terrorism'",
+                "content": (
+                    "In an exclusive interview, import/export mogul Viktor Kozlov "
+                    "condemned what he calls 'vigilante terrorism' affecting legitimate "
+                    "businesses in San Francisco's port district.\n\n"
+                    
+                    "'These masked criminals break into warehouses, steal property, "
+                    "and spread lies about honest businessmen,' Kozlov stated from "
+                    "his Pacific Heights mansion. 'The police do nothing while thugs "
+                    "run wild.'\n\n"
+                    
+                    "When asked about allegations of human trafficking, Kozlov's "
+                    "lawyer intervened. The FBI's ongoing investigation has found "
+                    "'no actionable evidence,' according to official statements.\n\n"
+                    
+                    "Anonymous flyers found near Kozlov's businesses show moth "
+                    "imagery and the words 'No More.' Kozlov dismisses these as "
+                    "'pranks by anarchists.'"
+                ),
+                "publication_date": "2025-07-22",
+                "source_nation": "sf_elite",
+                "bias": "pro_aggressor"
+            },
+            
+            # Sanctuary City Debate News
+            {
+                "conflict_id": "sanctuary_debate",
+                "headline": "Mayor Chen Proposes Underground Venue Regulations",
+                "content": (
+                    "Mayor Patricia Chen unveiled a controversial proposal today to "
+                    "legalize and regulate the city's underground adult venues. The "
+                    "move has split both City Council and the underground community.\n\n"
+                    
+                    "'We can better protect workers and patrons through regulation,' "
+                    "Chen argued. 'Bringing these establishments into the light means "
+                    "better safety standards and labor protections.'\n\n"
+                    
+                    "The Velvet Court, speaking through anonymous representatives, "
+                    "opposes the measure. 'Legitimacy means scrutiny. Scrutiny means "
+                    "vulnerability. Some things must remain in shadow to survive,' "
+                    "read their statement.\n\n"
+                    
+                    "Sex worker advocacy groups are divided. Some see opportunity for "
+                    "protection, others fear exposure. The first hearing is next month."
+                ),
+                "publication_date": "2025-07-18",
+                "source_nation": "sf_government",
+                "bias": "neutral"
+            }
+        ]
+    
     @staticmethod
     async def initialize_complete_sf_preset(ctx, user_id: int, conversation_id: int):
         """Initialize ALL lore components for SF Bay preset"""
