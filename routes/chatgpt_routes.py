@@ -11,6 +11,7 @@ from logic.gpt_image_prompting import get_system_prompt_with_image_guidance, for
 from lore.core.lore_system import LoreSystem
 from lore.core import canon
 import logging
+from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 
 chatgpt_bp = Blueprint('chatgpt_bp', __name__)
 
