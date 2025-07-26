@@ -2833,7 +2833,7 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
                 await conn.execute(
                     """
                     INSERT INTO unified_memories
-                    (entity_type, entity_id, user_id, conversation_id, 
+                    (entity_type, entity_id, user_id, conversation_id,
                      memory_text, memory_type, tags, significance, metadata)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     """,
@@ -2845,13 +2845,13 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
                     "gothic_poem",
                     ["poetry", "tone_reference", story_id, poem_id, "gothic", "romantic"],  # Pass list directly
                     10,              # Maximum significance
-                    {                # Pass dict directly
+                    json.dumps({    # Serialize metadata to JSON text
                         "poem_id": poem_id,
                         "poem_title": title,
                         "story_id": story_id,
                         "usage": "tone_and_imagery_reference",
                         "themes": ["masks", "vulnerability", "devotion", "abandonment"]
-                    }
+                    })
                 )
                 
                 # Extract and store key imagery separately for quick access
@@ -2870,12 +2870,12 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
                         "poetic_imagery",
                         ["imagery", story_id, poem_id, "metaphor"],  # Pass list directly
                         9,  # High significance
-                        {    # Pass dict directly
+                        json.dumps({    # Serialize metadata
                             "source_poem": poem_id,
                             "story_id": story_id,
                             "imagery_index": i,
                             "imagery_type": categorize_imagery(imagery)
-                        }
+                        })
                     )
         
         # Seed the tone instructions
@@ -2904,12 +2904,12 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
                     "writing_instructions",
                     ["instructions", "tone", "style", story_id, "gothic", "poetry"],  # Pass list directly
                     10,
-                    {    # Pass dict directly
+                    json.dumps({    # Serialize metadata
                         "story_id": story_id,
                         "instruction_type": "tone_and_style_guide",
                         "apply_to": "all_story_content",
                         "priority": "high"
-                    }
+                    })
                 )
         
         logger.info(f"Seeded {len(poems)} poems and tone instructions for {story_id}")

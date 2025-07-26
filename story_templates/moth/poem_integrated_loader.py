@@ -111,7 +111,7 @@ class PoemIntegratedStoryLoader:
             await conn.execute(
                 """
                 INSERT INTO unified_memories
-                (entity_type, entity_id, user_id, conversation_id, 
+                (entity_type, entity_id, user_id, conversation_id,
                  memory_text, memory_type, tags, significance, metadata, created_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
                 """,
@@ -123,13 +123,13 @@ class PoemIntegratedStoryLoader:
                 "source_poem",
                 ["poetry", "mood", "tone", story.id, poem_id, "gothic", "romantic"],
                 10,  # Maximum significance
-                {
+                json.dumps({
                     "poem_id": poem_id,
                     "poem_title": poem_title,
                     "story_id": story.id,
                     "usage": "tone_reference",
                     "themes": PoemIntegratedStoryLoader._extract_themes(poem_text)
-                }
+                })
             )
             
             # Also store individual stanzas for targeted retrieval
@@ -150,12 +150,12 @@ class PoemIntegratedStoryLoader:
                         "poem_stanza",
                         ["poetry", "stanza", story.id, poem_id],
                         9,
-                        {
+                        json.dumps({
                             "poem_id": poem_id,
                             "stanza_number": i,
                             "story_id": story.id,
                             "mood": PoemIntegratedStoryLoader._analyze_stanza_mood(stanza)
-                        }
+                        })
                     )
             
             logger.info(f"Loaded poem '{poem_title}' with {len(stanzas)-1} stanzas")
@@ -209,12 +209,12 @@ class PoemIntegratedStoryLoader:
                 "writing_style",
                 ["directive", "tone", "style", story.id, "gothic", "poetic"],
                 10,
-                {
+                json.dumps({
                     "story_id": story.id,
                     "directive_type": "tone_and_style",
                     "apply_to": "all_story_content",
                     "priority": "maximum"
-                }
+                })
             )
         
         logger.info(f"Loaded tone instructions for story {story.id}")
@@ -247,12 +247,12 @@ class PoemIntegratedStoryLoader:
                     "key_imagery",
                     ["imagery", "metaphor", story.id, poem_id],
                     9,
-                    {
+                    json.dumps({
                         "source_poem": poem_id,
                         "story_id": story.id,
                         "imagery_type": PoemIntegratedStoryLoader._classify_imagery(phrase),
                         "associated_themes": PoemIntegratedStoryLoader._get_imagery_themes(phrase)
-                    }
+                    })
                 )
                 all_imagery.append(phrase)
         
