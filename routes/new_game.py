@@ -15,6 +15,8 @@ from logic.aggregator_sdk import get_aggregated_roleplay_context
 from db.connection import get_db_connection_context
 from routes.story_routes import build_aggregator_text
 
+from tasks import process_new_game_task, process_new_game_preset_task  
+
 # Use your Railway DSN (public URL for local development)
 DB_DSN = os.getenv("DB_DSN") 
 logging.info(f"[new_game] Using DB_DSN={DB_DSN}")  # Add right after retrieving
@@ -154,7 +156,7 @@ async def list_preset_stories():
 @new_game_bp.route('/api/new-game/preset', methods=['POST'])
 async def start_preset_game():
     """Start a new game with a preset story"""
-    from tasks import process_new_game_preset_task
+    # Remove this line: from tasks import process_new_game_preset_task
     
     user_id = session.get("user_id")
     if not user_id:
@@ -165,6 +167,9 @@ async def start_preset_game():
     
     if not story_id:
         return jsonify({"error": "story_id required"}), 400
+    
+    # Log for debugging
+    logger.info(f"Starting preset game with story_id: {story_id} for user: {user_id}")
     
     # Verify story exists
     async with get_db_connection_context() as conn:
@@ -178,8 +183,10 @@ async def start_preset_game():
     
     # Queue the task with correct data structure
     task = process_new_game_preset_task.delay(user_id, {
-        "preset_story_id": story_id  # Make sure this key matches
+        "preset_story_id": story_id
     })
+    
+    logger.info(f"Queued preset game task {task.id} for story {story_id}")
     
     return jsonify({
         "status": "processing",
