@@ -1276,6 +1276,95 @@ class NewGameAgent:
             # Require at least 5 NPCs, 10 locations, and all key roleplay data
             return npc_count >= 5 and location_count >= 10 and roleplay_count >= len(roleplay_keys)
 
+    async def process_preset_game_direct(self, ctx, conversation_data: Dict[str, Any], preset_story_id: str):
+        """Process a preset game bypassing LLM generation"""
+        logger.info(f"Processing preset game: {preset_story_id}")
+        
+        # Create conversation if needed
+        conversation_id = conversation_data.get("conversation_id")
+        if not conversation_id:
+            conversation_id = await self.create_conversation(
+                ctx.user_id, 
+                f"Preset: {preset_story_id}"
+            )
+            conversation_data["conversation_id"] = conversation_id
+        
+        # Update conversation status
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """UPDATE conversations 
+                   SET status = 'processing', conversation_name = $3
+                   WHERE id = $1 AND user_id = $2""",
+                conversation_id, ctx.user_id, f"Loading: {preset_story_id}"
+            )
+        
+        # Mark this as a preset story
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                """INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                   VALUES ($1, $2, 'preset_story_id', $3)
+                   ON CONFLICT (user_id, conversation_id, key) 
+                   DO UPDATE SET value = EXCLUDED.value""",
+                ctx.user_id, conversation_id, json.dumps(preset_story_id)
+            )
+        
+        # Initialize the story based on the preset
+        if preset_story_id == "the_moth_and_flame":
+            from story_templates.moth.story_runner import MothFlameStoryRunner
+            
+            runner = MothFlameStoryRunner(ctx.user_id, conversation_id, use_sf_preset=True)
+            init_result = await runner.initialize()
+            
+            if init_result['status'] != 'success':
+                raise Exception(f"Failed to initialize preset story: {init_result.get('error')}")
+            
+            # Get the initial scene
+            initial_location = "Velvet Sanctum - Entrance"
+            scene_context = {
+                'is_first_visit': True,
+                'time_of_day': 'Night'
+            }
+            
+            # Generate the opening through the story runner
+            response = await runner.process_player_action(
+                "I enter the Velvet Sanctum for the first time",
+                initial_location,
+                scene_context
+            )
+            
+            opening_narrative = response.get('scene_description', 'You enter a mysterious venue...')
+            
+            # Store the opening
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """INSERT INTO messages (conversation_id, sender, content, created_at)
+                       VALUES ($1, 'Nyx', $2, NOW())""",
+                    conversation_id, opening_narrative
+                )
+            
+            # Update conversation status
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """UPDATE conversations 
+                       SET status = 'ready', conversation_name = $3
+                       WHERE id = $1 AND user_id = $2""",
+                    conversation_id, ctx.user_id, "The Moth and Flame"
+                )
+            
+            return NewGameResult(
+                conversation_id=conversation_id,
+                opening_narrative=opening_narrative,
+                environment_desc="The Velvet Sanctum and the Underground",
+                calendar_names={"days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]},
+                initial_location=initial_location,
+                initial_time="Night",
+                npc_ids=[init_result.get('main_npc_id')] if init_result.get('main_npc_id') else [],
+                status="success"
+            )
+        
+        else:
+            raise ValueError(f"Unknown preset story: {preset_story_id}")
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="finalize_game_setup",
