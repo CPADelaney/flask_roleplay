@@ -1276,94 +1276,275 @@ class NewGameAgent:
             # Require at least 5 NPCs, 10 locations, and all key roleplay data
             return npc_count >= 5 and location_count >= 10 and roleplay_count >= len(roleplay_keys)
 
-    async def process_preset_game_direct(self, ctx, conversation_data: Dict[str, Any], preset_story_id: str):
-        """Process a preset game bypassing LLM generation"""
-        logger.info(f"Processing preset game: {preset_story_id}")
+    async def process_preset_game_direct(self, ctx, conversation_data: Dict[str, Any], preset_story_id: str) -> ProcessNewGameResult:
+        """
+        Process preset game creation WITHOUT using LLM generation.
+        All data comes directly from the preset story definition.
+        """
+        user_id = ctx.user_id
+        conversation_id = None
         
-        # Create conversation if needed
-        conversation_id = conversation_data.get("conversation_id")
-        if not conversation_id:
-            conversation_id = await self.create_conversation(
-                ctx.user_id, 
-                f"Preset: {preset_story_id}"
-            )
-            conversation_data["conversation_id"] = conversation_id
-        
-        # Update conversation status
-        async with get_db_connection_context() as conn:
-            await conn.execute(
-                """UPDATE conversations 
-                   SET status = 'processing', conversation_name = $3
-                   WHERE id = $1 AND user_id = $2""",
-                conversation_id, ctx.user_id, f"Loading: {preset_story_id}"
-            )
-        
-        # Mark this as a preset story
-        async with get_db_connection_context() as conn:
-            await conn.execute(
-                """INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                   VALUES ($1, $2, 'preset_story_id', $3)
-                   ON CONFLICT (user_id, conversation_id, key) 
-                   DO UPDATE SET value = EXCLUDED.value""",
-                ctx.user_id, conversation_id, json.dumps(preset_story_id)
-            )
-        
-        # Initialize the story based on the preset
-        if preset_story_id == "the_moth_and_flame":
-            from story_templates.moth.story_runner import MothFlameStoryRunner
-            
-            runner = MothFlameStoryRunner(ctx.user_id, conversation_id, use_sf_preset=True)
-            init_result = await runner.initialize()
-            
-            if init_result['status'] != 'success':
-                raise Exception(f"Failed to initialize preset story: {init_result.get('error')}")
-            
-            # Get the initial scene
-            initial_location = "Velvet Sanctum - Entrance"
-            scene_context = {
-                'is_first_visit': True,
-                'time_of_day': 'Night'
-            }
-            
-            # Generate the opening through the story runner
-            response = await runner.process_player_action(
-                "I enter the Velvet Sanctum for the first time",
-                initial_location,
-                scene_context
-            )
-            
-            opening_narrative = response.get('scene_description', 'You enter a mysterious venue...')
-            
-            # Store the opening
+        try:
+            # Load the preset story
             async with get_db_connection_context() as conn:
-                await conn.execute(
-                    """INSERT INTO messages (conversation_id, sender, content, created_at)
-                       VALUES ($1, 'Nyx', $2, NOW())""",
-                    conversation_id, opening_narrative
+                story_row = await conn.fetchrow(
+                    "SELECT story_data FROM PresetStories WHERE story_id = $1",
+                    preset_story_id
+                )
+                
+                if not story_row:
+                    raise ValueError(f"Preset story {preset_story_id} not found")
+                
+                preset_story_data = json.loads(story_row['story_data'])
+            
+            # Create conversation
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    INSERT INTO conversations (user_id, conversation_name, status)
+                    VALUES ($1, $2, 'processing')
+                    RETURNING id
+                """, user_id, f"{preset_story_data['name']}")
+                conversation_id = row["id"]
+            
+            # Initialize player stats
+            await insert_default_player_stats_chase(user_id, conversation_id)
+            
+            # Create context wrapper
+            ctx_wrap = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id,
+                'db_dsn': DB_DSN,
+                'agent_instance': self
+            })
+            
+            # 1. Set up environment directly (NO LLM)
+            await self._setup_preset_environment(ctx_wrap, preset_story_data)
+            
+            # 2. Set up standard calendar (NO LLM)
+            await self._setup_standard_calendar(ctx_wrap)
+            
+            # 3. Create all required locations directly
+            location_ids = await self._create_preset_locations(ctx_wrap, preset_story_data)
+            
+            # 4. Create all required NPCs directly  
+            npc_ids = await self._create_preset_npcs(ctx_wrap, preset_story_data)
+            
+            # 5. Initialize story-specific mechanics
+            if preset_story_id == "the_moth_and_flame":
+                from story_templates.moth.story_initializer import MothFlameStoryInitializer
+                await MothFlameStoryInitializer._initialize_story_state(
+                    ctx_wrap, user_id, conversation_id, npc_ids[0]  # Lilith is first
+                )
+                await MothFlameStoryInitializer._setup_special_mechanics(
+                    ctx_wrap, user_id, conversation_id, npc_ids[0]
                 )
             
-            # Update conversation status
-            async with get_db_connection_context() as conn:
-                await conn.execute(
-                    """UPDATE conversations 
-                       SET status = 'ready', conversation_name = $3
-                       WHERE id = $1 AND user_id = $2""",
-                    conversation_id, ctx.user_id, "The Moth and Flame"
-                )
+            # 6. Create opening narrative (can still use story-specific generators)
+            opening = await self._create_preset_opening(ctx_wrap, preset_story_data)
             
-            return NewGameResult(
+            # 7. Store opening message
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    INSERT INTO messages (conversation_id, sender, content, created_at)
+                    VALUES ($1, 'Nyx', $2, NOW())
+                """, conversation_id, opening)
+            
+            # 8. Mark as ready
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE conversations 
+                    SET status='ready', conversation_name=$3
+                    WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id, preset_story_data['name'])
+            
+            return ProcessNewGameResult(
+                message=f"Started preset story: {preset_story_data['name']}",
+                scenario_name=preset_story_data['name'],
+                environment_name=preset_story_data['name'],
+                environment_desc=preset_story_data['synopsis'],
+                lore_summary="Preset story loaded",
                 conversation_id=conversation_id,
-                opening_narrative=opening_narrative,
-                environment_desc="The Velvet Sanctum and the Underground",
-                calendar_names={"days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]},
-                initial_location=initial_location,
-                initial_time="Night",
-                npc_ids=[init_result.get('main_npc_id')] if init_result.get('main_npc_id') else [],
-                status="success"
+                welcome_image_url=None,
+                status="ready",
+                opening_narrative=opening
             )
+            
+        except Exception as e:
+            logger.error(f"Error in process_preset_game_direct: {e}", exc_info=True)
+            if conversation_id:
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        UPDATE conversations 
+                        SET status='failed'
+                        WHERE id=$1 AND user_id=$2
+                    """, conversation_id, user_id)
+            raise
+
+    async def _setup_preset_environment(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]):
+        """Set up environment directly from preset data without LLM"""
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
         
-        else:
-            raise ValueError(f"Unknown preset story: {preset_story_id}")
+        from lore.core import canon
+        
+        # Extract key data from preset
+        setting_name = preset_data['name']
+        environment_desc = preset_data['synopsis']
+        environment_history = f"The world of {preset_data['name']} - {preset_data['theme']}"
+        scenario_name = preset_data['name']
+        
+        # Store in database
+        async with get_db_connection_context() as conn:
+            # Setting info
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'CurrentSetting', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+            """, user_id, conversation_id, setting_name)
+            
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'EnvironmentDesc', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+            """, user_id, conversation_id, environment_desc)
+            
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'EnvironmentHistory', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+            """, user_id, conversation_id, environment_history)
+            
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'ScenarioName', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+            """, user_id, conversation_id, scenario_name)
+    
+    async def _setup_standard_calendar(self, ctx: RunContextWrapper[GameContext]):
+        """Set up a standard 12-month calendar without LLM"""
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        # Standard calendar
+        calendar_data = {
+            "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+            "months": ["January", "February", "March", "April", "May", "June", 
+                       "July", "August", "September", "October", "November", "December"],
+            "seasons": ["Spring", "Summer", "Autumn", "Winter"]
+        }
+        
+        # Store in database
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'CalendarNames', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+            """, user_id, conversation_id, json.dumps(calendar_data))
+        
+        return calendar_data
+    
+    async def _create_preset_locations(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> List[str]:
+        """Create locations directly from preset data"""
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        location_ids = []
+        
+        from lore.core import canon
+        
+        async with get_db_connection_context() as conn:
+            for loc_data in preset_data.get('required_locations', []):
+                # Handle different data formats
+                if isinstance(loc_data, dict):
+                    location_name = loc_data.get('name', 'Unknown Location')
+                    description = loc_data.get('description', '')
+                    location_type = loc_data.get('type', 'general')
+                    
+                    # Extract additional data
+                    areas = loc_data.get('areas', {})
+                    schedule = loc_data.get('schedule', {})
+                    atmosphere = loc_data.get('atmosphere', '')
+                    
+                    metadata = {
+                        'location_type': location_type,
+                        'areas': areas,
+                        'schedule': schedule,
+                        'atmosphere': atmosphere
+                    }
+                else:
+                    # Handle simple string format
+                    location_name = str(loc_data)
+                    description = f"A location in {preset_data['name']}"
+                    metadata = {}
+                
+                # Create location
+                location_id = await canon.find_or_create_location(
+                    ctx, conn,
+                    location_name,
+                    description=description,
+                    metadata=metadata
+                )
+                location_ids.append(location_id)
+        
+        return location_ids
+    
+    async def _create_preset_npcs(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> List[int]:
+        """Create NPCs directly from preset data using PresetNPCHandler"""
+        from npcs.preset_npc_handler import PresetNPCHandler
+        from story_templates.moth.story_initializer import MothFlameStoryInitializer
+        
+        npc_ids = []
+        story_context = {
+            'story_name': preset_data['name'],
+            'story_id': preset_data['id'],
+            'theme': preset_data['theme']
+        }
+        
+        for npc_data in preset_data.get('required_npcs', []):
+            try:
+                # Special handling for complex NPCs like Lilith
+                if npc_data.get('id') == 'lilith_ravencroft' or npc_data.get('name') == 'Lilith Ravencroft':
+                    # Use the specialized Lilith creator
+                    npc_id = await MothFlameStoryInitializer._create_lilith_ravencroft(
+                        ctx, ctx.context['user_id'], ctx.context['conversation_id']
+                    )
+                    npc_ids.append(npc_id)
+                else:
+                    # Use PresetNPCHandler for all other NPCs
+                    npc_id = await PresetNPCHandler.create_detailed_npc(
+                        ctx=ctx,
+                        npc_data=npc_data,
+                        story_context=story_context
+                    )
+                    npc_ids.append(npc_id)
+                    
+            except Exception as e:
+                logger.error(f"Error creating preset NPC {npc_data.get('name', 'Unknown')}: {e}", exc_info=True)
+                # Continue with other NPCs even if one fails
+        
+        logger.info(f"Created {len(npc_ids)} preset NPCs")
+        return npc_ids
+        
+    async def _create_preset_opening(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> str:
+        """Create opening narrative for preset story"""
+        # For The Moth and Flame, use its specific opening
+        if preset_data['id'] == 'the_moth_and_flame':
+            return """The city breathes differently after midnight. In the underground district, where neon bleeds into shadow and desire takes corporeal form, you've heard whispers of a place called the Velvet Sanctum. They say a Queen holds court there - beautiful, terrible, offering transcendence through submission.
+    
+    You stand before an unmarked door, bass thrumming through your bones like a second heartbeat. The bouncer, scarred and silent, evaluates you with eyes that have seen too much. Finally, he steps aside.
+    
+    'The Queen is holding court tonight,' he says. 'Try not to stare. She notices everything.'
+    
+    As you descend the stairs, each step takes you further from the world you know. The air grows thick with incense and possibility. Somewhere below, a woman in a porcelain mask rules over hearts willing to break for her attention.
+    
+    Welcome to the beginning of your beautiful destruction."""
+        
+        # For other stories, create a simple opening
+        return f"Welcome to {preset_data['name']}. {preset_data['synopsis']}\n\nYour story begins..."
 
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
