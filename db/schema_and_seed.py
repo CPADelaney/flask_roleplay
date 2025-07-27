@@ -2678,6 +2678,30 @@ async def create_all_tables():
                                 'faction', 'organization', 'group', 'other'));
                 ''',
                 '''
+                ALTER TABLE NPCStats 
+                ADD COLUMN IF NOT EXISTS dialogue_patterns JSONB DEFAULT '[]'::jsonb;
+                ''',
+                '''
+                ALTER TABLE NPCStats 
+                ADD COLUMN IF NOT EXISTS relationship_mechanics JSONB DEFAULT '[]'::jsonb;
+                ''',
+                '''
+                ALTER TABLE NPCStats 
+                ADD COLUMN IF NOT EXISTS memory_priorities JSONB DEFAULT '[]'::jsonb;
+                ''',
+                '''
+                ALTER TABLE NPCStats 
+                ADD COLUMN IF NOT EXISTS secrets JSONB DEFAULT '{}'::jsonb;
+                ''',
+                '''
+                ALTER TABLE NPCStats 
+                ADD COLUMN IF NOT EXISTS special_mechanics JSONB DEFAULT '{}'::jsonb;
+                ''',
+                '''
+                ALTER TABLE NPCStats 
+                ADD COLUMN IF NOT EXISTS evolution_paths JSONB DEFAULT '{}'::jsonb;
+                ''',
+                '''
                 ALTER TABLE Locations 
                 ADD COLUMN IF NOT EXISTS controlling_faction TEXT;
                 ''',
