@@ -440,18 +440,29 @@ def run_npc_learning_cycle_task():
 def process_new_game_task(user_id, conversation_data):
     """
     Celery task to process new (or preset) game creation.
-    Handles both dynamic and preset game creation.
+    - Accepts either dynamic or preset flow (presence of preset_story_id decides).
+    - Marks the conversation row ready on success.
+    - Ensures an opening Nyx message exists so the poller stops spinning.
     """
     logger.info("CELERY – process_new_game_task called")
-    
+
     async def run_new_game():
         with trace(workflow_name="process_new_game_celery_task"):
-            # ----- Normalize IDs -----
+            # ----- Log & normalize inputs -----
             try:
+                logger.info(
+                    "[NG] payload keys=%s, preset_id=%s",
+                    list(conversation_data.keys()) if isinstance(conversation_data, dict) else type(conversation_data),
+                    (conversation_data or {}).get("preset_story_id")
+                )
                 user_id_int = int(user_id)
             except Exception:
                 logger.error(f"Invalid user_id: {user_id}")
                 return {"status": "failed", "error": "Invalid user_id"}
+
+            if not isinstance(conversation_data, dict):
+                logger.error("conversation_data is not a dict")
+                return {"status": "failed", "error": "Invalid conversation_data"}
 
             conv_id = conversation_data.get("conversation_id")
             if conv_id is not None:
@@ -469,11 +480,50 @@ def process_new_game_task(user_id, conversation_data):
             ctx = CanonicalContext(user_id_int, conversation_data.get("conversation_id", 0))
 
             try:
+                # ----- Run the appropriate pipeline -----
                 if preset_story_id:
                     logger.info(f"Preset path triggered (story_id={preset_story_id})")
                     result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
                 else:
                     result = await agent.process_new_game(ctx, conversation_data)
+
+                # ----- Finalize DB state -----
+                # Pull ids/names out of the result safely
+                def _get(attr, default=None):
+                    return getattr(result, attr, default) if hasattr(result, attr) else result.get(attr, default) if isinstance(result, dict) else default
+
+                conv_id_final = conversation_data.get("conversation_id") or _get("conversation_id")
+                if conv_id_final is None:
+                    logger.warning("No conversation_id found after pipeline; cannot mark ready.")
+                conv_name = _get("conversation_name", "New Game")
+                opening_text = _get("opening_narrative") or _get("opening_message") or "[World initialized]"
+
+                try:
+                    async with get_db_connection_context() as conn:
+                        # 1) Mark conversation ready
+                        if conv_id_final is not None:
+                            await conn.execute("""
+                                UPDATE conversations
+                                   SET status='ready',
+                                       conversation_name=$3
+                                 WHERE id=$1 AND user_id=$2
+                            """, conv_id_final, user_id_int, conv_name)
+
+                            # 2) Ensure there is a first Nyx message
+                            exists = await conn.fetchval("""
+                                SELECT 1 FROM messages
+                                 WHERE conversation_id=$1 AND sender='Nyx'
+                                 LIMIT 1
+                            """, conv_id_final)
+                            if not exists:
+                                await conn.execute("""
+                                    INSERT INTO messages (conversation_id, sender, content, created_at)
+                                    VALUES ($1, 'Nyx', $2, NOW())
+                                """, conv_id_final, opening_text)
+                                logger.info("Inserted opening Nyx message for conversation %s", conv_id_final)
+
+                except Exception as upd_err:
+                    logger.error("Failed to finalize conversation row: %s", upd_err, exc_info=True)
 
                 return serialize_for_celery(result)
 
@@ -481,16 +531,16 @@ def process_new_game_task(user_id, conversation_data):
                 logger.exception("Critical error in process_new_game_task")
 
                 # Attempt to mark convo failed
-                conv_id = conversation_data.get("conversation_id")
-                if conv_id:
+                conv_id_fail = conversation_data.get("conversation_id")
+                if conv_id_fail:
                     try:
                         async with get_db_connection_context() as conn:
                             await conn.execute("""
                                 UPDATE conversations
-                                SET status='failed',
-                                    conversation_name='New Game - Task Failed'
-                                WHERE id=$1 AND user_id=$2
-                            """, conv_id, user_id_int)
+                                   SET status='failed',
+                                       conversation_name='New Game - Task Failed'
+                                 WHERE id=$1 AND user_id=$2
+                            """, conv_id_fail, user_id_int)
                     except Exception as update_err:
                         logger.error(f"Failed to update conversation status: {update_err}")
 
@@ -498,10 +548,11 @@ def process_new_game_task(user_id, conversation_data):
                     "status": "failed",
                     "error": str(e),
                     "error_type": type(e).__name__,
-                    "conversation_id": conv_id
+                    "conversation_id": conv_id_fail
                 }
-    
+
     return asyncio.run(run_new_game())
+
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
