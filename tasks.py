@@ -89,7 +89,8 @@ def serialize_for_celery(obj):
         # Already serializable (dict, list, str, etc.)
         return obj
 
-
+def get_preset_id(d):
+    return d.get("preset_story_id") or d.get("story_id") or d.get("presetStoryId")
 
 # Helper decorator to run async functions in Celery tasks
 def async_task(func):
@@ -545,74 +546,66 @@ def run_npc_learning_cycle_task():
 @async_task
 async def process_new_game_task(user_id, conversation_data):
     """
-    Celery task to process new game creation.
+    Celery task to process new (or preset) game creation.
+    Branches to preset path BEFORE running the dynamic pipeline.
     """
     with trace(workflow_name="process_new_game_celery_task"):
         logger.info("CELERY – process_new_game_task called")
-        
-        # FIX: Ensure user_id is int
+
+        # ----- Normalize IDs -----
         try:
-            if isinstance(user_id, str):
-                user_id = int(user_id)
-        except (ValueError, TypeError) as e:
-            logger.error(f"Invalid user_id format: {user_id}")
-            return {"status": "failed", "error": f"Invalid user_id: {str(e)}"}
-        
-        # FIX: Ensure conversation_id in data is int
-        if "conversation_id" in conversation_data:
+            user_id = int(user_id)
+        except Exception:
+            logger.error(f"Invalid user_id: {user_id}")
+            return {"status": "failed", "error": "Invalid user_id"}
+
+        conv_id = conversation_data.get("conversation_id")
+        if conv_id is not None:
             try:
-                conv_id = conversation_data["conversation_id"]
-                if isinstance(conv_id, str):
-                    conversation_data["conversation_id"] = int(conv_id)
-            except (ValueError, TypeError) as e:
-                logger.error(f"Invalid conversation_id format: {conv_id}")
-                return {"status": "failed", "error": f"Invalid conversation_id: {str(e)}"}
+                conversation_data["conversation_id"] = int(conv_id)
+            except Exception:
+                logger.error(f"Invalid conversation_id: {conv_id}")
+                return {"status": "failed", "error": "Invalid conversation_id"}
+
+        # ----- Decide preset vs dynamic -----
+        preset_story_id = get_preset_id(conversation_data)
+
         agent = NewGameAgent()
-        conversation_id = None
-    
+        from lore.core.context import CanonicalContext
+        ctx = CanonicalContext(user_id, conversation_data.get("conversation_id", 0))
+
         try:
-            # Call the agent's process_new_game method
-            from lore.core.context import CanonicalContext  # or create inline
-            ctx = CanonicalContext(user_id, conversation_data.get('conversation_id', 0))
-            result = await agent.process_new_game(ctx, conversation_data)
-            
-            # Convert the Pydantic model result to a JSON-serializable dict
-            serialized_result = serialize_for_celery(result)
-            
-            logger.info(f"Successfully created new game for user_id={user_id}, "
-                       f"conversation_id={serialized_result.get('conversation_id')}")
-            
-            return serialized_result
-            
+            if preset_story_id:
+                logger.info(f"Preset path triggered (story_id={preset_story_id})")
+                result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
+            else:
+                result = await agent.process_new_game(ctx, conversation_data)
+
+            return serialize_for_celery(result)
+
         except Exception as e:
-            logger.exception(f"[DEBUG] Critical error in process_new_game_task for user_id={user_id}")
-            
-            # Try to update conversation status to failed
-            conversation_id = conversation_data.get("conversation_id")
-            if conversation_id:
+            logger.exception("Critical error in process_new_game_task")
+
+            # Attempt to mark convo failed
+            conv_id = conversation_data.get("conversation_id")
+            if conv_id:
                 try:
-                    # Don't use asyncio.run() here - we're already in an async context
                     async with get_db_connection_context() as conn:
                         await conn.execute("""
-                            UPDATE conversations 
-                            SET status='failed', 
+                            UPDATE conversations
+                            SET status='failed',
                                 conversation_name='New Game - Task Failed'
                             WHERE id=$1 AND user_id=$2
-                        """, conversation_id, user_id)
-                        logger.info(f"Updated conversation {conversation_id} status to 'failed'")
-                except Exception as update_error:
-                    logger.error(f"[DEBUG] Failed to update conversation status: {update_error}")
-            
-            # Return a serializable error structure
-            error_result = {
-                "status": "failed", 
+                        """, conv_id, user_id)
+                except Exception as update_err:
+                    logger.error(f"Failed to update conversation status: {update_err}")
+
+            return {
+                "status": "failed",
                 "error": str(e),
                 "error_type": type(e).__name__,
-                "conversation_id": conversation_id
+                "conversation_id": conv_id
             }
-            
-            logger.error(f"Returning error result: {error_result}")
-            return error_result
         
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
