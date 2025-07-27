@@ -16,6 +16,7 @@ from story_templates.moth.poem_integrated_loader import PoemIntegratedStoryLoade
 from story_templates.character_profiles.lilith_ravencroft import LILITH_RAVENCROFT
 from lore.core import canon
 from memory.wrapper import MemorySystem
+from story_templates.preset_stories import StoryBeat, PresetStory
 from nyx.integrate import remember_with_governance
 
 logger = logging.getLogger(__name__)
