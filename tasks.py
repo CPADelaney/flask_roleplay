@@ -1061,6 +1061,7 @@ async def sweep_and_merge_nyx_split_brains():
 async def process_new_game_preset_task(user_id, conversation_data):
     """Process new game creation with preset story - bypasses LLM generation"""
     logger.info(f"Starting preset game creation for user {user_id}")
+    logger.info(f"Conversation data: {conversation_data}")
     
     # Ensure user_id is int
     try:
@@ -1077,16 +1078,15 @@ async def process_new_game_preset_task(user_id, conversation_data):
         ctx = CanonicalContext(user_id, 0)
         
         preset_story_id = conversation_data.get('preset_story_id')
+        logger.info(f"Preset story ID: {preset_story_id}")
+        
         if not preset_story_id:
-            raise ValueError("No preset_story_id provided")
+            raise ValueError("No preset_story_id provided in conversation_data")
         
-        # Use the new direct method that bypasses LLM
-        result = await agent.process_preset_game_direct(
-            ctx, 
-            conversation_data,
-            preset_story_id
-        )
+        # Use the process_new_game method which should now check for preset
+        result = await agent.process_new_game(ctx, conversation_data)
         
+        logger.info(f"Preset game creation result: {result}")
         return serialize_for_celery(result)
         
     except Exception as e:
