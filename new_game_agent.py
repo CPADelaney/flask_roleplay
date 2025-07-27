@@ -1717,7 +1717,12 @@ class NewGameAgent:
         action_description="Processed complete new game creation workflow"
     )
     async def process_new_game(self, ctx, conversation_data: Dict[str, Any]) -> ProcessNewGameResult:
-        # Extract user_id from context - ctx is a CanonicalContext with direct attributes
+        # Check if this is a preset story request
+        preset_story_id = conversation_data.get("preset_story_id")
+        if preset_story_id:
+            logger.info(f"Detected preset story request: {preset_story_id}")
+            return await self.process_preset_game_direct(ctx, conversation_data, preset_story_id)
+        
         user_id = ctx.user_id  # Direct attribute access
         conversation_id = None
         
