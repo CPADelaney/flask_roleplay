@@ -294,8 +294,23 @@ async def initialize_preset_stories():
     """Load all preset stories into database on startup"""
     from story_templates.preset_story_loader import PresetStoryLoader
     
-    # This will load THE_MOTH_AND_FLAME story
-    await PresetStoryLoader.load_all_preset_stories()
+    try:
+        # This will load THE_MOTH_AND_FLAME story
+        await PresetStoryLoader.load_all_preset_stories()
+        logger.info("Preset stories loaded successfully")
+        
+        # Verify they're in the database
+        async with get_db_connection_context() as conn:
+            count = await conn.fetchval("SELECT COUNT(*) FROM PresetStories")
+            logger.info(f"Total preset stories in database: {count}")
+            
+            # List all story IDs
+            rows = await conn.fetch("SELECT story_id FROM PresetStories")
+            for row in rows:
+                logger.info(f"Available preset story: {row['story_id']}")
+                
+    except Exception as e:
+        logger.error(f"Failed to load preset stories: {e}", exc_info=True)
 
 async def initialize_systems(app: Quart):
     logger.info("Starting asynchronous system initializations...")
