@@ -221,14 +221,10 @@ window.closePresetStoryModal = function() {
 
 // Start a game with a preset story
 async function startPresetGame(storyId) {
-  if (AppState.isCreatingGame) {
-    console.log("Game creation already in progress");
-    return;
-  }
+  if (AppState.isCreatingGame) return;
 
-  // Close the modal
   closePresetStoryModal();
-  
+
   const newGameBtn = $("newGameBtn");
   if (newGameBtn) {
     newGameBtn.disabled = true;
@@ -238,70 +234,64 @@ async function startPresetGame(storyId) {
   AppState.isCreatingGame = true;
 
   const chatWindow = $("chatWindow");
-  if (!chatWindow) {
-    AppState.isCreatingGame = false;
-    if (newGameBtn) {
-      newGameBtn.disabled = false;
-      newGameBtn.textContent = "New Game ▼";
-    }
-    return;
-  }
-  
   const loadingDiv = document.createElement("div");
   loadingDiv.id = "newGameLoadingIndicator";
-  loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing preset story world...</div>';
+  loadingDiv.innerHTML = '<div style="text-align:center;padding:20px;font-style:italic;color:#888;">Initializing preset story world...</div>';
   chatWindow.appendChild(loadingDiv);
   chatWindow.scrollTop = chatWindow.scrollHeight;
 
   try {
-    const response = await fetch("/new_game/api/new-game/preset", {
+    const resp = await fetch("/new_game/api/new-game/preset", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: 'include',
-      body: JSON.stringify({ story_id: storyId })
+      credentials: "include",
+      body: JSON.stringify({ story_id: storyId }) // server normalizes to preset_story_id
     });
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to start preset game');
-    }
-    
-    // Since we're using Celery tasks, we'll get a task_id
-    // Poll for completion like we do with regular new games
-    if (data.task_id || data.status === 'processing') {
-      // Update loading message
-      loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Creating your preset story world... This may take a minute...</div>';
-      
-      // For now, we'll just wait and then check conversations
-      // In a full implementation, you'd poll a task status endpoint
-      let pollAttempts = 0;
-      const maxAttempts = CONFIG.GAME_POLL_MAX_ATTEMPTS;
-      
-      // Since we don't have a task status endpoint in the current code,
-      // we'll just wait and refresh conversations
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
-      
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Failed to start preset game");
+
+    const convId = data.conversation_id;
+    if (!convId) throw new Error("No conversation_id returned");
+
+    // Track the new conversation
+    AppState.currentConvId = normalizeConvId(convId);
+    AppState.roomConnectedOnce = false;
+    AppState.messagesOffset = 0;
+
+    loadingDiv.innerHTML = '<div style="text-align:center;padding:20px;font-style:italic;color:#888;">Creating your preset story world... This may take a minute...</div>';
+
+    // Poll until ready (reuse your existing poller)
+    const poll = await pollForGameReady(convId);
+    if (poll.ready) {
       loadingDiv.remove();
-      
-      // Refresh conversation list
+
+      // Join socket room if needed
+      await socketManager.joinRoom(convId);
+
+      // Load messages & assets
+      await loadMessages(convId, true);
+      await checkForWelcomeImage(convId);
       await loadConversations();
-      
-      appendMessage({ 
-        sender: "system", 
-        content: `Preset story "${storyId}" is being prepared. Check your conversation list in a moment.` 
-      }, true);
+
+      if (poll.opening_narrative) {
+        appendMessage({ sender: "Nyx", content: poll.opening_narrative }, true);
+      } else {
+        appendMessage({
+          sender: "system",
+          content: `New game started! Welcome to ${poll.conversation_name || "your new world"}.`
+        }, true);
+      }
+    } else {
+      throw new Error(poll.error || "Game creation timed out");
     }
 
   } catch (err) {
     console.error("startPresetGame error:", err);
-    
-    const existingLoadingDiv = $("newGameLoadingIndicator");
-    if (existingLoadingDiv) existingLoadingDiv.remove();
-    
-    appendMessage({ 
-      sender: "system", 
-      content: `Error starting preset game: ${err.message}. Please try again.` 
+    loadingDiv.remove();
+    appendMessage({
+      sender: "system",
+      content: `Error starting preset game: ${err.message}. Please try again.`
     }, true);
   } finally {
     AppState.isCreatingGame = false;
