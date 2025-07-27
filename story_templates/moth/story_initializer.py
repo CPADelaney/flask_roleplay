@@ -1288,7 +1288,7 @@ class MothFlameStoryProgression:
             # Get current story state
             state_row = await conn.fetchrow(
                 """
-                SELECT current_beat, story_flags, progress
+                SELECT current_beat, story_flags, progress, current_act
                 FROM story_states
                 WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
                 """,
@@ -1299,41 +1299,341 @@ class MothFlameStoryProgression:
                 return None
             
             current_beat = state_row['current_beat']
-            story_flags = json.loads(state_row['story_flags'])
+            current_act = state_row['current_act']
+            story_flags = json.loads(state_row['story_flags'] or '{}')
+            completed_beats = story_flags.get('completed_beats', [])
             
             # Get story definition
             from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
             
+            # Sort beats by priority (act number, then order in story)
+            sorted_beats = sorted(THE_MOTH_AND_FLAME.story_beats, 
+                                key=lambda b: (self._get_beat_act(b), 
+                                             THE_MOTH_AND_FLAME.story_beats.index(b)))
+            
             # Check each beat's trigger conditions
-            for beat in THE_MOTH_AND_FLAME.story_beats:
-                if beat.id == current_beat:
-                    continue  # Skip current beat
+            for beat in sorted_beats:
+                # Skip if already completed
+                if beat.id in completed_beats:
+                    continue
                 
+                # Skip if it's the current beat
+                if beat.id == current_beat:
+                    continue
+                
+                # Check if this beat's conditions are met
                 if await MothFlameStoryProgression._check_single_beat_conditions(
-                    beat, story_flags, user_id, conversation_id
+                    beat, story_flags, current_act, user_id, conversation_id, conn
                 ):
+                    logger.info(f"Story beat '{beat.id}' conditions met for user {user_id}")
                     return beat.id
         
         return None
     
     @staticmethod
+    def _get_beat_act(beat: StoryBeat) -> int:
+        """Determine which act a beat belongs to"""
+        # Based on narrative stage progression
+        stage_to_act = {
+            "Innocent Beginning": 1,
+            "First Doubts": 1,
+            "Creeping Realization": 2,
+            "Veil Thinning": 2,
+            "Full Revelation": 3
+        }
+        return stage_to_act.get(beat.narrative_stage, 1)
+    
+    @staticmethod
     async def _check_single_beat_conditions(
-        beat: StoryBeat, story_flags: Dict, user_id: int, conversation_id: int
+        beat: StoryBeat, 
+        story_flags: Dict, 
+        current_act: int,
+        user_id: int, 
+        conversation_id: int,
+        conn
     ) -> bool:
         """Check if a single beat's conditions are met"""
         
-        # Implementation would check each trigger condition
-        # This is a simplified version
-        for condition, value in beat.trigger_conditions.items():
-            if condition == "game_start" and value:
-                return story_flags.get("progress", 0) == 0
-            elif condition == "completed_beats":
-                completed = story_flags.get("completed_beats", [])
-                if not all(b in completed for b in value):
-                    return False
-            # Add more condition checks...
-        
-        return True
+        try:
+            # Check each trigger condition
+            for condition, value in beat.trigger_conditions.items():
+                
+                # Game start condition
+                if condition == "game_start" and value:
+                    if story_flags.get("progress", 0) > 0 or story_flags.get("completed_beats", []):
+                        return False
+                
+                # Act requirement
+                elif condition == "act":
+                    if current_act != value:
+                        return False
+                
+                # Time of day requirement
+                elif condition == "time":
+                    current_time = await conn.fetchval(
+                        """
+                        SELECT value FROM CurrentRoleplay
+                        WHERE user_id = $1 AND conversation_id = $2 AND key = 'TimeOfDay'
+                        """,
+                        user_id, conversation_id
+                    )
+                    if current_time != value.title():
+                        return False
+                
+                # Location requirement
+                elif condition == "location":
+                    current_location = await conn.fetchval(
+                        """
+                        SELECT value FROM CurrentRoleplay
+                        WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
+                        """,
+                        user_id, conversation_id
+                    )
+                    if not current_location or value.lower() not in current_location.lower():
+                        return False
+                
+                # Completed beats requirement
+                elif condition == "completed_beats":
+                    completed = story_flags.get("completed_beats", [])
+                    if not all(b in completed for b in value):
+                        return False
+                
+                # Times visited location
+                elif condition == "times_visited_sanctum":
+                    visit_count = story_flags.get("sanctum_visits", 0)
+                    if visit_count < value:
+                        return False
+                
+                # NPC awareness level
+                elif condition == "npc_awareness":
+                    for npc_name, requirements in value.items():
+                        npc_id = story_flags.get(f"{npc_name.lower().replace(' ', '_')}_id")
+                        if not npc_id:
+                            # Try to find NPC by name
+                            npc_id = await conn.fetchval(
+                                """
+                                SELECT npc_id FROM NPCStats
+                                WHERE user_id = $1 AND conversation_id = $2 
+                                AND LOWER(npc_name) = LOWER($3)
+                                """,
+                                user_id, conversation_id, npc_name
+                            )
+                        
+                        if npc_id:
+                            # Check awareness (could be trust, closeness, or custom awareness stat)
+                            awareness = await conn.fetchval(
+                                """
+                                SELECT GREATEST(trust, closeness, 
+                                    COALESCE((metadata->>'awareness')::int, 0)) as awareness
+                                FROM NPCStats
+                                WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                                """,
+                                user_id, conversation_id, npc_id
+                            )
+                            
+                            if not awareness or awareness < requirements.get("min", 0):
+                                return False
+                
+                # Player watched performance
+                elif condition == "player_watched_performance" and value:
+                    if not story_flags.get("watched_performance", False):
+                        return False
+                
+                # Quest completed
+                elif condition == "quest_completed":
+                    quest_status = await conn.fetchval(
+                        """
+                        SELECT status FROM Quests
+                        WHERE user_id = $1 AND conversation_id = $2 
+                        AND quest_name = $3
+                        """,
+                        user_id, conversation_id, value
+                    )
+                    if quest_status != "completed":
+                        return False
+                
+                # Has item
+                elif condition == "has_item":
+                    item_count = await conn.fetchval(
+                        """
+                        SELECT quantity FROM PlayerInventory
+                        WHERE user_id = $1 AND conversation_id = $2 
+                        AND item_name = $3
+                        """,
+                        user_id, conversation_id, value
+                    )
+                    if not item_count or item_count <= 0:
+                        return False
+                
+                # Relationship requirements
+                elif condition == "relationship":
+                    for npc_name, requirements in value.items():
+                        npc_id = story_flags.get(f"{npc_name.lower().replace(' ', '_')}_id")
+                        if not npc_id:
+                            npc_id = await conn.fetchval(
+                                """
+                                SELECT npc_id FROM NPCStats
+                                WHERE user_id = $1 AND conversation_id = $2 
+                                AND LOWER(npc_name) = LOWER($3)
+                                """,
+                                user_id, conversation_id, npc_name
+                            )
+                        
+                        if npc_id:
+                            trust = await conn.fetchval(
+                                """
+                                SELECT trust FROM NPCStats
+                                WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                                """,
+                                user_id, conversation_id, npc_id
+                            )
+                            
+                            if not trust or trust < requirements.get("min", 0):
+                                return False
+                
+                # Sanctum closed
+                elif condition == "sanctum_closed" and value:
+                    current_time = await conn.fetchval(
+                        """
+                        SELECT value FROM CurrentRoleplay
+                        WHERE user_id = $1 AND conversation_id = $2 AND key = 'TimeOfDay'
+                        """,
+                        user_id, conversation_id
+                    )
+                    # Sanctum is closed during Late Night or Morning
+                    if current_time not in ["Late Night", "Morning"]:
+                        return False
+                
+                # Private moment
+                elif condition == "private_moment" and value:
+                    # Check if alone with Lilith
+                    current_location = await conn.fetchval(
+                        """
+                        SELECT value FROM CurrentRoleplay
+                        WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
+                        """,
+                        user_id, conversation_id
+                    )
+                    if not current_location or "private" not in current_location.lower():
+                        return False
+                
+                # Trust established
+                elif condition == "trust_established" and value:
+                    lilith_id = story_flags.get("lilith_npc_id")
+                    if lilith_id:
+                        trust = await conn.fetchval(
+                            """
+                            SELECT trust FROM NPCStats
+                            WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                            """,
+                            user_id, conversation_id, lilith_id
+                        )
+                        if not trust or trust < 40:  # Minimum trust threshold
+                            return False
+                
+                # Intimacy level
+                elif condition == "intimacy_level":
+                    lilith_id = story_flags.get("lilith_npc_id")
+                    if lilith_id:
+                        # Use combination of trust and closeness
+                        intimacy = await conn.fetchval(
+                            """
+                            SELECT (trust + closeness) / 2 as intimacy FROM NPCStats
+                            WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                            """,
+                            user_id, conversation_id, lilith_id
+                        )
+                        if not intimacy or intimacy < value.get("min", 0):
+                            return False
+                
+                # Mask removed
+                elif condition == "mask_removed":
+                    if story_flags.get("mask_removed_count", 0) < 1:
+                        return False
+                
+                # Helped vulnerable NPC
+                elif condition == "helped_vulnerable_npc" and value:
+                    if not story_flags.get("helped_trafficking_victim", False):
+                        return False
+                
+                # Devotion level
+                elif condition == "devotion":
+                    player_devotion = await conn.fetchval(
+                        """
+                        SELECT devotion FROM player_story_stats
+                        WHERE user_id = $1 AND conversation_id = $2 
+                        AND story_id = 'the_moth_and_flame'
+                        """,
+                        user_id, conversation_id
+                    )
+                    
+                    # Parse devotion from JSON if needed
+                    if player_devotion and isinstance(player_devotion, str):
+                        try:
+                            stats = json.loads(player_devotion)
+                            player_devotion = stats.get('devotion', 0)
+                        except:
+                            player_devotion = 0
+                    
+                    if not player_devotion or player_devotion < value.get("min", 0):
+                        return False
+                
+                # Sessions completed
+                elif condition == "sessions_completed":
+                    session_count = story_flags.get("private_sessions_completed", 0)
+                    if session_count < value.get("min", 0):
+                        return False
+                
+                # Discovered secret
+                elif condition == "discovered_secret":
+                    secrets = story_flags.get("secrets_discovered", [])
+                    if value not in secrets:
+                        return False
+                
+                # Random event (for dynamic story beats)
+                elif condition == "random_event":
+                    # Random events have a chance to trigger
+                    import random
+                    if random.random() > 0.3:  # 30% chance
+                        return False
+                
+                # Emotional intensity
+                elif condition == "emotional_intensity":
+                    intensity = story_flags.get("current_emotional_intensity", 0)
+                    if intensity < value.get("min", 0):
+                        return False
+                
+                # Crisis resolved
+                elif condition == "crisis_resolved" and value:
+                    if not story_flags.get("safehouse_crisis_resolved", False):
+                        return False
+                
+                # Major choice made
+                elif condition == "major_choice":
+                    if value not in story_flags.get("major_choices_made", []):
+                        return False
+                
+                # Mutual confession
+                elif condition == "mutual_confession" and value:
+                    if not story_flags.get("mutual_love_confession", False):
+                        return False
+                
+                # Major choice made (any)
+                elif condition == "major_choice_made" and value:
+                    if not story_flags.get("major_choices_made", []):
+                        return False
+                
+                # Story completion percentage
+                elif condition == "story_complete":
+                    if story_flags.get("progress", 0) < value:
+                        return False
+            
+            # All conditions passed
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking beat conditions for {beat.id}: {e}", exc_info=True)
+            return False
     
     @staticmethod
     async def trigger_story_beat(
@@ -1346,15 +1646,334 @@ class MothFlameStoryProgression:
         # Find the beat
         beat = next((b for b in THE_MOTH_AND_FLAME.story_beats if b.id == beat_id), None)
         if not beat:
+            logger.error(f"Beat {beat_id} not found in story definition")
             return {"error": "Beat not found"}
         
-        # Apply beat outcomes
-        # Update story state
-        # Create events/memories
-        # etc.
+        try:
+            async with get_db_connection_context() as conn:
+                # Get current story state
+                state_row = await conn.fetchrow(
+                    """
+                    SELECT story_flags, progress FROM story_states
+                    WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                    """,
+                    user_id, conversation_id, "the_moth_and_flame"
+                )
+                
+                if not state_row:
+                    return {"error": "Story state not found"}
+                
+                story_flags = json.loads(state_row['story_flags'] or '{}')
+                
+                # Apply beat outcomes
+                outcomes_applied = await MothFlameStoryProgression._apply_beat_outcomes(
+                    beat, story_flags, user_id, conversation_id, conn
+                )
+                
+                # Update story state
+                completed_beats = story_flags.get('completed_beats', [])
+                if beat_id not in completed_beats:
+                    completed_beats.append(beat_id)
+                
+                story_flags['completed_beats'] = completed_beats
+                story_flags['last_beat_triggered'] = beat_id
+                story_flags['last_beat_timestamp'] = datetime.now().isoformat()
+                
+                # Calculate new progress
+                total_beats = len(THE_MOTH_AND_FLAME.story_beats)
+                progress = (len(completed_beats) / total_beats) * 100
+                
+                # Update in database
+                await conn.execute(
+                    """
+                    UPDATE story_states
+                    SET current_beat = $4, story_flags = $5, progress = $6, updated_at = NOW()
+                    WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                    """,
+                    user_id, conversation_id, "the_moth_and_flame",
+                    beat_id, json.dumps(story_flags), progress
+                )
+                
+                # Create memory of this story moment
+                if story_flags.get('lilith_npc_id'):
+                    await remember_with_governance(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity_type="npc",
+                        entity_id=story_flags['lilith_npc_id'],
+                        memory_text=f"Story moment: {beat.name} - {beat.description}",
+                        importance="high",
+                        emotional=True,
+                        tags=["story_beat", beat_id, beat.narrative_stage.lower().replace(" ", "_")]
+                    )
+                
+                # Log canonical event
+                ctx = type('Context', (), {
+                    'user_id': user_id,
+                    'conversation_id': conversation_id
+                })()
+                
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Story beat triggered: {beat.name}",
+                    tags=["story_progression", beat_id],
+                    significance=8
+                )
+                
+                logger.info(f"Successfully triggered story beat {beat_id} for user {user_id}")
+                
+                return {
+                    "status": "success",
+                    "beat_triggered": beat_id,
+                    "beat_name": beat.name,
+                    "narrative_stage": beat.narrative_stage,
+                    "outcomes": outcomes_applied,
+                    "dialogue_hints": beat.dialogue_hints,
+                    "can_skip": beat.can_skip,
+                    "progress": progress
+                }
+                
+        except Exception as e:
+            logger.error(f"Error triggering story beat {beat_id}: {e}", exc_info=True)
+            return {
+                "error": str(e),
+                "beat_id": beat_id
+            }
+    
+    @staticmethod
+    async def _apply_beat_outcomes(
+        beat: StoryBeat, 
+        story_flags: Dict,
+        user_id: int, 
+        conversation_id: int,
+        conn
+    ) -> Dict[str, Any]:
+        """Apply all outcomes from a story beat"""
         
-        return {
-            "status": "success",
-            "beat_triggered": beat_id,
-            "outcomes": beat.outcomes
-        }
+        applied_outcomes = {}
+        
+        for outcome_type, outcome_data in beat.outcomes.items():
+            try:
+                # Relationship added
+                if outcome_type == "relationship_added":
+                    npc_name = outcome_data.get("npc")
+                    rel_type = outcome_data.get("type", "neutral")
+                    
+                    # Find the NPC
+                    npc_id = await conn.fetchval(
+                        """
+                        SELECT npc_id FROM NPCStats
+                        WHERE user_id = $1 AND conversation_id = $2 
+                        AND LOWER(npc_name) = LOWER($3)
+                        """,
+                        user_id, conversation_id, npc_name
+                    )
+                    
+                    if npc_id:
+                        # Get player ID
+                        player_id = await conn.fetchval(
+                            """
+                            SELECT id FROM PlayerStats
+                            WHERE user_id = $1 AND conversation_id = $2 
+                            AND player_name = 'Chase'
+                            """,
+                            user_id, conversation_id
+                        )
+                        
+                        if player_id:
+                            # Create social link
+                            from lore.core import canon
+                            ctx = type('Context', (), {
+                                'user_id': user_id,
+                                'conversation_id': conversation_id
+                            })()
+                            
+                            await canon.find_or_create_social_link(
+                                ctx, conn,
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                entity1_type="player",
+                                entity1_id=player_id,
+                                entity2_type="npc",
+                                entity2_id=npc_id,
+                                link_type=rel_type,
+                                link_level=20  # Starting level
+                            )
+                            
+                            applied_outcomes["relationship_added"] = {
+                                "npc": npc_name,
+                                "type": rel_type
+                            }
+                
+                # Player stats changes
+                elif outcome_type == "player_stats":
+                    stats_row = await conn.fetchrow(
+                        """
+                        SELECT stats FROM player_story_stats
+                        WHERE user_id = $1 AND conversation_id = $2 
+                        AND story_id = 'the_moth_and_flame'
+                        """,
+                        user_id, conversation_id
+                    )
+                    
+                    if stats_row:
+                        current_stats = json.loads(stats_row['stats'])
+                        
+                        # Apply stat changes
+                        for stat, change in outcome_data.items():
+                            if isinstance(change, str) and change.startswith(('+', '-')):
+                                # Parse the change value
+                                change_val = int(change)
+                                current_val = current_stats.get(stat, 0)
+                                new_val = max(0, min(100, current_val + change_val))
+                                current_stats[stat] = new_val
+                            else:
+                                current_stats[stat] = change
+                        
+                        # Update stats
+                        await conn.execute(
+                            """
+                            UPDATE player_story_stats
+                            SET stats = $3
+                            WHERE user_id = $1 AND conversation_id = $2 
+                            AND story_id = 'the_moth_and_flame'
+                            """,
+                            user_id, conversation_id, json.dumps(current_stats)
+                        )
+                        
+                        applied_outcomes["player_stats"] = outcome_data
+                
+                # Location unlocked
+                elif outcome_type == "location_unlocked":
+                    # Add to known locations
+                    known_locations = story_flags.get("known_locations", [])
+                    if outcome_data not in known_locations:
+                        known_locations.append(outcome_data)
+                        story_flags["known_locations"] = known_locations
+                    
+                    applied_outcomes["location_unlocked"] = outcome_data
+                
+                # Knowledge/secrets/facts gained
+                elif outcome_type in ["knowledge_gained", "learned_fact", "learned_truth", 
+                                     "learned_secret", "discovered_secret"]:
+                    knowledge_key = "knowledge_gained" if outcome_type == "knowledge_gained" else "secrets_discovered"
+                    knowledge_list = story_flags.get(knowledge_key, [])
+                    if outcome_data not in knowledge_list:
+                        knowledge_list.append(outcome_data)
+                        story_flags[knowledge_key] = knowledge_list
+                    
+                    applied_outcomes[outcome_type] = outcome_data
+                
+                # NPC awareness
+                elif outcome_type == "npc_awareness":
+                    for npc_name, change in outcome_data.items():
+                        awareness_key = f"{npc_name.lower().replace(' ', '_')}_awareness"
+                        current = story_flags.get(awareness_key, 0)
+                        story_flags[awareness_key] = current + change
+                    
+                    applied_outcomes["npc_awareness"] = outcome_data
+                
+                # Quest added
+                elif outcome_type == "quest_added":
+                    # Create quest in database
+                    await conn.execute(
+                        """
+                        INSERT INTO Quests (user_id, conversation_id, quest_name, 
+                                          status, quest_giver, created_at)
+                        VALUES ($1, $2, $3, 'active', 'Lilith Ravencroft', NOW())
+                        ON CONFLICT (user_id, conversation_id, quest_name) DO NOTHING
+                        """,
+                        user_id, conversation_id, outcome_data
+                    )
+                    
+                    applied_outcomes["quest_added"] = outcome_data
+                
+                # Item received
+                elif outcome_type == "item_received":
+                    # Add to inventory
+                    await conn.execute(
+                        """
+                        INSERT INTO PlayerInventory (user_id, conversation_id, player_name,
+                                                   item_name, quantity, category)
+                        VALUES ($1, $2, 'Chase', $3, 1, 'story_item')
+                        ON CONFLICT (user_id, conversation_id, player_name, item_name)
+                        DO UPDATE SET quantity = PlayerInventory.quantity + 1
+                        """,
+                        user_id, conversation_id, outcome_data
+                    )
+                    
+                    applied_outcomes["item_received"] = outcome_data
+                
+                # Relationship progress
+                elif outcome_type == "relationship_progress":
+                    for npc_name, change in outcome_data.items():
+                        # Find NPC and update trust
+                        npc_id = await conn.fetchval(
+                            """
+                            SELECT npc_id FROM NPCStats
+                            WHERE user_id = $1 AND conversation_id = $2 
+                            AND LOWER(npc_name) = LOWER($3)
+                            """,
+                            user_id, conversation_id, npc_name
+                        )
+                        
+                        if npc_id:
+                            await conn.execute(
+                                """
+                                UPDATE NPCStats
+                                SET trust = LEAST(100, trust + $4)
+                                WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                                """,
+                                user_id, conversation_id, npc_id, change
+                            )
+                    
+                    applied_outcomes["relationship_progress"] = outcome_data
+                
+                # Skills learned
+                elif outcome_type == "learned_skill":
+                    skills = story_flags.get("learned_skills", [])
+                    if outcome_data not in skills:
+                        skills.append(outcome_data)
+                        story_flags["learned_skills"] = skills
+                    
+                    applied_outcomes["learned_skill"] = outcome_data
+                
+                # Special story flags
+                elif outcome_type in ["vulnerability_witnessed", "mask_removed", "three_words_moment",
+                                     "permanent_bond", "ending_achieved"]:
+                    story_flags[outcome_type] = True
+                    if outcome_type == "mask_removed":
+                        story_flags["mask_removed_count"] = story_flags.get("mask_removed_count", 0) + 1
+                    
+                    applied_outcomes[outcome_type] = True
+                
+                # Choice presented
+                elif outcome_type == "choice_presented":
+                    story_flags["pending_choice"] = outcome_data
+                    applied_outcomes["choice_presented"] = outcome_data
+                
+                # New quest/role
+                elif outcome_type in ["new_quest", "new_role", "gained_title"]:
+                    story_flags[outcome_type] = outcome_data
+                    applied_outcomes[outcome_type] = outcome_data
+                
+                # Relationship type/evolution/dynamic
+                elif outcome_type in ["relationship_type", "relationship_evolution", "relationship_dynamic"]:
+                    story_flags[f"player_{outcome_type}"] = outcome_data
+                    applied_outcomes[outcome_type] = outcome_data
+                
+                # Lilith vulnerability level
+                elif outcome_type == "lilith_vulnerability":
+                    story_flags["lilith_vulnerability_level"] = outcome_data
+                    applied_outcomes["lilith_vulnerability"] = outcome_data
+                
+                # Potential loss flag
+                elif outcome_type == "potential_loss":
+                    story_flags["potential_loss_risk"] = outcome_data
+                    applied_outcomes["potential_loss"] = outcome_data
+                    
+            except Exception as e:
+                logger.error(f"Error applying outcome {outcome_type}: {e}", exc_info=True)
+                applied_outcomes[f"{outcome_type}_error"] = str(e)
+        
+        return applied_outcomes
