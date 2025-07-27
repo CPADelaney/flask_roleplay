@@ -8,8 +8,7 @@ import asyncio
 import asyncpg
 import datetime
 from celery_config import celery_app
-from functools import wraps
-import time # Import time for potential delays
+import time
 from agents import trace, custom_span
 from agents.tracing import get_current_trace
 import traceback
@@ -26,9 +25,6 @@ from db.connection import get_db_connection_context
 from nyx.core.brain.base import NyxBrain
 from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
 
-_WORKER_LOOP = asyncio.new_event_loop()
-asyncio.set_event_loop(_WORKER_LOOP)
-
 logger = logging.getLogger(__name__)
 
 # Define DSN globally or ensure it's available
@@ -41,7 +37,7 @@ if not DB_DSN:
 # a database flag, or an external health check endpoint.
 _APP_INITIALIZED = False
 _LAST_INIT_CHECK_TIME = 0
-_INIT_CHECK_INTERVAL = 30 # Check every 30 seconds
+_INIT_CHECK_INTERVAL = 30  # Check every 30 seconds
 
 def set_app_initialized():
     """Call this from main.py AFTER successful NyxBrain initialization."""
@@ -60,10 +56,9 @@ async def is_app_initialized():
 
     # Check if enough time has passed since the last check or if never checked
     if now - _LAST_INIT_CHECK_TIME < _INIT_CHECK_INTERVAL:
-        return False # Return cached False value
+        return False  # Return cached False value
 
-    _LAST_INIT_CHECK_TIME = now # Update last check time
-
+    _LAST_INIT_CHECK_TIME = now  # Update last check time
     return False
 
 def serialize_for_celery(obj):
@@ -90,16 +85,8 @@ def serialize_for_celery(obj):
         return obj
 
 def get_preset_id(d):
+    """Extract preset story ID from various possible keys."""
     return d.get("preset_story_id") or d.get("story_id") or d.get("presetStoryId")
-
-# Helper decorator to run async functions in Celery tasks
-def async_task(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if _WORKER_LOOP.is_closed():
-            raise RuntimeError("Worker event-loop was closed unexpectedly")
-        return _WORKER_LOOP.run_until_complete(func(*args, **kwargs))
-    return wrapper
 
 @celery_app.task
 def test_task():
@@ -107,272 +94,125 @@ def test_task():
     logger.info("Executing test task!")
     return "Hello from test task!"
 
-# Convert async tasks to use the async_task wrapper
 @celery_app.task
-@async_task
-async def background_chat_task_with_memory(conversation_id, user_input, user_id, universal_update=None):
+def background_chat_task_with_memory(conversation_id, user_input, user_id, universal_update=None):
     """
     Enhanced background chat task that includes memory retrieval.
+    Uses asyncio.run() for async execution.
     """
-    with trace(workflow_name="background_chat_task_celery"):
-        logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
-        try:
-            # Get aggregator context
-            from logic.aggregator import get_aggregated_roleplay_context
-            aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
-    
-            context = {
-                "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
-                "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
-                "player_name": aggregator_data.get("playerName", "Chase"),
-                "npc_present": aggregator_data.get("npcsPresent", []),
-                "aggregator_data": aggregator_data
-            }
-    
-            # Apply universal update if provided
-            if universal_update:
-                logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
-                try:
-                    from logic.universal_updater import apply_universal_updates_async
-                    async with get_db_connection_context() as conn:
-                        await apply_universal_updates_async(
-                            user_id,
-                            conversation_id,
-                            universal_update,
-                            conn
-                        )
-                    logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
-                    # Refresh aggregator data post-update
-                    aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
-                    context["aggregator_data"] = aggregator_data
-                except Exception as update_err:
-                    logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                    return {"error": "Failed to apply world updates"}
-    
-            # Enrich context with relevant memories
+    async def run_chat_task():
+        with trace(workflow_name="background_chat_task_celery"):
+            logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
             try:
-                from memory.memory_integration import enrich_context_with_memories
-                
-                logger.info(f"[BG Task {conversation_id}] Enriching context with memories...")
-                context = await enrich_context_with_memories(
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    user_input=user_input,
-                    context=context
-                )
-                logger.info(f"[BG Task {conversation_id}] Context enriched with memories.")
-            except Exception as memory_err:
-                logger.error(f"[BG Task {conversation_id}] Error enriching context with memories: {memory_err}", exc_info=True)
-                # Continue without memories if error occurs
-    
-            # Process the user_input with OpenAI-enhanced Nyx agent
-            from nyx.nyx_agent_sdk import process_user_input_with_openai
-            logger.info(f"[BG Task {conversation_id}] Processing input with Nyx agent...")
-            response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
-            logger.info(f"[BG Task {conversation_id}] Nyx agent processing complete.")
-    
-            if not response or not response.get("success", False):
-                error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
-                logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
-                return {"error": error_msg}
-    
-            # Extract the message content
-            message_content = response.get("message", "")
-            if not message_content and "function_args" in response:
-                message_content = response["function_args"].get("narrative", "")
-            
-            # Store the Nyx response in DB
-            try:
-                async with get_db_connection_context() as conn:
-                    await conn.execute(
-                        """INSERT INTO messages (conversation_id, sender, content, created_at)
-                           VALUES ($1, $2, $3, NOW())""",
-                        conversation_id, "Nyx", message_content
-                    )
-                logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
-                
-                # Add AI response as a memory
+                # Get aggregator context
+                from logic.aggregator import get_aggregated_roleplay_context
+                aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+        
+                context = {
+                    "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+                    "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
+                    "player_name": aggregator_data.get("playerName", "Chase"),
+                    "npc_present": aggregator_data.get("npcsPresent", []),
+                    "aggregator_data": aggregator_data
+                }
+        
+                # Apply universal update if provided
+                if universal_update:
+                    logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
+                    try:
+                        from logic.universal_updater import apply_universal_updates_async
+                        async with get_db_connection_context() as conn:
+                            await apply_universal_updates_async(
+                                user_id,
+                                conversation_id,
+                                universal_update,
+                                conn
+                            )
+                        logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
+                        # Refresh aggregator data post-update
+                        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
+                        context["aggregator_data"] = aggregator_data
+                    except Exception as update_err:
+                        logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
+                        return {"error": "Failed to apply world updates"}
+        
+                # Enrich context with relevant memories
                 try:
-                    from memory.memory_integration import add_memory_from_message
+                    from memory.memory_integration import enrich_context_with_memories
                     
-                    memory_id = await add_memory_from_message(
+                    logger.info(f"[BG Task {conversation_id}] Enriching context with memories...")
+                    context = await enrich_context_with_memories(
                         user_id=user_id,
                         conversation_id=conversation_id,
-                        message_text=message_content,
-                        entity_type="memory",
-                        metadata={
-                            "source": "ai_response",
-                            "importance": 0.7  # Higher importance for AI responses
-                        }
+                        user_input=user_input,
+                        context=context
                     )
-                    logger.info(f"[BG Task {conversation_id}] Added AI response as memory {memory_id}")
+                    logger.info(f"[BG Task {conversation_id}] Context enriched with memories.")
                 except Exception as memory_err:
-                    logger.error(f"[BG Task {conversation_id}] Error adding memory: {memory_err}", exc_info=True)
+                    logger.error(f"[BG Task {conversation_id}] Error enriching context with memories: {memory_err}", exc_info=True)
+                    # Continue without memories if error occurs
+        
+                # Process the user_input with OpenAI-enhanced Nyx agent
+                from nyx.nyx_agent_sdk import process_user_input_with_openai
+                logger.info(f"[BG Task {conversation_id}] Processing input with Nyx agent...")
+                response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
+                logger.info(f"[BG Task {conversation_id}] Nyx agent processing complete.")
+        
+                if not response or not response.get("success", False):
+                    error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
+                    logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
+                    return {"error": error_msg}
+        
+                # Extract the message content
+                message_content = response.get("message", "")
+                if not message_content and "function_args" in response:
+                    message_content = response["function_args"].get("narrative", "")
+                
+                # Store the Nyx response in DB
+                try:
+                    async with get_db_connection_context() as conn:
+                        await conn.execute(
+                            """INSERT INTO messages (conversation_id, sender, content, created_at)
+                               VALUES ($1, $2, $3, NOW())""",
+                            conversation_id, "Nyx", message_content
+                        )
+                    logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
                     
-            except Exception as db_err:
-                logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
-    
-            return {
-                "success": True,
-                "message": message_content,
-                "conversation_id": conversation_id
-            }
-    
-        except Exception as e:
-            logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
-            return {"error": f"Server error processing message: {str(e)}"}
-
-# Memory System Celery Tasks
-@celery_app.task
-def process_memory_embedding_task(user_id, conversation_id, message_text, entity_type="memory", metadata=None):
-    """
-    Celery task to process a memory embedding asynchronously.
-    """
-    from memory.memory_integration import process_memory_task
-    
-    logger.info(f"Processing memory embedding for user {user_id}, conversation {conversation_id}")
-    
-    # Call the async task wrapper
-    result = process_memory_task(user_id, conversation_id, message_text, entity_type)
-    
-    return result
-
-@celery_app.task
-def retrieve_memories_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
-    """
-    Celery task to retrieve relevant memories.
-    """
-    from memory.memory_integration import memory_celery_task
-    
-    logger.info(f"Retrieving memories for user {user_id}, conversation {conversation_id}, query: {query_text[:50]}...")
-    
-    # Define async function
-    async def retrieve_memories_async():
-        from memory.memory_integration import retrieve_relevant_memories
+                    # Add AI response as a memory
+                    try:
+                        from memory.memory_integration import add_memory_from_message
+                        
+                        memory_id = await add_memory_from_message(
+                            user_id=user_id,
+                            conversation_id=conversation_id,
+                            message_text=message_content,
+                            entity_type="memory",
+                            metadata={
+                                "source": "ai_response",
+                                "importance": 0.7  # Higher importance for AI responses
+                            }
+                        )
+                        logger.info(f"[BG Task {conversation_id}] Added AI response as memory {memory_id}")
+                    except Exception as memory_err:
+                        logger.error(f"[BG Task {conversation_id}] Error adding memory: {memory_err}", exc_info=True)
+                        
+                except Exception as db_err:
+                    logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
         
-        try:
-            memories = await retrieve_relevant_memories(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                query_text=query_text,
-                entity_types=entity_types,
-                top_k=top_k
-            )
-            
-            return {
-                "success": True,
-                "memories": memories,
-                "message": f"Successfully retrieved {len(memories)} memories"
-            }
-        except Exception as e:
-            logger.error(f"Error retrieving memories: {e}")
-            return {
-                "success": False,
-                "memories": [],
-                "error": str(e)
-            }
+                return {
+                    "success": True,
+                    "message": message_content,
+                    "conversation_id": conversation_id
+                }
+        
+            except Exception as e:
+                logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
+                return {"error": f"Server error processing message: {str(e)}"}
     
-    # Create and use the task wrapper
-    wrapper = memory_celery_task(retrieve_memories_async)
-    result = wrapper()
-    
-    return result
+    # Run the async function
+    return asyncio.run(run_chat_task())
 
-@celery_app.task
-def analyze_with_memory_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
-    """
-    Celery task to analyze a query with relevant memories.
-    """
-    from memory.memory_integration import memory_celery_task
-    
-    logger.info(f"Analyzing query with memories for user {user_id}, conversation {conversation_id}, query: {query_text[:50]}...")
-    
-    # Define async function
-    async def analyze_with_memory_async():
-        from memory.memory_integration import analyze_with_memory
-        
-        try:
-            result = await analyze_with_memory(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                query_text=query_text,
-                entity_types=entity_types,
-                top_k=top_k
-            )
-            
-            return {
-                "success": True,
-                "result": result,
-                "message": "Successfully analyzed query with memories"
-            }
-        except Exception as e:
-            logger.error(f"Error analyzing with memories: {e}")
-            return {
-                "success": False,
-                "result": None,
-                "error": str(e)
-            }
-    
-    # Create and use the task wrapper
-    wrapper = memory_celery_task(analyze_with_memory_async)
-    result = wrapper()
-    
-    return result
-
-@celery_app.task
-@async_task
-async def memory_maintenance_task():
-    """
-    Celery task to perform maintenance on the memory system.
-    This task should be scheduled to run periodically.
-    """
-    logger.info("Running memory system maintenance task")
-    
-    try:
-        # Import the actual maintenance class
-        from memory.maintenance import MemoryMaintenance
-        
-        # Create maintenance instance
-        maintenance = MemoryMaintenance()
-        
-        # Check if cleanup should run based on conditions
-        should_run = await maintenance.should_run_cleanup()
-        
-        if should_run:
-            # Run the actual memory cleanup
-            cleanup_stats = await maintenance.cleanup_old_memories()
-            logger.info(f"Memory cleanup completed: {cleanup_stats}")
-            
-            # Update the last cleanup time
-            maintenance.last_cleanup = datetime.now()
-            
-            # Also cleanup any memory service instances if needed
-            from memory.memory_integration import cleanup_memory_services, cleanup_memory_retrievers
-            await cleanup_memory_services()
-            await cleanup_memory_retrievers()
-            
-            return {
-                "success": True,
-                "message": "Memory system maintenance completed",
-                "cleanup_stats": cleanup_stats,
-                "cleanup_performed": True
-            }
-        else:
-            logger.info("Skipping memory cleanup - conditions not met")
-            return {
-                "success": True,
-                "message": "Memory maintenance checked - cleanup not needed",
-                "cleanup_performed": False
-            }
-            
-    except Exception as e:
-        logger.error(f"Error during memory maintenance: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
-
+# Memory System Celery Tasks (removed duplicates)
 @celery_app.task
 def process_memory_embedding_task(user_id, conversation_id, message_text, entity_type="memory", metadata=None):
     """
@@ -480,16 +320,71 @@ def analyze_with_memory_task(user_id, conversation_id, query_text, entity_types=
     # Run the async function
     return asyncio.run(analyze_with_memory_async())
 
-# Fixed version of the NPC learning cycle task
+@celery_app.task
+def memory_maintenance_task():
+    """
+    Celery task to perform maintenance on the memory system.
+    This task should be scheduled to run periodically.
+    """
+    logger.info("Running memory system maintenance task")
+    
+    async def run_maintenance():
+        try:
+            # Import the actual maintenance class
+            from memory.maintenance import MemoryMaintenance
+            
+            # Create maintenance instance
+            maintenance = MemoryMaintenance()
+            
+            # Check if cleanup should run based on conditions
+            should_run = await maintenance.should_run_cleanup()
+            
+            if should_run:
+                # Run the actual memory cleanup
+                cleanup_stats = await maintenance.cleanup_old_memories()
+                logger.info(f"Memory cleanup completed: {cleanup_stats}")
+                
+                # Update the last cleanup time
+                maintenance.last_cleanup = datetime.datetime.now()
+                
+                # Also cleanup any memory service instances if needed
+                from memory.memory_integration import cleanup_memory_services, cleanup_memory_retrievers
+                await cleanup_memory_services()
+                await cleanup_memory_retrievers()
+                
+                return {
+                    "success": True,
+                    "message": "Memory system maintenance completed",
+                    "cleanup_stats": cleanup_stats,
+                    "cleanup_performed": True
+                }
+            else:
+                logger.info("Skipping memory cleanup - conditions not met")
+                return {
+                    "success": True,
+                    "message": "Memory maintenance checked - cleanup not needed",
+                    "cleanup_performed": False
+                }
+                
+        except Exception as e:
+            logger.error(f"Error during memory maintenance: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "traceback": traceback.format_exc()
+            }
+    
+    return asyncio.run(run_maintenance())
+
 @celery_app.task
 def run_npc_learning_cycle_task():
     """
     Celery task to run the NPC learning cycle periodically for active conversations.
     """
-    with trace(workflow_name="npc_learning_cycle_celery"):
-        logger.info("Starting NPC learning cycle task via Celery Beat.")
-        
-        async def run_learning_cycle():
+    logger.info("Starting NPC learning cycle task via Celery Beat.")
+    
+    async def run_learning_cycle():
+        with trace(workflow_name="npc_learning_cycle_celery"):
             processed_conversations = 0
             try:
                 # Use the async context manager for DB connection
@@ -500,11 +395,11 @@ def run_npc_learning_cycle_task():
                         FROM conversations
                         WHERE last_active > NOW() - INTERVAL '1 day'
                     """)
-    
+        
                     if not convs:
                         logger.info("No recent conversations found for NPC learning.")
                         return {"status": "success", "processed_conversations": 0}
-    
+        
                     for conv_row in convs:
                         conv_id = conv_row['id']
                         user_id = conv_row['user_id']
@@ -514,9 +409,9 @@ def run_npc_learning_cycle_task():
                                 SELECT npc_id FROM NPCStats
                                 WHERE user_id=$1 AND conversation_id=$2
                             """, user_id, conv_id)
-    
+        
                             npc_ids = [row['npc_id'] for row in npc_rows]
-    
+        
                             if npc_ids:
                                 # Run the learning logic
                                 manager = NPCLearningManager(user_id, conv_id)
@@ -526,87 +421,88 @@ def run_npc_learning_cycle_task():
                                 processed_conversations += 1
                             else:
                                 logger.info(f"No NPCs found for learning cycle in conversation {conv_id}.")
-    
+        
                         except Exception as e_inner:
                             logger.error(f"Error in NPC learning cycle for conv {conv_id}: {e_inner}", exc_info=True)
                             # Continue to the next conversation
-    
+        
             except Exception as e_outer:
                 logger.error(f"Critical error in NPC learning scheduler task: {e_outer}", exc_info=True)
                 return {"status": "error", "message": str(e_outer)}
-    
+        
             logger.info(f"NPC learning cycle task finished. Processed {processed_conversations} conversations.")
             return {"status": "success", "processed_conversations": processed_conversations}
-        
-        # Run the async function in the sync task
-        return asyncio.run(run_learning_cycle())
-
+    
+    # Run the async function
+    return asyncio.run(run_learning_cycle())
 
 @celery_app.task(expires=3600)
-@async_task
-async def process_new_game_task(user_id, conversation_data):
+def process_new_game_task(user_id, conversation_data):
     """
     Celery task to process new (or preset) game creation.
-    Branches to preset path BEFORE running the dynamic pipeline.
+    Handles both dynamic and preset game creation.
     """
-    with trace(workflow_name="process_new_game_celery_task"):
-        logger.info("CELERY – process_new_game_task called")
-
-        # ----- Normalize IDs -----
-        try:
-            user_id = int(user_id)
-        except Exception:
-            logger.error(f"Invalid user_id: {user_id}")
-            return {"status": "failed", "error": "Invalid user_id"}
-
-        conv_id = conversation_data.get("conversation_id")
-        if conv_id is not None:
+    logger.info("CELERY – process_new_game_task called")
+    
+    async def run_new_game():
+        with trace(workflow_name="process_new_game_celery_task"):
+            # ----- Normalize IDs -----
             try:
-                conversation_data["conversation_id"] = int(conv_id)
+                user_id_int = int(user_id)
             except Exception:
-                logger.error(f"Invalid conversation_id: {conv_id}")
-                return {"status": "failed", "error": "Invalid conversation_id"}
+                logger.error(f"Invalid user_id: {user_id}")
+                return {"status": "failed", "error": "Invalid user_id"}
 
-        # ----- Decide preset vs dynamic -----
-        preset_story_id = get_preset_id(conversation_data)
-
-        agent = NewGameAgent()
-        from lore.core.context import CanonicalContext
-        ctx = CanonicalContext(user_id, conversation_data.get("conversation_id", 0))
-
-        try:
-            if preset_story_id:
-                logger.info(f"Preset path triggered (story_id={preset_story_id})")
-                result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
-            else:
-                result = await agent.process_new_game(ctx, conversation_data)
-
-            return serialize_for_celery(result)
-
-        except Exception as e:
-            logger.exception("Critical error in process_new_game_task")
-
-            # Attempt to mark convo failed
             conv_id = conversation_data.get("conversation_id")
-            if conv_id:
+            if conv_id is not None:
                 try:
-                    async with get_db_connection_context() as conn:
-                        await conn.execute("""
-                            UPDATE conversations
-                            SET status='failed',
-                                conversation_name='New Game - Task Failed'
-                            WHERE id=$1 AND user_id=$2
-                        """, conv_id, user_id)
-                except Exception as update_err:
-                    logger.error(f"Failed to update conversation status: {update_err}")
+                    conversation_data["conversation_id"] = int(conv_id)
+                except Exception:
+                    logger.error(f"Invalid conversation_id: {conv_id}")
+                    return {"status": "failed", "error": "Invalid conversation_id"}
 
-            return {
-                "status": "failed",
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "conversation_id": conv_id
-            }
-        
+            # ----- Decide preset vs dynamic -----
+            preset_story_id = get_preset_id(conversation_data)
+
+            agent = NewGameAgent()
+            from lore.core.context import CanonicalContext
+            ctx = CanonicalContext(user_id_int, conversation_data.get("conversation_id", 0))
+
+            try:
+                if preset_story_id:
+                    logger.info(f"Preset path triggered (story_id={preset_story_id})")
+                    result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
+                else:
+                    result = await agent.process_new_game(ctx, conversation_data)
+
+                return serialize_for_celery(result)
+
+            except Exception as e:
+                logger.exception("Critical error in process_new_game_task")
+
+                # Attempt to mark convo failed
+                conv_id = conversation_data.get("conversation_id")
+                if conv_id:
+                    try:
+                        async with get_db_connection_context() as conn:
+                            await conn.execute("""
+                                UPDATE conversations
+                                SET status='failed',
+                                    conversation_name='New Game - Task Failed'
+                                WHERE id=$1 AND user_id=$2
+                            """, conv_id, user_id_int)
+                    except Exception as update_err:
+                        logger.error(f"Failed to update conversation status: {update_err}")
+
+                return {
+                    "status": "failed",
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "conversation_id": conv_id
+                }
+    
+    return asyncio.run(run_new_game())
+
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
     """Celery task to create NPCs using async logic."""
@@ -686,10 +582,10 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
     if isinstance(gpt_reply_dict, dict):
         nyx_text = gpt_reply_dict.get("response")
         if gpt_reply_dict.get("type") == "function_call" or not nyx_text:
-            nyx_text = None # Force fallback
+            nyx_text = None  # Force fallback
     else:
         logger.error(f"get_chatgpt_response returned unexpected type: {type(gpt_reply_dict)}")
-        gpt_reply_dict = {} # Initialize for fallback
+        gpt_reply_dict = {}  # Initialize for fallback
 
     if nyx_text is None:
         logger.warning("Async GPT task: GPT returned function call, no text, or error. Retrying without function calls.")
@@ -727,10 +623,10 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
 @celery_app.task
 def nyx_memory_maintenance_task():
     """Celery task for Nyx memory maintenance using asyncpg."""
-    with trace(workflow_name="nyx_memory_maintenance_celery"):
-        logger.info("Starting Nyx memory maintenance task (via governance)")
-    
-        async def process_all_conversations():
+    logger.info("Starting Nyx memory maintenance task (via governance)")
+
+    async def process_all_conversations():
+        with trace(workflow_name="nyx_memory_maintenance_celery"):
             processed_count = 0
             async with get_db_connection_context() as conn:
                 rows = await conn.fetch("""
@@ -760,226 +656,230 @@ def nyx_memory_maintenance_task():
                     except Exception as e:
                         logger.error(f"Governed maintenance error user={user_id}, conv={conversation_id}: {e}", exc_info=True)
     
-                    await asyncio.sleep(0.1) # Small delay to prevent hammering
+                    await asyncio.sleep(0.1)  # Small delay to prevent hammering
     
                 return {
                     "status": "success",
                     "conversations_processed": processed_count
                 }
-    
-        try:
-            # Run the async logic
-            result = asyncio.run(process_all_conversations())
-            logger.info(f"Nyx memory maintenance task completed: {result}")
-            return result
-        except Exception as e:
-            logger.exception("Critical error in nyx_memory_maintenance_task")
-            return {"status": "error", "error": str(e)}
+
+    try:
+        # Run the async logic
+        result = asyncio.run(process_all_conversations())
+        logger.info(f"Nyx memory maintenance task completed: {result}")
+        return result
+    except Exception as e:
+        logger.exception("Critical error in nyx_memory_maintenance_task")
+        return {"status": "error", "error": str(e)}
 
 @celery_app.task
-@async_task
-async def monitor_nyx_performance_task():
+def monitor_nyx_performance_task():
     """
     Periodic task to monitor Nyx agent performance across active conversations.
     Collects metrics and triggers cleanup if needed.
     """
     logger.info("Starting Nyx performance monitoring task")
     
-    if not await is_app_initialized():
-        logger.info("Application not initialized. Skipping performance monitoring.")
-        return {"status": "skipped", "reason": "App not initialized"}
-    
-    monitored_count = 0
-    issues_found = []
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Find active conversations
-            rows = await conn.fetch("""
-                SELECT DISTINCT c.id, c.user_id
-                FROM conversations c
-                JOIN messages m ON m.conversation_id = c.id
-                WHERE m.created_at > NOW() - INTERVAL '1 hour'
-                GROUP BY c.id, c.user_id
-            """)
-            
-            for row in rows:
-                user_id = row['user_id']
-                conversation_id = row['id']
+    async def run_monitoring():
+        if not await is_app_initialized():
+            logger.info("Application not initialized. Skipping performance monitoring.")
+            return {"status": "skipped", "reason": "App not initialized"}
+        
+        monitored_count = 0
+        issues_found = []
+        
+        try:
+            async with get_db_connection_context() as conn:
+                # Find active conversations
+                rows = await conn.fetch("""
+                    SELECT DISTINCT c.id, c.user_id
+                    FROM conversations c
+                    JOIN messages m ON m.conversation_id = c.id
+                    WHERE m.created_at > NOW() - INTERVAL '1 hour'
+                    GROUP BY c.id, c.user_id
+                """)
                 
-                try:
-                    # Get latest performance metrics
-                    perf_row = await conn.fetchrow("""
-                        SELECT metrics, error_log
-                        FROM performance_metrics
-                        WHERE user_id = $1 AND conversation_id = $2
-                        ORDER BY created_at DESC
-                        LIMIT 1
-                    """, user_id, conversation_id)
+                for row in rows:
+                    user_id = row['user_id']
+                    conversation_id = row['id']
                     
-                    if perf_row and perf_row['metrics']:
-                        metrics = json.loads(perf_row['metrics'])
+                    try:
+                        # Get latest performance metrics
+                        perf_row = await conn.fetchrow("""
+                            SELECT metrics, error_log
+                            FROM performance_metrics
+                            WHERE user_id = $1 AND conversation_id = $2
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        """, user_id, conversation_id)
                         
-                        # Check for issues
-                        if metrics.get('memory_usage', 0) > 600:  # 600MB threshold
-                            issues_found.append({
-                                'type': 'high_memory',
-                                'user_id': user_id,
-                                'conversation_id': conversation_id,
-                                'value': metrics['memory_usage']
-                            })
-                        
-                        if metrics.get('error_rates', {}).get('total', 0) > 50:
-                            issues_found.append({
-                                'type': 'high_errors',
-                                'user_id': user_id,
-                                'conversation_id': conversation_id,
-                                'value': metrics['error_rates']['total']
-                            })
-                        
-                        # Calculate average response time
-                        response_times = metrics.get('response_times', [])
-                        if response_times and len(response_times) > 5:
-                            avg_time = sum(response_times) / len(response_times)
-                            if avg_time > 3.0:  # 3 second threshold
+                        if perf_row and perf_row['metrics']:
+                            metrics = json.loads(perf_row['metrics'])
+                            
+                            # Check for issues
+                            if metrics.get('memory_usage', 0) > 600:  # 600MB threshold
                                 issues_found.append({
-                                    'type': 'slow_response',
+                                    'type': 'high_memory',
                                     'user_id': user_id,
                                     'conversation_id': conversation_id,
-                                    'value': avg_time
+                                    'value': metrics['memory_usage']
                                 })
-                    
-                    monitored_count += 1
-                    
-                except Exception as e:
-                    logger.error(f"Error monitoring performance for {user_id}/{conversation_id}: {e}")
-            
-            # Log aggregated metrics
-            if issues_found:
-                logger.warning(f"Performance issues found: {json.dumps(issues_found)}")
+                            
+                            if metrics.get('error_rates', {}).get('total', 0) > 50:
+                                issues_found.append({
+                                    'type': 'high_errors',
+                                    'user_id': user_id,
+                                    'conversation_id': conversation_id,
+                                    'value': metrics['error_rates']['total']
+                                })
+                            
+                            # Calculate average response time
+                            response_times = metrics.get('response_times', [])
+                            if response_times and len(response_times) > 5:
+                                avg_time = sum(response_times) / len(response_times)
+                                if avg_time > 3.0:  # 3 second threshold
+                                    issues_found.append({
+                                        'type': 'slow_response',
+                                        'user_id': user_id,
+                                        'conversation_id': conversation_id,
+                                        'value': avg_time
+                                    })
+                        
+                        monitored_count += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Error monitoring performance for {user_id}/{conversation_id}: {e}")
                 
-                # Could trigger alerts or auto-remediation here
-                # For example, send to monitoring system or trigger cleanup tasks
-        
-        return {
-            "status": "success",
-            "conversations_monitored": monitored_count,
-            "issues_found": len(issues_found),
-            "issues": issues_found
-        }
-        
-    except Exception as e:
-        logger.exception("Error in Nyx performance monitoring task")
-        return {"status": "error", "error": str(e)}
-
+                # Log aggregated metrics
+                if issues_found:
+                    logger.warning(f"Performance issues found: {json.dumps(issues_found)}")
+                    
+                    # Could trigger alerts or auto-remediation here
+                    # For example, send to monitoring system or trigger cleanup tasks
+            
+            return {
+                "status": "success",
+                "conversations_monitored": monitored_count,
+                "issues_found": len(issues_found),
+                "issues": issues_found
+            }
+            
+        except Exception as e:
+            logger.exception("Error in Nyx performance monitoring task")
+            return {"status": "error", "error": str(e)}
+    
+    return asyncio.run(run_monitoring())
 
 @celery_app.task
-@async_task
-async def aggregate_learning_metrics_task():
+def aggregate_learning_metrics_task():
     """
     Periodic task to aggregate learning metrics across all Nyx instances.
     Useful for understanding system-wide learning patterns.
     """
     logger.info("Starting learning metrics aggregation task")
     
-    if not await is_app_initialized():
-        return {"status": "skipped", "reason": "App not initialized"}
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Get recent learning metrics
-            rows = await conn.fetch("""
-                SELECT user_id, conversation_id, metrics, learned_patterns
-                FROM learning_metrics
-                WHERE created_at > NOW() - INTERVAL '1 day'
-                ORDER BY created_at DESC
-            """)
-            
-            # Aggregate metrics
-            total_patterns = 0
-            avg_adaptation_rate = 0.0
-            pattern_success_rates = []
-            
-            for row in rows:
-                if row['metrics']:
-                    metrics = json.loads(row['metrics'])
-                    adaptation_rate = metrics.get('adaptation_success_rate', 0.0)
-                    if adaptation_rate > 0:
-                        pattern_success_rates.append(adaptation_rate)
+    async def run_aggregation():
+        if not await is_app_initialized():
+            return {"status": "skipped", "reason": "App not initialized"}
+        
+        try:
+            async with get_db_connection_context() as conn:
+                # Get recent learning metrics
+                rows = await conn.fetch("""
+                    SELECT user_id, conversation_id, metrics, learned_patterns
+                    FROM learning_metrics
+                    WHERE created_at > NOW() - INTERVAL '1 day'
+                    ORDER BY created_at DESC
+                """)
                 
-                if row['learned_patterns']:
-                    patterns = json.loads(row['learned_patterns'])
-                    total_patterns += len(patterns)
-            
-            if pattern_success_rates:
-                avg_adaptation_rate = sum(pattern_success_rates) / len(pattern_success_rates)
-            
-            # Store aggregated metrics (could go to a monitoring system)
-            logger.info(f"Learning metrics - Total patterns: {total_patterns}, "
-                       f"Avg adaptation rate: {avg_adaptation_rate:.2%}, "
-                       f"Active conversations: {len(rows)}")
-            
-            return {
-                "status": "success",
-                "total_patterns_learned": total_patterns,
-                "average_adaptation_rate": avg_adaptation_rate,
-                "active_learning_conversations": len(rows)
-            }
-            
-    except Exception as e:
-        logger.exception("Error in learning metrics aggregation")
-        return {"status": "error", "error": str(e)}
-
+                # Aggregate metrics
+                total_patterns = 0
+                avg_adaptation_rate = 0.0
+                pattern_success_rates = []
+                
+                for row in rows:
+                    if row['metrics']:
+                        metrics = json.loads(row['metrics'])
+                        adaptation_rate = metrics.get('adaptation_success_rate', 0.0)
+                        if adaptation_rate > 0:
+                            pattern_success_rates.append(adaptation_rate)
+                    
+                    if row['learned_patterns']:
+                        patterns = json.loads(row['learned_patterns'])
+                        total_patterns += len(patterns)
+                
+                if pattern_success_rates:
+                    avg_adaptation_rate = sum(pattern_success_rates) / len(pattern_success_rates)
+                
+                # Store aggregated metrics (could go to a monitoring system)
+                logger.info(f"Learning metrics - Total patterns: {total_patterns}, "
+                           f"Avg adaptation rate: {avg_adaptation_rate:.2%}, "
+                           f"Active conversations: {len(rows)}")
+                
+                return {
+                    "status": "success",
+                    "total_patterns_learned": total_patterns,
+                    "average_adaptation_rate": avg_adaptation_rate,
+                    "active_learning_conversations": len(rows)
+                }
+                
+        except Exception as e:
+            logger.exception("Error in learning metrics aggregation")
+            return {"status": "error", "error": str(e)}
+    
+    return asyncio.run(run_aggregation())
 
 @celery_app.task
-@async_task
-async def cleanup_old_performance_data_task():
+def cleanup_old_performance_data_task():
     """
     Periodic task to clean up old performance and learning data.
     Keeps the database lean while preserving important patterns.
     """
     logger.info("Starting performance data cleanup task")
     
-    try:
-        async with get_db_connection_context() as conn:
-            # Clean up old performance metrics (keep last 7 days)
-            perf_result = await conn.execute("""
-                DELETE FROM performance_metrics
-                WHERE created_at < NOW() - INTERVAL '7 days'
-            """)
-            perf_deleted = int(perf_result.split()[-1]) if perf_result else 0
-            
-            # Clean up old learning metrics (keep last 30 days)
-            learn_result = await conn.execute("""
-                DELETE FROM learning_metrics
-                WHERE created_at < NOW() - INTERVAL '30 days'
-            """)
-            learn_deleted = int(learn_result.split()[-1]) if learn_result else 0
-            
-            # Clean up old scenario states (keep last 3 days)
-            scenario_result = await conn.execute("""
-                DELETE FROM scenario_states
-                WHERE created_at < NOW() - INTERVAL '3 days'
-            """)
-            scenario_deleted = int(scenario_result.split()[-1]) if scenario_result else 0
-            
-            logger.info(f"Cleanup complete - Performance: {perf_deleted}, "
-                       f"Learning: {learn_deleted}, Scenarios: {scenario_deleted}")
-            
-            return {
-                "status": "success",
-                "performance_metrics_deleted": perf_deleted,
-                "learning_metrics_deleted": learn_deleted,
-                "scenario_states_deleted": scenario_deleted
-            }
-            
-    except Exception as e:
-        logger.exception("Error in cleanup task")
-        return {"status": "error", "error": str(e)}
+    async def run_cleanup():
+        try:
+            async with get_db_connection_context() as conn:
+                # Clean up old performance metrics (keep last 7 days)
+                perf_result = await conn.execute("""
+                    DELETE FROM performance_metrics
+                    WHERE created_at < NOW() - INTERVAL '7 days'
+                """)
+                perf_deleted = int(perf_result.split()[-1]) if perf_result else 0
+                
+                # Clean up old learning metrics (keep last 30 days)
+                learn_result = await conn.execute("""
+                    DELETE FROM learning_metrics
+                    WHERE created_at < NOW() - INTERVAL '30 days'
+                """)
+                learn_deleted = int(learn_result.split()[-1]) if learn_result else 0
+                
+                # Clean up old scenario states (keep last 3 days)
+                scenario_result = await conn.execute("""
+                    DELETE FROM scenario_states
+                    WHERE created_at < NOW() - INTERVAL '3 days'
+                """)
+                scenario_deleted = int(scenario_result.split()[-1]) if scenario_result else 0
+                
+                logger.info(f"Cleanup complete - Performance: {perf_deleted}, "
+                           f"Learning: {learn_deleted}, Scenarios: {scenario_deleted}")
+                
+                return {
+                    "status": "success",
+                    "performance_metrics_deleted": perf_deleted,
+                    "learning_metrics_deleted": learn_deleted,
+                    "scenario_states_deleted": scenario_deleted
+                }
+                
+        except Exception as e:
+            logger.exception("Error in cleanup task")
+            return {"status": "error", "error": str(e)}
+    
+    return asyncio.run(run_cleanup())
 
 # --- Utility Functions ---
 async def find_split_brain_nyxes():
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=30) # Check last 30 mins
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=30)  # Check last 30 mins
     async with get_db_connection_context() as conn:
         rows = await conn.fetch("""
             SELECT nyx_id, COUNT(DISTINCT instance_id) as instance_count
@@ -987,7 +887,7 @@ async def find_split_brain_nyxes():
             WHERE checkpoint_time > $1 AND nyx_id = $2
             GROUP BY nyx_id
             HAVING COUNT(DISTINCT instance_id) > 1
-        """, cutoff, os.getenv("NYX_ID", "nyx_v1")) # Filter by current NYX_ID
+        """, cutoff, os.getenv("NYX_ID", "nyx_v1"))  # Filter by current NYX_ID
     return [row["nyx_id"] for row in rows]
 
 async def perform_sweep_and_merge_for_id(nyx_id: str):
@@ -1015,133 +915,101 @@ async def perform_sweep_and_merge_for_id(nyx_id: str):
         logger.error(f"Failed to merge {nyx_id}: {e}", exc_info=True)
         return False
 
-# --- Modified Sweep Task ---
 @celery_app.task
-@async_task
-async def sweep_and_merge_nyx_split_brains():
+def sweep_and_merge_nyx_split_brains():
     """
     Celery task for periodically merging split-brain Nyx instances.
     Checks if the main application is initialized before running.
     """
     logger.info("Checking application readiness for split-brain sweep...")
-    if not await is_app_initialized():
-        logger.info("Application not initialized yet. Skipping split-brain sweep task.")
-        return {"status": "skipped", "reason": "App not initialized"}
+    
+    async def run_sweep():
+        if not await is_app_initialized():
+            logger.info("Application not initialized yet. Skipping split-brain sweep task.")
+            return {"status": "skipped", "reason": "App not initialized"}
 
-    logger.info("Application initialized. Starting split-brain Nyx sweep-and-merge task.")
-    merged_count = 0
-    failed_count = 0
-    try:
-        split_nyxes = await find_split_brain_nyxes()
-        if not split_nyxes:
-            logger.info("No split-brain Nyx instances found requiring merge.")
-        else:
-            logger.info(f"Found potentially split Nyx IDs: {split_nyxes}")
-            for nyx_id in split_nyxes:
-                success = await perform_sweep_and_merge_for_id(nyx_id)
-                if success: merged_count += 1
-                else: failed_count += 1
-                await asyncio.sleep(1) # Small delay between merges
+        logger.info("Application initialized. Starting split-brain Nyx sweep-and-merge task.")
+        merged_count = 0
+        failed_count = 0
+        try:
+            split_nyxes = await find_split_brain_nyxes()
+            if not split_nyxes:
+                logger.info("No split-brain Nyx instances found requiring merge.")
+            else:
+                logger.info(f"Found potentially split Nyx IDs: {split_nyxes}")
+                for nyx_id in split_nyxes:
+                    success = await perform_sweep_and_merge_for_id(nyx_id)
+                    if success: 
+                        merged_count += 1
+                    else: 
+                        failed_count += 1
+                    await asyncio.sleep(1)  # Small delay between merges
 
-        logger.info(f"Sweep-and-merge task completed. Merged: {merged_count}, Failed/Skipped: {failed_count}.")
-        return {"status": "success", "merged": merged_count, "failed_or_skipped": failed_count}
-    except Exception as e:
-        logger.exception("Sweep-and-merge task failed critically.")
-        return {"status": "error", "error": str(e)}
+            logger.info(f"Sweep-and-merge task completed. Merged: {merged_count}, Failed/Skipped: {failed_count}.")
+            return {"status": "success", "merged": merged_count, "failed_or_skipped": failed_count}
+        except Exception as e:
+            logger.exception("Sweep-and-merge task failed critically.")
+            return {"status": "error", "error": str(e)}
+    
+    return asyncio.run(run_sweep())
 
 @celery_app.task
-@async_task
-async def process_new_game_preset_task(user_id, conversation_data):
-    """Process new game creation with preset story - bypasses LLM generation"""
-    logger.info(f"Starting preset game creation for user {user_id}")
-    logger.info(f"Conversation data: {conversation_data}")
-    
-    # Ensure user_id is int
-    try:
-        if isinstance(user_id, str):
-            user_id = int(user_id)
-    except (ValueError, TypeError) as e:
-        logger.error(f"Invalid user_id format: {user_id}")
-        return {"status": "failed", "error": f"Invalid user_id: {str(e)}"}
-    
-    agent = NewGameAgent()
-    
-    try:
-        from lore.core.context import CanonicalContext
-        ctx = CanonicalContext(user_id, 0)
-        
-        preset_story_id = conversation_data.get('preset_story_id')
-        logger.info(f"Preset story ID: {preset_story_id}")
-        
-        if not preset_story_id:
-            raise ValueError("No preset_story_id provided in conversation_data")
-        
-        # Use the process_new_game method which should now check for preset
-        result = await agent.process_new_game(ctx, conversation_data)
-        
-        logger.info(f"Preset game creation result: {result}")
-        return serialize_for_celery(result)
-        
-    except Exception as e:
-        logger.exception(f"Error in preset game task for user {user_id}")
-        return {"status": "failed", "error": str(e)}
-
-# --- NEW LLM Checkpointing Task ---
-@celery_app.task
-@async_task # Use decorator for the async logic
-async def run_llm_periodic_checkpoint_task(user_id: int, conversation_id: int):
+def run_llm_periodic_checkpoint_task(user_id: int, conversation_id: int):
     """
     Celery task for periodically running the LLM-driven checkpointing.
     """
-    nyx_id = os.getenv("NYX_ID", "nyx_v1") # Or determine based on user/conv if needed
+    nyx_id = os.getenv("NYX_ID", "nyx_v1")  # Or determine based on user/conv if needed
     logger.info(f"Starting LLM periodic checkpoint task for NyxBrain {user_id}-{conversation_id} (NyxID: {nyx_id})...")
 
-    if not await is_app_initialized():
-        logger.info(f"Application not initialized yet. Skipping LLM checkpoint for {user_id}-{conversation_id}.")
-        return {"status": "skipped", "reason": "App not initialized"}
+    async def run_checkpoint():
+        if not await is_app_initialized():
+            logger.info(f"Application not initialized yet. Skipping LLM checkpoint for {user_id}-{conversation_id}.")
+            return {"status": "skipped", "reason": "App not initialized"}
 
-    try:
-        # Get the specific brain instance
-        # Use nyx_id if you have a global instance per NYX_ID, otherwise use user/conv
-        brain_instance = await NyxBrain.get_instance(user_id, conversation_id, nyx_id=nyx_id if user_id == 0 and conversation_id == 0 else None)
+        try:
+            # Get the specific brain instance
+            # Use nyx_id if you have a global instance per NYX_ID, otherwise use user/conv
+            brain_instance = await NyxBrain.get_instance(user_id, conversation_id, nyx_id=nyx_id if user_id == 0 and conversation_id == 0 else None)
 
-        if not brain_instance or not brain_instance.initialized:
-            logger.warning(f"Could not get initialized NyxBrain instance for {user_id}-{conversation_id}. Skipping checkpoint.")
-            return {"status": "skipped", "reason": "Brain instance not ready"}
+            if not brain_instance or not brain_instance.initialized:
+                logger.warning(f"Could not get initialized NyxBrain instance for {user_id}-{conversation_id}. Skipping checkpoint.")
+                return {"status": "skipped", "reason": "Brain instance not ready"}
 
-        # 1. Gather current state
-        logger.debug(f"Gathering state for {user_id}-{conversation_id}...")
-        current_state = await brain_instance.gather_checkpoint_state(event="periodic_llm_scheduled")
+            # 1. Gather current state
+            logger.debug(f"Gathering state for {user_id}-{conversation_id}...")
+            current_state = await brain_instance.gather_checkpoint_state(event="periodic_llm_scheduled")
 
-        # 2. Get plan from agent
-        logger.debug(f"Requesting checkpoint plan for {user_id}-{conversation_id}...")
-        planner_agent = CheckpointingPlannerAgent() # Create agent instance
-        # Pass brain_instance as context if planner's tools need it, else None
-        checkpoint_plan = await planner_agent.recommend_checkpoint(current_state, brain_instance_for_context=brain_instance)
+            # 2. Get plan from agent
+            logger.debug(f"Requesting checkpoint plan for {user_id}-{conversation_id}...")
+            planner_agent = CheckpointingPlannerAgent()  # Create agent instance
+            # Pass brain_instance as context if planner's tools need it, else None
+            checkpoint_plan = await planner_agent.recommend_checkpoint(current_state, brain_instance_for_context=brain_instance)
 
-        # 3. Save based on plan
-        if checkpoint_plan and checkpoint_plan.get("to_save"):
-            logger.debug(f"Saving planned checkpoint for {user_id}-{conversation_id}...")
-            # Extract data correctly from the plan structure
-            data_to_save = checkpoint_plan["to_save"] # This is {"field": {"value": ..., "why_saved": ...}}
-            justifications = {k: v.get("why_saved", "N/A") for k, v in data_to_save.items()}
-            skipped = checkpoint_plan.get("skip_fields", [])
+            # 3. Save based on plan
+            if checkpoint_plan and checkpoint_plan.get("to_save"):
+                logger.debug(f"Saving planned checkpoint for {user_id}-{conversation_id}...")
+                # Extract data correctly from the plan structure
+                data_to_save = checkpoint_plan["to_save"]  # This is {"field": {"value": ..., "why_saved": ...}}
+                justifications = {k: v.get("why_saved", "N/A") for k, v in data_to_save.items()}
+                skipped = checkpoint_plan.get("skip_fields", [])
 
-            await brain_instance.save_planned_checkpoint( # Call method on brain instance
-                event="periodic", # Base event type
-                data_to_save=data_to_save, # Pass the structured dict
-                justifications=justifications,
-                skipped=skipped
-            )
-            logger.info(f"LLM periodic checkpoint saved for {user_id}-{conversation_id}.")
-            return {"status": "success", "saved_fields": len(data_to_save), "skipped_fields": len(skipped)}
-        else:
-            logger.info(f"Checkpoint planner recommended skipping save for {user_id}-{conversation_id}.")
-            return {"status": "success", "saved_fields": 0, "skipped_fields": checkpoint_plan.get("skip_fields", ["No plan generated"])}
+                await brain_instance.save_planned_checkpoint(  # Call method on brain instance
+                    event="periodic",  # Base event type
+                    data_to_save=data_to_save,  # Pass the structured dict
+                    justifications=justifications,
+                    skipped=skipped
+                )
+                logger.info(f"LLM periodic checkpoint saved for {user_id}-{conversation_id}.")
+                return {"status": "success", "saved_fields": len(data_to_save), "skipped_fields": len(skipped)}
+            else:
+                logger.info(f"Checkpoint planner recommended skipping save for {user_id}-{conversation_id}.")
+                return {"status": "success", "saved_fields": 0, "skipped_fields": checkpoint_plan.get("skip_fields", ["No plan generated"])}
 
-    except Exception as e:
-        logger.exception(f"Error during LLM periodic checkpoint task for {user_id}-{conversation_id}")
-        return {"status": "error", "error": str(e)}
+        except Exception as e:
+            logger.exception(f"Error during LLM periodic checkpoint task for {user_id}-{conversation_id}")
+            return {"status": "error", "error": str(e)}
+    
+    return asyncio.run(run_checkpoint())
 
 # Ensure celery_app is correctly configured if needed elsewhere
 app = celery_app
