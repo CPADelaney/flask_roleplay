@@ -13,7 +13,7 @@ from datetime import datetime
 from npcs.new_npc_creation import NPCCreationHandler
 from db.connection import get_db_connection_context
 from story_templates.moth.poem_integrated_loader import PoemIntegratedStoryLoader
-from character_profiles.lilith_ravencroft import LILITH_RAVENCROFT
+from story_templates.character_profiles.lilith_ravencroft import LILITH_RAVENCROFT
 from lore.core import canon
 from memory.wrapper import MemorySystem
 from nyx.integrate import remember_with_governance
