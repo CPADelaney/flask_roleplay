@@ -13,6 +13,7 @@ class PresetNPCHandler:
     """Handles creation of rich, preset NPCs with full feature parity"""
     
     @staticmethod
+    @staticmethod
     async def create_detailed_npc(ctx, npc_data: Dict[str, Any], story_context: Dict[str, Any]) -> int:
         """Create a detailed NPC from preset data with ALL features"""
         user_id = ctx.context["user_id"]
@@ -28,42 +29,176 @@ class PresetNPCHandler:
         lore_system = await LoreSystem.get_instance(user_id, conversation_id)
         npc_handler = NPCCreationHandler()
         
-        # Step 1: Create NPC through the full creation system
-        logger.info(f"Creating preset NPC: {npc_data['name']}")
+        # Step 1: Check if NPC already exists using canonical function
+        logger.info(f"Checking if preset NPC {npc_data['name']} already exists")
+        
+        async with get_db_connection_context() as conn:
+            # Use the canonical find_or_create_npc function which has semantic matching
+            npc_id = await canon.find_or_create_npc(
+                ctx, conn,
+                npc_name=npc_data['name'],
+                role=npc_data.get('role', ''),
+                affiliations=npc_data.get('affiliations', [])
+            )
+            
+            # Check if this is a newly created NPC or existing one
+            npc_details = await conn.fetchrow("""
+                SELECT age, birthdate, personality_traits, created_at
+                FROM NPCStats 
+                WHERE npc_id = $1
+            """, npc_id)
+            
+            # If NPC was just created (within last minute), we can fully update it
+            # If it's older, we should be more careful about updates
+            import datetime
+            is_new_npc = False
+            if npc_details and npc_details['created_at']:
+                time_since_creation = datetime.datetime.now() - npc_details['created_at']
+                is_new_npc = time_since_creation.total_seconds() < 60  # Created within last minute
+            else:
+                is_new_npc = True  # No created_at means it's brand new
+        
+        # Step 2: Update the NPC with preset data
+        logger.info(f"Updating preset NPC {npc_data['name']} (ID: {npc_id}, New: {is_new_npc})")
         
         # Build complete NPC data matching regular creation
         complete_npc_data = PresetNPCHandler._build_complete_npc_data(npc_data, story_context)
         
-        # Create through the standard handler to ensure ALL features
-        result = await npc_handler.create_npc_in_database(ctx, complete_npc_data)
+        if is_new_npc:
+            # For new NPCs, do a full update
+            result = await PresetNPCHandler._update_npc_fully(
+                ctx, npc_id, complete_npc_data, lore_system
+            )
+        else:
+            # For existing NPCs, only update non-conflicting fields
+            result = await PresetNPCHandler._update_npc_selectively(
+                ctx, npc_id, complete_npc_data, npc_data, lore_system
+            )
         
         if "error" in result:
-            raise Exception(f"Failed to create NPC: {result['error']}")
+            logger.error(f"Failed to update NPC: {result['error']}")
+            # Continue with the existing NPC even if update failed
         
-        npc_id = result["npc_id"]
-        
-        # Step 2: Add preset-specific enhancements
+        # Step 3: Add preset-specific enhancements (these are additive, not conflicting)
         await PresetNPCHandler._add_preset_specific_features(
             ctx, npc_id, npc_data, user_id, conversation_id
         )
         
-        # Step 3: Initialize ALL memory subsystems (same as regular NPCs)
-        await PresetNPCHandler._initialize_complete_memory_system(
-            ctx, user_id, conversation_id, npc_id, npc_data
-        )
+        # Step 4: Initialize memory system (only if new or missing memories)
+        async with get_db_connection_context() as conn:
+            memory_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM npc_memories
+                WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+            """, user_id, conversation_id, npc_id)
+            
+            if memory_count < 3:  # If NPC has few memories, initialize them
+                await PresetNPCHandler._initialize_complete_memory_system(
+                    ctx, user_id, conversation_id, npc_id, npc_data
+                )
         
-        # Step 4: Setup relationships with full features
+        # Step 5: Setup relationships (additive)
         await PresetNPCHandler._setup_complete_relationships(
             ctx, user_id, conversation_id, npc_id, npc_data
         )
         
-        # Step 5: Initialize special mechanics
+        # Step 6: Initialize special mechanics (additive)
         await PresetNPCHandler._initialize_special_mechanics(
             ctx, user_id, conversation_id, npc_id, npc_data
         )
         
-        logger.info(f"Successfully created preset NPC {npc_data['name']} with ID {npc_id}")
+        logger.info(f"Successfully initialized preset NPC {npc_data['name']} with ID {npc_id}")
         return npc_id
+    
+    @staticmethod
+    async def _update_npc_fully(ctx, npc_id: int, complete_data: Dict[str, Any], 
+                               lore_system) -> Dict[str, Any]:
+        """Fully update an NPC (for new NPCs)"""
+        # Extract the fields that can be updated
+        updates = {
+            "age": complete_data.get("age"),
+            "sex": complete_data.get("sex"),
+            "physical_description": complete_data.get("physical_description"),
+            "personality_traits": json.dumps(complete_data["personality"].get("personality_traits", [])),
+            "likes": json.dumps(complete_data["personality"].get("likes", [])),
+            "dislikes": json.dumps(complete_data["personality"].get("dislikes", [])),
+            "hobbies": json.dumps(complete_data["personality"].get("hobbies", [])),
+            "dominance": complete_data["stats"].get("dominance", 50),
+            "cruelty": complete_data["stats"].get("cruelty", 30),
+            "affection": complete_data["stats"].get("affection", 50),
+            "trust": complete_data["stats"].get("trust", 0),
+            "respect": complete_data["stats"].get("respect", 0),
+            "intensity": complete_data["stats"].get("intensity", 40),
+            "archetype_summary": complete_data["archetypes"].get("archetype_summary", ""),
+            "archetype_extras_summary": complete_data["archetypes"].get("archetype_extras_summary", ""),
+            "introduced": complete_data.get("introduced", False),
+            "current_location": complete_data.get("current_location", "Unknown"),
+            "affiliations": json.dumps(complete_data.get("affiliations", [])),
+            "schedule": json.dumps(complete_data.get("schedule", {}))
+        }
+        
+        # Remove None values
+        updates = {k: v for k, v in updates.items() if v is not None}
+        
+        # Update through LoreSystem for consistency
+        result = await lore_system.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="NPCStats",
+            entity_identifier={"npc_id": npc_id},
+            updates=updates,
+            reason="Initializing preset NPC with complete data"
+        )
+        
+        return result
+    
+    @staticmethod
+    async def _update_npc_selectively(ctx, npc_id: int, complete_data: Dict[str, Any], 
+                                     npc_data: Dict[str, Any], lore_system) -> Dict[str, Any]:
+        """Selectively update an existing NPC (avoid conflicts)"""
+        # Only update fields that are explicitly marked as "should_override" or are new additions
+        updates = {}
+        
+        # Always update these fields as they're story-critical
+        critical_updates = {
+            "archetype_summary": complete_data["archetypes"].get("archetype_summary", ""),
+            "archetype_extras_summary": complete_data["archetypes"].get("archetype_extras_summary", ""),
+            "current_location": complete_data.get("current_location", "Unknown"),
+            "schedule": json.dumps(complete_data.get("schedule", {}))
+        }
+        
+        updates.update(critical_updates)
+        
+        # For personality traits, likes, dislikes - merge instead of replace
+        async with get_db_connection_context() as conn:
+            current_npc = await conn.fetchrow("""
+                SELECT personality_traits, likes, dislikes, hobbies
+                FROM NPCStats WHERE npc_id = $1
+            """, npc_id)
+            
+            if current_npc:
+                # Merge personality data
+                current_traits = json.loads(current_npc['personality_traits'] or '[]')
+                new_traits = complete_data["personality"].get("personality_traits", [])
+                merged_traits = list(set(current_traits + new_traits))
+                updates["personality_traits"] = json.dumps(merged_traits)
+                
+                # Similar merging for likes, dislikes, hobbies
+                for field in ['likes', 'dislikes', 'hobbies']:
+                    current = json.loads(current_npc[field] or '[]')
+                    new = complete_data["personality"].get(field, [])
+                    merged = list(set(current + new))
+                    updates[field] = json.dumps(merged)
+        
+        if updates:
+            result = await lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="NPCStats",
+                entity_identifier={"npc_id": npc_id},
+                updates=updates,
+                reason="Updating existing NPC with preset enhancements"
+            )
+            return result
+        
+        return {"status": "no_updates_needed"}
     
     @staticmethod
     def _build_complete_npc_data(npc_data: Dict[str, Any], story_context: Dict[str, Any]) -> Dict[str, Any]:
