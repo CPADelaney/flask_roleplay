@@ -1820,7 +1820,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 else:
                     self.invalidate_cache_pattern(f"WorldLore_{myth_id}")
     
-    return changes
+        return changes
     
     async def _develop_cultural_elements(self) -> List[Dict[str, Any]]:
         """
@@ -1954,7 +1954,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 
                 self.invalidate_cache_pattern(f"CulturalElements_{element_id}")
     
-    return changes
+        return changes
     
     async def _shift_geopolitical_landscape(self) -> List[Dict[str, Any]]:
         """
@@ -2221,7 +2221,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 
                 self.invalidate_cache_pattern(f"Factions_{faction['id']}")
     
-    return changes
+        return changes
     
     async def _evolve_notable_figures(self) -> List[Dict[str, Any]]:
         """
@@ -2359,7 +2359,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 
                 self.invalidate_cache_pattern(f"{table_name}_{figure_id}")
     
-    return changes
+        return changes
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -3054,27 +3054,27 @@ class NarrativeEvaluator:
         except Exception as e:
             logger.error(f"Error applying improvement suggestions: {e}")
 
-    async def generate_embedding(text: str) -> List[float]:
-        """Generate embedding for text using the embedding system."""
-        try:
-            from embedding.vector_store import generate_embedding
-            return await generate_embedding(text)
-        except ImportError:
-            # Fallback if embedding system not available
-            logger.warning("Embedding system not available, using dummy embedding")
-            import hashlib
-            # Create a simple hash-based pseudo-embedding
-            hash_obj = hashlib.md5(text.encode())
-            hash_hex = hash_obj.hexdigest()
-            # Convert to list of floats (384 dimensions)
-            embedding = []
-            for i in range(0, len(hash_hex), 2):
-                byte_val = int(hash_hex[i:i+2], 16)
-                embedding.append(float(byte_val) / 255.0)
-            # Pad or truncate to 384 dimensions
-            while len(embedding) < 384:
-                embedding.extend(embedding[:min(len(embedding), 384 - len(embedding))])
-            return embedding[:384]
+async def generate_embedding(text: str) -> List[float]:
+    """Generate embedding for text using the embedding system."""
+    try:
+        from embedding.vector_store import generate_embedding
+        return await generate_embedding(text)
+    except ImportError:
+        # Fallback if embedding system not available
+        logger.warning("Embedding system not available, using dummy embedding")
+        import hashlib
+        # Create a simple hash-based pseudo-embedding
+        hash_obj = hashlib.md5(text.encode())
+        hash_hex = hash_obj.hexdigest()
+        # Convert to list of floats (384 dimensions)
+        embedding = []
+        for i in range(0, len(hash_hex), 2):
+            byte_val = int(hash_hex[i:i+2], 16)
+            embedding.append(float(byte_val) / 255.0)
+        # Pad or truncate to 384 dimensions
+        while len(embedding) < 384:
+            embedding.extend(embedding[:min(len(embedding), 384 - len(embedding))])
+        return embedding[:384]
 
 class NarrativeEvolutionSystem:
     """
