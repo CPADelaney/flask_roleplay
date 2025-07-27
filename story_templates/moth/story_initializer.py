@@ -18,6 +18,7 @@ from lore.core import canon
 from memory.wrapper import MemorySystem
 from story_templates.preset_stories import StoryBeat, PresetStory
 from nyx.integrate import remember_with_governance
+from npcs.preset_npc_handler import PresetNPCHandler
 
 logger = logging.getLogger(__name__)
 
@@ -108,67 +109,421 @@ class MothFlameStoryInitializer:
     
     @staticmethod
     async def _create_lilith_ravencroft(ctx, user_id: int, conversation_id: int) -> int:
-        """Create Lilith with all her complexity"""
+        """Create Lilith with all her complexity using canonical functions"""
         
         try:
-            npc_handler = NPCCreationHandler()
+            # First, use canonical function to find or create
+            async with get_db_connection_context() as conn:
+                lilith_id = await canon.find_or_create_npc(
+                    ctx, conn,
+                    npc_name=LILITH_RAVENCROFT["name"],
+                    role=LILITH_RAVENCROFT["role"],
+                    affiliations=["Velvet Sanctum", "The Underground Network", "The Moth Queen Identity"]
+                )
+                
+                # Check if this is a new NPC or existing
+                npc_details = await conn.fetchrow("""
+                    SELECT personality_traits, created_at, age
+                    FROM NPCStats 
+                    WHERE npc_id = $1
+                """, lilith_id)
+                
+                # Determine if we need to update
+                is_new_npc = False
+                if npc_details and npc_details['created_at']:
+                    time_since_creation = datetime.now() - npc_details['created_at']
+                    is_new_npc = time_since_creation.total_seconds() < 60
+                else:
+                    is_new_npc = True
+                
+                # Only update if new or has minimal data
+                if is_new_npc or not npc_details['personality_traits']:
+                    logger.info(f"Updating Lilith (ID: {lilith_id}) with full preset data")
+                    
+                    # Use PresetNPCHandler to add all the detailed data
+                    await PresetNPCHandler.create_detailed_npc(ctx, LILITH_RAVENCROFT, {
+                        "story_context": "moth_flame",
+                        "is_main_character": True
+                    })
+                else:
+                    logger.info(f"Lilith already exists (ID: {lilith_id}), adding special properties only")
+                    
+                    # Just add special properties that won't conflict
+                    await MothFlameStoryInitializer._add_lilith_special_properties(
+                        ctx, lilith_id, LILITH_RAVENCROFT, user_id, conversation_id
+                    )
+                    
+                    # Ensure memory system is initialized
+                    memory_count = await conn.fetchval("""
+                        SELECT COUNT(*) FROM npc_memories
+                        WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                    """, user_id, conversation_id, lilith_id)
+                    
+                    if memory_count < 3:
+                        await MothFlameStoryInitializer._initialize_lilith_memory_system(
+                            user_id, conversation_id, lilith_id, LILITH_RAVENCROFT
+                        )
             
-            # Prepare complete NPC data from character profile
-            lilith_data = LILITH_RAVENCROFT.copy()
-            
-            # Build comprehensive physical description
-            physical_desc = MothFlameStoryInitializer._build_comprehensive_physical_description(
-                lilith_data["physical_description"]
-            )
-            
-            # Create initial memories that establish her character
-            initial_memories = MothFlameStoryInitializer._create_lilith_memories()
-            
-            # Create the NPC through the handler
-            result = await npc_handler.create_npc_in_database(ctx, {
-                "npc_name": lilith_data["name"],
-                "sex": "female",
-                "age": 32,
-                "physical_description": physical_desc,
-                "personality": {
-                    "personality_traits": lilith_data["traits"],
-                    "likes": lilith_data["personality"]["likes"],
-                    "dislikes": lilith_data["personality"]["dislikes"],
-                    "hobbies": lilith_data["personality"]["hobbies"]
-                },
-                "stats": lilith_data["stats"],
-                "archetypes": {
-                    "archetype_names": [lilith_data["archetype"]],
-                    "archetype_summary": f"{lilith_data['role']}. {lilith_data['backstory']['history']}",
-                    "archetype_extras_summary": lilith_data["backstory"]["the_transformation"]
-                },
-                "schedule": lilith_data["schedule"],
-                "memories": initial_memories,
-                "current_location": "Velvet Sanctum - Preparation Chamber",
-                "affiliations": ["Velvet Sanctum", "The Underground Network", "The Moth Queen Identity"],
-                "introduced": False  # Player hasn't met her yet
-            })
-            
-            if "error" in result:
-                raise Exception(f"Failed to create Lilith: {result['error']}")
-            
-            npc_id = result["npc_id"]
-            
-            # Add special properties through canonical updates
-            await MothFlameStoryInitializer._add_lilith_special_properties(
-                ctx, npc_id, lilith_data, user_id, conversation_id
-            )
-            
-            # Set up her memory system with special focus
-            await MothFlameStoryInitializer._initialize_lilith_memory_system(
-                user_id, conversation_id, npc_id, lilith_data
-            )
-            
-            return npc_id
+            return lilith_id
             
         except Exception as e:
             logger.error(f"Failed to create Lilith Ravencroft: {e}", exc_info=True)
             raise
+    
+    @staticmethod
+    async def _create_supporting_npcs(ctx, user_id: int, conversation_id: int) -> List[int]:
+        """Create all supporting NPCs for the story using canonical functions"""
+        
+        npc_ids = []
+        
+        # Define all NPCs with their data
+        npcs_to_create = [
+            {
+                "name": "Marcus Sterling",
+                "role": "Devoted Submissive / Broken Executive",
+                "affiliations": ["Velvet Sanctum", "The Queen's Inner Circle"],
+                "data": {
+                    "id": "marcus_sterling",
+                    "name": "Marcus Sterling",
+                    "sex": "male",
+                    "age": 45,
+                    "physical_description": (
+                        "A once-powerful businessman now wholly devoted to his Queen. Expensive suits "
+                        "can't hide the collar marks on his neck or the desperate hunger in his eyes. "
+                        "Silver hair, always perfectly styled, as if maintaining his appearance might "
+                        "earn him an extra moment of her attention. Kneels with practiced grace."
+                    ),
+                    "personality": {
+                        "personality_traits": [
+                            "obsessively_devoted", "jealous", "broken", "wealthy",
+                            "desperately_needy", "completely_submissive", "worship_focused"
+                        ],
+                        "likes": [
+                            "serving the Queen", "public humiliation", "being used as example",
+                            "buying gifts for her", "kneeling", "being ignored (it's still attention)"
+                        ],
+                        "dislikes": [
+                            "new submissives", "being forgotten", "others getting attention",
+                            "leaving the sanctum", "his old life", "independent thought"
+                        ],
+                        "hobbies": [
+                            "collecting Queen's used items", "writing devotional poetry",
+                            "practicing perfect service", "studying her preferences"
+                        ]
+                    },
+                    "stats": {
+                        "dominance": 5,
+                        "cruelty": 10,
+                        "affection": 95,
+                        "trust": 100,
+                        "respect": 20,
+                        "intensity": 80
+                    },
+                    "archetypes": {
+                        "archetype_names": ["Broken Executive", "Devoted Submissive"],
+                        "archetype_summary": "A powerful man reduced to a worshipful pet",
+                        "archetype_extras_summary": "Represents the complete dissolution of self in service"
+                    },
+                    "schedule": {
+                        "Monday": {"Evening": "Waiting outside Velvet Sanctum", "Night": "Kneeling in main chamber"},
+                        "Tuesday": {"All Day": "Preparing offerings for the Queen"},
+                        "Wednesday": {"Evening": "Early arrival at Sanctum", "Night": "Public display"},
+                        "Thursday": {"Evening": "Private session if permitted", "Night": "Cleaning duties"},
+                        "Friday": {"Evening": "First to arrive", "Night": "Demonstration subject"},
+                        "Saturday": {"All Day": "Living at the Sanctum's edges"},
+                        "Sunday": {"All Day": "Writing poetry and waiting"}
+                    },
+                    "memories": [
+                        "The first time She noticed me, I was just another suit with a fetish. But when She "
+                        "looked into my eyes, She saw the hollow man I truly was. 'You're already empty,' "
+                        "She said. 'Let me fill you with purpose.' I've been Hers ever since.",
+                        
+                        "I gave up my CEO position, my marriage, my identity - all for the privilege of "
+                        "kneeling at Her feet. My ex-wife thinks I'm insane. She doesn't understand that "
+                        "I've never been saner. I exist to serve. That is sanity."
+                    ],
+                    "current_location": "Outside Velvet Sanctum",
+                    "affiliations": ["Velvet Sanctum", "The Queen's Inner Circle"],
+                    "introduced": False
+                }
+            },
+            {
+                "name": "Sarah Chen",
+                "role": "Trafficking Survivor / Safehouse Resident",
+                "affiliations": ["The Underground Network", "Moth Queen's Saved"],
+                "data": {
+                    "id": "sarah_chen",
+                    "name": "Sarah Chen",
+                    "sex": "female",
+                    "age": 22,
+                    "physical_description": (
+                        "A young woman still healing from trauma. Asian features marked by a wariness that "
+                        "never quite leaves her eyes. Thin from years of deprivation, slowly learning to "
+                        "take up space again. Dresses in layers, always ready to run. A moth tattoo on "
+                        "her wrist - the mark of those saved by the Moth Queen."
+                    ),
+                    "personality": {
+                        "personality_traits": [
+                            "traumatized", "grateful", "suspicious", "healing",
+                            "protective_of_others", "alert", "slowly_trusting"
+                        ],
+                        "likes": [
+                            "feeling safe", "helping other survivors", "quiet spaces",
+                            "the Moth Queen's protection", "learning self-defense", "tea"
+                        ],
+                        "dislikes": [
+                            "sudden movements", "locked doors", "vans", "older men",
+                            "being touched without warning", "loud voices", "feeling trapped"
+                        ],
+                        "hobbies": [
+                            "counseling other survivors", "self-defense training",
+                            "gardening in the safehouse", "journaling her recovery"
+                        ]
+                    },
+                    "stats": {
+                        "dominance": 20,
+                        "cruelty": 5,
+                        "affection": 70,
+                        "trust": 30,
+                        "respect": 95,
+                        "intensity": 60
+                    },
+                    "archetypes": {
+                        "archetype_names": ["Trafficking Survivor", "Hidden Strength"],
+                        "archetype_summary": "A survivor learning to reclaim her power",
+                        "archetype_extras_summary": "Represents those Lilith saves and why she fights"
+                    },
+                    "schedule": {
+                        "Monday": {"Morning": "Safehouse", "Afternoon": "Therapy", "Evening": "Helping newcomers"},
+                        "Tuesday": {"Morning": "Self-defense class", "Afternoon": "Safehouse garden"},
+                        "Wednesday": {"All Day": "Counseling other survivors"},
+                        "Thursday": {"Morning": "Job training", "Afternoon": "Safehouse"},
+                        "Friday": {"Evening": "Support group meeting"},
+                        "Saturday": {"Varies": "Helping with rescue operations"},
+                        "Sunday": {"All Day": "Rest and recovery"}
+                    },
+                    "memories": [
+                        "I was seventeen when they took me. Promised a waitressing job in the city. The "
+                        "Moth Queen found me three years later, half-dead in a basement. She burned their "
+                        "whole operation down. 'No one else,' she whispered as she carried me out. 'No one else.'",
+                        
+                        "Sometimes I see her at the safehouse, checking on us. She's different there - no "
+                        "masks, no performance. Just a woman who understands our pain because she lived it. "
+                        "She taught me that surviving isn't enough. We deserve to live."
+                    ],
+                    "current_location": "Safehouse - Common Area",
+                    "affiliations": ["The Underground Network", "Moth Queen's Saved"],
+                    "introduced": False
+                }
+            },
+            {
+                "name": "Viktor Kozlov",
+                "role": "Human Trafficker / Crime Boss",
+                "affiliations": ["Eastern European Crime Syndicate", "The Shadow Trade"],
+                "data": {
+                    "id": "viktor_kozlov",
+                    "name": "Viktor Kozlov",
+                    "sex": "male", 
+                    "age": 48,
+                    "physical_description": (
+                        "A mountain of barely restrained violence. Russian accent thick as his scarred "
+                        "knuckles. Prison tattoos peek from under expensive shirts that can't hide what "
+                        "he is. Dead eyes that see women as commodities. Smells of cologne and cruelty."
+                    ),
+                    "personality": {
+                        "personality_traits": [
+                            "violent", "calculating", "misogynistic", "predatory",
+                            "intelligent", "ruthless", "well_connected"
+                        ],
+                        "likes": [
+                            "power over others", "breaking the strong", "money",
+                            "fear in others' eyes", "the trafficking trade", "violence"
+                        ],
+                        "dislikes": [
+                            "the Moth Queen", "losing merchandise", "police attention",
+                            "women with power", "being challenged", "witnesses"
+                        ],
+                        "hobbies": [
+                            "expanding his network", "intimidation", "counting profits",
+                            "planning the Moth Queen's downfall"
+                        ]
+                    },
+                    "stats": {
+                        "dominance": 90,
+                        "cruelty": 95,
+                        "affection": 0,
+                        "trust": 0,
+                        "respect": -50,
+                        "intensity": 85
+                    },
+                    "archetypes": {
+                        "archetype_names": ["Human Trafficker", "Dangerous Predator"],
+                        "archetype_summary": "The evil that Lilith fights against",
+                        "archetype_extras_summary": "Represents the darkness she escaped and battles"
+                    },
+                    "schedule": {
+                        "Monday": {"Night": "Underground clubs hunting"},
+                        "Tuesday": {"Night": "Moving 'merchandise'"},
+                        "Wednesday": {"Evening": "Meeting with corrupt officials"},
+                        "Thursday": {"Night": "Checking on operations"},
+                        "Friday": {"Night": "High-end clubs", "Late Night": "Violence"},
+                        "Saturday": {"Night": "Expanding territory"},
+                        "Sunday": {"Unknown": "Planning and counting money"}
+                    },
+                    "memories": [
+                        "The Moth Queen cost me three million dollars when she burned down my warehouse. "
+                        "But worse, she gave the merchandise hope. Hope is bad for business. Soon I will "
+                        "clip those moth wings and remind her what happens to little girls who forget their place.",
+                        
+                        "I remember her from before - just another scared teenager in my van. Should have "
+                        "killed her when she bit Dmitri. Now she plays queen and steals from me. But "
+                        "every queen falls. And when she does, I'll be there to collect what's mine."
+                    ],
+                    "current_location": "Unknown - Hunting",
+                    "affiliations": ["Eastern European Crime Syndicate", "The Shadow Trade"],
+                    "introduced": False
+                }
+            }
+        ]
+        
+        # Minor NPCs
+        minor_npcs = [
+            {
+                "name": "Jessica Vale",
+                "role": "Sanctum Regular / Lawyer",
+                "affiliations": ["Velvet Sanctum"],
+                "data": {
+                    "id": "jessica_vale",
+                    "name": "Jessica Vale",
+                    "sex": "female",
+                    "age": 32,
+                    "archetype": "Sanctum Regular",
+                    "physical_description": "A lawyer by day who seeks absolution in submission",
+                    "personality": {
+                        "personality_traits": ["submissive", "devoted", "seeking"],
+                        "likes": ["the Queen", "belonging", "structure"],
+                        "dislikes": ["being ignored", "vanilla life"],
+                        "hobbies": ["attending the Sanctum"]
+                    },
+                    "stats": {
+                        "dominance": 20,
+                        "cruelty": 10,
+                        "affection": 60,
+                        "trust": 40,
+                        "respect": 70,
+                        "intensity": 50
+                    },
+                    "current_location": "Velvet Sanctum",
+                    "introduced": False
+                }
+            },
+            {
+                "name": "Amanda Ross",
+                "role": "New Submissive",
+                "affiliations": ["Velvet Sanctum"],
+                "data": {
+                    "id": "amanda_ross",
+                    "name": "Amanda Ross",
+                    "sex": "female",
+                    "age": 26,
+                    "archetype": "Curious Newcomer",
+                    "physical_description": "Curious and eager, hasn't learned the rules yet",
+                    "personality": {
+                        "personality_traits": ["curious", "eager", "naive"],
+                        "likes": ["new experiences", "the Queen's attention"],
+                        "dislikes": ["being corrected", "feeling out of place"],
+                        "hobbies": ["exploring the scene"]
+                    },
+                    "stats": {
+                        "dominance": 15,
+                        "cruelty": 5,
+                        "affection": 70,
+                        "trust": 60,
+                        "respect": 80,
+                        "intensity": 40
+                    },
+                    "current_location": "Velvet Sanctum",
+                    "introduced": False
+                }
+            },
+            {
+                "name": "Diana Moon",
+                "role": "Former Favorite",
+                "affiliations": ["Velvet Sanctum"],
+                "data": {
+                    "id": "diana_moon",
+                    "name": "Diana Moon",
+                    "sex": "female",
+                    "age": 35,
+                    "archetype": "Fallen from Grace",
+                    "physical_description": "Once held the Queen's attention, now watches from the shadows",
+                    "personality": {
+                        "personality_traits": ["bitter", "watchful", "experienced"],
+                        "likes": ["remembering better times", "the Queen's rare acknowledgment"],
+                        "dislikes": ["new favorites", "being replaced"],
+                        "hobbies": ["haunting the Sanctum"]
+                    },
+                    "stats": {
+                        "dominance": 30,
+                        "cruelty": 40,
+                        "affection": 50,
+                        "trust": 20,
+                        "respect": 60,
+                        "intensity": 70
+                    },
+                    "current_location": "Velvet Sanctum",
+                    "introduced": False
+                }
+            }
+        ]
+        
+        # Combine all NPCs
+        all_npcs = npcs_to_create + minor_npcs
+        
+        # Create each NPC using canonical functions
+        async with get_db_connection_context() as conn:
+            for npc_def in all_npcs:
+                try:
+                    # First, find or create the NPC canonically
+                    npc_id = await canon.find_or_create_npc(
+                        ctx, conn,
+                        npc_name=npc_def["name"],
+                        role=npc_def["role"],
+                        affiliations=npc_def.get("affiliations", [])
+                    )
+                    
+                    if npc_id:
+                        # Check if this NPC needs full data update
+                        existing = await conn.fetchrow("""
+                            SELECT personality_traits, created_at
+                            FROM NPCStats WHERE npc_id = $1
+                        """, npc_id)
+                        
+                        # Determine if we need to update
+                        is_new_npc = False
+                        if existing and existing['created_at']:
+                            time_since_creation = datetime.now() - existing['created_at']
+                            is_new_npc = time_since_creation.total_seconds() < 60
+                        else:
+                            is_new_npc = True
+                        
+                        # Only update if newly created or has minimal data
+                        if is_new_npc or not existing['personality_traits']:
+                            logger.info(f"Updating {npc_def['name']} (ID: {npc_id}) with full preset data")
+                            # Use the preset handler to add full details
+                            await PresetNPCHandler.create_detailed_npc(
+                                ctx, npc_def["data"], {"story_context": "moth_flame"}
+                            )
+                        else:
+                            logger.info(f"{npc_def['name']} already exists (ID: {npc_id}), skipping full update")
+                    
+                    npc_ids.append(npc_id)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to create NPC {npc_def['name']}: {e}", exc_info=True)
+                    # Continue with other NPCs even if one fails
+        
+        return npc_ids
     
     @staticmethod
     def _build_comprehensive_physical_description(desc_data: Dict[str, str]) -> str:
@@ -354,63 +709,23 @@ class MothFlameStoryInitializer:
         
         memory_system = await MemorySystem.get_instance(user_id, conversation_id)
         
-        # Create memory schemas specific to her character
-        schemas = [
-            {
-                "name": "Abandonment Patterns",
-                "description": "Tracking promises made and broken",
-                "category": "trauma",
-                "attributes": {
-                    "promise_type": "unknown",
-                    "promise_keeper": "unknown", 
-                    "time_until_broken": "unknown",
-                    "her_response": "unknown"
-                }
-            },
-            {
-                "name": "Devotion Displays",
-                "description": "How others show their submission",
-                "category": "relationship",
-                "attributes": {
-                    "devotion_type": "unknown",
-                    "sincerity_assessment": "unknown",
-                    "her_satisfaction": "unknown",
-                    "trust_impact": "unknown"
-                }
-            },
-            {
-                "name": "Mask Moments",
-                "description": "When and why masks slip or are removed",
-                "category": "vulnerability",
-                "attributes": {
-                    "mask_type": "unknown",
-                    "trigger": "unknown",
-                    "witness": "unknown",
-                    "aftermath": "unknown"
-                }
-            },
-            {
-                "name": "Underground Work",
-                "description": "Her secret life as protector",
-                "category": "hidden_identity",
-                "attributes": {
-                    "operation_type": "unknown",
-                    "lives_saved": 0,
-                    "lives_lost": 0,
-                    "emotional_cost": "unknown"
-                }
-            }
-        ]
-        
-        for schema in schemas:
-            await memory_system.schema_manager.create_schema(
+        # Store initial memories
+        initial_memories = MothFlameStoryInitializer._create_lilith_memories()
+        for memory_text in initial_memories:
+            await memory_system.remember(
                 entity_type="npc",
                 entity_id=npc_id,
-                schema_name=schema["name"],
-                description=schema["description"],
-                category=schema["category"],
-                attributes=schema["attributes"]
+                memory_text=memory_text,
+                importance="high",
+                emotional=True,
+                tags=["backstory", "core_memory", "trauma", "motivation"]
             )
+        
+        # Create memory schemas specific to her character
+        await memory_system.generate_schemas(
+            entity_type="npc",
+            entity_id=npc_id
+        )
         
         # Set up trauma keywords for flashback system
         trauma_keywords = [
@@ -429,268 +744,6 @@ class MothFlameStoryInitializer:
                 json.dumps(trauma_keywords),
                 user_id, conversation_id, npc_id
             )
-    
-    @staticmethod
-    async def _create_supporting_npcs(ctx, user_id: int, conversation_id: int) -> List[int]:
-        """Create all supporting NPCs for the story"""
-        
-        npc_handler = NPCCreationHandler()
-        npc_ids = []
-        
-        # Marcus Sterling - The Devoted Pilgrim
-        marcus_result = await npc_handler.create_npc_in_database(ctx, {
-            "npc_name": "Marcus Sterling",
-            "sex": "male",
-            "age": 45,
-            "physical_description": (
-                "A once-powerful businessman now wholly devoted to his Queen. Expensive suits "
-                "can't hide the collar marks on his neck or the desperate hunger in his eyes. "
-                "Silver hair, always perfectly styled, as if maintaining his appearance might "
-                "earn him an extra moment of her attention. Kneels with practiced grace."
-            ),
-            "personality": {
-                "personality_traits": [
-                    "obsessively_devoted", "jealous", "broken", "wealthy",
-                    "desperately_needy", "completely_submissive", "worship_focused"
-                ],
-                "likes": [
-                    "serving the Queen", "public humiliation", "being used as example",
-                    "buying gifts for her", "kneeling", "being ignored (it's still attention)"
-                ],
-                "dislikes": [
-                    "new submissives", "being forgotten", "others getting attention",
-                    "leaving the sanctum", "his old life", "independent thought"
-                ],
-                "hobbies": [
-                    "collecting Queen's used items", "writing devotional poetry",
-                    "practicing perfect service", "studying her preferences"
-                ]
-            },
-            "stats": {
-                "dominance": 5,
-                "cruelty": 10,
-                "affection": 95,
-                "trust": 100,
-                "respect": 20,
-                "intensity": 80
-            },
-            "archetypes": {
-                "archetype_names": ["Broken Executive", "Devoted Submissive"],
-                "archetype_summary": "A powerful man reduced to a worshipful pet",
-                "archetype_extras_summary": "Represents the complete dissolution of self in service"
-            },
-            "schedule": {
-                "Monday": {"Evening": "Waiting outside Velvet Sanctum", "Night": "Kneeling in main chamber"},
-                "Tuesday": {"All Day": "Preparing offerings for the Queen"},
-                "Wednesday": {"Evening": "Early arrival at Sanctum", "Night": "Public display"},
-                "Thursday": {"Evening": "Private session if permitted", "Night": "Cleaning duties"},
-                "Friday": {"Evening": "First to arrive", "Night": "Demonstration subject"},
-                "Saturday": {"All Day": "Living at the Sanctum's edges"},
-                "Sunday": {"All Day": "Writing poetry and waiting"}
-            },
-            "memories": [
-                "The first time She noticed me, I was just another suit with a fetish. But when She "
-                "looked into my eyes, She saw the hollow man I truly was. 'You're already empty,' "
-                "She said. 'Let me fill you with purpose.' I've been Hers ever since.",
-                
-                "I gave up my CEO position, my marriage, my identity - all for the privilege of "
-                "kneeling at Her feet. My ex-wife thinks I'm insane. She doesn't understand that "
-                "I've never been saner. I exist to serve. That is sanity."
-            ],
-            "current_location": "Outside Velvet Sanctum",
-            "affiliations": ["Velvet Sanctum", "The Queen's Inner Circle"],
-            "introduced": False
-        })
-        
-        if "error" not in marcus_result:
-            npc_ids.append(marcus_result["npc_id"])
-        
-        # Sarah Chen - Rescued Trafficking Victim
-        sarah_result = await npc_handler.create_npc_in_database(ctx, {
-            "npc_name": "Sarah Chen",
-            "sex": "female",
-            "age": 22,
-            "physical_description": (
-                "A young woman still healing from trauma. Asian features marked by a wariness that "
-                "never quite leaves her eyes. Thin from years of deprivation, slowly learning to "
-                "take up space again. Dresses in layers, always ready to run. A moth tattoo on "
-                "her wrist - the mark of those saved by the Moth Queen."
-            ),
-            "personality": {
-                "personality_traits": [
-                    "traumatized", "grateful", "suspicious", "healing",
-                    "protective_of_others", "alert", "slowly_trusting"
-                ],
-                "likes": [
-                    "feeling safe", "helping other survivors", "quiet spaces",
-                    "the Moth Queen's protection", "learning self-defense", "tea"
-                ],
-                "dislikes": [
-                    "sudden movements", "locked doors", "vans", "older men",
-                    "being touched without warning", "loud voices", "feeling trapped"
-                ],
-                "hobbies": [
-                    "counseling other survivors", "self-defense training",
-                    "gardening in the safehouse", "journaling her recovery"
-                ]
-            },
-            "stats": {
-                "dominance": 20,
-                "cruelty": 5,
-                "affection": 70,
-                "trust": 30,
-                "respect": 95,
-                "intensity": 60
-            },
-            "archetypes": {
-                "archetype_names": ["Trafficking Survivor", "Hidden Strength"],
-                "archetype_summary": "A survivor learning to reclaim her power",
-                "archetype_extras_summary": "Represents those Lilith saves and why she fights"
-            },
-            "schedule": {
-                "Monday": {"Morning": "Safehouse", "Afternoon": "Therapy", "Evening": "Helping newcomers"},
-                "Tuesday": {"Morning": "Self-defense class", "Afternoon": "Safehouse garden"},
-                "Wednesday": {"All Day": "Counseling other survivors"},
-                "Thursday": {"Morning": "Job training", "Afternoon": "Safehouse"},
-                "Friday": {"Evening": "Support group meeting"},
-                "Saturday": {"Varies": "Helping with rescue operations"},
-                "Sunday": {"All Day": "Rest and recovery"}
-            },
-            "memories": [
-                "I was seventeen when they took me. Promised a waitressing job in the city. The "
-                "Moth Queen found me three years later, half-dead in a basement. She burned their "
-                "whole operation down. 'No one else,' she whispered as she carried me out. 'No one else.'",
-                
-                "Sometimes I see her at the safehouse, checking on us. She's different there - no "
-                "masks, no performance. Just a woman who understands our pain because she lived it. "
-                "She taught me that surviving isn't enough. We deserve to live."
-            ],
-            "current_location": "Safehouse - Common Area",
-            "affiliations": ["The Underground Network", "Moth Queen's Saved"],
-            "introduced": False
-        })
-        
-        if "error" not in sarah_result:
-            npc_ids.append(sarah_result["npc_id"])
-        
-        # Viktor Kozlov - Trafficking Ring Enforcer
-        viktor_result = await npc_handler.create_npc_in_database(ctx, {
-            "npc_name": "Viktor Kozlov",
-            "sex": "male", 
-            "age": 48,
-            "physical_description": (
-                "A mountain of barely restrained violence. Russian accent thick as his scarred "
-                "knuckles. Prison tattoos peek from under expensive shirts that can't hide what "
-                "he is. Dead eyes that see women as commodities. Smells of cologne and cruelty."
-            ),
-            "personality": {
-                "personality_traits": [
-                    "violent", "calculating", "misogynistic", "predatory",
-                    "intelligent", "ruthless", "well_connected"
-                ],
-                "likes": [
-                    "power over others", "breaking the strong", "money",
-                    "fear in others' eyes", "the trafficking trade", "violence"
-                ],
-                "dislikes": [
-                    "the Moth Queen", "losing merchandise", "police attention",
-                    "women with power", "being challenged", "witnesses"
-                ],
-                "hobbies": [
-                    "expanding his network", "intimidation", "counting profits",
-                    "planning the Moth Queen's downfall"
-                ]
-            },
-            "stats": {
-                "dominance": 90,
-                "cruelty": 95,
-                "affection": 0,
-                "trust": 0,
-                "respect": -50,
-                "intensity": 85
-            },
-            "archetypes": {
-                "archetype_names": ["Human Trafficker", "Dangerous Predator"],
-                "archetype_summary": "The evil that Lilith fights against",
-                "archetype_extras_summary": "Represents the darkness she escaped and battles"
-            },
-            "schedule": {
-                "Monday": {"Night": "Underground clubs hunting"},
-                "Tuesday": {"Night": "Moving 'merchandise'"},
-                "Wednesday": {"Evening": "Meeting with corrupt officials"},
-                "Thursday": {"Night": "Checking on operations"},
-                "Friday": {"Night": "High-end clubs", "Late Night": "Violence"},
-                "Saturday": {"Night": "Expanding territory"},
-                "Sunday": {"Unknown": "Planning and counting money"}
-            },
-            "memories": [
-                "The Moth Queen cost me three million dollars when she burned down my warehouse. "
-                "But worse, she gave the merchandise hope. Hope is bad for business. Soon I will "
-                "clip those moth wings and remind her what happens to little girls who forget their place.",
-                
-                "I remember her from before - just another scared teenager in my van. Should have "
-                "killed her when she bit Dmitri. Now she plays queen and steals from me. But "
-                "every queen falls. And when she does, I'll be there to collect what's mine."
-            ],
-            "current_location": "Unknown - Hunting",
-            "affiliations": ["Eastern European Crime Syndicate", "The Shadow Trade"],
-            "introduced": False
-        })
-        
-        if "error" not in viktor_result:
-            npc_ids.append(viktor_result["npc_id"])
-        
-        # Create a few minor NPCs for atmosphere
-        minor_npcs = [
-            {
-                "name": "Jessica Vale",
-                "role": "Sanctum Regular",
-                "description": "A lawyer by day who seeks absolution in submission"
-            },
-            {
-                "name": "Amanda Ross", 
-                "role": "New Submissive",
-                "description": "Curious and eager, hasn't learned the rules yet"
-            },
-            {
-                "name": "Diana Moon",
-                "role": "Former Favorite",
-                "description": "Once held the Queen's attention, now watches from the shadows"
-            }
-        ]
-        
-        for minor in minor_npcs:
-            minor_result = await npc_handler.create_npc_in_database(ctx, {
-                "npc_name": minor["name"],
-                "sex": "female",
-                "physical_description": minor["description"],
-                "personality": {
-                    "personality_traits": ["submissive", "devoted", "seeking"],
-                    "likes": ["the Queen", "belonging", "structure"],
-                    "dislikes": ["being ignored", "vanilla life"],
-                    "hobbies": ["attending the Sanctum"]
-                },
-                "stats": {
-                    "dominance": 20,
-                    "cruelty": 10,
-                    "affection": 60,
-                    "trust": 40,
-                    "respect": 70,
-                    "intensity": 50
-                },
-                "archetypes": {
-                    "archetype_names": ["Sanctum Regular"],
-                    "archetype_summary": minor["role"],
-                    "archetype_extras_summary": "Part of the Queen's court"
-                },
-                "current_location": "Velvet Sanctum",
-                "introduced": False
-            })
-            
-            if "error" not in minor_result:
-                npc_ids.append(minor_result["npc_id"])
-        
-        return npc_ids
     
     @staticmethod
     async def _create_all_locations(ctx, user_id: int, conversation_id: int) -> List[str]:
@@ -847,30 +900,41 @@ class MothFlameStoryInitializer:
                 if row:
                     npc_names[npc_id] = row['npc_name']
         
+        # Map names to IDs
+        npc_id_map = {name: npc_id for npc_id, name in npc_names.items()}
+        
         # Establish Lilith's relationships
-        relationships = [
-            {
+        relationships = []
+        
+        # Marcus Sterling (devoted submissive)
+        if "Marcus Sterling" in npc_id_map:
+            relationships.append({
                 "source": lilith_id,
-                "target": support_npc_ids[0],  # Marcus
+                "target": npc_id_map["Marcus Sterling"],
                 "type": "owns",
                 "reverse": "owned_by",
                 "strength": 90
-            },
-            {
+            })
+        
+        # Sarah Chen (saved victim)
+        if "Sarah Chen" in npc_id_map:
+            relationships.append({
                 "source": lilith_id,
-                "target": support_npc_ids[1],  # Sarah
+                "target": npc_id_map["Sarah Chen"],
                 "type": "protector",
                 "reverse": "protected_by", 
                 "strength": 80
-            },
-            {
+            })
+        
+        # Viktor Kozlov (enemy)
+        if "Viktor Kozlov" in npc_id_map:
+            relationships.append({
                 "source": lilith_id,
-                "target": support_npc_ids[2],  # Viktor
+                "target": npc_id_map["Viktor Kozlov"],
                 "type": "enemy",
                 "reverse": "enemy",
                 "strength": 100
-            }
-        ]
+            })
         
         async with get_db_connection_context() as conn:
             for rel in relationships:
@@ -901,32 +965,37 @@ class MothFlameStoryInitializer:
                 )
         
         # Create shared memories between connected NPCs
-        shared_memories = [
-            {
-                "npcs": [lilith_id, support_npc_ids[0]],
+        shared_memories = []
+        
+        if "Marcus Sterling" in npc_id_map:
+            shared_memories.append({
+                "npcs": [lilith_id, npc_id_map["Marcus Sterling"]],
                 "memory": (
                     "The night Marcus Sterling first knelt before the Queen, he wept. 'I've been "
                     "empty so long,' he confessed. She placed a collar around his neck with the "
                     "tenderness of a mother and the finality of a judge. 'Now you're mine.'"
                 )
-            },
-            {
-                "npcs": [lilith_id, support_npc_ids[1]],
+            })
+        
+        if "Sarah Chen" in npc_id_map:
+            shared_memories.append({
+                "npcs": [lilith_id, npc_id_map["Sarah Chen"]],
                 "memory": (
                     "Sarah was barely breathing when the Moth Queen found her. As she carried the "
                     "girl from that basement, she whispered, 'You're safe now. I promise you're safe.' "
                     "It was the first promise she'd made in years that she knew she'd keep."
                 )
-            },
-            {
-                "npcs": [lilith_id, support_npc_ids[2]],
+            })
+        
+        if "Viktor Kozlov" in npc_id_map:
+            shared_memories.append({
+                "npcs": [lilith_id, npc_id_map["Viktor Kozlov"]],
                 "memory": (
                     "Viktor's men had her surrounded that night five years ago. 'Just another moth,' "
                     "he laughed. But moths can burn too. By dawn, his warehouse was ash and three "
                     "girls were free. He's been hunting her ever since."
                 )
-            }
-        ]
+            })
         
         for shared in shared_memories:
             for npc_id in shared["npcs"]:
@@ -1040,6 +1109,8 @@ class MothFlameStoryInitializer:
                     user_id, conversation_id, npc_id, mechanic_type, mechanic_data
                 )
                 VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (user_id, conversation_id, npc_id, mechanic_type)
+                DO UPDATE SET mechanic_data = EXCLUDED.mechanic_data
                 """,
                 user_id, conversation_id, lilith_id, "mask_system",
                 json.dumps({
@@ -1098,6 +1169,8 @@ class MothFlameStoryInitializer:
                     user_id, conversation_id, npc_id, mechanic_type, mechanic_data
                 )
                 VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (user_id, conversation_id, npc_id, mechanic_type)
+                DO UPDATE SET mechanic_data = EXCLUDED.mechanic_data
                 """,
                 user_id, conversation_id, lilith_id, "poetry_triggers",
                 json.dumps({
@@ -1123,6 +1196,8 @@ class MothFlameStoryInitializer:
                     user_id, conversation_id, npc_id, mechanic_type, mechanic_data
                 )
                 VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (user_id, conversation_id, npc_id, mechanic_type)
+                DO UPDATE SET mechanic_data = EXCLUDED.mechanic_data
                 """,
                 user_id, conversation_id, lilith_id, "three_words",
                 json.dumps({
