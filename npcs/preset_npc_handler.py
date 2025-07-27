@@ -4,6 +4,8 @@ import json
 import logging
 import random
 from datetime import datetime
+from db.connection import get_db_connection_context
+
 
 logger = logging.getLogger(__name__)
 
