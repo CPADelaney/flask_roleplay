@@ -15,11 +15,15 @@ from logic.aggregator_sdk import get_aggregated_roleplay_context
 from db.connection import get_db_connection_context
 from routes.story_routes import build_aggregator_text
 
-from tasks import process_new_game_task, process_new_game_preset_task  
+# Only import the single task - no more preset-specific task
+from tasks import process_new_game_task
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 # Use your Railway DSN (public URL for local development)
 DB_DSN = os.getenv("DB_DSN") 
-logging.info(f"[new_game] Using DB_DSN={DB_DSN}")  # Add right after retrieving
+logger.info(f"[new_game] Using DB_DSN={DB_DSN}")
 
 new_game_bp = Blueprint('new_game_bp', __name__)
 
@@ -29,17 +33,15 @@ async def create_conversation_async(user_id):
         preliminary_name = "New Game"
         status = "processing"
         
-        async with conn.cursor() as cursor:
-            await cursor.execute("""
-                INSERT INTO conversations (user_id, conversation_name, status)
-                VALUES (%s, %s, %s)
-                RETURNING id
-            """, (user_id, preliminary_name, status))
-            
-            row = await cursor.fetchone()
-            conversation_id = row[0]
-            
-        logging.info(f"Created conversation_id: {conversation_id} for user_id: {user_id}")
+        row = await conn.fetchrow("""
+            INSERT INTO conversations (user_id, conversation_name, status)
+            VALUES ($1, $2, $3)
+            RETURNING id
+        """, user_id, preliminary_name, status)
+        
+        conversation_id = row['id']
+        
+        logger.info(f"Created conversation_id: {conversation_id} for user_id: {user_id}")
         return conversation_id
 
 
@@ -52,16 +54,16 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
     await asyncio.sleep(delay)
     return await asyncio.to_thread(get_chatgpt_response, conversation_id, context, prompt)
 
+
 @new_game_bp.route('/start_new_game', methods=['POST'])
 async def start_new_game():
-    from tasks import process_new_game_task  # Import task that uses NewGameAgent and Nyx governance
-    logging.info("=== /start_new_game endpoint called (offloading to background task using NewGameAgent) ===")
+    logger.info("=== /start_new_game endpoint called (offloading to background task using NewGameAgent) ===")
     
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    conversation_data = request.get_json() or {}
+    conversation_data = await request.get_json() or {}
 
     if not conversation_data.get("conversation_id"):
         conversation_id = await create_conversation_async(user_id)
@@ -70,9 +72,10 @@ async def start_new_game():
         conversation_id = conversation_data["conversation_id"]
 
     task = process_new_game_task.delay(user_id, conversation_data)
-    logging.info(f"Enqueued process_new_game_task with NewGameAgent for user_id={user_id}, conversation_id={conversation_id}, task id: {task.id}")
+    logger.info(f"Enqueued process_new_game_task with NewGameAgent for user_id={user_id}, conversation_id={conversation_id}, task id: {task.id}")
 
     return jsonify({"job_id": task.id, "conversation_id": conversation_id}), 202
+
 
 @new_game_bp.route('/conversation_status', methods=['GET'])
 async def conversation_status():
@@ -126,6 +129,7 @@ async def conversation_status():
             "opening_narrative": opening_msg_row['content'] if opening_msg_row else None
         })
 
+
 @new_game_bp.route('/api/preset-stories', methods=['GET'])
 async def list_preset_stories():
     """Get all available preset stories"""
@@ -153,11 +157,10 @@ async def list_preset_stories():
         
         return jsonify({"stories": stories})
 
+
 @new_game_bp.route('/api/new-game/preset', methods=['POST'])
 async def start_preset_game():
     """Start a new game with a preset story"""
-    # Remove this line: from tasks import process_new_game_preset_task
-    
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"error": "Not authenticated"}), 401
@@ -181,11 +184,19 @@ async def start_preset_game():
         if not exists:
             return jsonify({"error": f"Preset story '{story_id}' not found"}), 404
     
-    # Queue the task with correct data structure
+    # Queue the SAME task but with preset_story_id in the data
     conv_id = await create_conversation_async(user_id)
-    task = process_new_game_preset_task.delay(user_id, {
-        "preset_story_id": story_id,
+    
+    # Use the same process_new_game_task but include preset_story_id
+    task = process_new_game_task.delay(user_id, {
+        "preset_story_id": story_id,  # This tells the task to use preset logic
         "conversation_id": conv_id
     })
-    return jsonify({"status":"processing","task_id":task.id,"conversation_id":conv_id}), 202
-
+    
+    logger.info(f"Enqueued process_new_game_task (preset mode) for story_id={story_id}, conversation_id={conv_id}")
+    
+    return jsonify({
+        "status": "processing",
+        "task_id": task.id,
+        "conversation_id": conv_id
+    }), 202
