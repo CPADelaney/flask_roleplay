@@ -320,6 +320,7 @@ async def create_all_tables():
                     closeness INT CHECK (closeness BETWEEN -100 AND 100),
                     trust INT CHECK (trust BETWEEN -100 AND 100),
                     respect INT CHECK (respect BETWEEN -100 AND 100),
+                    affection INT CHECK (affection BETWEEN -100 AND 100) DEFAULT 0,
                     intensity INT CHECK (intensity BETWEEN -100 AND 100),
                     memory JSONB,
                     monica_level INT DEFAULT 0,
@@ -2471,6 +2472,12 @@ async def create_all_tables():
                 ''',
                 '''
                 ALTER TABLE NPCStats ADD COLUMN flashback_triggers JSONB;
+                ''',
+                '''
+                ALTER TABLE NPCStats 
+                ADD COLUMN IF NOT EXISTS affection INT 
+                CHECK (affection BETWEEN -100 AND 100) 
+                DEFAULT 0;
                 ''',
                 '''
                 ALTER TABLE NPCStats ADD COLUMN revelation_plan JSONB;
