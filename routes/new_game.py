@@ -182,14 +182,10 @@ async def start_preset_game():
             return jsonify({"error": f"Preset story '{story_id}' not found"}), 404
     
     # Queue the task with correct data structure
+    conv_id = await create_conversation_async(user_id)
     task = process_new_game_preset_task.delay(user_id, {
-        "preset_story_id": story_id
+        "preset_story_id": story_id,
+        "conversation_id": conv_id
     })
-    
-    logger.info(f"Queued preset game task {task.id} for story {story_id}")
-    
-    return jsonify({
-        "status": "processing",
-        "task_id": task.id,
-        "story_id": story_id
-    })
+    return jsonify({"status":"processing","task_id":task.id,"conversation_id":conv_id}), 202
+
