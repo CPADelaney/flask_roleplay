@@ -3090,6 +3090,385 @@ async def create_all_tables():
                 CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw 
                 ON unified_memories USING hnsw (embedding vector_cosine_ops);
                 ''',
+                '''
+                ALTER TABLE NPCMemories 
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 0;
+                ''',
+                '''
+                ALTER TABLE NPCMemories 
+                ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
+                ''',
+                '''
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_npcmemories_user') THEN
+                        ALTER TABLE NPCMemories 
+                        ADD CONSTRAINT fk_npcmemories_user 
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+                    END IF;
+                END $$;
+                ''',
+                '''
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_npcmemories_conversation') THEN
+                        ALTER TABLE NPCMemories 
+                        ADD CONSTRAINT fk_npcmemories_conversation 
+                        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                    END IF;
+                END $$;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_npcmemories_user_conv 
+                ON NPCMemories(user_id, conversation_id);
+                ''',
+                
+                # ======================================
+                # DROP ALL VECTOR INDEXES (SAFE TO RE-RUN)
+                # ======================================
+                '''
+                DROP INDEX IF EXISTS idx_npcstats_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_locations_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_events_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_nations_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_national_conflicts_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_cultural_elements_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_culinary_traditions_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_social_customs_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_geographic_regions_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_political_entities_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_conflict_simulations_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_border_disputes_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_urban_myths_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_local_histories_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_landmarks_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_historical_events_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_notable_figures_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_quests_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS npc_memory_embedding_hnsw_idx;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_unified_memories_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_worldlore_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_factions_embedding_hnsw;
+                ''',
+                '''
+                DROP INDEX IF EXISTS idx_nyxmemories_embedding_hnsw;
+                ''',
+                
+                # ======================================
+                # UPDATE ALL VECTOR COLUMNS TO 1536 DIMENSIONS
+                # ======================================
+                '''
+                DO $$ 
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'npcstats' AND column_name = 'embedding') THEN
+                        ALTER TABLE NPCStats ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'locations' AND column_name = 'embedding') THEN
+                        ALTER TABLE Locations ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'events' AND column_name = 'embedding') THEN
+                        ALTER TABLE Events ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'factions' AND column_name = 'embedding') THEN
+                        ALTER TABLE Factions ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'nations' AND column_name = 'embedding') THEN
+                        ALTER TABLE Nations ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'nationalconflicts' AND column_name = 'embedding') THEN
+                        ALTER TABLE NationalConflicts ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'culturalelements' AND column_name = 'embedding') THEN
+                        ALTER TABLE CulturalElements ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'culinarytraditions' AND column_name = 'embedding') THEN
+                        ALTER TABLE CulinaryTraditions ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'socialcustoms' AND column_name = 'embedding') THEN
+                        ALTER TABLE SocialCustoms ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'geographicregions' AND column_name = 'embedding') THEN
+                        ALTER TABLE GeographicRegions ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'politicalentities' AND column_name = 'embedding') THEN
+                        ALTER TABLE PoliticalEntities ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'conflictsimulations' AND column_name = 'embedding') THEN
+                        ALTER TABLE ConflictSimulations ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'borderdisputes' AND column_name = 'embedding') THEN
+                        ALTER TABLE BorderDisputes ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'urbanmyths' AND column_name = 'embedding') THEN
+                        ALTER TABLE UrbanMyths ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'localhistories' AND column_name = 'embedding') THEN
+                        ALTER TABLE LocalHistories ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'landmarks' AND column_name = 'embedding') THEN
+                        ALTER TABLE Landmarks ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'historicalevents' AND column_name = 'embedding') THEN
+                        ALTER TABLE HistoricalEvents ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'notablefigures' AND column_name = 'embedding') THEN
+                        ALTER TABLE NotableFigures ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'quests' AND column_name = 'embedding') THEN
+                        ALTER TABLE Quests ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'npcmemories' AND column_name = 'embedding') THEN
+                        ALTER TABLE NPCMemories ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'unified_memories' AND column_name = 'embedding') THEN
+                        ALTER TABLE unified_memories ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'worldlore' AND column_name = 'embedding') THEN
+                        ALTER TABLE WorldLore ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name = 'nyxmemories' AND column_name = 'embedding') THEN
+                        ALTER TABLE NyxMemories ALTER COLUMN embedding TYPE vector(1536);
+                    END IF;
+                END $$;
+                ''',
+                
+                # ======================================
+                # RECREATE ALL VECTOR INDEXES WITH CORRECT DIMENSIONS
+                # ======================================
+                '''
+                CREATE INDEX IF NOT EXISTS idx_npcstats_embedding_hnsw 
+                ON NPCStats USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_locations_embedding_hnsw 
+                ON Locations USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_events_embedding_hnsw 
+                ON Events USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_factions_embedding_hnsw 
+                ON Factions USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nations_embedding_hnsw 
+                ON Nations USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_national_conflicts_embedding_hnsw 
+                ON NationalConflicts USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_cultural_elements_embedding_hnsw 
+                ON CulturalElements USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_culinary_traditions_embedding_hnsw 
+                ON CulinaryTraditions USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_social_customs_embedding_hnsw 
+                ON SocialCustoms USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_geographic_regions_embedding_hnsw 
+                ON GeographicRegions USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_political_entities_embedding_hnsw 
+                ON PoliticalEntities USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conflict_simulations_embedding_hnsw 
+                ON ConflictSimulations USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_border_disputes_embedding_hnsw 
+                ON BorderDisputes USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_urban_myths_embedding_hnsw 
+                ON UrbanMyths USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_local_histories_embedding_hnsw 
+                ON LocalHistories USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_landmarks_embedding_hnsw 
+                ON Landmarks USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_historical_events_embedding_hnsw 
+                ON HistoricalEvents USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_notable_figures_embedding_hnsw 
+                ON NotableFigures USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_quests_embedding_hnsw 
+                ON Quests USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx 
+                ON NPCMemories USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw 
+                ON unified_memories USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_worldlore_embedding_hnsw 
+                ON WorldLore USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nyxmemories_embedding_hnsw 
+                ON NyxMemories USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+                ''',
+                
+                # ======================================
+                # VERIFY AND LOG VECTOR DIMENSIONS
+                # ======================================
+                '''
+                DO $$ 
+                DECLARE
+                    r RECORD;
+                    dim_count INTEGER;
+                BEGIN
+                    FOR r IN 
+                        SELECT 
+                            c.table_name,
+                            c.column_name,
+                            pg_catalog.format_type(a.atttypid, a.atttypmod) as data_type
+                        FROM information_schema.columns c
+                        JOIN pg_attribute a ON a.attname = c.column_name
+                        JOIN pg_class cl ON cl.oid = a.attrelid AND cl.relname = c.table_name
+                        WHERE c.column_name = 'embedding' 
+                        AND c.udt_name = 'vector'
+                    LOOP
+                        IF r.data_type ~ 'vector\(([0-9]+)\)' THEN
+                            dim_count := substring(r.data_type from 'vector\(([0-9]+)\)')::INTEGER;
+                            RAISE NOTICE 'Table % has embedding dimension: %', r.table_name, dim_count;
+                            
+                            IF dim_count != 1536 THEN
+                                RAISE WARNING 'Table % has incorrect dimension % (expected 1536)', r.table_name, dim_count;
+                            END IF;
+                        END IF;
+                    END LOOP;
+                END $$;
+                ''',
             ]  # End of sql_commands list
 
             # Execute commands sequentially
