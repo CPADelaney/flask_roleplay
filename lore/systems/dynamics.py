@@ -702,86 +702,95 @@ class LoreDynamicsSystem(BaseLoreManager):
     # IDENTIFY AFFECTED LORE
     #===========================================================================
     async def _identify_affected_lore_impl(self, event_description: str) -> List[Dict[str, Any]]:
-            """
-            Identify lore elements that might be impacted by an event.
-            Implementation method - can be called directly.
-            """
-            event_embedding = await generate_embedding(event_description)
-            affected_elements = []
-            
-            lore_types = [
-                "WorldLore", "Factions", "CulturalElements", "HistoricalEvents",
-                "GeographicRegions", "LocationLore", "UrbanMyths", "LocalHistories",
-                "Landmarks", "NotableFigures"
-            ]
-            
-            async with get_db_connection_context() as conn:
-                for lore_type in lore_types:
-                    try:
-                        # Use safe table name
-                        table_name_unquoted = lore_type.lower()
-                        table_name = safe_table_name(table_name_unquoted)
-                        
-                        # Check if table exists
-                        table_exists = await conn.fetchval("""
-                            SELECT EXISTS (
-                                SELECT FROM information_schema.tables 
-                                WHERE table_name = $1
-                            );
-                        """, table_name_unquoted)
-                        
-                        if not table_exists:
-                            continue
-                        
-                        # Check if embedding column exists
-                        has_embedding = await conn.fetchval("""
-                            SELECT EXISTS (
-                                SELECT FROM information_schema.columns 
-                                WHERE table_name = $1 AND column_name = 'embedding'
-                            );
-                        """, table_name_unquoted)
-                        
-                        if not has_embedding:
-                            continue
-                        
-                        # Determine id field
-                        id_field = 'id'
-                        if lore_type == 'LocationLore':
-                            id_field = 'location_id'
-                        
-                        id_column = safe_column_name(id_field)
-                        
-                        # Build and execute query
-                        query = f"""
-                            SELECT {id_column} as id, name, description, 
-                                   1 - (embedding <=> $1) as relevance
-                            FROM {table_name}
-                            WHERE embedding IS NOT NULL
-                            ORDER BY embedding <=> $1
-                            LIMIT 5
-                        """
-                        
-                        rows = await conn.fetch(query, event_embedding)
-                        
-                        # Filter only those with decent relevance
-                        for row in rows:
-                            if row['relevance'] >= 0.6:
-                                affected_elements.append({
-                                    'lore_type': lore_type,
-                                    'lore_id': row['id'],
-                                    'name': row['name'],
-                                    'description': row['description'],
-                                    'relevance': row['relevance']
-                                })
-                    except Exception as e:
-                        logging.error(f"Error checking {lore_type} for affected elements: {e}")
-            
-            # Sort by descending relevance, limit to top 15
-            affected_elements.sort(key=lambda x: x['relevance'], reverse=True)
-            if len(affected_elements) > 15:
-                affected_elements = affected_elements[:15]
-            
-            return affected_elements
+        """
+        Identify lore elements that might be impacted by an event.
+        Implementation method - can be called directly.
+        """
+        event_embedding = await generate_embedding(event_description)
+        affected_elements = []
+        
+        # Define table configurations with their specific name columns
+        lore_type_configs = {
+            "WorldLore": {"name_column": "name", "id_column": "id"},
+            "Factions": {"name_column": "name", "id_column": "id"},
+            "CulturalElements": {"name_column": "name", "id_column": "id"},
+            "HistoricalEvents": {"name_column": "name", "id_column": "id"},
+            "GeographicRegions": {"name_column": "name", "id_column": "id"},
+            "LocationLore": {"name_column": "name", "id_column": "location_id"},
+            "UrbanMyths": {"name_column": "name", "id_column": "id"},
+            "LocalHistories": {"name_column": "event_name", "id_column": "id"},  # Different name column
+            "Landmarks": {"name_column": "name", "id_column": "id"},
+            "NotableFigures": {"name_column": "name", "id_column": "id"},
+            "Locations": {"name_column": "location_name", "id_column": "id"}  # Different name column
+        }
+        
+        async with get_db_connection_context() as conn:
+            for lore_type, config in lore_type_configs.items():
+                try:
+                    # Use safe table name
+                    table_name_unquoted = lore_type.lower()
+                    table_name = safe_table_name(table_name_unquoted)
+                    
+                    # Check if table exists
+                    table_exists = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_name = $1
+                        );
+                    """, table_name_unquoted)
+                    
+                    if not table_exists:
+                        continue
+                    
+                    # Check if embedding column exists
+                    has_embedding = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.columns 
+                            WHERE table_name = $1 AND column_name = 'embedding'
+                        );
+                    """, table_name_unquoted)
+                    
+                    if not has_embedding:
+                        continue
+                    
+                    # Get column names from config
+                    id_field = config["id_column"]
+                    name_field = config["name_column"]
+                    
+                    id_column = safe_column_name(id_field)
+                    name_column = safe_column_name(name_field)
+                    
+                    # Build and execute query with the correct name column
+                    query = f"""
+                        SELECT {id_column} as id, {name_column} as name, description, 
+                               1 - (embedding <=> $1) as relevance
+                        FROM {table_name}
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <=> $1
+                        LIMIT 5
+                    """
+                    
+                    rows = await conn.fetch(query, event_embedding)
+                    
+                    # Filter only those with decent relevance
+                    for row in rows:
+                        if row['relevance'] >= 0.6:
+                            affected_elements.append({
+                                'lore_type': lore_type,
+                                'lore_id': row['id'],
+                                'name': row['name'],
+                                'description': row['description'],
+                                'relevance': row['relevance']
+                            })
+                except Exception as e:
+                    logging.error(f"Error checking {lore_type} for affected elements: {e}")
+        
+        # Sort by descending relevance, limit to top 15
+        affected_elements.sort(key=lambda x: x['relevance'], reverse=True)
+        if len(affected_elements) > 15:
+            affected_elements = affected_elements[:15]
+        
+        return affected_elements
 
     
     #===========================================================================
