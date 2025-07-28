@@ -34,15 +34,17 @@ async def _find_semantically_similar_npc(conn, name: str, role: Optional[str], t
 
     # Perform a cosine similarity search on the database
     # This requires a vector index on the `embedding` column for performance
+    # Filter out NPCs without embeddings to avoid NULL similarity values
     query = """
         SELECT npc_id, npc_name, 1 - (embedding <=> $1) AS similarity
         FROM NPCStats
+        WHERE embedding IS NOT NULL
         ORDER BY embedding <=> $1
         LIMIT 1
     """
     most_similar = await conn.fetchrow(query, search_vector)
 
-    if most_similar and most_similar['similarity'] > threshold:
+    if most_similar and most_similar['similarity'] is not None and most_similar['similarity'] > threshold:
         logger.info(
             f"Found a semantically similar NPC: '{most_similar['npc_name']}' (ID: {most_similar['npc_id']}) "
             f"with similarity {most_similar['similarity']:.2f} to the proposal for '{name}'."
