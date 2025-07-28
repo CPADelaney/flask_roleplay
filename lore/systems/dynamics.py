@@ -41,6 +41,8 @@ from lore.utils.sql_safe import safe_table_name, safe_column_name, unquote_ident
 
 logger = logging.getLogger(__name__)
 
+
+
 # ===========================================================================
 # PYDANTIC MODELS FOR STRUCTURED DATA
 # ===========================================================================
@@ -247,6 +249,83 @@ class EvolutionScenarioYear(BaseModel):
 # ===========================================================================
 # MAIN LORE DYNAMICS SYSTEM CLASS
 # ===========================================================================
+
+ALLOWED_LORE_TYPES = {
+    "WorldLore":        {"table": "worldlore",        "id_col": "id",          "name_col": "name"},
+    "Factions":         {"table": "factions",         "id_col": "id",          "name_col": "name"},
+    "CulturalElements": {"table": "culturalelements", "id_col": "id",          "name_col": "name"},
+    "HistoricalEvents": {"table": "historicalevents", "id_col": "id",          "name_col": "name"},
+    "GeographicRegions":{"table": "geographicregions","id_col": "id",          "name_col": "name"},
+    "LocationLore":     {"table": "locationlore",     "id_col": "location_id", "name_col": "name"},
+    "UrbanMyths":       {"table": "urbanmyths",       "id_col": "id",          "name_col": "name"},
+    "LocalHistories":   {"table": "localhistories",   "id_col": "id",          "name_col": "event_name"},
+    "Landmarks":        {"table": "landmarks",        "id_col": "id",          "name_col": "name"},
+    "NotableFigures":   {"table": "notablefigures",   "id_col": "id",          "name_col": "name"},
+    "Locations":        {"table": "locations",        "id_col": "id",          "name_col": "location_name"},
+}
+
+ALIASES = {
+    "cultural shift": "CulturalElements",
+    "cultural development": "CulturalElements",
+    "mythological revelation": "WorldLore",
+    "event impact": "HistoricalEvents",
+    "political development": "Factions",
+    "political consequence": "Factions",
+    "political event": "Factions",
+    "geopolitical shift": "Factions",
+    "location change": "Locations",
+}
+
+def _normalize_lore_type(self, raw: str | None) -> str:
+    if not raw:
+        return "WorldLore"
+    t = ALIASES.get(raw.strip().lower(), raw.strip())
+    return t if t in ALLOWED_LORE_TYPES else "WorldLore"
+
+async def _resolve_lore_id(self, conn, info, lore_id_or_name, original_type):
+    """Returns int id or None."""
+    id_col   = safe_column_name(info["id_col"])
+    name_col = safe_column_name(info["name_col"])
+    table    = safe_table_name(info["table"])
+
+    # numeric?
+    if isinstance(lore_id_or_name, int) or (isinstance(lore_id_or_name, str) and lore_id_or_name.isdigit()):
+        return int(lore_id_or_name)
+
+    # treat as name
+    logger.warning("Agent provided name '%s' instead of ID for %s, looking up…", lore_id_or_name, original_type)
+    row = await conn.fetchrow(
+        f"""
+        SELECT {id_col} AS id
+          FROM {table}
+         WHERE {name_col} = $1
+           AND user_id = $2 AND conversation_id = $3
+         LIMIT 1
+        """,
+        lore_id_or_name, self.user_id, self.conversation_id
+    )
+    if row:
+        return row["id"]
+
+    # final fallback: WorldLore by name
+    wl = ALLOWED_LORE_TYPES["WorldLore"]
+    wl_table = safe_table_name(wl["table"])
+    wl_idcol = safe_column_name(wl["id_col"])
+    wl_name  = safe_column_name(wl["name_col"])
+    row = await conn.fetchrow(
+        f"""
+        SELECT {wl_idcol} AS id
+          FROM {wl_table}
+         WHERE {wl_name} = $1
+           AND user_id = $2 AND conversation_id = $3
+         LIMIT 1
+        """,
+        lore_id_or_name, self.user_id, self.conversation_id
+    )
+    if row:
+        logger.info("Found '%s' in WorldLore instead.", lore_id_or_name)
+        return row["id"]
+    return None
 
 class LoreDynamicsSystem(BaseLoreManager):
     """
@@ -928,89 +1007,56 @@ class LoreDynamicsSystem(BaseLoreManager):
     # APPLY LORE UPDATES
     #===========================================================================
     async def _apply_lore_updates_impl(self, updates: List[Dict[str, Any]]) -> None:
-        """
-        Apply the agent-generated updates to the database.
-        Implementation method - can be called directly.
-        """
         async with get_db_connection_context() as conn:
             for update in updates:
-                lore_type = update['lore_type']
-                lore_id = update['lore_id']
-                new_description = update['new_description']
-                old_description = update['old_description']
-                
-                # Convert lore_id to integer if it's a string number
-                try:
-                    if isinstance(lore_id, str) and lore_id.isdigit():
-                        lore_id = int(lore_id)
-                    elif isinstance(lore_id, str) and not lore_id.isdigit():
-                        # The agent provided a name instead of an ID - look it up
-                        logging.warning(f"Agent provided name '{lore_id}' instead of ID for {lore_type}, looking up...")
-                        
-                        # Determine the correct name column for this lore type
-                        name_column = self._get_name_column_for_lore_type(lore_type)
-                        
-                        # Look up the ID by name
-                        table_name = safe_table_name(lore_type.lower())
-                        name_col = safe_column_name(name_column)
-                        
-                        id_row = await conn.fetchrow(f"""
-                            SELECT id FROM {table_name}
-                            WHERE {name_col} = $1
-                            AND user_id = $2 AND conversation_id = $3
-                            LIMIT 1
-                        """, lore_id, self.user_id, self.conversation_id)
-                        
-                        if id_row:
-                            lore_id = id_row['id']
-                            logging.info(f"Found ID {lore_id} for name '{update['lore_id']}'")
-                        else:
-                            logging.error(f"Could not find ID for lore name: {update['lore_id']} in {lore_type}")
-                            continue
-                            
-                except (ValueError, TypeError) as e:
-                    logging.error(f"Invalid lore_id format: {lore_id} for {lore_type} - {e}")
+                orig_type = update.get("lore_type", "")
+                lore_type = self._normalize_lore_type(orig_type)
+                if lore_type != orig_type:
+                    logger.info("Normalized lore type '%s' -> '%s'", orig_type, lore_type)
+    
+                info = ALLOWED_LORE_TYPES[lore_type]
+    
+                lore_id = await self._resolve_lore_id(conn, info, update.get("lore_id"), orig_type)
+                if lore_id is None:
+                    logger.error("Could not resolve lore_id for update: %s", update)
                     continue
-                
-                # Rest of the method remains the same...
-                id_field = 'id'
-                if lore_type == 'LocationLore':
-                    id_field = 'location_id'
-                
+    
+                item_name       = update.get("name", "Unknown")
+                old_description = update["old_description"]
+                new_description = update["new_description"]
+                reason          = update["update_reason"]
+    
+                table    = safe_table_name(info["table"])
+                id_col   = safe_column_name(info["id_col"])
+    
                 try:
-                    # Use safe identifiers
-                    table_name = safe_table_name(lore_type.lower())
-                    id_column = safe_column_name(id_field)
-                    
-                    await conn.execute(f"""
-                        UPDATE {table_name}
-                        SET description = $1
-                        WHERE {id_column} = $2
-                    """, new_description, lore_id)  # Now lore_id is an integer
-                    
-                    # Generate embedding
-                    item_name = update.get('name', 'Unknown')
-                    embedding_text = f"{item_name} {new_description}"
-                    new_embedding = await generate_embedding(embedding_text)
-                    
-                    # Update embedding
-                    await conn.execute(f"""
-                        UPDATE {table_name}
-                        SET embedding = $1
-                        WHERE {id_column} = $2
-                    """, new_embedding, lore_id)  # Now lore_id is an integer
-                    
-                    # Insert into LoreChangeHistory
+                    # description
+                    await conn.execute(
+                        f"UPDATE {table} SET description = $1 WHERE {id_col} = $2",
+                        new_description, lore_id
+                    )
+    
+                    # embedding
+                    embed_text = f"{item_name} {new_description}"
+                    embedding  = await generate_embedding(embed_text)
+                    await conn.execute(
+                        f"UPDATE {table} SET embedding = $1 WHERE {id_col} = $2",
+                        embedding, lore_id
+                    )
+    
+                    # history
                     await conn.execute("""
                         INSERT INTO LoreChangeHistory 
                         (lore_type, lore_id, previous_description, new_description, change_reason)
                         VALUES ($1, $2, $3, $4, $5)
-                    """, lore_type, str(lore_id), old_description, new_description, update['update_reason'])
+                    """, lore_type, str(lore_id), old_description, new_description, reason)
+    
                 except Exception as e:
-                    logging.error(f"Error updating {lore_type} ID {lore_id}: {e}")
-                
+                    logger.error("Error updating %s id %s: %s", lore_type, lore_id, e)
+                    continue
+    
                 self.invalidate_cache_pattern(f"{lore_type}_{lore_id}")
-
+                
     #===========================================================================
     # GENERATE CONSEQUENTIAL LORE
     #===========================================================================
@@ -1691,20 +1737,21 @@ class LoreDynamicsSystem(BaseLoreManager):
         
         DIRECTIVE:
         {directive}
-
+        
         Generate a LoreUpdate object with:
-        - lore_id: "{element['lore_id']}"
-        - lore_type: "{element['lore_type']}"
+        - lore_id: "{element['lore_id']}"  (MUST be exactly this numeric/string id, NOT the name)
+        - lore_type: one of [{ALLOWED}] (case sensitive). Do NOT invent new categories like 'Cultural Shift' or 'Event Impact'.
         - name: "{element['name']}"
-        - old_description: (the current description)
-        - new_description: (updated text reflecting the event)
-        - update_reason: (why this update is happening)
-        - impact_level: (1-10 representing significance)
-
+        - old_description: the current description
+        - new_description: updated text reflecting the event
+        - update_reason: why this update happens
+        - impact_level: integer 1-10
+        
         Maintain strong matriarchal themes and internal consistency.
-
-        IMPORTANT: The lore_id MUST be exactly "{element['lore_id']}" (the numeric ID).
-        Do NOT use the name "{element['name']}" in the lore_id field.
+        
+        IMPORTANT:
+        - 'lore_type' MUST be from the allowed list above.
+        - 'lore_id' MUST equal "{element['lore_id']}".
         """
         return prompt
     
