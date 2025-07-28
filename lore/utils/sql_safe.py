@@ -18,6 +18,7 @@ ALLOWED_TABLES = {
     'landmarks',
     'notablefigures',
     'lorechangehistory',
+    'characters',
     'worldstate',
     'nations',
     'locations'
