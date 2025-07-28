@@ -55,7 +55,8 @@ ALLOWED_COLUMNS = {
     'climate',
     'strategic_value',
     'government_type',
-    'location_name'
+    'location_name',
+    'event_name',  # Add this for LocalHistories
 }
 
 def safe_ident(raw: str, allowed_set: Optional[set] = None) -> str:
