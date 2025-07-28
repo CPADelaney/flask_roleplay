@@ -275,7 +275,7 @@ class VectorService:
         with trace(workflow_name="get_embedding"):
             if not self.enabled:
                 # Return a zeroed vector if not enabled
-                return [0.0] * 384
+                return [0.0] * 1536
             
             # Hash text for cache key
             text_hash = hashlib.md5(text.encode()).hexdigest()
@@ -296,7 +296,7 @@ class VectorService:
                     return await self.entity_manager.embedding_service.get_embedding(text)
                 
                 # Fallback to random embedding for testing
-                vec = list(np.random.normal(0, 1, 384))
+                vec = list(np.random.normal(0, 1, 1536))
                 norm = np.linalg.norm(vec)
                 if norm == 0:
                     return vec
@@ -500,7 +500,7 @@ class VectorService:
             entity_type: Type of entity (must be in self.collections)
             entity_id: Unique ID for the entity
             content: Text content for the entity (used for embedding if not provided)
-            embedding: Optional pre-computed embedding vector (384 dimensions)
+            embedding: Optional pre-computed embedding vector (1536 dimensions)
             **metadata: Additional metadata for the entity (varies by entity type)
             
         Returns:
@@ -533,12 +533,12 @@ class VectorService:
                     embedding = await self.embedding_service.get_embedding(content)
                 except Exception as e:
                     logger.error(f"Error generating embedding: {e}")
-                    # Fallback: Generate random 384-dimensional embedding
-                    vec = list(np.random.normal(0, 1, 384))
+                    # Fallback: Generate random 1536-dimensional embedding
+                    vec = list(np.random.normal(0, 1, 1536))
                     embedding = vec / np.linalg.norm(vec)
             else:
                 # No embedding service, use random embedding
-                vec = list(np.random.normal(0, 1, 384))
+                vec = list(np.random.normal(0, 1, 1536))
                 embedding = vec / np.linalg.norm(vec)
         
         # Step 4: Build complete metadata
