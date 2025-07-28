@@ -268,7 +268,7 @@ class FallbackEmbedding(EmbeddingProvider):
         if not self.providers:
             try:
                 self.providers.append(SentenceTransformerEmbedding())
-                logger.info("Using SentenceTransformers for embeddings (384 dimensions)")
+                logger.info("Using SentenceTransformers for embeddings (1536 dimensions)")
                 logger.warning("WARNING: Dimension mismatch - database expects 1536!")
             except (ImportError, Exception) as e:
                 logger.warning(f"SentenceTransformers unavailable: {e}")
