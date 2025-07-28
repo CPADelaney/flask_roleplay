@@ -260,17 +260,19 @@ def _coerce_personality(data: dict) -> "NPCPersonalityData":
 
 def _coerce_stats(data: dict) -> "NPCStatsData":
     def _iv(v, default):  # int value
+        if v is None:
+            return default
         try:
             return int(v)
         except Exception:
             return default
     return NPCStatsData(
-        dominance=_iv(data.get("dominance"), 50),
-        cruelty=_iv(data.get("cruelty"), 30),
-        closeness=_iv(data.get("closeness"), 50),
+        dominance=_iv(data.get("dominance"), 0),
+        cruelty=_iv(data.get("cruelty"), 0),
+        closeness=_iv(data.get("closeness"), 0),
         trust=_iv(data.get("trust"), 0),
         respect=_iv(data.get("respect"), 0),
-        intensity=_iv(data.get("intensity"), 40),
+        intensity=_iv(data.get("intensity"), 0),
     )
 
 def _coerce_archetype(data: dict, *, provided_names: list[str] | None = None) -> "NPCArchetypeData":
@@ -2145,12 +2147,12 @@ class NPCCreationHandler:
                 basic_updates = {
                     "introduced": introduced,
                     "sex": sex,
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "closeness": closeness,
-                    "trust": trust,
-                    "respect": respect,
-                    "intensity": intensity,
+                    "dominance": dominance if dominance is not None else 0,
+                    "cruelty": cruelty if cruelty is not None else 0,
+                    "closeness": closeness if closeness is not None else 0,
+                    "trust": trust if trust is not None else 0,
+                    "respect": respect if respect is not None else 0,
+                    "intensity": intensity if intensity is not None else 0,
                     "archetypes": json.dumps(archetype_objs),
                     "archetype_summary": archetype_summary,
                     "archetype_extras_summary": archetype_extras_summary,
@@ -3083,7 +3085,7 @@ class NPCCreationHandler:
         overwrite_description: bool = True,
     ) -> list[dict] | None:
         """
-        Evaluate whether the NPC’s *facade* cracks for the **player** based on the
+        Evaluate whether the NPC's *facade* cracks for the **player** based on the
         *current* values of dominance / cruelty / intensity.
     
         • Uses the environment‑aware templates supplied by `dynamic_templates`.
@@ -3120,12 +3122,14 @@ class NPCCreationHandler:
                 if not row:
                     return None
     
-                npc_name       = row["npc_name"]
-                env_desc       = row["env"] or ""
-                stats_current  = {
-                    "dominance": row["dominance"],
-                    "cruelty":   row["cruelty"],
-                    "intensity": row["intensity"],
+                npc_name = row["npc_name"]
+                env_desc = row["env"] or ""
+                
+                # FIX: Handle None values with defaults, but preserve 0 as valid
+                stats_current = {
+                    "dominance": row["dominance"] if row["dominance"] is not None else 50,
+                    "cruelty": row["cruelty"] if row["cruelty"] is not None else 30,
+                    "intensity": row["intensity"] if row["intensity"] is not None else 40,
                 }
     
             # ── fetch *dynamic* trigger tables ──────────────────────────────────
@@ -3151,11 +3155,16 @@ class NPCCreationHandler:
                     else []
                 )
     
-            history_cues   = {h["cue"] for h in history}
+            history_cues = {h["cue"] for h in history}
             newly_triggered: list[dict] = []
     
-            # ── evaluate each stat’s ladder ─────────────────────────────────────
+            # ── evaluate each stat's ladder ─────────────────────────────────────
             for stat, value in stats_current.items():
+                # Additional safety check (though shouldn't be needed with the fix above)
+                if value is None:
+                    logging.warning(f"Stat {stat} is None for NPC {npc_id}, skipping")
+                    continue
+                    
                 for step in trigger_map[stat]:
                     cue = step["cue"]
                     if cue in history_cues:
