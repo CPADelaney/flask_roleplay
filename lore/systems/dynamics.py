@@ -811,7 +811,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             group_id=self.trace_group_id,
             metadata={
                 **self.trace_metadata,
-                "elements_count": len(affected_elements),
+                "elements_count": str(len(affected_elements)),  
                 "event": event_description[:50]
             }
         ):
@@ -1377,7 +1377,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         with trace(
             "LoreMaturationProcess", 
             group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "days_passed": days_passed}
+            metadata={**self.trace_metadata, "days_passed": str(days_passed)}
         ):
             await self.ensure_initialized()
             
@@ -2375,7 +2375,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         with trace(
             "WorldEvolutionWorkflow", 
             group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "days_passed": days_passed}
+            metadata={**self.trace_metadata, "days_passed": str(days_passed)}
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
             evolution_results = {}
@@ -3420,7 +3420,7 @@ class WorldStateStreamer:
         with trace(
             "EvolutionScenarioStreaming", 
             group_id=self.dynamics_system.trace_group_id,
-            metadata={"years": years}
+            metadata={"years": str(years)}
         ):
             # Get the current world state
             if not initial_state:
