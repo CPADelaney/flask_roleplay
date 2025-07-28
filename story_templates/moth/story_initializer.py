@@ -155,7 +155,7 @@ class MothFlameStoryInitializer:
                     
                     # Ensure memory system is initialized
                     memory_count = await conn.fetchval("""
-                        SELECT COUNT(*) FROM npc_memories
+                        SELECT COUNT(*) FROM NPCMemories
                         WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
                     """, user_id, conversation_id, lilith_id)
                     
