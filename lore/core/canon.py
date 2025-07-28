@@ -74,6 +74,9 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
     Returns the NPC's ID.
     `conn` must be an active asyncpg connection or transaction.
     """
+    # Convert context to canonical format
+    ctx = ensure_canonical_context(ctx)
+    
     # --- Step 1: Exact Match Check (Fastest) ---
     existing_npc = await conn.fetchrow(
         "SELECT npc_id FROM NPCStats WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3",
