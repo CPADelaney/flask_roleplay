@@ -906,6 +906,23 @@ class LoreDynamicsSystem(BaseLoreManager):
         
         result = await Runner.run(agent, prompt, context=run_ctx.context, run_config=run_config)
         return result.final_output.dict()
+
+    def _get_name_column_for_lore_type(self, lore_type: str) -> str:
+        """Get the correct name column for a given lore type."""
+        name_column_map = {
+            "WorldLore": "name",
+            "Factions": "name", 
+            "CulturalElements": "name",
+            "HistoricalEvents": "name",
+            "GeographicRegions": "name",
+            "LocationLore": "name",
+            "UrbanMyths": "name",
+            "LocalHistories": "event_name",  # Different name column
+            "Landmarks": "name",
+            "NotableFigures": "name",
+            "Locations": "location_name"  # Different name column
+        }
+        return name_column_map.get(lore_type, "name")
     
     #===========================================================================
     # APPLY LORE UPDATES
@@ -922,15 +939,40 @@ class LoreDynamicsSystem(BaseLoreManager):
                 new_description = update['new_description']
                 old_description = update['old_description']
                 
-                # Convert lore_id to integer if it's a string
+                # Convert lore_id to integer if it's a string number
                 try:
-                    if isinstance(lore_id, str):
+                    if isinstance(lore_id, str) and lore_id.isdigit():
                         lore_id = int(lore_id)
-                except (ValueError, TypeError):
-                    logging.error(f"Invalid lore_id format: {lore_id} for {lore_type}")
+                    elif isinstance(lore_id, str) and not lore_id.isdigit():
+                        # The agent provided a name instead of an ID - look it up
+                        logging.warning(f"Agent provided name '{lore_id}' instead of ID for {lore_type}, looking up...")
+                        
+                        # Determine the correct name column for this lore type
+                        name_column = self._get_name_column_for_lore_type(lore_type)
+                        
+                        # Look up the ID by name
+                        table_name = safe_table_name(lore_type.lower())
+                        name_col = safe_column_name(name_column)
+                        
+                        id_row = await conn.fetchrow(f"""
+                            SELECT id FROM {table_name}
+                            WHERE {name_col} = $1
+                            AND user_id = $2 AND conversation_id = $3
+                            LIMIT 1
+                        """, lore_id, self.user_id, self.conversation_id)
+                        
+                        if id_row:
+                            lore_id = id_row['id']
+                            logging.info(f"Found ID {lore_id} for name '{update['lore_id']}'")
+                        else:
+                            logging.error(f"Could not find ID for lore name: {update['lore_id']} in {lore_type}")
+                            continue
+                            
+                except (ValueError, TypeError) as e:
+                    logging.error(f"Invalid lore_id format: {lore_id} for {lore_type} - {e}")
                     continue
                 
-                # Generate a new embedding
+                # Rest of the method remains the same...
                 id_field = 'id'
                 if lore_type == 'LocationLore':
                     id_field = 'location_id'
@@ -1660,6 +1702,9 @@ class LoreDynamicsSystem(BaseLoreManager):
         - impact_level: (1-10 representing significance)
 
         Maintain strong matriarchal themes and internal consistency.
+
+        IMPORTANT: The lore_id MUST be exactly "{element['lore_id']}" (the numeric ID).
+        Do NOT use the name "{element['name']}" in the lore_id field.
         """
         return prompt
     
