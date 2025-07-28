@@ -1093,7 +1093,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     logger.error("Error updating %s id %s: %s", lore_type, lore_id, e)
                     continue
     
-                self.invalidate_cache_pattern(f"{lore_type}_{lore_id}")
+                await self.invalidate_cache_pattern(f"{lore_type}_{lore_id}")
                 
     #===========================================================================
     # GENERATE CONSEQUENTIAL LORE
@@ -1965,9 +1965,9 @@ class LoreDynamicsSystem(BaseLoreManager):
                 
                 # Clear cache
                 if has_urban_myths_table:
-                    self.invalidate_cache_pattern(f"UrbanMyths_{myth_id}")
+                    await self.invalidate_cache_pattern(f"UrbanMyths_{myth_id}")
                 else:
-                    self.invalidate_cache_pattern(f"WorldLore_{myth_id}")
+                    await self.invalidate_cache_pattern(f"WorldLore_{myth_id}")
     
         return changes
     
@@ -2101,7 +2101,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "significance_after": new_significance
                 })
                 
-                self.invalidate_cache_pattern(f"CulturalElements_{element_id}")
+                await self.invalidate_cache_pattern(f"CulturalElements_{element_id}")
     
         return changes
     
@@ -2368,7 +2368,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         "new_description": new_description
                     })
                 
-                self.invalidate_cache_pattern(f"Factions_{faction['id']}")
+                await self.invalidate_cache_pattern(f"Factions_{faction['id']}")
     
         return changes
     
@@ -2506,7 +2506,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "new_reputation": new_rep
                 })
                 
-                self.invalidate_cache_pattern(f"{table_name}_{figure_id}")
+                await self.invalidate_cache_pattern(f"{table_name}_{figure_id}")
     
         return changes
 
