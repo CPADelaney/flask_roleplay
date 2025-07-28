@@ -583,7 +583,7 @@ class PresetNPCHandler:
             memories = await handler.generate_memories(ctx, npc_data["name"])
         
         # 1. Store memories with governance
-        await handler.store_NPCMemories(user_id, conversation_id, npc_id, memories)
+        await handler.store_npc_memories(user_id, conversation_id, npc_id, memories)
         
         # 2. Initialize emotional state
         await handler.initialize_npc_emotional_state(
