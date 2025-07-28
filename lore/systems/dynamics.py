@@ -267,6 +267,7 @@ ALLOWED_LORE_TYPES = {
 ALIASES = {
     "cultural shift": "CulturalElements",
     "cultural development": "CulturalElements",
+    "cultural practice": "CulturalElements",  # Add this
     "mythological revelation": "WorldLore",
     "event impact": "HistoricalEvents",
     "political development": "Factions",
@@ -274,10 +275,17 @@ ALIASES = {
     "political event": "Factions",
     "geopolitical shift": "Factions",
     "location change": "Locations",
-    "character": "NotableFigures",  # Add this line
-    "characters": "NotableFigures",  # Add this line
-    "person": "NotableFigures",      # Add this line
-    "people": "NotableFigures",      # Add this line
+    "character": "NotableFigures",
+    "characters": "NotableFigures",
+    "person": "NotableFigures",
+    "people": "NotableFigures",
+    "character trait": "NotableFigures",  # Add this
+    "character_trait": "NotableFigures",  # Add this
+    "legal reform": "HistoricalEvents",   # Add this
+    "legal_reform": "HistoricalEvents",   # Add this
+    "law": "HistoricalEvents",            # Add this
+    "legislation": "HistoricalEvents",    # Add this
+    "reform": "HistoricalEvents",         # Add this
 }
 
 
@@ -324,7 +332,20 @@ class LoreDynamicsSystem(BaseLoreManager):
                     f"{base_instructions}\n\n"
                     "You update existing lore elements based on narrative events while maintaining thematic consistency. "
                     "Your updates should be meaningful and reflect the impact of events on the world. "
-                    "Maintain the matriarchal power dynamics in all updates."
+                    "Maintain the matriarchal power dynamics in all updates.\n\n"
+                    "CRITICAL: When specifying lore_type, you MUST use ONLY these exact values:\n"
+                    "- WorldLore (for general lore, myths, miscellaneous)\n"
+                    "- Factions (for political groups, organizations)\n"
+                    "- CulturalElements (for traditions, customs, practices)\n"
+                    "- HistoricalEvents (for events, reforms, laws)\n"
+                    "- GeographicRegions (for geographic areas)\n"
+                    "- LocationLore (for location-specific lore)\n"
+                    "- UrbanMyths (for urban legends)\n"
+                    "- LocalHistories (for local historical events)\n"
+                    "- Landmarks (for notable structures)\n"
+                    "- NotableFigures (for characters, people)\n"
+                    "- Locations (for physical locations)\n\n"
+                    "Never use types like 'character_trait', 'Legal Reform', etc."
                 ),
                 "model": "gpt-4.1-nano",
                 "settings": model_settings
@@ -923,10 +944,12 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "conversation_id": self.conversation_id
                 })
                 
+                # Fetch additional context for this element
                 related_elements = await self._fetch_related_elements(element.get('lore_id', ''))
                 hierarchy_position = await self._get_hierarchy_position(element)
                 update_history = await self._fetch_element_update_history(element.get('lore_id', ''))
                 
+                # Build the prompt with clear instructions about allowed types
                 prompt = await self._build_lore_update_prompt(
                     element=element,
                     event_description=event_description,
@@ -936,13 +959,85 @@ class LoreDynamicsSystem(BaseLoreManager):
                     update_history=update_history
                 )
                 
+                # Clone the update agent with structured output
                 update_agent = self._get_agent("lore_update").clone(
                     output_type=LoreUpdate
                 )
                 
-                result = await Runner.run(update_agent, prompt, context=run_ctx.context)
-                update_data = result.final_output
-                updates.append(update_data.dict())
+                try:
+                    # Run the agent
+                    result = await Runner.run(update_agent, prompt, context=run_ctx.context)
+                    update_data = result.final_output
+                    
+                    # Convert to dict for manipulation
+                    update_dict = update_data.dict()
+                    
+                    # Validate and fix the lore_type if needed
+                    original_type = update_dict.get("lore_type", "")
+                    normalized_type = self._normalize_lore_type(original_type)
+                    
+                    if normalized_type != original_type:
+                        logger.info(f"Correcting lore_type from '{original_type}' to '{normalized_type}'")
+                        update_dict["lore_type"] = normalized_type
+                    
+                    # Ensure lore_id is the actual ID from the element, not what the agent provided
+                    # The agent often provides names instead of IDs
+                    provided_id = update_dict.get("lore_id", "")
+                    actual_id = element.get('lore_id', '')
+                    
+                    # Check if the agent provided a name instead of an ID
+                    if provided_id != actual_id:
+                        logger.info(f"Agent provided '{provided_id}' but actual lore_id is '{actual_id}' for {update_dict.get('name', 'Unknown')}")
+                        update_dict["lore_id"] = actual_id
+                    
+                    # Validate that we have all required fields
+                    required_fields = ["lore_id", "lore_type", "name", "old_description", "new_description", "update_reason", "impact_level"]
+                    missing_fields = [field for field in required_fields if field not in update_dict or update_dict[field] is None]
+                    
+                    if missing_fields:
+                        logger.warning(f"Update missing required fields {missing_fields} for element {element.get('name', 'Unknown')}")
+                        # Fill in missing fields from the original element
+                        if "name" not in update_dict or update_dict["name"] is None:
+                            update_dict["name"] = element.get("name", "Unknown")
+                        if "old_description" not in update_dict or update_dict["old_description"] is None:
+                            update_dict["old_description"] = element.get("description", "")
+                        if "lore_id" not in update_dict or update_dict["lore_id"] is None:
+                            update_dict["lore_id"] = actual_id
+                        if "impact_level" not in update_dict or update_dict["impact_level"] is None:
+                            update_dict["impact_level"] = 5  # Default medium impact
+                    
+                    # Ensure impact_level is within bounds
+                    impact_level = update_dict.get("impact_level", 5)
+                    if not isinstance(impact_level, int) or impact_level < 1 or impact_level > 10:
+                        logger.warning(f"Invalid impact_level {impact_level}, setting to 5")
+                        update_dict["impact_level"] = 5
+                    
+                    # Log the update for debugging
+                    logger.debug(f"Generated update for {update_dict['name']} ({update_dict['lore_type']}): "
+                               f"ID={update_dict['lore_id']}, Impact={update_dict['impact_level']}")
+                    
+                    updates.append(update_dict)
+                    
+                except Exception as e:
+                    logger.error(f"Error generating update for element {element.get('name', 'Unknown')}: {e}")
+                    logger.error(f"Element data: {element}")
+                    # Create a minimal update to prevent total failure
+                    fallback_update = {
+                        "lore_id": element.get('lore_id', ''),
+                        "lore_type": self._normalize_lore_type(element.get('lore_type', 'WorldLore')),
+                        "name": element.get('name', 'Unknown'),
+                        "old_description": element.get('description', ''),
+                        "new_description": element.get('description', '') + f" [Affected by: {event_description[:100]}]",
+                        "update_reason": "Automatic update due to event impact",
+                        "impact_level": 3
+                    }
+                    updates.append(fallback_update)
+        
+        # Sort updates by impact level (highest first) for better narrative flow
+        updates.sort(key=lambda x: x.get('impact_level', 0), reverse=True)
+        
+        # Log summary
+        logger.info(f"Generated {len(updates)} lore updates from {len(affected_elements)} affected elements")
         
         return updates
         
@@ -1752,22 +1847,37 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "They have limited autonomy and must carefully navigate the structures above them."
             )
         
+        # Create a clear list of allowed types and their descriptions
+        allowed_types_desc = [
+            "WorldLore - General world lore, myths, legends, and miscellaneous elements",
+            "Factions - Political groups, organizations, and power structures", 
+            "CulturalElements - Traditions, customs, practices, and cultural norms",
+            "HistoricalEvents - Past or current events, reforms, laws, and historical moments",
+            "GeographicRegions - Geographic areas and territories",
+            "LocationLore - Specific location-based lore",
+            "UrbanMyths - Urban legends and contemporary myths",
+            "LocalHistories - Local historical events and stories",
+            "Landmarks - Notable landmarks and structures",
+            "NotableFigures - Characters, people, and notable individuals",
+            "Locations - Physical locations and places"
+        ]
+        
         prompt = f"""
         The following lore element requires an update based on a recent event:
-
+    
         LORE ELEMENT:
         Type: {element['lore_type']}
         Name: {element['name']}
         Current Description: {element['description']}
         Hierarchy Position: {hierarchy_position}/10 (lower = higher authority)
-
+    
         {relationship_context}
-
+    
         {history_context}
-
+    
         EVENT:
         {event_description}
-
+    
         SOCIETAL IMPACT:
         - stability_impact: {societal_impact.get('stability_impact',5)}/10
         - power_structure_change: {societal_impact.get('power_structure_change','unknown')}
@@ -1777,21 +1887,26 @@ class LoreDynamicsSystem(BaseLoreManager):
         {directive}
         
         Generate a LoreUpdate object with:
-        - lore_id: "{element['lore_id']}"  (MUST be exactly this numeric/string id, NOT the name)
-        - lore_type: one of [{ALLOWED}] (case sensitive). Do NOT invent new categories like 'Cultural Shift' or 'Event Impact'.
+        - lore_id: "{element['lore_id']}"  (MUST be exactly this value)
+        - lore_type: MUST be one of these exact values (case-sensitive):
+          {chr(10).join('  * ' + lt for lt in ALLOWED_LORE_TYPES.keys())}
+        
+        IMPORTANT TYPE MAPPINGS:
+        - For characters/people/traits → use "NotableFigures"
+        - For cultural practices/traditions → use "CulturalElements"  
+        - For laws/reforms/legal changes → use "HistoricalEvents"
+        - For general/miscellaneous → use "WorldLore"
+        
         - name: "{element['name']}"
         - old_description: the current description
         - new_description: updated text reflecting the event
         - update_reason: why this update happens
         - impact_level: integer 1-10
         
-        Maintain strong matriarchal themes and internal consistency.
+        DO NOT use types like 'character_trait', 'Legal Reform', 'Cultural Practice' etc.
+        Use ONLY the exact type names listed above.
         
-        IMPORTANT:
-        - lore_id: "{element['lore_id']}"  (MUST be exactly this numeric/string id, NOT the name)
-        - lore_type: one of {list(ALLOWED_LORE_TYPES.keys())} (case sensitive). 
-          Common aliases: 'character' -> 'NotableFigures', 'cultural shift' -> 'CulturalElements', 'political event' -> 'Factions'.
-          Do NOT use the aliases in your response - use the proper lore type names from the list above.
+        Maintain strong matriarchal themes and internal consistency.
         """
         return prompt
     
