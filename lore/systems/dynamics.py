@@ -280,64 +280,7 @@ ALIASES = {
     "people": "NotableFigures",      # Add this line
 }
 
-def _normalize_lore_type(self, raw: str | None) -> str:
-    if not raw:
-        return "WorldLore"
-    # Convert to lowercase for comparison
-    raw_lower = raw.strip().lower()
-    # Check aliases first
-    normalized = ALIASES.get(raw_lower, raw.strip())
-    # Ensure the result is in allowed types
-    if normalized not in ALLOWED_LORE_TYPES:
-        # Log warning and default to WorldLore
-        logger.warning(f"Unknown lore type '{raw}' normalized to '{normalized}', defaulting to WorldLore")
-        return "WorldLore"
-    return normalized
 
-async def _resolve_lore_id(self, conn, info, lore_id_or_name, original_type):
-    """Returns int id or None."""
-    id_col   = safe_column_name(info["id_col"])
-    name_col = safe_column_name(info["name_col"])
-    table    = safe_table_name(info["table"])
-
-    # numeric?
-    if isinstance(lore_id_or_name, int) or (isinstance(lore_id_or_name, str) and lore_id_or_name.isdigit()):
-        return int(lore_id_or_name)
-
-    # treat as name
-    logger.warning("Agent provided name '%s' instead of ID for %s, looking up…", lore_id_or_name, original_type)
-    row = await conn.fetchrow(
-        f"""
-        SELECT {id_col} AS id
-          FROM {table}
-         WHERE {name_col} = $1
-           AND user_id = $2 AND conversation_id = $3
-         LIMIT 1
-        """,
-        lore_id_or_name, self.user_id, self.conversation_id
-    )
-    if row:
-        return row["id"]
-
-    # final fallback: WorldLore by name
-    wl = ALLOWED_LORE_TYPES["WorldLore"]
-    wl_table = safe_table_name(wl["table"])
-    wl_idcol = safe_column_name(wl["id_col"])
-    wl_name  = safe_column_name(wl["name_col"])
-    row = await conn.fetchrow(
-        f"""
-        SELECT {wl_idcol} AS id
-          FROM {wl_table}
-         WHERE {wl_name} = $1
-           AND user_id = $2 AND conversation_id = $3
-         LIMIT 1
-        """,
-        lore_id_or_name, self.user_id, self.conversation_id
-    )
-    if row:
-        logger.info("Found '%s' in WorldLore instead.", lore_id_or_name)
-        return row["id"]
-    return None
 
 class LoreDynamicsSystem(BaseLoreManager):
     """
@@ -625,6 +568,65 @@ class LoreDynamicsSystem(BaseLoreManager):
                 logger.warning(f"Failed to report action to governance: {e}")
         else:
             logger.debug(f"No governor available for action reporting: {action['type']}")
+
+    def _normalize_lore_type(self, raw: str | None) -> str:
+        if not raw:
+            return "WorldLore"
+        # Convert to lowercase for comparison
+        raw_lower = raw.strip().lower()
+        # Check aliases first
+        normalized = ALIASES.get(raw_lower, raw.strip())
+        # Ensure the result is in allowed types
+        if normalized not in ALLOWED_LORE_TYPES:
+            # Log warning and default to WorldLore
+            logger.warning(f"Unknown lore type '{raw}' normalized to '{normalized}', defaulting to WorldLore")
+            return "WorldLore"
+        return normalized
+    
+    async def _resolve_lore_id(self, conn, info, lore_id_or_name, original_type):
+        """Returns int id or None."""
+        id_col   = safe_column_name(info["id_col"])
+        name_col = safe_column_name(info["name_col"])
+        table    = safe_table_name(info["table"])
+    
+        # numeric?
+        if isinstance(lore_id_or_name, int) or (isinstance(lore_id_or_name, str) and lore_id_or_name.isdigit()):
+            return int(lore_id_or_name)
+    
+        # treat as name
+        logger.warning("Agent provided name '%s' instead of ID for %s, looking up…", lore_id_or_name, original_type)
+        row = await conn.fetchrow(
+            f"""
+            SELECT {id_col} AS id
+              FROM {table}
+             WHERE {name_col} = $1
+               AND user_id = $2 AND conversation_id = $3
+             LIMIT 1
+            """,
+            lore_id_or_name, self.user_id, self.conversation_id
+        )
+        if row:
+            return row["id"]
+    
+        # final fallback: WorldLore by name
+        wl = ALLOWED_LORE_TYPES["WorldLore"]
+        wl_table = safe_table_name(wl["table"])
+        wl_idcol = safe_column_name(wl["id_col"])
+        wl_name  = safe_column_name(wl["name_col"])
+        row = await conn.fetchrow(
+            f"""
+            SELECT {wl_idcol} AS id
+              FROM {wl_table}
+             WHERE {wl_name} = $1
+               AND user_id = $2 AND conversation_id = $3
+             LIMIT 1
+            """,
+            lore_id_or_name, self.user_id, self.conversation_id
+        )
+        if row:
+            logger.info("Found '%s' in WorldLore instead.", lore_id_or_name)
+            return row["id"]
+        return None
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
