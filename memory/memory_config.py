@@ -15,7 +15,7 @@ DEFAULT_MEMORY_CONFIG = {
     "vector_store": {
         "type": "chroma",  # Options: "chroma", "faiss", "qdrant"
         "persist_base_dir": "./vector_stores",
-        "dimension": 384,  # Default dimension for embeddings
+        "dimension": 1536,  # Default dimension for embeddings
         "similarity_threshold": 0.7,  # Minimum similarity score for retrieval
         "max_results": 10,  # Maximum number of results to return
         "optimized_for_render": True,  # Optimization for Render hosting
@@ -47,7 +47,7 @@ DEFAULT_MEMORY_CONFIG = {
         "openai_model": "text-embedding-3-small",  # For OpenAI embeddings
         "normalize": True,
         "batch_size": 32,
-        "embedding_dim": 384,  # Dimension of local embeddings
+        "embedding_dim": 1536,  # Dimension of local embeddings
     },
     
     # LLM settings for memory retrieval
