@@ -988,14 +988,14 @@ class BaseLoreManager:
             self.conversation_id
         )
     
-    def invalidate_cache_pattern(self, pattern: str) -> None:
+    async def invalidate_cache_pattern(self, pattern: str) -> None:
         """
         Invalidate cache keys matching a pattern.
         
         Args:
             pattern: Pattern to match cache keys
         """
-        GLOBAL_LORE_CACHE.invalidate_pattern(
+        await GLOBAL_LORE_CACHE.invalidate_pattern(
             self.cache_namespace,
             pattern,
             self.user_id,
