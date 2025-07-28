@@ -1427,7 +1427,7 @@ async def find_or_create_notable_figure(ctx, conn, figure_name: str, **kwargs) -
         if result.final_output.strip().lower() == 'true':
             return similar['id']
     
-    # Create new figure
+    # Create new figure - CONVERT ALL LISTS/DICTS TO JSON STRINGS
     figure_id = await conn.fetchval("""
         INSERT INTO NotableFigures (
             user_id, conversation_id, name, title, description,
@@ -1443,16 +1443,16 @@ async def find_or_create_notable_figure(ctx, conn, figure_name: str, **kwargs) -
         ctx.user_id, ctx.conversation_id, figure_name, title, description,
         kwargs.get('birth_date'),
         kwargs.get('death_date'),
-        kwargs.get('faction_affiliations', []),
-        kwargs.get('achievements', []),
-        kwargs.get('failures', []),
-        kwargs.get('personality_traits', []),
+        json.dumps(kwargs.get('faction_affiliations', [])),  # Convert to JSON string
+        json.dumps(kwargs.get('achievements', [])),          # Convert to JSON string
+        json.dumps(kwargs.get('failures', [])),              # Convert to JSON string
+        json.dumps(kwargs.get('personality_traits', [])),    # Convert to JSON string
         kwargs.get('public_image', 'neutral'),
-        kwargs.get('hidden_aspects', []),
-        kwargs.get('influence_areas', []),
+        json.dumps(kwargs.get('hidden_aspects', [])),        # Convert to JSON string
+        json.dumps(kwargs.get('influence_areas', [])),       # Convert to JSON string
         kwargs.get('legacy', ''),
-        kwargs.get('controversial_actions', []),
-        kwargs.get('relationships', []),
+        json.dumps(kwargs.get('controversial_actions', [])), # Convert to JSON string
+        json.dumps(kwargs.get('relationships', [])),         # Convert to JSON string
         kwargs.get('current_status', 'active'),
         kwargs.get('reputation', 50),
         kwargs.get('significance', 5),
