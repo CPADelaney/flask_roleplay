@@ -165,7 +165,7 @@ class MemoryEmbeddingService:
         # Ensure collections exist
         for collection_name in self.collection_mapping.values():
             # Get embedding dimension based on model
-            dimension = 384  # Default for all-MiniLM-L6-v2
+            dimension = 1536  # Default for all-MiniLM-L6-v2
             if self.embedding_model == "openai":
                 dimension = 1536  # Default for text-embedding-3-small
             
@@ -205,7 +205,7 @@ class MemoryEmbeddingService:
         if self.embedding_model == "openai":
             return [0.0] * 1536  # OpenAI dimension
         else:
-            return [0.0] * 384  # Default for most HuggingFace models
+            return [0.0] * 1536  # Default for most HuggingFace models
     
     async def add_memory(
         self,
