@@ -667,10 +667,14 @@ class PresetNPCHandler:
         """Initialize memory schemas including preset-specific ones"""
         
         from memory.wrapper import MemorySystem
+        from memory.schemas import MemorySchemaManager  # Add this import
         from npcs.new_npc_creation import NPCCreationHandler
         
         handler = NPCCreationHandler()
         memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        
+        # Create a MemorySchemaManager instance directly
+        schema_manager = MemorySchemaManager(user_id, conversation_id)
         
         # First, create standard schemas
         await handler.initialize_npc_memory_schemas(
@@ -770,9 +774,9 @@ class PresetNPCHandler:
                 }
             })
         
-        # Create the preset-specific schemas
+        # Create the preset-specific schemas using schema_manager directly
         for schema in preset_schemas:
-            await memory_system.schema_manager.create_schema(
+            await schema_manager.create_schema(  # Use schema_manager instead of memory_system.schema_manager
                 entity_type="npc",
                 entity_id=npc_id,
                 schema_name=schema["name"],
