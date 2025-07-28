@@ -1216,20 +1216,41 @@ class LoreSystem:
         logger.debug(f"[_create_conflict_event_description] Conflicts: {conflicts}")
         logger.debug(f"[_create_conflict_event_description] Reason: {reason}")
         
-        # Try to get the entity name
+        # Try to get the entity name - expanded list to handle more entity types
         entity_name = None
-        for name_field in ['name', 'npc_name', 'location_name', 'quest_name', 'title']:
+        name_fields = [
+            'name', 'npc_name', 'location_name', 'quest_name', 'title', 
+            'event_name',  # For LocalHistories
+            'conflict_name',  # For Conflicts
+            'group_name',  # For NPCGroups
+            'faction_name',  # For various faction-related tables
+            'currency_name',  # For CurrencySystem
+            'trigger_name',  # For PlotTriggers
+            'interaction_name',  # For Interactions
+            'region_name',  # For regions
+            'landmark_name'  # For landmarks
+        ]
+        
+        for name_field in name_fields:
             if name_field in existing_entity:
                 entity_name = existing_entity[name_field]
                 logger.debug(f"[_create_conflict_event_description] Found entity name: {entity_name}")
                 break
         
         if not entity_name:
-            entity_name = f"{entity_type} #{entity_identifier.get('id', entity_identifier.get('npc_id', 'unknown'))}"
+            # Try to construct a meaningful identifier from available fields
+            if 'id' in entity_identifier:
+                entity_name = f"{entity_type} #{entity_identifier['id']}"
+            elif 'npc_id' in entity_identifier:
+                entity_name = f"{entity_type} #NPC{entity_identifier['npc_id']}"
+            elif 'user_id' in entity_identifier and 'conversation_id' in entity_identifier:
+                entity_name = f"{entity_type} (User:{entity_identifier['user_id']}, Conv:{entity_identifier['conversation_id']})"
+            else:
+                entity_name = f"{entity_type} #{entity_identifier.get('id', entity_identifier.get('npc_id', 'unknown'))}"
             logger.debug(f"[_create_conflict_event_description] Using fallback entity name: {entity_name}")
         
         # Don't pass technical parsing errors to lore evolution
-        technical_conflict = any('parse error' in c or 'JSON' in c for c in conflicts)
+        technical_conflict = any('parse error' in c or 'JSON' in c or 'Type error' in c for c in conflicts)
         logger.info(f"[_create_conflict_event_description] Technical conflict detected: {technical_conflict}")
         
         if technical_conflict:
@@ -1237,10 +1258,19 @@ class LoreSystem:
             logger.warning(f"[_create_conflict_event_description] Converting technical conflict to narrative")
             logger.debug(f"[_create_conflict_event_description] Original conflicts: {json.dumps(conflicts, indent=2)}")
             
+            # Create narrative descriptions based on the specific technical error
             if entity_type == "NPCStats" and "relationships" in str(conflicts[0]):
                 description = (f"Complex social dynamics prevented {entity_name} from forming new relationships as intended. "
                               f"The existing web of connections resisted change, suggesting deeper loyalties or "
                               f"obligations that must be addressed before new bonds can form. Original intention: {reason}")
+            elif entity_type == "LocalHistories" and any("name" in c for c in conflicts):
+                description = (f"Historical records for {entity_name} proved resistant to revision. "
+                              f"The chronicles seem to have their own inertia, as if the past itself refuses "
+                              f"to be rewritten. Original intention: {reason}")
+            elif "JSON" in str(conflicts[0]) or "parse error" in str(conflicts[0]):
+                description = (f"The intricate nature of {entity_name} resisted simplification or change. "
+                              f"Its complex essence proved too intertwined with the world's fabric to alter "
+                              f"in the intended way. Original intention: {reason}")
             else:
                 description = (f"Mysterious forces prevented changes to {entity_name}. The very fabric of reality "
                               f"seemed to resist the transformation, as if protecting some essential truth about "
@@ -1249,15 +1279,44 @@ class LoreSystem:
             # For non-technical conflicts, create a proper narrative
             conflict_summary = conflicts[0] if conflicts else "Multiple conflicting changes were attempted"
             
-            if "already has value" in conflict_summary:
-                description = (f"A conflict arose when attempting to change {entity_name}: {reason}. "
-                              f"The attempted changes were blocked because the entity already possesses "
-                              f"the qualities being imposed, creating a paradox of transformation.")
+            # Extract field names from conflict messages for better narratives
+            conflicting_fields = []
+            for conflict in conflicts:
+                if "Conflict on field" in conflict:
+                    field_match = conflict.split("'")[1] if "'" in conflict else None
+                    if field_match:
+                        conflicting_fields.append(field_match)
+            
+            if conflicting_fields:
+                # Create specific narratives based on the conflicting fields
+                if "power_level" in conflicting_fields or "influence" in conflicting_fields:
+                    description = (f"A power struggle emerged around {entity_name}: {reason}. "
+                                  f"Competing forces vie for influence, each attempting to shape their destiny "
+                                  f"in different ways. The balance of power remains contested.")
+                elif "territory" in conflicting_fields or "location" in conflicting_fields:
+                    description = (f"Territorial disputes arose concerning {entity_name}: {reason}. "
+                                  f"Multiple claims to the same domain created tension, as different factions "
+                                  f"assert their rights to control or influence this valuable asset.")
+                elif "allies" in conflicting_fields or "rivals" in conflicting_fields:
+                    description = (f"Diplomatic tensions surrounded {entity_name}: {reason}. "
+                                  f"Conflicting allegiances and rivalries created a complex web of relationships "
+                                  f"that resisted simple resolution, reflecting deeper political currents.")
+                else:
+                    field_text = ", ".join(conflicting_fields[:3])
+                    description = (f"Conflicting changes were attempted on {entity_name} regarding {field_text}: {reason}. "
+                                  f"These competing alterations revealed underlying tensions in the world's structure, "
+                                  f"suggesting that some aspects of reality resist easy modification.")
             else:
-                description = (f"A conflict arose when attempting to change {entity_name}: {reason}. "
-                              f"The attempted changes were blocked by competing forces within the world, "
-                              f"creating tension between what was and what might be. This resistance "
-                              f"suggests deeper currents at work in the world's fabric.")
+                # Generic conflict narrative
+                if "already has value" in conflict_summary:
+                    description = (f"A conflict arose when attempting to change {entity_name}: {reason}. "
+                                  f"The attempted changes were blocked because the entity already possesses "
+                                  f"the qualities being imposed, creating a paradox of transformation.")
+                else:
+                    description = (f"A conflict arose when attempting to change {entity_name}: {reason}. "
+                                  f"The attempted changes were blocked by competing forces within the world, "
+                                  f"creating tension between what was and what might be. This resistance "
+                                  f"suggests deeper currents at work in the world's fabric.")
         
         logger.info(f"[_create_conflict_event_description] Generated narrative description: '{description[:100]}...'")
         return description
