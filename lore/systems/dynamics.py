@@ -274,6 +274,10 @@ ALIASES = {
     "political event": "Factions",
     "geopolitical shift": "Factions",
     "location change": "Locations",
+    "character": "NotableFigures",  # Add this line
+    "characters": "NotableFigures",  # Add this line
+    "person": "NotableFigures",      # Add this line
+    "people": "NotableFigures",      # Add this line
 }
 
 def _normalize_lore_type(self, raw: str | None) -> str:
