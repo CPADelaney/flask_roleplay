@@ -322,6 +322,7 @@ async def create_all_tables():
                     respect INT CHECK (respect BETWEEN -100 AND 100),
                     affection INT CHECK (affection BETWEEN -100 AND 100) DEFAULT 0,
                     intensity INT CHECK (intensity BETWEEN -100 AND 100),
+                    mask_integrity INT CHECK (mask_integrity BETWEEN -100 AND 100) DEFAULT 100,
                     memory JSONB,
                     monica_level INT DEFAULT 0,
                     monica_games_left INT DEFAULT 0,
