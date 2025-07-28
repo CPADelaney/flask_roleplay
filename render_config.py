@@ -1,4 +1,3 @@
-
 # render_config.py
 
 """
@@ -27,7 +26,7 @@ def get_render_config() -> Dict[str, Any]:
             "db_type": "qdrant",  # Using Qdrant as the vector database
             "url": os.environ.get('QDRANT_URL', 'http://localhost:6333'),
             "api_key": os.environ.get('QDRANT_API_KEY'),
-            "dimension": 384,  # Consistent with existing configuration
+            "dimension": 1536,  # Consistent with existing configuration
             
             # Render-specific settings
             "connection_timeout": 30,  # seconds
