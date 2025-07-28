@@ -87,7 +87,7 @@ class PresetNPCHandler:
         # Step 4: Initialize memory system (only if new or missing memories)
         async with get_db_connection_context() as conn:
             memory_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM npc_memories
+                SELECT COUNT(*) FROM NPCMemories
                 WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
             """, user_id, conversation_id, npc_id)
             
@@ -583,7 +583,7 @@ class PresetNPCHandler:
             memories = await handler.generate_memories(ctx, npc_data["name"])
         
         # 1. Store memories with governance
-        await handler.store_npc_memories(user_id, conversation_id, npc_id, memories)
+        await handler.store_NPCMemories(user_id, conversation_id, npc_id, memories)
         
         # 2. Initialize emotional state
         await handler.initialize_npc_emotional_state(
