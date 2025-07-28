@@ -2706,6 +2706,10 @@ async def create_all_tables():
                 ADD COLUMN IF NOT EXISTS controlling_faction TEXT;
                 ''',
                 '''
+                ALTER TABLE NPCStats 
+                ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS PresetStories (
                     id SERIAL PRIMARY KEY,
                     story_id TEXT UNIQUE NOT NULL,
