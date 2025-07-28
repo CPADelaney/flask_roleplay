@@ -283,8 +283,16 @@ ALIASES = {
 def _normalize_lore_type(self, raw: str | None) -> str:
     if not raw:
         return "WorldLore"
-    t = ALIASES.get(raw.strip().lower(), raw.strip())
-    return t if t in ALLOWED_LORE_TYPES else "WorldLore"
+    # Convert to lowercase for comparison
+    raw_lower = raw.strip().lower()
+    # Check aliases first
+    normalized = ALIASES.get(raw_lower, raw.strip())
+    # Ensure the result is in allowed types
+    if normalized not in ALLOWED_LORE_TYPES:
+        # Log warning and default to WorldLore
+        logger.warning(f"Unknown lore type '{raw}' normalized to '{normalized}', defaulting to WorldLore")
+        return "WorldLore"
+    return normalized
 
 async def _resolve_lore_id(self, conn, info, lore_id_or_name, original_type):
     """Returns int id or None."""
@@ -1020,9 +1028,33 @@ class LoreDynamicsSystem(BaseLoreManager):
     
                 info = ALLOWED_LORE_TYPES[lore_type]
     
-                lore_id = await self._resolve_lore_id(conn, info, update.get("lore_id"), orig_type)
-                if lore_id is None:
-                    logger.error("Could not resolve lore_id for update: %s", update)
+                try:
+                    lore_id = await self._resolve_lore_id(conn, info, update.get("lore_id"), orig_type)
+                    if lore_id is None:
+                        logger.error("Could not resolve lore_id for update: %s", update)
+                        # Try to create the entity if it's a character
+                        if lore_type == "NotableFigures" and update.get("name"):
+                            # Create the notable figure
+                            from agents import RunContextWrapper
+                            ctx = RunContextWrapper(context={
+                                "user_id": self.user_id,
+                                "conversation_id": self.conversation_id
+                            })
+                            await canon.find_or_create_notable_figure(
+                                ctx, conn, update["name"],
+                                description=update.get("old_description", ""),
+                                title="",
+                                significance=5
+                            )
+                            # Try to resolve again
+                            lore_id = await self._resolve_lore_id(conn, info, update.get("name"), orig_type)
+                            if lore_id is None:
+                                logger.error("Failed to create and resolve NotableFigure: %s", update["name"])
+                                continue
+                        else:
+                            continue
+                except Exception as e:
+                    logger.error("Error resolving lore_id for %s: %s", update, e)
                     continue
     
                 item_name       = update.get("name", "Unknown")
@@ -1754,8 +1786,10 @@ class LoreDynamicsSystem(BaseLoreManager):
         Maintain strong matriarchal themes and internal consistency.
         
         IMPORTANT:
-        - 'lore_type' MUST be from the allowed list above.
-        - 'lore_id' MUST equal "{element['lore_id']}".
+        - lore_id: "{element['lore_id']}"  (MUST be exactly this numeric/string id, NOT the name)
+        - lore_type: one of {list(ALLOWED_LORE_TYPES.keys())} (case sensitive). 
+          Common aliases: 'character' -> 'NotableFigures', 'cultural shift' -> 'CulturalElements', 'political event' -> 'Factions'.
+          Do NOT use the aliases in your response - use the proper lore type names from the list above.
         """
         return prompt
     
