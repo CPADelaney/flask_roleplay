@@ -10,12 +10,11 @@ from datetime import datetime
 import json
 
 from nyx.governance import AgentType
-from lore.core.context import CanonicalContext
-from lore.core import canon
+# Remove circular import - will import canon lazily when needed
 
 logger = logging.getLogger(__name__)
 
-def ensure_canonical_context(ctx) -> CanonicalContext:
+def ensure_canonical_context(ctx):
     """
     Ensure we have a proper CanonicalContext for canon operations.
     
@@ -25,6 +24,9 @@ def ensure_canonical_context(ctx) -> CanonicalContext:
     Returns:
         CanonicalContext instance
     """
+    # Lazy import to avoid circular dependency
+    from lore.core.context import CanonicalContext
+    
     if isinstance(ctx, CanonicalContext):
         return ctx
     elif isinstance(ctx, dict):
@@ -265,6 +267,8 @@ def with_canon_tracking(
                     # Log the event
                     try:
                         async with get_db_connection_context() as conn:
+                            # Lazy import to avoid circular dependency
+                            from lore.core import canon
                             await canon.log_canonical_event(
                                 ctx, conn,
                                 event_text,
@@ -505,6 +509,9 @@ async def create_canonical_entity(
     
     # Route to appropriate canon function
     async with get_db_connection_context() as conn:
+        # Lazy import to avoid circular dependency
+        from lore.core import canon
+        
         result = None
         
         if entity_type == "npc":
