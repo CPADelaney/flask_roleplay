@@ -536,7 +536,7 @@ class RPGEntityManager:
         for collection_name in self.collections.values():
             await self.vector_db.create_collection(
                 collection_name=collection_name,
-                dimension=384  # Default dimension
+                dimension=1536  # Default dimension
             )
     
     async def close(self) -> None:
@@ -579,11 +579,11 @@ class RPGEntityManager:
             except Exception as e:
                 logger.error(f"Error generating embedding: {e}")
                 # Generate random embedding as fallback
-                vec = list(np.random.normal(0, 1, 384))
+                vec = list(np.random.normal(0, 1, 1536))
                 embedding = vec / np.linalg.norm(vec)
         elif embedding is None:
             # Generate random embedding as fallback
-            vec = list(np.random.normal(0, 1, 384))
+            vec = list(np.random.normal(0, 1, 1536))
             embedding = vec / np.linalg.norm(vec)
         
         # Add user and conversation ID to metadata
@@ -810,11 +810,11 @@ class RPGEntityManager:
             except Exception as e:
                 logger.error(f"Error generating query embedding: {e}")
                 # Generate random embedding as fallback
-                vec = list(np.random.normal(0, 1, 384))
+                vec = list(np.random.normal(0, 1, 1536))
                 query_embedding = vec / np.linalg.norm(vec)
         elif query_embedding is None:
             # Generate random embedding as fallback
-            vec = list(np.random.normal(0, 1, 384))
+            vec = list(np.random.normal(0, 1, 1536))
             query_embedding = vec / np.linalg.norm(vec)
         
         # Prepare base filter
