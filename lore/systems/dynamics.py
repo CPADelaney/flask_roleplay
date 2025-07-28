@@ -3075,15 +3075,15 @@ async def generate_embedding(text: str) -> List[float]:
         # Create a simple hash-based pseudo-embedding
         hash_obj = hashlib.md5(text.encode())
         hash_hex = hash_obj.hexdigest()
-        # Convert to list of floats (384 dimensions)
+        # Convert to list of floats (1536 dimensions)
         embedding = []
         for i in range(0, len(hash_hex), 2):
             byte_val = int(hash_hex[i:i+2], 16)
             embedding.append(float(byte_val) / 255.0)
-        # Pad or truncate to 384 dimensions
-        while len(embedding) < 384:
-            embedding.extend(embedding[:min(len(embedding), 384 - len(embedding))])
-        return embedding[:384]
+        # Pad or truncate to 1536 dimensions
+        while len(embedding) < 1536:
+            embedding.extend(embedding[:min(len(embedding), 1536 - len(embedding))])
+        return embedding[:1536]
 
 class NarrativeEvolutionSystem:
     """
