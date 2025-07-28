@@ -922,6 +922,14 @@ class LoreDynamicsSystem(BaseLoreManager):
                 new_description = update['new_description']
                 old_description = update['old_description']
                 
+                # Convert lore_id to integer if it's a string
+                try:
+                    if isinstance(lore_id, str):
+                        lore_id = int(lore_id)
+                except (ValueError, TypeError):
+                    logging.error(f"Invalid lore_id format: {lore_id} for {lore_type}")
+                    continue
+                
                 # Generate a new embedding
                 id_field = 'id'
                 if lore_type == 'LocationLore':
@@ -936,7 +944,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         UPDATE {table_name}
                         SET description = $1
                         WHERE {id_column} = $2
-                    """, new_description, lore_id)
+                    """, new_description, lore_id)  # Now lore_id is an integer
                     
                     # Generate embedding
                     item_name = update.get('name', 'Unknown')
@@ -948,7 +956,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         UPDATE {table_name}
                         SET embedding = $1
                         WHERE {id_column} = $2
-                    """, new_embedding, lore_id)
+                    """, new_embedding, lore_id)  # Now lore_id is an integer
                     
                     # Insert into LoreChangeHistory
                     await conn.execute("""
