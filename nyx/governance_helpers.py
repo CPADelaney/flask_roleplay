@@ -297,19 +297,33 @@ def with_governance(
             
             # Extract arguments based on function type
             if is_method:
-                # Method call: (self, ctx, ...)
-                if len(args) < 2:
-                    raise ValueError(f"Method {func.__name__} requires at least self and ctx arguments")
-                self_arg = args[0]
-                ctx = args[1]
-                remaining_args = args[2:]
+                # Method call: (self, ctx, ...) or (self, ..., ctx=ctx)
+                if len(args) >= 2:
+                    # ctx passed as positional
+                    self_arg = args[0]
+                    ctx = args[1]
+                    remaining_args = args[2:]
+                elif len(args) >= 1 and 'ctx' in kwargs:
+                    # ctx passed as keyword
+                    self_arg = args[0]
+                    ctx = kwargs.pop('ctx')  # Remove ctx from kwargs to avoid duplicate
+                    remaining_args = args[1:]
+                else:
+                    raise ValueError(f"Method {func.__name__} requires self and ctx arguments")
             else:
-                # Function call: (ctx, ...)
-                if len(args) < 1:
-                    raise ValueError(f"Function {func.__name__} requires at least ctx argument")
-                self_arg = None
-                ctx = args[0]
-                remaining_args = args[1:]
+                # Function call: (ctx, ...) or (..., ctx=ctx)
+                if len(args) >= 1:
+                    # ctx passed as positional
+                    self_arg = None
+                    ctx = args[0]
+                    remaining_args = args[1:]
+                elif 'ctx' in kwargs:
+                    # ctx passed as keyword
+                    self_arg = None
+                    ctx = kwargs.pop('ctx')  # Remove ctx from kwargs to avoid duplicate
+                    remaining_args = args
+                else:
+                    raise ValueError(f"Function {func.__name__} requires ctx argument")
             
             # Extract user_id and conversation_id with multiple fallback strategies
             user_id = None
@@ -357,62 +371,128 @@ def with_governance(
                 if conversation_id is None:
                     conversation_id = 0
             
-            # Store governance info for permission/reporting decorators
-            governance_context = {
-                "user_id": user_id,
-                "conversation_id": conversation_id,
-                "agent_type": agent_type,
-                "action_type": action_type,
-                "action_description": action_description,
-                "id_from_context": id_from_context,
-                "extract_result": extract_result
+            # Determine agent_id
+            if id_from_context:
+                agent_id = id_from_context(ctx)
+            elif is_method and self_arg:
+                agent_id = getattr(self_arg, "agent_id", f"{agent_type}_{conversation_id}")
+            else:
+                agent_id = f"{agent_type}_{conversation_id}"
+            
+            # ===== PERMISSION CHECK =====
+            # Create action details from args and kwargs
+            action_details = {
+                "function": func.__name__,
+                "args": [str(arg)[:100] for arg in remaining_args],  # Truncate for logging
+                "kwargs": {k: str(v)[:100] for k, v in kwargs.items()},  # Truncate for logging
+                "description": action_description.format(**kwargs) if kwargs else action_description
             }
             
-            # Call the original function with original arguments preserved
-            # The ctx remains as it was passed, we don't create a NormalizedContext
-            if is_method:
-                # Store governance context on the method's self for nested decorators
-                if hasattr(self_arg, '_governance_context'):
-                    old_context = self_arg._governance_context
-                else:
-                    old_context = None
-                self_arg._governance_context = governance_context
-                
-                try:
-                    result = await func(self_arg, ctx, *remaining_args, **kwargs)
-                finally:
-                    if old_context is not None:
-                        self_arg._governance_context = old_context
-                    elif hasattr(self_arg, '_governance_context'):
-                        delattr(self_arg, '_governance_context')
-            else:
-                # For functions, add governance context to ctx if possible
-                if hasattr(ctx, '_governance_context'):
-                    old_context = ctx._governance_context
-                else:
-                    old_context = None
-                    
-                # Only add governance context if ctx is an object we can modify
-                if hasattr(ctx, '__dict__'):
-                    ctx._governance_context = governance_context
-                    
-                try:
-                    result = await func(ctx, *remaining_args, **kwargs)
-                finally:
-                    if hasattr(ctx, '_governance_context'):
-                        if old_context is not None:
-                            ctx._governance_context = old_context
-                        else:
-                            delattr(ctx, '_governance_context')
+            # Check permission
+            permission = await check_permission(
+                user_id,
+                conversation_id,
+                agent_type,
+                agent_id,
+                action_type,
+                action_details
+            )
             
-            # Now handle permission checking and reporting using the governance context
-            # This would be done by the nested decorators, not here
+            if not permission["approved"]:
+                logger.warning(f"Permission denied for {func.__name__}: {permission.get('reasoning')}")
+                return {
+                    "error": permission.get("reasoning", "Not approved by governance"),
+                    "approved": False,
+                    "governance_blocked": True
+                }
+            
+            # Apply override if present
+            if permission.get("override_action"):
+                override = permission["override_action"]
+                # Update args and kwargs based on override
+                if "args" in override and len(override["args"]) == len(remaining_args):
+                    remaining_args = override["args"]
+                if "kwargs" in override:
+                    kwargs.update(override["kwargs"])
+            
+            # ===== EXECUTE FUNCTION =====
+            start_time = datetime.now()
+            error_occurred = None
+            
+            try:
+                # Call the original function with ctx in the correct position
+                if is_method:
+                    result = await func(self_arg, *remaining_args, ctx=ctx, **kwargs)
+                else:
+                    result = await func(*remaining_args, ctx=ctx, **kwargs)
+            except Exception as e:
+                error_occurred = e
+                result = {
+                    "error": str(e),
+                    "success": False,
+                    "exception_type": type(e).__name__
+                }
+            
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
+            # ===== ACTION REPORTING =====
+            # Build the action dictionary for reporting
+            truncated_kwargs = {k: str(v)[:100] for k, v in kwargs.items()}
+            action = {
+                "type": action_type,
+                "description": action_description.format(**kwargs) if kwargs else action_description,
+                "function": func.__name__,
+                "duration_seconds": duration,
+                "permission_tracking_id": permission.get("tracking_id", -1),
+                **truncated_kwargs
+            }
+            
+            # Extract result details
+            result_details = {
+                "duration_seconds": duration,
+                "error_occurred": error_occurred is not None
+            }
+            
+            if extract_result and not error_occurred:
+                try:
+                    extracted = extract_result(result)
+                    if isinstance(extracted, dict):
+                        result_details.update(extracted)
+                except Exception as e:
+                    logger.warning(f"Error extracting result details: {e}")
+            elif isinstance(result, dict):
+                # Common keys to extract
+                for key in ["success", "message", "count", "length", "status", "committed"]:
+                    if key in result:
+                        result_details[key] = result[key]
+            
+            # Report this action to governance
+            report_result = await report_action(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                agent_type=agent_type,
+                agent_id=agent_id,
+                action=action,
+                result=result_details
+            )
+            
+            # Attach governance metadata to result if it's a dict
+            if isinstance(result, dict):
+                result["governance_metadata"] = {
+                    "permission_approved": True,
+                    "permission_tracking_id": permission.get("tracking_id", -1),
+                    "directive_applied": permission.get("directive_applied", False),
+                    "action_reported": report_result.get("reported", False),
+                    "report_id": report_result.get("report_id", None)
+                }
+            
+            # Re-raise the error if one occurred
+            if error_occurred:
+                raise error_occurred
             
             return result
         
-        # Apply the decorators in order but just return wrapper for now
-        # The actual permission/reporting logic should be refactored to use
-        # the governance context we set up above
         return wrapper
     
     return decorator
