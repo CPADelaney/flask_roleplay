@@ -36,7 +36,7 @@ DEFAULT_CONFIG = {
         "db_type": "in_memory",  # Options: "in_memory", "qdrant"
         "url": "http://localhost:6333",
         "api_key": None,
-        "dimension": 384
+        "dimension": 1536
     },
     
     # Token budget settings
