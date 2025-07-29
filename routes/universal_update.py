@@ -4,10 +4,13 @@ from quart import Blueprint, request, jsonify, session
 import asyncio
 import asyncpg
 import os
+import logging
 from db.connection import get_db_connection_context
 from logic.universal_updater_agent import apply_universal_updates_async 
+from logic.aggregator_sdk import get_aggregated_roleplay_context
 
 universal_bp = Blueprint("universal_bp", __name__)
+logger = logging.getLogger(__name__)
 
 @universal_bp.route("/universal_update", methods=["POST"])
 async def universal_update():
@@ -69,3 +72,101 @@ async def get_roleplay_value():
         return jsonify({"value": row['value']})
     else:
         return jsonify({"value": None})
+
+# ADD THIS NEW ENDPOINT - This is what's missing and causing the 404
+@universal_bp.route('/get_aggregated_roleplay_context', methods=['GET'])
+async def get_aggregated_roleplay_context_endpoint():
+    """
+    Endpoint to get aggregated roleplay context for the game UI.
+    """
+    # Check authentication
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    # Get parameters
+    conversation_id = request.args.get("conversation_id")
+    player_name = request.args.get("player_name", "Chase")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    try:
+        # Convert to int
+        conversation_id = int(conversation_id)
+        
+        # Get the aggregated context
+        context_data = await get_aggregated_roleplay_context(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            player_name=player_name
+        )
+        
+        return jsonify(context_data), 200
+        
+    except ValueError:
+        return jsonify({"error": "Invalid conversation_id"}), 400
+    except Exception as e:
+        logger.error(f"Error getting aggregated context: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# OPTIONALLY ADD THIS TOO - for player resources
+@universal_bp.route('/player/resources', methods=['GET'])
+async def get_player_resources():
+    """
+    Get player resources (money, supplies, influence) and vitals (energy, hunger).
+    """
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    conversation_id = request.args.get("conversation_id")
+    player_name = request.args.get("player_name", "Chase")
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id"}), 400
+    
+    try:
+        conversation_id = int(conversation_id)
+        
+        async with get_db_connection_context() as conn:
+            # Get resources
+            resources_row = await conn.fetchrow("""
+                SELECT money, supplies, influence
+                FROM PlayerResources
+                WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+            """, user_id, conversation_id, player_name)
+            
+            # Get vitals
+            vitals_row = await conn.fetchrow("""
+                SELECT energy, hunger
+                FROM PlayerVitals
+                WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+            """, user_id, conversation_id, player_name)
+            
+            resources = {}
+            vitals = {}
+            
+            if resources_row:
+                resources = {
+                    "money": resources_row["money"],
+                    "supplies": resources_row["supplies"],
+                    "influence": resources_row["influence"]
+                }
+            
+            if vitals_row:
+                vitals = {
+                    "energy": vitals_row["energy"],
+                    "hunger": vitals_row["hunger"]
+                }
+            
+            return jsonify({
+                "resources": resources,
+                "vitals": vitals
+            }), 200
+            
+    except ValueError:
+        return jsonify({"error": "Invalid conversation_id"}), 400
+    except Exception as e:
+        logger.error(f"Error getting player resources: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
