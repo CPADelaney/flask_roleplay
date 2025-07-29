@@ -19,7 +19,7 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
 from memory.memory_nyx_integration import run_maintenance_through_nyx
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, run_async_in_worker_loop
 
 # --- Core NyxBrain and Checkpointing ---
 from nyx.core.brain.base import NyxBrain
@@ -440,15 +440,14 @@ def run_npc_learning_cycle_task():
 def process_new_game_task(user_id, conversation_data):
     """
     Celery task to process new (or preset) game creation.
-    - Accepts either dynamic or preset flow (presence of preset_story_id decides).
-    - Marks the conversation row ready on success.
-    - Ensures an opening Nyx message exists so the poller stops spinning.
+    Uses the worker's persistent event loop instead of creating a new one.
     """
     logger.info("CELERY – process_new_game_task called")
 
     async def run_new_game():
         with trace(workflow_name="process_new_game_celery_task"):
-            # ----- Log & normalize inputs -----
+            # Your existing code here...
+            # (keeping all the logic the same)
             try:
                 logger.info(
                     "[NG] payload keys=%s, preset_id=%s",
@@ -472,7 +471,6 @@ def process_new_game_task(user_id, conversation_data):
                     logger.error(f"Invalid conversation_id: {conv_id}")
                     return {"status": "failed", "error": "Invalid conversation_id"}
 
-            # ----- Decide preset vs dynamic -----
             preset_story_id = get_preset_id(conversation_data)
 
             agent = NewGameAgent()
@@ -480,15 +478,12 @@ def process_new_game_task(user_id, conversation_data):
             ctx = CanonicalContext(user_id_int, conversation_data.get("conversation_id", 0))
 
             try:
-                # ----- Run the appropriate pipeline -----
                 if preset_story_id:
                     logger.info(f"Preset path triggered (story_id={preset_story_id})")
                     result = await agent.process_preset_game_direct(ctx, conversation_data, preset_story_id)
                 else:
                     result = await agent.process_new_game(ctx, conversation_data)
 
-                # ----- Finalize DB state -----
-                # Pull ids/names out of the result safely
                 def _get(attr, default=None):
                     return getattr(result, attr, default) if hasattr(result, attr) else result.get(attr, default) if isinstance(result, dict) else default
 
@@ -500,7 +495,6 @@ def process_new_game_task(user_id, conversation_data):
 
                 try:
                     async with get_db_connection_context() as conn:
-                        # 1) Mark conversation ready
                         if conv_id_final is not None:
                             await conn.execute("""
                                 UPDATE conversations
@@ -509,7 +503,6 @@ def process_new_game_task(user_id, conversation_data):
                                  WHERE id=$1 AND user_id=$2
                             """, conv_id_final, user_id_int, conv_name)
 
-                            # 2) Ensure there is a first Nyx message
                             exists = await conn.fetchval("""
                                 SELECT 1 FROM messages
                                  WHERE conversation_id=$1 AND sender='Nyx'
@@ -530,7 +523,6 @@ def process_new_game_task(user_id, conversation_data):
             except Exception as e:
                 logger.exception("Critical error in process_new_game_task")
 
-                # Attempt to mark convo failed
                 conv_id_fail = conversation_data.get("conversation_id")
                 if conv_id_fail:
                     try:
@@ -551,8 +543,8 @@ def process_new_game_task(user_id, conversation_data):
                     "conversation_id": conv_id_fail
                 }
 
-    return asyncio.run(run_new_game())
-
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_new_game())
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
