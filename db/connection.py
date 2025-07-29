@@ -8,12 +8,19 @@ from contextlib import asynccontextmanager
 from quart import Quart 
 from typing import Optional
 import pgvector.asyncpg as pgvector_asyncpg
+import threading
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Global Pool variable - will be initialized per worker
 DB_POOL: Optional[asyncpg.Pool] = None
+
+# Store the event loop that owns the pool
+DB_POOL_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+# Thread-local storage for worker event loops
+_thread_local = threading.local()
 
 # Default connection pool settings
 DEFAULT_MIN_CONNECTIONS = 10
@@ -35,9 +42,27 @@ def get_db_dsn() -> str:
     
     return dsn
 
+def get_or_create_event_loop() -> asyncio.AbstractEventLoop:
+    """Get the current event loop or create one if needed."""
+    try:
+        loop = asyncio.get_running_loop()
+        return loop
+    except RuntimeError:
+        # No running loop
+        if hasattr(_thread_local, 'event_loop') and not _thread_local.event_loop.is_closed():
+            # Use thread-local loop
+            asyncio.set_event_loop(_thread_local.event_loop)
+            return _thread_local.event_loop
+        else:
+            # Create new loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            _thread_local.event_loop = loop
+            return loop
+
 async def close_existing_pool():
     """Close existing pool if any."""
-    global DB_POOL
+    global DB_POOL, DB_POOL_LOOP
     if DB_POOL and not DB_POOL._closed:
         try:
             logger.info(f"Closing existing pool in process {os.getpid()}")
@@ -46,6 +71,7 @@ async def close_existing_pool():
             logger.error(f"Error closing existing pool: {e}")
         finally:
             DB_POOL = None
+            DB_POOL_LOOP = None
 
 async def initialize_connection_pool(app: Optional[Quart] = None, force_new: bool = False) -> bool:
     """
@@ -55,33 +81,43 @@ async def initialize_connection_pool(app: Optional[Quart] = None, force_new: boo
         app: Optional Quart app instance
         force_new: Force creation of a new pool even if one exists
     """
-    global DB_POOL
+    global DB_POOL, DB_POOL_LOOP
     
-    # For Celery workers, always create a new pool
-    if force_new:
-        await close_existing_pool()
+    # Get current event loop
+    current_loop = get_or_create_event_loop()
     
-    # Check if the pool is already initialized and valid
-    if DB_POOL is not None and not DB_POOL._closed:
+    # Check if we have a pool for the current loop
+    if not force_new and DB_POOL is not None and not DB_POOL._closed and DB_POOL_LOOP == current_loop:
         try:
             # Test the pool
             async with DB_POOL.acquire() as conn:
                 await conn.execute("SELECT 1")
-            logger.info(f"DB pool already initialized and working in process {os.getpid()}.")
+            logger.info(f"DB pool already initialized for current loop in process {os.getpid()}.")
             if app and not hasattr(app, 'db_pool'):
                 app.db_pool = DB_POOL
             return True
         except Exception:
             # Pool exists but is not working, close it
             await close_existing_pool()
+    
+    # If pool is from a different loop, close it
+    if DB_POOL is not None and DB_POOL_LOOP != current_loop:
+        logger.warning(f"Pool exists for different event loop, closing it")
+        await close_existing_pool()
+    
+    # For Celery workers, always create a new pool if forced
+    if force_new:
+        await close_existing_pool()
 
-    # Check if app already has a pool
+    # Check if app already has a pool for current loop
     if app and hasattr(app, 'db_pool') and app.db_pool is not None and not app.db_pool._closed:
+        # Verify it's for the current loop
         try:
             async with app.db_pool.acquire() as conn:
                 await conn.execute("SELECT 1")
             logger.info(f"Using existing DB pool from app in process {os.getpid()}.")
             DB_POOL = app.db_pool
+            DB_POOL_LOOP = current_loop
             return True
         except Exception:
             # App pool is not working
@@ -99,15 +135,7 @@ async def initialize_connection_pool(app: Optional[Quart] = None, force_new: boo
         command_timeout = int(os.getenv("DB_COMMAND_TIMEOUT", "60"))
         max_queries = int(os.getenv("DB_MAX_QUERIES", "50000"))
         
-        logger.info(f"Process {os.getpid()}: Creating new asyncpg pool (min={min_s}, max={max_s})...")
-        
-        # Create new event loop if needed (for Celery workers)
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop, create a new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        logger.info(f"Process {os.getpid()}: Creating new asyncpg pool for event loop {id(current_loop)} (min={min_s}, max={max_s})...")
         
         local_pool = await asyncpg.create_pool(
             dsn=dsn,
@@ -118,7 +146,7 @@ async def initialize_connection_pool(app: Optional[Quart] = None, force_new: boo
             command_timeout=command_timeout,
             max_queries=max_queries,
             setup=setup_connection,
-            loop=loop  # Explicitly pass the loop
+            loop=current_loop  # Explicitly bind to current loop
         )
         
         # Test the pool
@@ -127,16 +155,19 @@ async def initialize_connection_pool(app: Optional[Quart] = None, force_new: boo
             logger.info(f"Process {os.getpid()}: Pool test query successful.")
 
         DB_POOL = local_pool
+        DB_POOL_LOOP = current_loop
+        
         if app:
             app.db_pool = DB_POOL
             logger.info(f"Process {os.getpid()}: DB_POOL stored on app.db_pool.")
 
-        logger.info(f"Process {os.getpid()}: Asyncpg pool initialized successfully.")
+        logger.info(f"Process {os.getpid()}: Asyncpg pool initialized successfully for loop {id(current_loop)}.")
         return True
         
     except Exception as e:
         logger.critical(f"Process {os.getpid()}: Failed to initialize asyncpg pool: {e}", exc_info=True)
         DB_POOL = None
+        DB_POOL_LOOP = None
         if app:
             app.db_pool = None
         return False
@@ -156,8 +187,11 @@ async def get_db_connection_pool():
     Get the current database connection pool.
     Attempts lazy initialization if pool is not available.
     """
-    global DB_POOL
-    if DB_POOL is None or DB_POOL._closed:
+    global DB_POOL, DB_POOL_LOOP
+    current_loop = get_or_create_event_loop()
+    
+    # Check if pool exists and is for current loop
+    if DB_POOL is None or DB_POOL._closed or DB_POOL_LOOP != current_loop:
         # In Celery context, force new pool
         is_celery = 'celery' in os.environ.get('SERVER_SOFTWARE', '').lower()
         ok = await initialize_connection_pool(force_new=is_celery)
@@ -170,14 +204,20 @@ async def get_db_connection_context(timeout: Optional[float] = 30.0, app: Option
     """
     Async context manager for database connections.
     """
-    global DB_POOL
+    global DB_POOL, DB_POOL_LOOP
+    current_loop = get_or_create_event_loop()
     current_pool_to_use: Optional[asyncpg.Pool] = None
     conn: Optional[asyncpg.Connection] = None
+
+    # Check if we need to reinitialize due to loop change
+    if DB_POOL and DB_POOL_LOOP != current_loop:
+        logger.warning(f"DB pool was created for different event loop, reinitializing")
+        await close_existing_pool()
 
     # Determine which pool to use
     if app and hasattr(app, 'db_pool') and isinstance(app.db_pool, asyncpg.Pool) and not app.db_pool._closed:
         current_pool_to_use = app.db_pool
-    elif DB_POOL and not DB_POOL._closed:
+    elif DB_POOL and not DB_POOL._closed and DB_POOL_LOOP == current_loop:
         current_pool_to_use = DB_POOL
     
     # Lazy initialization if needed
@@ -223,7 +263,7 @@ async def close_connection_pool(app: Optional[Quart] = None):
     """
     Closes the DB_POOL.
     """
-    global DB_POOL
+    global DB_POOL, DB_POOL_LOOP
     pool_to_close: Optional[asyncpg.Pool] = None
 
     if app and hasattr(app, 'db_pool') and isinstance(app.db_pool, asyncpg.Pool) and not app.db_pool._closed:
@@ -236,6 +276,7 @@ async def close_connection_pool(app: Optional[Quart] = None):
     if pool_to_close:
         if DB_POOL is pool_to_close:
             DB_POOL = None
+            DB_POOL_LOOP = None
         if app and hasattr(app, 'db_pool') and app.db_pool is pool_to_close:
             app.db_pool = None
         
@@ -282,22 +323,42 @@ async def check_pool_health() -> dict:
     
     return health
 
-# Celery worker initialization
+# Celery worker event loop management
+def run_async_in_worker_loop(coro):
+    """
+    Run an async coroutine in the worker's event loop.
+    Creates and manages a persistent event loop per worker thread.
+    """
+    loop = get_or_create_event_loop()
+    
+    # If loop is already running, we can't use run_until_complete
+    if loop.is_running():
+        # This shouldn't happen in normal Celery operation
+        raise RuntimeError("Event loop is already running")
+    
+    try:
+        return loop.run_until_complete(coro)
+    except Exception:
+        # Don't close the loop on error - we want to reuse it
+        raise
+
 def init_celery_worker():
-    """Initialize database pool for Celery worker."""
-    logger.info(f"Initializing Celery worker in process {os.getpid()}")
+    """
+    Initialize database pool for Celery worker.
+    This is called from celery_config.py when a worker process starts.
+    """
+    logger.info(f"Initializing Celery worker database pool in process {os.getpid()}")
     
     # Set marker for Celery context
     os.environ['SERVER_SOFTWARE'] = 'celery'
     
-    # Create new event loop for this worker
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Get or create the event loop for this worker
+    loop = get_or_create_event_loop()
     
-    # Initialize the pool
+    # Initialize the pool using the worker's event loop
     try:
-        loop.run_until_complete(initialize_connection_pool(force_new=True))
-        logger.info("Celery worker database pool initialized successfully")
+        run_async_in_worker_loop(initialize_connection_pool(force_new=True))
+        logger.info(f"Celery worker {os.getpid()} database pool initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize Celery worker database pool: {e}", exc_info=True)
         raise
@@ -311,5 +372,7 @@ __all__ = [
     'close_connection_pool',
     'check_pool_health',
     'setup_connection',
-    'init_celery_worker'
+    'init_celery_worker',
+    'run_async_in_worker_loop',
+    'get_or_create_event_loop'
 ]
