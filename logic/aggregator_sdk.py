@@ -152,7 +152,20 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
             WHERE user_id = $1 AND conversation_id = $2
             AND (
                 (day = $3 AND time_of_day = $4) OR
-                (start_time <= NOW() AND end_time >= NOW())
+                (
+                    start_time IS NOT NULL 
+                    AND end_time IS NOT NULL
+                    AND start_time != ''
+                    AND end_time != ''
+                    AND CASE 
+                        WHEN start_time ~ '^\d{4}-\d{2}-\d{2}' THEN start_time::timestamp <= NOW()
+                        ELSE FALSE
+                    END
+                    AND CASE
+                        WHEN end_time ~ '^\d{4}-\d{2}-\d{2}' THEN end_time::timestamp >= NOW()
+                        ELSE FALSE
+                    END
+                )
             )
         """, user_id, conversation_id, 
             current_roleplay.get('CurrentDay', 1),
