@@ -3,6 +3,7 @@
 The unified LoreSystem - Primary implementation.
 This is the core module that contains all lore-related logic and operations.
 Complete refactor including ALL functionality from the original.
+Enhanced with multi-relationship support for NPCs.
 """
 import logging
 import json
@@ -39,6 +40,7 @@ class LoreSystem:
     """
     The core unified LoreSystem that handles all lore-related functionality.
     This is the primary implementation containing all logic.
+    Enhanced with multi-relationship support for NPCs.
     """
     _instances: Dict[str, "LoreSystem"] = {}
 
@@ -485,16 +487,113 @@ class LoreSystem:
         return await self.lore_dynamics_system.mature_lore_over_time.fn(ctx, days_passed)
     
     # ---------------------------------------------------------------------
-    # Canon Methods - This is critical for the system to work
+    # Enhanced Relationship Methods - Multi-Relationship Support
     # ---------------------------------------------------------------------
 
-    def _are_relationships_compatible(self, current_rels: Any, new_rels: Any) -> bool:
+    def _merge_compatible_relationships(self, current_relationships: List[Dict], new_relationships: List[Dict]) -> Tuple[bool, List[Dict]]:
         """
-        Check if new relationships are compatible with current ones.
-        Returns True if new_rels contains all of current_rels plus potentially more.
+        Merge relationship lists, allowing multiple compatible relationship types per entity.
+        
+        Returns:
+            (is_compatible, merged_relationships)
+        """
+        # Group current relationships by entity
+        current_by_entity = {}
+        for rel in current_relationships:
+            key = (rel.get('entity_id'), rel.get('entity_type'))
+            if key not in current_by_entity:
+                current_by_entity[key] = []
+            current_by_entity[key].append(rel)
+        
+        # Group new relationships by entity
+        new_by_entity = {}
+        for rel in new_relationships:
+            key = (rel.get('entity_id'), rel.get('entity_type'))
+            if key not in new_by_entity:
+                new_by_entity[key] = []
+            new_by_entity[key].append(rel)
+        
+        # Define incompatible relationship types
+        incompatible_pairs = {
+            ('dead', 'alive'),
+            ('missing', 'present'),
+            ('banished', 'welcomed'),
+            ('imprisoned', 'free'),
+            ('exiled', 'resident'),
+            ('destroyed', 'intact'),
+            # Emotional extremes that are truly incompatible
+            ('devoted', 'betrayed'),  # but devoted + suspicious could work
+            ('worshipping', 'despising'),  # but worshipping + fearful could work
+            # Add more as needed based on your specific game logic
+        }
+        
+        # Optional: Define relationship hierarchies (stronger relationships override weaker ones)
+        relationship_hierarchy = {
+            'family': 10,     # Family ties are strongest
+            'lover': 9,       # Romantic relationships are very strong  
+            'enemy': 8,       # Enmity is a strong bond
+            'ally': 7,        # Political alliances are strong
+            'friend': 6,      # Friendships are meaningful
+            'neighbor': 3,    # Proximity relationships are weaker
+            'acquaintance': 1 # Casual relationships are weakest
+        }
+        
+        # Check for true incompatibilities
+        merged = {}
+        for entity_key in set(current_by_entity.keys()) | set(new_by_entity.keys()):
+            merged[entity_key] = []
+            
+            # Get all relationship labels for this entity
+            current_labels = set()
+            new_labels = set()
+            
+            for rel in current_by_entity.get(entity_key, []):
+                current_labels.add(rel.get('relationship_label'))
+                merged[entity_key].append(rel)
+            
+            for rel in new_by_entity.get(entity_key, []):
+                new_labels.add(rel.get('relationship_label'))
+                
+            # Check for incompatible combinations
+            all_labels = current_labels | new_labels
+            for label1 in all_labels:
+                for label2 in all_labels:
+                    if (label1, label2) in incompatible_pairs or (label2, label1) in incompatible_pairs:
+                        return False, []
+            
+            # Add new relationships that don't already exist
+            for rel in new_by_entity.get(entity_key, []):
+                label = rel.get('relationship_label')
+                # Check if this exact relationship already exists
+                already_exists = False
+                for existing_rel in current_by_entity.get(entity_key, []):
+                    if existing_rel.get('relationship_label') == label:
+                        # Update existing relationship with new data if provided
+                        for key, value in rel.items():
+                            if key != 'relationship_label' and value is not None:
+                                existing_rel[key] = value
+                        already_exists = True
+                        break
+                
+                if not already_exists:
+                    merged[entity_key].append(rel)
+        
+        # Convert back to flat list
+        merged_list = []
+        for relationships in merged.values():
+            merged_list.extend(relationships)
+        
+        return True, merged_list
+
+    def _are_relationships_compatible(self, current_rels: Any, new_rels: Any) -> Tuple[bool, Any]:
+        """
+        Enhanced relationship compatibility check that allows multiple relationship types.
+        
+        Returns:
+            (is_compatible, merged_relationships_if_compatible)
         """
         try:
-            # Parse if needed
+            # Parse relationships
             if isinstance(current_rels, str):
                 current_list = json.loads(current_rels) if current_rels else []
             else:
@@ -507,36 +606,24 @@ class LoreSystem:
             
             # Empty current list is always compatible
             if not current_list:
-                return True
+                return True, new_list
             
-            # Create a mapping for efficient lookup
-            # Key: (entity_id, entity_type) -> relationship data
-            current_map = {}
-            for rel in current_list:
-                if isinstance(rel, dict):
-                    key = (rel.get('entity_id'), rel.get('entity_type'))
-                    current_map[key] = rel
+            # Use enhanced merging logic
+            is_compatible, merged = self._merge_compatible_relationships(current_list, new_list)
             
-            new_map = {}
-            for rel in new_list:
-                if isinstance(rel, dict):
-                    key = (rel.get('entity_id'), rel.get('entity_type'))
-                    new_map[key] = rel
-            
-            # Check if all current relationships exist in new
-            for key, current_rel in current_map.items():
-                if key not in new_map:
-                    return False
-                # Check if the relationship data matches
-                if new_map[key] != current_rel:
-                    return False
-            
-            return True
-            
+            if is_compatible:
+                return True, merged
+            else:
+                return False, None
+                
         except Exception as e:
-            logger.error(f"Error comparing relationships: {e}")
-            return False
-
+            logger.error(f"Error checking relationship compatibility: {e}")
+            return False, None
+    
+    # ---------------------------------------------------------------------
+    # Canon Methods - This is critical for the system to work
+    # ---------------------------------------------------------------------
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="handle_narrative_event",
@@ -621,7 +708,7 @@ class LoreSystem:
         reason: str
     ) -> Dict[str, Any]:
         """
-        Canonical state-change helper with proper list comparison.
+        Canonical state-change helper with proper list comparison and enhanced relationship support.
         """
         from lore.core import canon
         from db.connection import get_db_connection_context
@@ -658,7 +745,7 @@ class LoreSystem:
         # ------------------------------------------------------------------ #
         def _is_effectively_empty(val) -> bool:
             """
-            Returns True when *val* should be considered an “empty placeholder”.
+            Returns True when *val* should be considered an "empty placeholder".
 
             Handles:
               • NULL/None
@@ -851,8 +938,27 @@ class LoreSystem:
                             logger.debug(f"[propose_and_enact_change] Field '{field}' is effectively empty, allowing overwrite")
                             continue
     
-                        # JSON fields
-                        if field in entity_json_fields:
+                        # SPECIAL CASE: Enhanced relationships handling
+                        if field == "relationships" and field in entity_json_fields:
+                            # Special handling for relationships to allow multiple compatible types
+                            is_compatible, merged_relationships = self._are_relationships_compatible(current_val, new_val)
+                            
+                            if is_compatible:
+                                logger.debug(f"[propose_and_enact_change] Relationships are compatible, merging")
+                                # Update the processed_updates to use merged relationships
+                                processed_updates[field] = json.dumps(merged_relationships)
+                                continue
+                            else:
+                                # True conflict - incompatible relationship states
+                                conflict_msg = (
+                                    f"Incompatible relationships for field '{field}': "
+                                    f"Cannot combine {json.dumps(current_val)} with {json.dumps(new_val)}"
+                                )
+                                conflicts.append(conflict_msg)
+                                logger.warning(f"[propose_and_enact_change] {conflict_msg}")
+                            
+                        elif field in entity_json_fields:
+                            # Original JSON field handling for non-relationship fields
                             try:
                                 cur_obj = (json.loads(current_val)
                                            if isinstance(current_val, str) else current_val) or {}
