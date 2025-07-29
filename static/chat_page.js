@@ -101,15 +101,16 @@ const CONFIG = {
 const AppState = {
   // User info
   userId: null,
+  isAdmin: false,
   
   // Conversation state
   currentConvId: null,      // Always normalized to string
   currentRoomId: null,      // Always stored as string
-  roomConnectedOnce: false,   // <— NEW
+  roomConnectedOnce: false,
   messagesOffset: 0,
   
   // UI state
-  isDarkMode: false,
+  isDarkMode: true,  // Default to dark mode
   isCreatingGame: false,
   isSelectingConversation: false,
   isSendingMessage: false,
@@ -157,6 +158,80 @@ function resetPendingUniversalUpdates() {
   AppState.pendingUniversalUpdates = createUniversalUpdates();
 }
 
+// ===== Robust Socket Connection =====
+function createRobustSocketConnection(handlers = {}) {
+  const {
+    onConnect = () => {},
+    onDisconnect = () => {},
+    onReconnect = () => {},
+    onReconnectFailed = () => {}
+  } = handlers;
+
+  const socket = io({
+    path: '/socket.io/',
+    transports: ['websocket', 'polling'],
+    reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    reconnectionAttempts: 10,
+    timeout: 20000,
+    autoConnect: true
+  });
+
+  // Connection events
+  socket.on('connect', () => {
+    console.log('Socket connected:', socket.id);
+    onConnect(socket, false);
+  });
+
+  socket.on('disconnect', (reason) => {
+    console.log('Socket disconnected:', reason);
+    onDisconnect(socket, reason);
+  });
+
+  socket.on('reconnect', (attemptNumber) => {
+    console.log('Socket reconnected after', attemptNumber, 'attempts');
+    onReconnect(socket, attemptNumber);
+  });
+
+  socket.on('reconnect_failed', () => {
+    console.log('Socket reconnection failed');
+    onReconnectFailed();
+  });
+
+  socket.on('connect_error', (error) => {
+    console.error('Socket connection error:', error.message);
+  });
+
+  return socket;
+}
+
+// ===== Admin UI Functions =====
+function initializeAdminUI() {
+  // Set admin state
+  AppState.isAdmin = window.IS_ADMIN || false;
+  
+  if (AppState.isAdmin) {
+    document.body.classList.add('is-admin');
+  }
+  
+  // Update button visibility
+  updateAdminButtonVisibility();
+}
+
+function updateAdminButtonVisibility() {
+  const nyxSpaceBtn = $("nyxSpaceBtn");
+  const advanceTimeBtn = $("advanceTimeBtn");
+  
+  if (nyxSpaceBtn) {
+    nyxSpaceBtn.style.display = AppState.isAdmin ? "block" : "none";
+  }
+  
+  if (advanceTimeBtn) {
+    advanceTimeBtn.style.display = AppState.isAdmin ? "" : "none";
+  }
+}
+
 // ===== New Game Dropdown Functions =====
 function toggleNewGameDropdown() {
   const dropdown = $('newGameDropdown');
@@ -180,22 +255,15 @@ window.showPresetStories = async function() {
     if (data.stories && data.stories.length > 0) {
       data.stories.forEach(story => {
         const storyCard = document.createElement('div');
-        storyCard.style.cssText = 'border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; cursor: pointer; transition: background-color 0.3s;';
-        storyCard.onmouseover = () => storyCard.style.backgroundColor = '#f0f0f0';
-        storyCard.onmouseout = () => storyCard.style.backgroundColor = 'white';
-        
-        // Apply dark mode styles if active
-        if (AppState.isDarkMode) {
-          storyCard.style.borderColor = '#555';
-          storyCard.onmouseover = () => storyCard.style.backgroundColor = '#4a4a4a';
-          storyCard.onmouseout = () => storyCard.style.backgroundColor = 'transparent';
-        }
+        storyCard.style.cssText = 'border: 1px solid #555; padding: 15px; margin-bottom: 10px; border-radius: 5px; cursor: pointer; transition: background-color 0.3s; background-color: transparent;';
+        storyCard.onmouseover = () => storyCard.style.backgroundColor = '#4a4a4a';
+        storyCard.onmouseout = () => storyCard.style.backgroundColor = 'transparent';
         
         storyCard.innerHTML = `
           <h3 style="margin: 0 0 10px 0;">${story.name}</h3>
-          <p style="margin: 0 0 5px 0; color: ${AppState.isDarkMode ? '#aaa' : '#666'};"><strong>Theme:</strong> ${story.theme}</p>
-          <p style="margin: 0; color: ${AppState.isDarkMode ? '#f0f0f0' : '#333'};">${story.synopsis}</p>
-          <p style="margin: 5px 0 0 0; color: ${AppState.isDarkMode ? '#888' : '#999'}; font-size: 0.9em;">Acts: ${story.num_acts}</p>
+          <p style="margin: 0 0 5px 0; color: #aaa;"><strong>Theme:</strong> ${story.theme}</p>
+          <p style="margin: 0; color: #f0f0f0;">${story.synopsis}</p>
+          <p style="margin: 5px 0 0 0; color: #888; font-size: 0.9em;">Acts: ${story.num_acts}</p>
         `;
         
         storyCard.onclick = () => startPresetGame(story.id);
@@ -245,7 +313,7 @@ async function startPresetGame(storyId) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ story_id: storyId }) // server normalizes to preset_story_id
+      body: JSON.stringify({ story_id: storyId })
     });
 
     const data = await resp.json();
@@ -261,7 +329,7 @@ async function startPresetGame(storyId) {
 
     loadingDiv.innerHTML = '<div style="text-align:center;padding:20px;font-style:italic;color:#888;">Creating your preset story world... This may take a minute...</div>';
 
-    // Poll until ready (reuse your existing poller)
+    // Poll until ready
     const poll = await pollForGameReady(convId);
     if (poll.ready) {
       loadingDiv.remove();
@@ -297,7 +365,7 @@ async function startPresetGame(storyId) {
     AppState.isCreatingGame = false;
     if (newGameBtn) {
       newGameBtn.disabled = false;
-      newGameBtn.textContent = "New Game ▼";
+      newGameBtn.textContent = "➕ New Game ▼";
     }
   }
 }
@@ -306,6 +374,106 @@ async function startPresetGame(storyId) {
 window.startCustomGame = async function() {
   closePresetStoryModal();
   await startNewGame();
+}
+
+// Start new game function
+window.startNewGame = async function() {
+  const dropdown = $('newGameDropdown');
+  dropdown.style.display = 'none';
+  
+  if (AppState.isCreatingGame) {
+    console.log("Game creation already in progress");
+    return;
+  }
+
+  const newGameBtn = $("newGameBtn");
+  if (newGameBtn) {
+    newGameBtn.disabled = true;
+    newGameBtn.textContent = "Creating...";
+  }
+
+  AppState.isCreatingGame = true;
+
+  const chatWindow = $("chatWindow");
+  if (!chatWindow) {
+    AppState.isCreatingGame = false;
+    if (newGameBtn) {
+      newGameBtn.disabled = false;
+      newGameBtn.textContent = "➕ New Game ▼";
+    }
+    return;
+  }
+  
+  const loadingDiv = document.createElement("div");
+  loadingDiv.id = "newGameLoadingIndicator";
+  loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing new game world...</div>';
+  chatWindow.appendChild(loadingDiv);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+
+  try {
+    const data = await fetchJson("/start_new_game", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    const newConvNum = data.conversation_id;
+    AppState.currentConvId = normalizeConvId(newConvNum);
+    AppState.roomConnectedOnce = false;
+    AppState.messagesOffset = 0;
+
+    // Update loading message
+    loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Creating your world... This may take a minute...</div>';
+
+    // Poll for completion
+    const pollResult = await pollForGameReady(data.conversation_id);
+    
+    if (pollResult.ready) {
+      loadingDiv.remove();
+      
+      // Join only if we didn't get auto-joined
+      if (AppState.currentRoomId !== String(newConvNum)) {
+        await socketManager.joinRoom(newConvNum);
+      }
+      
+      // Load game content
+      await loadMessages(AppState.currentConvId, true);
+      await checkForWelcomeImage(AppState.currentConvId);
+      await loadConversations();
+      
+      // Show opening narrative
+      if (pollResult.opening_narrative) {
+        appendMessage({ 
+          sender: "Nyx", 
+          content: pollResult.opening_narrative
+        }, true);
+      } else {
+        appendMessage({ 
+          sender: "system", 
+          content: `New game started! Welcome to ${pollResult.conversation_name || "your new world"}.` 
+        }, true);
+      }
+    } else {
+      throw new Error(pollResult.error || "Game creation timed out");
+    }
+
+  } catch (err) {
+    console.error("startNewGame error:", err);
+    
+    const existingLoadingDiv = $("newGameLoadingIndicator");
+    if (existingLoadingDiv) existingLoadingDiv.remove();
+    
+    appendMessage({ 
+      sender: "system", 
+      content: `Error starting new game: ${err.message}. Please try again.` 
+    }, true);
+  } finally {
+    AppState.isCreatingGame = false;
+    if (newGameBtn) {
+      newGameBtn.disabled = false;
+      newGameBtn.textContent = "➕ New Game ▼";
+    }
+  }
 }
 
 // ===== Socket Management =====
@@ -1021,7 +1189,7 @@ async function advanceTime() {
 }
 
 // ===== Conversation Management =====
-async function selectConversation(convId) {
+window.selectConversation = async function(convId) {
   if (AppState.isSelectingConversation) {
     console.log("Already selecting a conversation");
     return;
@@ -1055,6 +1223,14 @@ async function selectConversation(convId) {
     await loadNyxSpace();
   } else {
     await loadGameConversation(convId); // Pass original convId
+  }
+
+  // Update admin button visibility for game conversations
+  if (AppState.currentConvId !== CONFIG.NYX_SPACE_CONV_ID) {
+    const advanceTimeBtn = $("advanceTimeBtn");
+    if (advanceTimeBtn) {
+      advanceTimeBtn.style.display = AppState.isAdmin ? "" : "none";
+    }
   }
 
   AppState.isSelectingConversation = false;
@@ -1101,7 +1277,7 @@ async function loadGameConversation(convId) {
   // Show game-specific buttons
   const advanceTimeBtn = $("advanceTimeBtn");
   const loadMoreBtn = $("loadMore");
-  if (advanceTimeBtn) advanceTimeBtn.style.display = "";
+  if (advanceTimeBtn) advanceTimeBtn.style.display = AppState.isAdmin ? "" : "none";
   if (loadMoreBtn) loadMoreBtn.style.display = "";
   
   await loadMessages(convId, true);
@@ -1111,7 +1287,7 @@ async function loadGameConversation(convId) {
 // ===== Conversation messages loader =====
 async function loadMessages(convId, replace = false) {
   const chatWindow  = $("chatWindow");
-  let   loadMoreBtn = $("loadMore");      // ⬅️  let, not const
+  let   loadMoreBtn = $("loadMore");
   if (!chatWindow) return;
 
   const url = `/multiuser/conversations/${ensureIntegerId(convId)}/messages` +
@@ -1172,7 +1348,6 @@ async function loadMessages(convId, replace = false) {
   }
 }
 
-
 async function checkForWelcomeImage(convId) {
   try {
     const data = await fetchJson(`/universal/get_roleplay_value?conversation_id=${ensureIntegerId(convId)}&key=WelcomeImageUrl`);
@@ -1181,102 +1356,6 @@ async function checkForWelcomeImage(convId) {
     }
   } catch (err) {
     console.error("Error checking for welcome image:", err);
-  }
-}
-
-async function startNewGame() {
-  if (AppState.isCreatingGame) {
-    console.log("Game creation already in progress");
-    return;
-  }
-
-  const newGameBtn = $("newGameBtn");
-  if (newGameBtn) {
-    newGameBtn.disabled = true;
-    newGameBtn.textContent = "Creating...";
-  }
-
-  AppState.isCreatingGame = true;
-
-  const chatWindow = $("chatWindow");
-  if (!chatWindow) {
-    AppState.isCreatingGame = false;
-    if (newGameBtn) {
-      newGameBtn.disabled = false;
-      newGameBtn.textContent = "New Game ▼";
-    }
-    return;
-  }
-  
-  const loadingDiv = document.createElement("div");
-  loadingDiv.id = "newGameLoadingIndicator";
-  loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing new game world...</div>';
-  chatWindow.appendChild(loadingDiv);
-  chatWindow.scrollTop = chatWindow.scrollHeight;
-
-  try {
-    const data = await fetchJson("/start_new_game", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({})
-    });
-
-    const newConvNum = data.conversation_id;          // keep the numeric form
-    AppState.currentConvId = normalizeConvId(newConvNum);
-    AppState.roomConnectedOnce = false;
-    AppState.messagesOffset = 0;
-
-    // Update loading message
-    loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Creating your world... This may take a minute...</div>';
-
-    // Poll for completion
-    const pollResult = await pollForGameReady(data.conversation_id);
-    
-    if (pollResult.ready) {
-      loadingDiv.remove();
-      
-      // Join only if we didn't get auto-joined
-      if (AppState.currentRoomId !== String(newConvNum)) {
-        await socketManager.joinRoom(newConvNum);
-      }
-      
-      // Load game content
-      await loadMessages(AppState.currentConvId, true);
-      await checkForWelcomeImage(AppState.currentConvId);
-      await loadConversations();
-      
-      // Show opening narrative
-      if (pollResult.opening_narrative) {
-        appendMessage({ 
-          sender: "Nyx", 
-          content: pollResult.opening_narrative
-        }, true);
-      } else {
-        appendMessage({ 
-          sender: "system", 
-          content: `New game started! Welcome to ${pollResult.conversation_name || "your new world"}.` 
-        }, true);
-      }
-    } else {
-      throw new Error(pollResult.error || "Game creation timed out");
-    }
-
-  } catch (err) {
-    console.error("startNewGame error:", err);
-    
-    const existingLoadingDiv = $("newGameLoadingIndicator");
-    if (existingLoadingDiv) existingLoadingDiv.remove();
-    
-    appendMessage({ 
-      sender: "system", 
-      content: `Error starting new game: ${err.message}. Please try again.` 
-    }, true);
-  } finally {
-    AppState.isCreatingGame = false;
-    if (newGameBtn) {
-      newGameBtn.disabled = false;
-      newGameBtn.textContent = "New Game ▼";
-    }
   }
 }
 
@@ -1521,21 +1600,35 @@ async function checkLoggedIn() {
   }
 }
 
-function loadDarkModeFromStorage() {
-  const val = localStorage.getItem("dark_mode_enabled");
-  if (val === "true") {
+function loadThemeFromStorage() {
+  const savedTheme = localStorage.getItem("theme");
+  
+  // Default to dark mode
+  if (!savedTheme || savedTheme === "dark") {
     AppState.isDarkMode = true;
-    document.body.classList.add("dark-mode");
+    document.body.classList.remove("light-mode");
   } else {
     AppState.isDarkMode = false;
-    document.body.classList.remove("dark-mode");
+    document.body.classList.add("light-mode");
   }
 }
 
-function toggleDarkMode() {
+function toggleTheme() {
   AppState.isDarkMode = !AppState.isDarkMode;
-  localStorage.setItem("dark_mode_enabled", AppState.isDarkMode);
-  document.body.classList.toggle("dark-mode", AppState.isDarkMode);
+  
+  if (AppState.isDarkMode) {
+    document.body.classList.remove("light-mode");
+    localStorage.setItem("theme", "dark");
+  } else {
+    document.body.classList.add("light-mode");
+    localStorage.setItem("theme", "light");
+  }
+  
+  // Update button text if it exists
+  const themeBtn = $("toggleThemeBtn");
+  if (themeBtn) {
+    themeBtn.textContent = AppState.isDarkMode ? "☀️ Light Mode" : "🌙 Dark Mode";
+  }
 }
 
 async function logout() {
@@ -1606,9 +1699,12 @@ document.addEventListener('DOMContentLoaded', async function() {
   const isLoggedIn = await checkLoggedIn();
   if (!isLoggedIn) return;
 
+  // Initialize admin UI
+  initializeAdminUI();
+
   // Initialize UI
   attachEnterKey();
-  loadDarkModeFromStorage();
+  loadThemeFromStorage();
   await loadConversations();
 
   // Initialize socket connection
@@ -1616,7 +1712,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // Attach event listeners using dynamic lookups
   const logoutBtn = $("logoutBtn");
-  const toggleDarkModeBtn = $("toggleDarkModeBtn");
+  const toggleThemeBtn = $("toggleThemeBtn");
   const advanceTimeBtn = $("advanceTimeBtn");
   const newGameBtn = $("newGameBtn");
   const nyxSpaceBtn = $("nyxSpaceBtn");
@@ -1624,7 +1720,11 @@ document.addEventListener('DOMContentLoaded', async function() {
   const sendBtn = $("sendBtn");
 
   if (logoutBtn) logoutBtn.addEventListener("click", logout);
-  if (toggleDarkModeBtn) toggleDarkModeBtn.addEventListener("click", toggleDarkMode);
+  if (toggleThemeBtn) {
+    toggleThemeBtn.addEventListener("click", toggleTheme);
+    // Set initial button text
+    toggleThemeBtn.textContent = AppState.isDarkMode ? "☀️ Light Mode" : "🌙 Dark Mode";
+  }
   if (advanceTimeBtn) advanceTimeBtn.addEventListener("click", advanceTime);
   if (newGameBtn) {
     newGameBtn.removeEventListener("click", startNewGame); // Remove old listener
@@ -1649,7 +1749,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     
     // Close dropdown if clicking outside
-    if (!newGameBtn.contains(e.target) && !dropdown.contains(e.target)) {
+    if (dropdown && newGameBtn && !newGameBtn.contains(e.target) && !dropdown.contains(e.target)) {
       dropdown.style.display = 'none';
     }
   });
