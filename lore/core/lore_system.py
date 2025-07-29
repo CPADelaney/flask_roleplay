@@ -505,7 +505,7 @@ class LoreSystem:
                 current_by_entity[key] = []
             current_by_entity[key].append(rel)
         
-        # Group new relationships by entity
+        # Group new relationships by entity  
         new_by_entity = {}
         for rel in new_relationships:
             key = (rel.get('entity_id'), rel.get('entity_type'))
@@ -513,112 +513,234 @@ class LoreSystem:
                 new_by_entity[key] = []
             new_by_entity[key].append(rel)
         
-        # Define incompatible relationship types
-        incompatible_pairs = {
-            ('dead', 'alive'),
-            ('missing', 'present'),
-            ('banished', 'welcomed'),
-            ('imprisoned', 'free'),
-            ('exiled', 'resident'),
-            ('destroyed', 'intact'),
-            # Emotional extremes that are truly incompatible
-            ('devoted', 'betrayed'),  # but devoted + suspicious could work
-            ('worshipping', 'despising'),  # but worshipping + fearful could work
-            # Add more as needed based on your specific game logic
+        # Only truly mutually exclusive relationships (can't be both at once)
+        mutually_exclusive_groups = [
+            # Can't be multiple family members at once
+            {'mother', 'stepmother', 'aunt', 'older sister', 'stepsister', 'sister', 'cousin'},
+            # Can't have multiple positions in SAME hierarchy
+            {'boss', 'supervisor', 'boss/supervisor', 'employee', 'underling'},
+            {'teacher', 'principal', 'teacher/principal'},
+            # Remove these - they often coexist:
+            # {'best friend', 'friend'} - best friend IS a friend
+            # {'childhood friend', 'friend'} - childhood friend IS a friend
+        ]
+        
+        # Relationships that supersede others (stronger includes weaker)
+        superseding_relationships = {
+            'best friend': {'friend', 'acquaintance'},
+            'childhood friend': {'friend', 'acquaintance'},
+            'friend': {'acquaintance'},
+            'enemy': {'rival'},  # enemy is stronger than rival
+            'nemesis': {'enemy', 'rival'},  # nemesis is ultimate enemy
+            'lover': {'friend'},  # lovers are usually friends too
+            'ex-wife': {'ex-partner'},  # more specific
+            'ex-girlfriend': {'ex-partner'},  # more specific
         }
         
-        # Optional: Define relationship hierarchies (stronger relationships override weaker ones)
-        relationship_hierarchy = {
-            'family': 10,     # Family ties are strongest
-            'lover': 9,       # Romantic relationships are very strong  
-            'enemy': 8,       # Enmity is a strong bond
-            'ally': 7,        # Political alliances are strong
-            'friend': 6,      # Friendships are meaningful
-            'neighbor': 3,    # Proximity relationships are weaker
-            'acquaintance': 1 # Casual relationships are weakest
+        # Very few truly impossible combinations
+        truly_impossible_combinations = [
+            # Can't be both superior and subordinate in same hierarchy
+            ({'boss', 'supervisor', 'boss/supervisor'}, {'employee', 'underling'}),
+        ]
+        
+        # Complicated but common combinations for narrative purposes
+        complicated_combinations = [
+            # Romantic complications
+            ({'lover'}, {'ex-partner', 'ex-girlfriend', 'ex-wife'}),  # on-again, off-again
+            ({'lover'}, {'the one who got away'}),  # finally together
+            ({'lover'}, {'roommate'}),  # living together
+            ({'lover'}, {'colleague', 'boss', 'supervisor', 'employee'}),  # workplace romance
+            
+            # Family complications  
+            ({'mother', 'stepmother', 'aunt', 'older sister', 'stepsister', 'sister', 'cousin'}, 
+             {'lover', 'ex-partner', 'ex-girlfriend', 'ex-wife'}),  # taboo
+            ({'mother', 'stepmother'}, {'enemy', 'nemesis', 'rival'}),  # family conflict
+            
+            # Social complications
+            ({'best friend', 'friend', 'childhood friend'}, {'enemy', 'nemesis', 'rival'}),  # frenemies
+            ({'best friend', 'friend'}, {'ex-partner', 'ex-girlfriend', 'ex-wife'}),  # dated your friend
+            ({'roommate'}, {'enemy', 'nemesis', 'rival'}),  # living with someone you hate
+            
+            # Professional complications
+            ({'therapist'}, {'lover', 'ex-partner', 'friend', 'neighbor'}),  # boundary issues
+            ({'landlord'}, {'lover', 'ex-partner', 'friend'}),  # mixing business and personal
+            ({'boss', 'supervisor'}, {'friend', 'best friend'}),  # friendship with power dynamics
+            
+            # Authority complications
+            ({'babysitter'}, {'lover', 'ex-partner'}),  # if they babysit your kids
+            ({'teacher', 'principal'}, {'neighbor', 'friend'}),  # personal connection with authority
+        ]
+        
+        # Natural relationship combinations that make sense
+        natural_combinations = [
+            ({'colleague'}, {'friend', 'best friend', 'rival', 'enemy'}),  # work relationships
+            ({'neighbor'}, {'friend', 'best friend', 'landlord', 'enemy'}),  # proximity breeds all
+            ({'roommate'}, {'friend', 'best friend', 'lover', 'ex-partner'}),  # close quarters
+            ({'classmate'}, {'friend', 'best friend', 'rival', 'lover'}),  # school relationships
+            ({'online friend'}, {'best friend', 'lover'}),  # online to real connection
+        ]
+        
+        # Relationship strength (for resolving conflicts)
+        relationship_strength = {
+            # Family ties (strongest)
+            'mother': 100,
+            'stepmother': 95,
+            'aunt': 90,
+            'older sister': 85,
+            'sister': 85,
+            'stepsister': 84,
+            'cousin': 80,
+            
+            # Deep emotional bonds
+            'nemesis': 78,  # obsessive enemy
+            'lover': 75,
+            'best friend': 70,
+            
+            # Authority relationships
+            'boss': 70,
+            'supervisor': 69,
+            'boss/supervisor': 70,
+            'principal': 66,
+            'teacher': 65,
+            'therapist': 60,
+            'landlord': 55,
+            'head of household': 58,
+            'domestic authority': 57,
+            'babysitter': 50,
+            
+            # Strong connections
+            'enemy': 60,
+            'childhood friend': 55,
+            'rival': 50,
+            'friend': 45,
+            
+            # Professional/social
+            'colleague': 40,
+            'roommate': 38,
+            'teammate': 35,
+            'employee': 35,
+            'underling': 34,
+            'classmate': 30,
+            'online friend': 28,
+            'neighbor': 25,
+            
+            # Historical relationships  
+            'ex-wife': 30,
+            'ex-partner': 28,
+            'ex-girlfriend': 27,
+            'the one who got away': 35,  # higher because of emotional weight
+            
+            # Weakest
+            'acquaintance': 10,
         }
         
-        # Check for true incompatibilities
+        # Check for incompatibilities and merge
         merged = {}
+        relationship_notes = []
+        
         for entity_key in set(current_by_entity.keys()) | set(new_by_entity.keys()):
             merged[entity_key] = []
             
-            # Get all relationship labels for this entity
-            current_labels = set()
-            new_labels = set()
+            # Collect all relationships for this entity
+            all_rels = []
+            rel_labels = set()
             
             for rel in current_by_entity.get(entity_key, []):
-                current_labels.add(rel.get('relationship_label'))
-                merged[entity_key].append(rel)
-            
-            for rel in new_by_entity.get(entity_key, []):
-                new_labels.add(rel.get('relationship_label'))
+                all_rels.append(('current', rel))
+                rel_labels.add(rel.get('relationship_label'))
                 
-            # Check for incompatible combinations
-            all_labels = current_labels | new_labels
-            for label1 in all_labels:
-                for label2 in all_labels:
-                    if (label1, label2) in incompatible_pairs or (label2, label1) in incompatible_pairs:
-                        return False, []
-            
-            # Add new relationships that don't already exist
             for rel in new_by_entity.get(entity_key, []):
+                all_rels.append(('new', rel))
+                rel_labels.add(rel.get('relationship_label'))
+            
+            # Check truly impossible combinations
+            for group1, group2 in truly_impossible_combinations:
+                if (rel_labels & group1) and (rel_labels & group2):
+                    return False, []
+            
+            # Handle superseding relationships
+            labels_to_remove = set()
+            for stronger, weaker_set in superseding_relationships.items():
+                if stronger in rel_labels:
+                    labels_to_remove.update(weaker_set & rel_labels)
+            
+            # Remove superseded relationships
+            all_rels = [(source, rel) for source, rel in all_rels 
+                        if rel.get('relationship_label') not in labels_to_remove]
+            
+            # Check mutually exclusive groups
+            for exclusive_group in mutually_exclusive_groups:
+                group_matches = rel_labels & exclusive_group
+                if len(group_matches) > 1:
+                    strongest_label = max(group_matches, 
+                                        key=lambda x: relationship_strength.get(x, 0))
+                    for source, rel in all_rels[:]:
+                        if (rel.get('relationship_label') in group_matches and 
+                            rel.get('relationship_label') != strongest_label):
+                            all_rels.remove((source, rel))
+            
+            # Update rel_labels after removals
+            rel_labels = {rel.get('relationship_label') for _, rel in all_rels}
+            
+            # Check for natural combinations
+            for group1, group2 in natural_combinations:
+                if (rel_labels & group1) and (rel_labels & group2):
+                    relationship_notes.append({
+                        'entity': entity_key,
+                        'type': 'natural',
+                        'combo': f"{list(rel_labels & group1)[0]} + {list(rel_labels & group2)[0]}"
+                    })
+            
+            # Check for complicated combinations
+            for group1, group2 in complicated_combinations:
+                if (rel_labels & group1) and (rel_labels & group2):
+                    relationship_notes.append({
+                        'entity': entity_key,
+                        'type': 'complicated',
+                        'combo': f"{list(rel_labels & group1)[0]} + {list(rel_labels & group2)[0]}",
+                        'drama_potential': 'high'
+                    })
+            
+            # Build final merged list
+            seen_labels = set()
+            for source, rel in all_rels:
                 label = rel.get('relationship_label')
-                # Check if this exact relationship already exists
-                already_exists = False
-                for existing_rel in current_by_entity.get(entity_key, []):
-                    if existing_rel.get('relationship_label') == label:
-                        # Update existing relationship with new data if provided
-                        for key, value in rel.items():
-                            if key != 'relationship_label' and value is not None:
-                                existing_rel[key] = value
-                        already_exists = True
-                        break
-                
-                if not already_exists:
+                if label not in seen_labels:
+                    # Add metadata about relationship dynamics
+                    if any(note['entity'] == entity_key and note['type'] == 'complicated' 
+                          for note in relationship_notes):
+                        rel['is_complicated'] = True
+                        
+                    # Track if this is a multi-faceted relationship
+                    if len([r for _, r in all_rels if r.get('entity_id') == rel.get('entity_id')]) > 1:
+                        rel['is_multifaceted'] = True
+                        
                     merged[entity_key].append(rel)
+                    seen_labels.add(label)
+                else:
+                    # Update existing with new data
+                    for existing_rel in merged[entity_key]:
+                        if existing_rel.get('relationship_label') == label:
+                            for key, value in rel.items():
+                                if key != 'relationship_label' and value is not None:
+                                    existing_rel[key] = value
+                            break
         
         # Convert back to flat list
         merged_list = []
         for relationships in merged.values():
             merged_list.extend(relationships)
         
-        return True, merged_list
-
-    def _are_relationships_compatible(self, current_rels: Any, new_rels: Any) -> Tuple[bool, Any]:
-        """
-        Enhanced relationship compatibility check that allows multiple relationship types.
+        # Log interesting relationship dynamics
+        if relationship_notes:
+            natural = [n for n in relationship_notes if n['type'] == 'natural']
+            complicated = [n for n in relationship_notes if n['type'] == 'complicated']
+            if natural:
+                logger.debug(f"Natural relationship combinations: {natural}")
+            if complicated:
+                logger.info(f"Complicated relationships detected (narrative gold!): {complicated}")
         
-        Returns:
-            (is_compatible, merged_relationships_if_compatible)
-        """
-        try:
-            # Parse relationships
-            if isinstance(current_rels, str):
-                current_list = json.loads(current_rels) if current_rels else []
-            else:
-                current_list = current_rels if current_rels else []
-                
-            if isinstance(new_rels, str):
-                new_list = json.loads(new_rels) if new_rels else []
-            else:
-                new_list = new_rels if new_rels else []
-            
-            # Empty current list is always compatible
-            if not current_list:
-                return True, new_list
-            
-            # Use enhanced merging logic
-            is_compatible, merged = self._merge_compatible_relationships(current_list, new_list)
-            
-            if is_compatible:
-                return True, merged
-            else:
-                return False, None
-                
-        except Exception as e:
-            logger.error(f"Error checking relationship compatibility: {e}")
-            return False, None
+        return True, merged_list
     
     # ---------------------------------------------------------------------
     # Canon Methods - This is critical for the system to work
