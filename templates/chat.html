@@ -4,85 +4,791 @@
   <meta charset="UTF-8">
   <title>Roleplay Chat - Comprehensive</title>
   <style>
-    body { margin: 0; font-family: Arial, sans-serif; transition: background-color 0.3s, color 0.3s; }
-    .dark-mode { background-color: #2c2c2c; color: #f0f0f0; }
-    #topBar { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #ccc; }
-    .dark-mode #topBar { border-bottom: 1px solid #555; }
-    #topBar button { margin-right: 10px; padding: 5px 10px; cursor: pointer; }
-    #chatContainer { display: flex; width: 100%; height: calc(100vh - 52px); /* Adjusted for border */ }
-    #leftPanel { width: 280px; border-right: 1px solid #ccc; display: flex; flex-direction: column; }
-    .dark-mode #leftPanel { border-right: 1px solid #555; }
-    #leftPanelInner { flex: 1; overflow-y: auto; padding: 10px; }
-    #convList button { width: 100%; text-align: left; margin-bottom: 5px; padding: 8px; cursor: pointer; border: 1px solid #ddd; background-color: #f9f9f9; border-radius: 4px; }
-    .dark-mode #convList button { border: 1px solid #444; background-color: #3a3a3a; color: #eee; }
-    #convList button:hover { background-color: #efefef; }
-    .dark-mode #convList button:hover { background-color: #4a4a4a; }
-    .inline-input { width: 65%; margin-right: 5px; }
-    #chatPanel { flex: 1; display: flex; flex-direction: column; }
-    #chatWindow { flex: 1; /* border: 1px solid #ccc; */ margin: 10px; padding: 10px; overflow-y: auto; background-color: #fefefe; position: relative; border-radius: 5px; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); }
-    .dark-mode #chatWindow { background-color: #3b3b3b; box-shadow: inset 0 0 5px rgba(0,0,0,0.3); }
-    .message-row { display: flex; margin-bottom: 10px; }
-    .message-bubble { max-width: 70%; padding: 10px 15px; border-radius: 15px; line-height: 1.4em; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+    /* Base styles */
+    * { box-sizing: border-box; }
+    body { 
+      margin: 0; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+      transition: background-color 0.3s, color 0.3s; 
+      background-color: #1a1a1c;
+      color: #f5f5f7;
+    }
+    
+    /* Dark mode is now default */
+    body:not(.light-mode) { 
+      background-color: #1a1a1c; 
+      color: #f5f5f7; 
+    }
+    
+    /* Light mode */
+    .light-mode { 
+      background-color: #f5f5f7;
+      color: #1d1d1f;
+    }
+    
+    /* Admin-only elements */
+    .admin-only {
+      display: none;
+    }
+    .is-admin .admin-only {
+      display: block;
+    }
+    .is-admin button.admin-only {
+      display: inline-block;
+    }
+    
+    /* Top bar */
+    #topBar { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      padding: 12px 20px; 
+      background: linear-gradient(to bottom, rgba(26,26,28,0.95), rgba(26,26,28,0.85));
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .light-mode #topBar { 
+      background: linear-gradient(to bottom, rgba(255,255,255,0.95), rgba(255,255,255,0.85));
+      border-bottom: 1px solid rgba(0,0,0,0.1);
+    }
+    
+    /* Buttons */
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      background-color: #007aff;
+      color: white;
+    }
+    button:hover {
+      background-color: #0056b3;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0,122,255,0.2);
+    }
+    button:active {
+      transform: translateY(0);
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .secondary-btn {
+      background-color: #3a3a3c;
+      color: #f5f5f7;
+    }
+    .secondary-btn:hover {
+      background-color: #48484a;
+    }
+    .light-mode .secondary-btn {
+      background-color: #e8e8ed;
+      color: #1d1d1f;
+    }
+    .light-mode .secondary-btn:hover {
+      background-color: #d1d1d6;
+    }
+    
+    /* Main container */
+    #mainContainer {
+      display: flex;
+      width: 100%;
+      height: calc(100vh - 61px);
+    }
+    
+    /* Left panel */
+    #leftPanel { 
+      width: 280px; 
+      background-color: #2c2c2e;
+      border-right: 1px solid rgba(255,255,255,0.1);
+      display: flex; 
+      flex-direction: column;
+      box-shadow: 1px 0 3px rgba(0,0,0,0.05);
+    }
+    .light-mode #leftPanel { 
+      background-color: #ffffff;
+      border-right: 1px solid rgba(0,0,0,0.1);
+    }
+    
+    #leftPanelInner { 
+      flex: 1; 
+      overflow-y: auto; 
+      padding: 20px;
+    }
+    
+    /* Conversation list */
+    #convList button { 
+      width: 100%; 
+      text-align: left; 
+      margin-bottom: 8px; 
+      padding: 12px 16px; 
+      background-color: #3a3a3c;
+      color: #f5f5f7;
+      border-radius: 10px;
+      font-weight: normal;
+      position: relative;
+      overflow: hidden;
+    }
+    .light-mode #convList button { 
+      background-color: #f5f5f7;
+      color: #1d1d1f;
+    }
+    #convList button:hover { 
+      background-color: #48484a;
+    }
+    .light-mode #convList button:hover { 
+      background-color: #e8e8ed;
+    }
+    #convList button.active {
+      background-color: #007aff;
+      color: white;
+    }
+    
+    /* Right panel */
+    #rightPanel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background-color: #2c2c2e;
+    }
+    .light-mode #rightPanel {
+      background-color: #fafafa;
+    }
+    
+    /* Tab container */
+    #tabContainer {
+      display: flex;
+      background-color: #1c1c1e;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding: 0 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .light-mode #tabContainer {
+      background-color: #ffffff;
+      border-bottom: 1px solid rgba(0,0,0,0.1);
+    }
+    
+    .tab {
+      padding: 16px 24px;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+      font-weight: 500;
+      color: #8e8e93;
+      position: relative;
+    }
+    .tab:hover {
+      color: #f5f5f7;
+    }
+    .light-mode .tab:hover {
+      color: #1d1d1f;
+    }
+    .tab.active {
+      color: #007aff;
+      border-bottom-color: #007aff;
+    }
+    .tab-icon {
+      font-size: 18px;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    
+    /* Tab content */
+    #tabContent {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+    }
+    
+    .tab-pane {
+      display: none;
+      animation: fadeIn 0.3s;
+    }
+    .tab-pane.active {
+      display: block;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    /* Chat panel specific */
+    #chatPanel {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    
+    #chatWindow { 
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      background-color: #3a3a3c;
+      margin: 20px;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .light-mode #chatWindow { 
+      background-color: #ffffff;
+    }
+    
+    /* Message bubbles */
+    .message-row { 
+      display: flex; 
+      margin-bottom: 16px;
+      animation: slideIn 0.3s;
+    }
+    
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(-20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    
+    .message-bubble { 
+      max-width: 70%; 
+      padding: 12px 18px; 
+      border-radius: 18px; 
+      line-height: 1.5;
+      word-wrap: break-word; 
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    }
+    
     .user-row { justify-content: flex-end; }
-    .user-row .message-bubble { background-color: #007bff; color: #ffffff; border-bottom-right-radius: 5px; }
-    .dark-mode .user-row .message-bubble { background-color: #375a7f; }
+    .user-row .message-bubble { 
+      background: linear-gradient(135deg, #007aff, #0051d5);
+      color: #ffffff; 
+      border-bottom-right-radius: 4px;
+    }
+    
     .gpt-row { justify-content: flex-start; }
-    .gpt-row .message-bubble { background-color: #e9e9eb; color: #333333; border-bottom-left-radius: 5px; }
-    .dark-mode .gpt-row .message-bubble { background-color: #5a5a5a; color: #f0f0f0; }
-    .message-bubble strong { font-weight: 600;}
-    #loadMore { display: block; text-align: center; margin: 10px auto; cursor: pointer; color: #007bff; padding: 8px 15px; background-color: #f0f0f0; border-radius: 20px; width: fit-content; }
-    .dark-mode #loadMore { color: #4dabf7; background-color: #444; }
-    #inputRow { margin: 10px; display: flex; padding: 5px; background-color: #fff; border-radius: 5px; box-shadow: 0 -1px 3px rgba(0,0,0,0.05); }
-    .dark-mode #inputRow { background-color: #303030; }
-    #userMsg { flex: 1; margin-right: 10px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; resize: none; /* if it's a textarea */ }
-    .dark-mode #userMsg { background-color: #424242; color: #eee; border: 1px solid #555; }
-    #sendBtn { padding: 10px 20px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; }
-    .dark-mode #sendBtn { background-color: #375a7f; }
-    #contextMenu { position: absolute; display: none; border: 1px solid #ccc; background: #fff; z-index: 999; box-shadow: 0 2px 5px rgba(0,0,0,0.15); border-radius: 4px; min-width: 150px;}
-    #contextMenu div { padding: 8px 12px; cursor: pointer; }
-    #contextMenu div:hover { background-color: #f0f0f0; }
-    .dark-mode #contextMenu { background-color: #333; color: #fff; border: 1px solid #555; }
-    .dark-mode #contextMenu div:hover { background-color: #444; }
-    .image-bubble { max-width: 80% !important; padding: 8px !important; background-color: transparent !important; box-shadow: none !important; }
-    .image-container { display: flex; flex-direction: column; align-items: center; }
-    .image-caption { font-size: 0.8em; color: #666; margin-top: 5px; font-style: italic; text-align: center; }
-    .dark-mode .image-caption { color: #aaa !important; }
-    #processingIndicator div { color: #888 !important; }
-    .dark-mode #processingIndicator div { color: #aaa !important; }
-
-    /* New styles for preset story feature */
-    #presetStoryModal .modal-content {
-      background-color: white;
-      color: #333;
+    .gpt-row .message-bubble { 
+      background-color: #48484a;
+      color: #f5f5f7;
+      border-bottom-left-radius: 4px;
     }
-    .dark-mode #presetStoryModal .modal-content {
-      background-color: #2c2c2c;
-      color: #f0f0f0;
+    .light-mode .gpt-row .message-bubble { 
+      background-color: #f1f1f4;
+      color: #1d1d1f;
     }
-    .dark-mode #presetStoryModal .modal-content div[style*="border: 1px solid #ddd"] {
-      border-color: #555 !important;
+    
+    /* Input row */
+    #inputRow { 
+      margin: 20px;
+      display: flex;
+      padding: 12px;
+      background-color: #3a3a3c;
+      border-radius: 12px;
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
     }
-    #newGameDropdown {
-      border: 1px solid #ddd;
+    .light-mode #inputRow { 
+      background-color: #ffffff;
+    }
+    
+    #userMsg { 
+      flex: 1;
+      margin-right: 12px;
+      padding: 12px 16px;
+      border: 2px solid #48484a;
+      border-radius: 8px;
+      font-size: 15px;
+      transition: border-color 0.2s;
+      background-color: #2c2c2e;
+      color: #f5f5f7;
+    }
+    #userMsg:focus {
+      outline: none;
+      border-color: #007aff;
+      background-color: #1c1c1e;
+    }
+    .light-mode #userMsg { 
+      background-color: #fafafa;
+      color: #1d1d1f;
+      border-color: #e8e8ed;
+    }
+    .light-mode #userMsg:focus {
+      background-color: #ffffff;
+    }
+    
+    /* Game UI Cards */
+    .game-card {
+      background-color: #3a3a3c;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .game-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .light-mode .game-card {
+      background-color: #ffffff;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .light-mode .game-card:hover {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    }
+    
+    .stat-group {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    
+    .stat-item {
+      text-align: center;
+      padding: 12px;
+      background-color: #2c2c2e;
+      border-radius: 8px;
+    }
+    .light-mode .stat-item {
+      background-color: #f5f5f7;
+    }
+    
+    .stat-label {
+      font-size: 12px;
+      color: #8e8e93;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    
+    .stat-value {
+      font-size: 24px;
+      font-weight: 600;
+      color: #007aff;
+    }
+    
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background-color: #48484a;
       border-radius: 4px;
-      margin-top: 5px;
+      overflow: hidden;
+      margin-top: 8px;
     }
-    .dark-mode #newGameDropdown {
-      background-color: #3a3a3a;
-      border-color: #555;
+    .light-mode .progress-bar {
+      background-color: #e8e8ed;
     }
-    #newGameDropdown a:hover {
-      background-color: #f0f0f0;
+    
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(to right, #007aff, #0051d5);
+      border-radius: 4px;
+      transition: width 0.3s;
     }
-    .dark-mode #newGameDropdown a {
-      color: #f0f0f0 !important;
+    
+    /* Context menu */
+    #contextMenu { 
+      position: absolute;
+      display: none;
+      background: rgba(58,58,60,0.95);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 999;
+      min-width: 180px;
+      overflow: hidden;
     }
-    .dark-mode #newGameDropdown a:hover {
-      background-color: #4a4a4a;
+    .light-mode #contextMenu { 
+      background: rgba(255,255,255,0.95);
+      border-color: rgba(0,0,0,0.1);
     }
-    .new-game-wrapper {
+    
+    #contextMenu div { 
+      padding: 12px 16px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    #contextMenu div:hover { 
+      background-color: rgba(0,122,255,0.1);
+    }
+    
+    /* Modal styles */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.5);
+      backdrop-filter: blur(5px);
+      z-index: 1000;
+      animation: fadeIn 0.3s;
+    }
+    
+    .modal-content {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background-color: #2c2c2e;
+      padding: 32px;
+      border-radius: 16px;
+      max-width: 600px;
+      max-height: 80vh;
+      overflow-y: auto;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      animation: slideUp 0.3s;
+    }
+    .light-mode .modal-content {
+      background-color: #ffffff;
+    }
+    
+    @keyframes slideUp {
+      from { transform: translate(-50%, -40%); opacity: 0; }
+      to { transform: translate(-50%, -50%); opacity: 1; }
+    }
+    
+    /* Dropdown styles */
+    .dropdown {
       position: relative;
       display: inline-block;
+    }
+    
+    .dropdown-content {
+      display: none;
+      position: absolute;
+      background-color: #3a3a3c;
+      min-width: 200px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      border-radius: 8px;
+      z-index: 1;
+      margin-top: 4px;
+      overflow: hidden;
+    }
+    .light-mode .dropdown-content {
+      background-color: #ffffff;
+    }
+    
+    .dropdown-content a {
+      color: #f5f5f7;
+      padding: 12px 16px;
+      text-decoration: none;
+      display: block;
+      transition: background-color 0.2s;
+    }
+    .light-mode .dropdown-content a {
+      color: #1d1d1f;
+    }
+    
+    .dropdown-content a:hover {
+      background-color: rgba(0,122,255,0.2);
+    }
+    
+    /* Image styles */
+    .image-bubble { 
+      max-width: 80% !important;
+      padding: 0 !important;
+      background-color: transparent !important;
+      box-shadow: none !important;
+    }
+    
+    .image-container { 
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    .image-container img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    
+    .image-caption { 
+      font-size: 13px;
+      color: #8e8e93;
+      padding: 8px 12px;
+      text-align: center;
+      background-color: #2c2c2e;
+      width: 100%;
+    }
+    .light-mode .image-caption { 
+      background-color: #f5f5f7;
+    }
+    
+    /* Load more button */
+    #loadMore { 
+      display: block;
+      text-align: center;
+      margin: 16px auto;
+      cursor: pointer;
+      color: #007aff;
+      padding: 10px 20px;
+      background-color: #3a3a3c;
+      border-radius: 20px;
+      width: fit-content;
+      transition: all 0.2s;
+    }
+    #loadMore:hover {
+      background-color: #48484a;
+      transform: scale(1.05);
+    }
+    .light-mode #loadMore { 
+      background-color: #f5f5f7;
+    }
+    .light-mode #loadMore:hover {
+      background-color: #e8e8ed;
+    }
+    
+    /* Utility classes */
+    .text-center { text-align: center; }
+    .mb-2 { margin-bottom: 8px; }
+    .mb-3 { margin-bottom: 16px; }
+    .mb-4 { margin-bottom: 24px; }
+    .mt-2 { margin-top: 8px; }
+    .mt-3 { margin-top: 16px; }
+    .mt-4 { margin-top: 24px; }
+    
+    /* Calendar specific styles */
+    .calendar-container {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+      margin-top: 16px;
+    }
+    
+    .calendar-day {
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #2c2c2e;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+    .light-mode .calendar-day {
+      background-color: #f5f5f7;
+    }
+    
+    .calendar-day:hover {
+      background-color: #48484a;
+      transform: scale(1.05);
+    }
+    .light-mode .calendar-day:hover {
+      background-color: #e8e8ed;
+    }
+    
+    .calendar-day.active {
+      background-color: #007aff;
+      color: white;
+    }
+    
+    /* Inventory grid */
+    .inventory-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+    
+    .inventory-item {
+      padding: 12px;
+      background-color: #2c2c2e;
+      border-radius: 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .light-mode .inventory-item {
+      background-color: #f5f5f7;
+    }
+    
+    .inventory-item:hover {
+      background-color: #48484a;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .light-mode .inventory-item:hover {
+      background-color: #e8e8ed;
+    }
+    
+    .inventory-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    
+    .inventory-name {
+      font-size: 13px;
+      font-weight: 500;
+    }
+    
+    .inventory-quantity {
+      font-size: 11px;
+      color: #8e8e93;
+      margin-top: 4px;
+    }
+    
+    /* Scrollbar styles */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background-color: rgba(255,255,255,0.2);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background-color: rgba(255,255,255,0.3);
+    }
+    .light-mode ::-webkit-scrollbar-thumb {
+      background-color: rgba(0,0,0,0.2);
+    }
+    .light-mode ::-webkit-scrollbar-thumb:hover {
+      background-color: rgba(0,0,0,0.3);
+    }
+    
+    /* Social link cards */
+    .social-link-card {
+      padding: 16px;
+      background-color: #2c2c2e;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.2s;
+    }
+    .light-mode .social-link-card {
+      background-color: #f5f5f7;
+    }
+    
+    .social-link-card:hover {
+      background-color: #48484a;
+      transform: translateX(4px);
+    }
+    .light-mode .social-link-card:hover {
+      background-color: #e8e8ed;
+    }
+    
+    .social-link-info {
+      flex: 1;
+    }
+    
+    .social-link-name {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .social-link-type {
+      font-size: 13px;
+      color: #8e8e93;
+    }
+    
+    .social-link-level {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    /* Quest/Journal styles */
+    .quest-card {
+      padding: 16px;
+      background-color: #2c2c2e;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      transition: all 0.2s;
+    }
+    .light-mode .quest-card {
+      background-color: #f5f5f7;
+    }
+    
+    .quest-card:hover {
+      background-color: #48484a;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .light-mode .quest-card:hover {
+      background-color: #e8e8ed;
+    }
+    
+    .quest-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #007aff;
+    }
+    
+    .quest-description {
+      font-size: 14px;
+      line-height: 1.5;
+      margin-bottom: 8px;
+    }
+    
+    .quest-progress {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      color: #8e8e93;
+    }
+    
+    /* Codex styles */
+    .codex-section {
+      margin-bottom: 32px;
+    }
+    
+    .codex-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    
+    .codex-entry {
+      padding: 16px;
+      background-color: #2c2c2e;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .light-mode .codex-entry {
+      background-color: #f5f5f7;
+    }
+    
+    .codex-entry:hover {
+      background-color: #48484a;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .light-mode .codex-entry:hover {
+      background-color: #e8e8ed;
+    }
+    
+    .codex-entry-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #007aff;
+    }
+    
+    .codex-entry-type {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: #8e8e93;
+      margin-bottom: 8px;
+    }
+    
+    .codex-entry-description {
+      font-size: 13px;
+      line-height: 1.4;
+      color: #8e8e93;
     }
   </style>
 
@@ -97,34 +803,185 @@
     <button id="logoutBtn" style="display:none;">Logout</button>
   </div>
   <div>
-    <button id="toggleDarkModeBtn">Toggle Dark Mode</button>
-    <button id="advanceTimeBtn">Advance Time</button>
+    <button id="toggleThemeBtn" class="secondary-btn">☀️ Light Mode</button>
   </div>
 </div>
 
-<div id="chatContainer">
+<div id="mainContainer">
   <div id="leftPanel">
     <div id="leftPanelInner">
       <h3>Conversations</h3>
-      <div class="new-game-wrapper">
-        <button type="button" id="newGameBtn" style="padding-right: 30px;">New Game ▼</button>
-        <div id="newGameDropdown" style="display: none; position: absolute; background-color: white; min-width: 160px; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2); z-index: 1;">
-          <a href="#" onclick="showPresetStories(); return false;" style="color: black; padding: 12px 16px; text-decoration: none; display: block;">Choose Preset Story</a>
-          <a href="#" onclick="startNewGame(); return false;" style="color: black; padding: 12px 16px; text-decoration: none; display: block;">Custom Game</a>
+      <div class="dropdown">
+        <button type="button" id="newGameBtn">➕ New Game ▼</button>
+        <div id="newGameDropdown" class="dropdown-content">
+          <a href="#" onclick="showPresetStories(); return false;">📚 Choose Preset Story</a>
+          <a href="#" onclick="startNewGame(); return false;">✨ Custom Game</a>
         </div>
       </div>
-      <button id="nyxSpaceBtn" style="width:100%;margin-bottom:8px;margin-top:8px;">Chat with Nyx</button>
+      <button id="nyxSpaceBtn" style="width:100%;margin-bottom:8px;margin-top:8px;" class="secondary-btn admin-only">💬 Chat with Nyx</button>
       <div id="convList" style="margin-top:10px;"></div>
     </div>
   </div>
 
-  <div id="chatPanel">
-    <div id="chatWindow">
-      <span id="loadMore" style="display:none;">Load older messages...</span>
+  <div id="rightPanel">
+    <div id="tabContainer">
+      <div class="tab active" data-tab="chat">
+        <span class="tab-icon">💬</span>Chat
+      </div>
+      <div class="tab" data-tab="stats">
+        <span class="tab-icon">📊</span>Stats
+      </div>
+      <div class="tab" data-tab="calendar">
+        <span class="tab-icon">📅</span>Calendar
+      </div>
+      <div class="tab" data-tab="journal">
+        <span class="tab-icon">📖</span>Journal
+      </div>
+      <div class="tab" data-tab="inventory">
+        <span class="tab-icon">🎒</span>Inventory
+      </div>
+      <div class="tab" data-tab="social">
+        <span class="tab-icon">🤝</span>Social Links
+      </div>
+      <div class="tab" data-tab="codex">
+        <span class="tab-icon">📚</span>Codex
+      </div>
+      <div class="tab" data-tab="settings">
+        <span class="tab-icon">⚙️</span>Settings
+      </div>
     </div>
-    <div id="inputRow">
-      <input type="text" id="userMsg" placeholder="Type your message"/>
-      <button id="sendBtn">Send</button>
+
+    <div id="tabContent">
+      <!-- Chat Tab -->
+      <div class="tab-pane active" id="chatTab">
+        <div id="chatPanel">
+          <div id="chatWindow">
+            <span id="loadMore" style="display:none;">Load older messages...</span>
+          </div>
+          <div id="inputRow">
+            <input type="text" id="userMsg" placeholder="Type your message..."/>
+            <button id="sendBtn">Send</button>
+            <button id="advanceTimeBtn" class="secondary-btn admin-only" style="margin-left: 8px;">⏰ Advance Time</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Tab -->
+      <div class="tab-pane" id="statsTab">
+        <div class="game-card">
+          <h3>Player Stats</h3>
+          <div class="stat-group" id="playerStats">
+            <!-- Stats will be populated by JavaScript -->
+          </div>
+        </div>
+        
+        <div class="game-card">
+          <h3>Resources</h3>
+          <div class="stat-group" id="playerResources">
+            <!-- Resources will be populated by JavaScript -->
+          </div>
+        </div>
+        
+        <div class="game-card">
+          <h3>Vitals</h3>
+          <div class="stat-group" id="playerVitals">
+            <!-- Vitals will be populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Calendar Tab -->
+      <div class="tab-pane" id="calendarTab">
+        <div class="game-card">
+          <h3 id="calendarTitle">Calendar</h3>
+          <div id="currentDate" class="mb-3 text-center" style="font-size: 18px; font-weight: 600;"></div>
+          <div class="calendar-container" id="calendarGrid">
+            <!-- Calendar will be populated by JavaScript -->
+          </div>
+        </div>
+        
+        <div class="game-card">
+          <h3>Today's Schedule</h3>
+          <div id="todaySchedule">
+            <!-- Schedule will be populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Journal Tab -->
+      <div class="tab-pane" id="journalTab">
+        <div class="game-card">
+          <h3>Active Quests</h3>
+          <div id="activeQuests">
+            <!-- Quests will be populated by JavaScript -->
+          </div>
+        </div>
+        
+        <div class="game-card">
+          <h3>Journal Entries</h3>
+          <div id="journalEntries">
+            <!-- Journal entries will be populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Inventory Tab -->
+      <div class="tab-pane" id="inventoryTab">
+        <div class="game-card">
+          <h3>Inventory</h3>
+          <div class="inventory-grid" id="inventoryGrid">
+            <!-- Inventory items will be populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Social Links Tab -->
+      <div class="tab-pane" id="socialTab">
+        <div class="game-card">
+          <h3>Relationships</h3>
+          <div id="socialLinks">
+            <!-- Social links will be populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Codex Tab -->
+      <div class="tab-pane" id="codexTab">
+        <div class="codex-section">
+          <div class="game-card">
+            <h3>Characters</h3>
+            <div class="codex-grid" id="codexCharacters">
+              <!-- Character entries will be populated by JavaScript -->
+            </div>
+          </div>
+        </div>
+        
+        <div class="codex-section">
+          <div class="game-card">
+            <h3>Locations</h3>
+            <div class="codex-grid" id="codexLocations">
+              <!-- Location entries will be populated by JavaScript -->
+            </div>
+          </div>
+        </div>
+        
+        <div class="codex-section">
+          <div class="game-card">
+            <h3>Lore</h3>
+            <div class="codex-grid" id="codexLore">
+              <!-- Lore entries will be populated by JavaScript -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Tab -->
+      <div class="tab-pane" id="settingsTab">
+        <div class="game-card">
+          <h3>Game Settings</h3>
+          <p>Settings functionality coming soon...</p>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -132,17 +989,15 @@
 <div id="contextMenu"></div>
 
 <!-- Preset Story Selection Modal -->
-<div id="presetStoryModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1000;">
-  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: white; padding: 20px; border-radius: 10px; max-width: 600px; max-height: 80vh; overflow-y: auto;">
-    <div class="modal-content">
-      <h2>Choose a Story</h2>
-      <div id="presetStoriesList" style="margin: 20px 0;">
-        <!-- Stories will be populated here -->
-      </div>
-      <div style="text-align: center; margin-top: 20px;">
-        <button onclick="closePresetStoryModal()" style="padding: 10px 20px; margin-right: 10px; cursor: pointer;">Cancel</button>
-        <button onclick="startCustomGame()" style="padding: 10px 20px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">Start Custom Game</button>
-      </div>
+<div id="presetStoryModal" class="modal">
+  <div class="modal-content">
+    <h2>Choose a Story</h2>
+    <div id="presetStoriesList" style="margin: 20px 0;">
+      <!-- Stories will be populated here -->
+    </div>
+    <div style="text-align: center; margin-top: 20px;">
+      <button onclick="closePresetStoryModal()" class="secondary-btn" style="margin-right: 10px;">Cancel</button>
+      <button onclick="startCustomGame()">Start Custom Game</button>
     </div>
   </div>
 </div>
@@ -150,9 +1005,12 @@
 <script>
   // Quart's session.user_id to JSON    
   window.CURRENT_USER_ID = {{ session.user_id|tojson }};
+  // Check if user is admin (you'll need to pass this from your backend)
+  window.IS_ADMIN = {{ (session.is_admin|default(false))|tojson }};
 </script>
 <!-- Link to our refactored script, DEFER is important -->
 <script src="/static/socket-fix.js"></script>
 <script src="/static/chat_page.js" defer></script>
+<script src="/static/game-ui.js" defer></script>
 </body>
 </html>
