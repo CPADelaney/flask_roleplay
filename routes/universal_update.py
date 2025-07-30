@@ -106,8 +106,16 @@ async def get_aggregated_roleplay_context_endpoint():
         
     except ValueError:
         return jsonify({"error": "Invalid conversation_id"}), 400
+    except SyntaxError as e:
+        # Log the actual syntax error details
+        logger.error(f"SyntaxError in get_aggregated_roleplay_context: {e}")
+        logger.error(f"Error details: {e.filename}:{e.lineno} - {e.text}")
+        return jsonify({"error": f"Syntax error: {str(e)}"}), 500
     except Exception as e:
         logger.error(f"Error getting aggregated context: {e}", exc_info=True)
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"Full traceback:\n{tb}")
         return jsonify({"error": str(e)}), 500
 
 # OPTIONALLY ADD THIS TOO - for player resources
