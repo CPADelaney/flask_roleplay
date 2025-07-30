@@ -548,94 +548,103 @@ class QueenOfThornsSliceRunner:
                     if hasattr(episode, key):
                         setattr(episode, key, value)
     
-    async def process_player_action(
+    async def process_player_action_slice(
         self, 
         player_input: str, 
         current_location: str,
-        scene_context: Optional[Dict[str, Any]] = None,
-        stay_with_queen: Optional[bool] = None
+        scene_context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Process player action with dynamic cast management"""
+        """
+        Process a player action in the slice-of-life sandbox.
+        Lilith's presence depends on current proximity state.
+        """
         if not self._initialized:
             await self.initialize()
         
         try:
+            # Update current time
             self.current_time = datetime.now()
             
-            # Agent 1: Intent classification
+            # Update Queen's schedule if needed
+            await self._update_queen_schedule()
+            
+            # Agent 1: Intent & Tone Classifier
             intent_result = None
             if self.dynamic_mode:
                 intent_result = await self._classify_intent_with_proximity(player_input)
                 self._last_intent = intent_result
             
-            # Update NPC affinity based on interaction
-            await self._update_npc_affinity(intent_result, player_input, current_location)
+            # Handle proximity changes based on intent
+            await self._handle_proximity_with_cutoff(intent_result, None, current_location)
             
-            # Handle proximity changes (including cutoff check)
-            await self._handle_proximity_with_cutoff(intent_result, stay_with_queen, current_location)
-            
-            # Update Queen's schedule
-            await self._update_queen_schedule()
-            
-            # Run Focus Allocator to check for cast changes
-            if self.dynamic_mode:
-                focus_changes = await self._run_focus_allocator()
-                await self._handle_focus_changes(focus_changes)
-            
-            # Build context
-            context = await self._build_unified_context(
+            # Build complete context with proximity-aware presence
+            context = await self._build_slice_context(
                 player_input, current_location, scene_context, intent_result
             )
             
-            # Situation Weaver with spotlight bias
+            # Agent: Situation Weaver - what episode is relevant now?
             if self.dynamic_mode:
-                situation = await self._weave_situation_with_spotlight(context)
+                situation = await self._weave_situation(context)
                 await self._handle_situation_results(situation)
             else:
+                # Pick a relevant episode based on location
                 self._select_relevant_episode(current_location)
             
-            # Check mechanics based on proximity and spotlight
-            all_mechanics = await self._check_unified_mechanics(context)
+            # Check network mechanics if relevant
+            network_results = {}
+            if context.get('is_network_relevant') or self.spotlight_episode and self.spotlight_episode.network_related:
+                network_results = await self._check_network_mechanics(context)
             
-            # Generate response
-            if self.proximity in [Proximity.DIFFERENT_VENUE, Proximity.OFFSCREEN]:
-                response = await self._generate_solo_response(context, all_mechanics)
-            else:
+            # Check Lilith's mechanics only if she's present
+            lilith_mechanics_results = {}
+            if self.proximity in [Proximity.TOGETHER, Proximity.SAME_VENUE]:
+                lilith_mechanics_results = await self._check_lilith_special_mechanics(context)
+            
+            # Combine mechanics
+            all_mechanics = {**network_results, **lilith_mechanics_results}
+            
+            # Generate response based on proximity
+            if self.proximity == Proximity.TOGETHER:
                 response = await self._generate_duet_response(context, all_mechanics)
+            elif self.proximity == Proximity.SAME_VENUE:
+                response = await self._generate_venue_response(context, all_mechanics)
+            else:  # DIFFERENT_VENUE or OFFSCREEN
+                response = await self._generate_solo_response(context, all_mechanics)
             
-            # Continuity check including offscreen violations
+            # Agent 8: Continuity check
             if self.dynamic_mode:
-                continuity_ok = await self._check_unified_continuity(response, context)
+                continuity_ok = await self._check_slice_continuity(response, context)
                 if not continuity_ok:
-                    logger.warning("Continuity check failed, regenerating")
-                    if self.proximity in [Proximity.DIFFERENT_VENUE, Proximity.OFFSCREEN]:
-                        response = await self._generate_solo_response(context, all_mechanics, retry=True)
-                    else:
+                    logger.warning("Continuity check failed, regenerating response")
+                    # Regenerate based on proximity
+                    if self.proximity == Proximity.TOGETHER:
                         response = await self._generate_duet_response(context, all_mechanics, retry=True)
+                    elif self.proximity == Proximity.SAME_VENUE:
+                        response = await self._generate_venue_response(context, all_mechanics, retry=True)
+                    else:
+                        response = await self._generate_solo_response(context, all_mechanics, retry=True)
             
-            # Update state
+            # Update story state and episode progress
             await self._update_slice_state(context, response)
             
-            # Check episode lifecycle
+            # Check for episode resolution
             await self._check_episode_lifecycle()
             
-            # Build status
-            spotlight_name = await self._get_npc_name(self.current_spotlight_npc)
-            
+            # Add current slice status
             response['slice_status'] = {
                 'proximity': self.proximity.value,
-                'current_spotlight_npc': spotlight_name,
-                'queen_availability': "severed" if self.proximity == Proximity.OFFSCREEN else "available",
+                'queen_with_you': self.proximity == Proximity.TOGETHER,
+                'queen_nearby': self.proximity == Proximity.SAME_VENUE,
+                'queen_accessible': self.proximity != Proximity.OFFSCREEN,
                 'queen_location': self.queen_current_state.location if self.queen_current_state else "Unknown",
-                'queen_affinity': self.lilith_affinity,
-                'relationship_tension': self.relationship_tension,
+                'queen_activity': self.queen_current_state.activity if self.queen_current_state else "Unknown",
+                'queen_mood': self.queen_current_state.mood if self.queen_current_state and self.proximity != Proximity.OFFSCREEN else "unknown",
                 'active_episodes': len(self.active_episodes),
-                'dormant_episodes': len(self.dormant_episodes),
                 'spotlight_episode': self.spotlight_episode.premise if self.spotlight_episode else None,
+                'neighborhood_vibe': self.neighborhood_pulse.bay_mood if self.neighborhood_pulse else "normal",
+                'time': self.current_time.strftime("%I:%M %p"),
                 'can_invite_queen': self._can_invite_queen(),
-                'can_retcon_queen': self._can_retcon_queen(),
-                'cast_spotlight_scores': self._get_top_cast_scores(),
-                'time': self.current_time.strftime("%I:%M %p")
+                'can_retcon_queen': self._can_retcon_queen()
             }
             
             return response
@@ -647,6 +656,50 @@ class QueenOfThornsSliceRunner:
                 "error": str(e),
                 "message": "Failed to process action"
             }
+    
+    # 3. Add new method for SAME_VENUE responses
+    async def _generate_venue_response(
+        self,
+        context: Dict[str, Any],
+        mechanics_results: Dict[str, Any],
+        retry: bool = False
+    ) -> Dict[str, Any]:
+        """Generate response when Queen is in same venue but not together"""
+        response = {
+            'status': 'success',
+            'timestamp': self.current_time.isoformat(),
+            'proximity': Proximity.SAME_VENUE.value
+        }
+        
+        # Get scene description with Queen visible but not interacting
+        scene_parts = [
+            f"You're in {context.get('current_location')}.",
+            f"Lilith is here too, {self.queen_current_state.activity if self.queen_current_state else 'occupied with her own affairs'}."
+        ]
+        
+        # She might acknowledge player but won't engage in full dialogue
+        if context.get('player_intent', {}).get('intent') == 'invite':
+            if self._check_queen_will_join(context.get('player_intent')):
+                scene_parts.append("She notices your invitation and considers it.")
+            else:
+                scene_parts.append("She notices but seems too busy to join you right now.")
+        
+        response['scene_description'] = " ".join(scene_parts)
+        
+        # Limited interaction - maybe a gesture or brief acknowledgment
+        if self.dynamic_mode and random.random() < 0.3:
+            response['queen_acknowledgment'] = await self._get_queen_acknowledgment(context)
+        
+        # Episode content still relevant
+        if self.spotlight_episode:
+            response['episode_content'] = {
+                'current': self.spotlight_episode.premise,
+                'stakes': self.spotlight_episode.stakes,
+                'progress': self.spotlight_episode.progress
+            }
+        
+        return response
+
     
     async def _initialize_npc_traits(self, support_npc_ids: List[int]):
         """Initialize traits for all NPCs"""
@@ -1080,6 +1133,39 @@ Flag any violations."""
             }
         
         return response
+
+    async def _generate_cast_scene_description(
+        self, context: Dict[str, Any], cast_present: List[str]
+    ) -> str:
+        """Generate scene description with cast awareness"""
+        location = context.get('current_location', 'somewhere')
+        base_parts = [f"You're in {location}."]
+        
+        # Describe who's actually present based on proximity
+        if "Lilith" in cast_present and self.proximity == Proximity.TOGETHER:
+            base_parts.append(f"Lilith is with you, {self.queen_current_state.activity if self.queen_current_state else 'her attention on you'}.")
+        elif self.proximity == Proximity.SAME_VENUE:
+            base_parts.append(f"Lilith is here but occupied with {self.queen_current_state.activity if self.queen_current_state else 'her own affairs'}.")
+        
+        # Add other cast members
+        other_cast = [c for c in cast_present if c != "Lilith"]
+        if other_cast:
+            base_parts.append(f"{', '.join(other_cast)} {'is' if len(other_cast) == 1 else 'are'} here.")
+        
+        base_desc = " ".join(base_parts)
+        
+        # Enhance with scene details
+        enhanced = await self.text_generator.enhance_scene_description(
+            base_desc,
+            context.get('scene_type', 'dynamic'),
+            {
+                'cast_size': len(cast_present),
+                'proximity': self.proximity.value,
+                'emotional_tone': context.get('lilith_emotion', 'neutral')
+            }
+        )
+        
+        return enhanced
     
     async def _write_cast_dialogue(self, context: Dict[str, Any], mechanics: Dict[str, Any], cast_present: List[str]) -> DialogueScript:
         """Write dialogue for present cast members"""
@@ -1212,20 +1298,110 @@ What is she doing?"""
             result.offscreen_status = "Living her own life"
         
         return result
-    
+
+    async def _build_unified_context(
+        self,
+        player_input: str,
+        current_location: str,
+        scene_context: Optional[Dict[str, Any]],
+        intent_result: Optional[IntentClassification] = None
+    ) -> Dict[str, Any]:
+        """Build unified context with full proximity awareness"""
+        
+        # Start with base proximity context
+        context = await self._build_base_proximity_context(
+            player_input, current_location, scene_context
+        )
+        
+        # Add proximity-specific details
+        context['proximity'] = self.proximity.value
+        context['queen_present'] = self.proximity == Proximity.TOGETHER
+        context['queen_nearby'] = self.proximity == Proximity.SAME_VENUE
+        context['queen_accessible'] = self.proximity != Proximity.OFFSCREEN
+        context['queen_in_story'] = self.proximity != Proximity.OFFSCREEN
+        
+        # Add intent if available
+        if intent_result:
+            context['player_intent'] = intent_result.dict()
+            context['is_threatening'] = intent_result.threat_level > 6
+            context['is_network_relevant'] = intent_result.network_relevance > 5
+            context['proximity_intent'] = intent_result.proximity_intent
+        
+        # Determine current focus NPC info
+        if self.current_spotlight_npc:
+            context['spotlight_npc'] = {
+                'id': self.current_spotlight_npc,
+                'name': await self._get_npc_name(self.current_spotlight_npc),
+                'is_queen': self.current_spotlight_npc == self.lilith_npc_id
+            }
+        
+        # Add episode context filtered by proximity appropriateness
+        appropriate_episodes = []
+        for ep in self.active_episodes:
+            if self.proximity == Proximity.OFFSCREEN and ep.lilith_involvement == "central":
+                continue  # Skip Lilith-centric episodes when she's gone
+            appropriate_episodes.append(ep.premise)
+        context['appropriate_episodes'] = appropriate_episodes
+        
+        # Reflection lens for when apart
+        if self.proximity in [Proximity.DIFFERENT_VENUE, Proximity.OFFSCREEN] and self.dynamic_mode:
+            context['reflection'] = await self._get_reflection_lens(current_location)
+        
+        return context
+        
     async def _get_lilith_meanwhile(self, context: Dict[str, Any]) -> LilithInnerVoice:
-        """Get Lilith's inner voice - silent if offscreen"""
+        """Get Lilith's inner voice/meanwhile based on proximity"""
+        
         if self.proximity == Proximity.OFFSCREEN:
+            # She's completely out of the story
             return LilithInnerVoice(
                 mask_slip=False,
                 mask_integrity=100,
                 emotional_state="absent",
                 vulnerability_level=0,
-                is_offscreen=True
+                is_offscreen=True,
+                meanwhile_glimpse=None  # No glimpses when severed
             )
-        
-        # Normal inner voice for other proximities
-        return await super()._get_lilith_meanwhile(context)
+        elif self.proximity == Proximity.DIFFERENT_VENUE:
+            # Get a glimpse of what she's doing elsewhere
+            system_prompt = """You provide brief glimpses of what Lilith is doing elsewhere.
+    She has her own life, goals, and activities. Show her as a full person.
+    Keep it mysterious but grounded."""
+    
+            user_prompt = f"""Lilith is at {self.queen_current_state.location if self.queen_current_state else 'her own location'}.
+    She's {self.queen_current_state.activity if self.queen_current_state else 'pursuing her own agenda'}.
+    Relationship tension: {self.relationship_tension}
+    Time since together: {(self.current_time - self.last_proximity_change).seconds / 3600:.1f} hours
+    
+    Give a brief, evocative glimpse of her activities."""
+    
+            result = await self.gpt_service.call_with_validation(
+                model=_INNER_VOICE_MODEL,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=LilithInnerVoice,
+                temperature=0.7
+            )
+            
+            # Override to ensure it's marked as meanwhile
+            result.is_offscreen = False
+            result.mask_slip = False
+            result.vulnerability_level = 0
+            return result
+        elif self.proximity == Proximity.SAME_VENUE:
+            # She's aware of player but focused on her own things
+            return LilithInnerVoice(
+                mask_slip=False,
+                mask_integrity=90,
+                emotional_state="aware but occupied",
+                vulnerability_level=1,
+                separation_feeling="maintaining appropriate distance",
+                meanwhile_glimpse=f"She {self.queen_current_state.activity if self.queen_current_state else 'continues her business'}, occasionally aware of your presence"
+            )
+        else:  # TOGETHER
+            # Full inner voice when together
+            return await self._get_lilith_inner_voice(context)
+
     
     def _get_top_cast_scores(self) -> List[Dict[str, Any]]:
         """Get top 5 NPCs by spotlight score"""
@@ -1485,24 +1661,72 @@ Where is she and what is she doing?"""
             response_model=QueenSchedule,
             temperature=0.6
         )
+
+    async def handle_retcon_attempt(self, catalyst_type: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle player attempts to bring Queen back via RetconGate"""
+        if self.proximity != Proximity.OFFSCREEN:
+            return {
+                'success': False,
+                'reason': 'Queen is not offscreen'
+            }
+        
+        # Check various catalysts
+        catalysts = {
+            'sincere_apology': context.get('player_input', '').lower().count('sorry') > 0 and self.lilith_affinity > -40,
+            'network_crisis': context.get('is_network_relevant') and any(e.network_related and e.lilith_involvement == "required" for e in self.active_episodes),
+            'emotional_plea': any(word in context.get('player_input', '').lower() for word in ['need you', 'come back', 'miss you']),
+            'time_passed': (self.current_time - self.last_proximity_change).days > 7,
+            'high_thread_score': self._last_thread_index and self._last_thread_index.queen_return_potential > 0.7
+        }
+        
+        if catalysts.get(catalyst_type, False):
+            success = await self.attempt_queen_reentry(catalyst_type)
+            
+            if success:
+                return {
+                    'success': True,
+                    'new_proximity': self.proximity.value,
+                    'queen_response': await self._generate_return_response(catalyst_type),
+                    'affinity_change': 5
+                }
+        
+        return {
+            'success': False,
+            'reason': f'Conditions not met for {catalyst_type}',
+            'hint': 'Perhaps time, sincerity, or necessity will open the way...'
+        }
+
+    async def _generate_return_response(self, catalyst: str) -> str:
+        """Generate Lilith's response when returning via RetconGate"""
+        responses = {
+            'sincere_apology': "Your words... they reached me. I'm not ready to be close again, but I'm here.",
+            'network_crisis': "The network needs me. And perhaps... so do you. Let's handle this first.",
+            'emotional_plea': "I heard you calling. I'm not sure this is wise, but...",
+            'time_passed': "Time has a way of softening edges. Hello again.",
+            'high_thread_score': "There are threads between us that refuse to be cut. Very well."
+        }
+        
+        return responses.get(catalyst, "I'm here. Let's see where this goes.")
     
     async def _run_neighborhood_pulse(self):
-        """Generate what's happening in the Bay Area today"""
+        """Generate neighborhood events considering Queen's availability"""
         if not self.dynamic_mode:
             return
         
         system_prompt = """You generate daily events in San Francisco Bay Area, 2025.
-Mix of: tech culture, underground scenes, supernatural hints, normal city life.
-Events should be hooks the player might pursue or ignore.
-Keep it diverse - not everything is about the network."""
-
+    Mix of: tech culture, underground scenes, supernatural hints, normal city life.
+    Consider whether Lilith is available to participate in events."""
+    
+        queen_status = "offscreen" if self.proximity == Proximity.OFFSCREEN else "available"
+        
         user_prompt = f"""Generate today's neighborhood events:
-Day: {self.current_time.strftime('%A')}
-Season: {self._get_season()}
-Recent player locations: {self._get_recent_locations()}
-
-Create 2-4 interesting happenings around the Bay."""
-
+    Day: {self.current_time.strftime('%A')}
+    Season: {self._get_season()}
+    Queen status: {queen_status}
+    Recent player locations: {self._get_recent_locations()}
+    
+    Create 2-4 interesting happenings. Mark which ones could involve Lilith."""
+    
         self.neighborhood_pulse = await self.gpt_service.call_with_validation(
             model=_PULSE_MODEL,
             system_prompt=system_prompt,
@@ -1511,9 +1735,17 @@ Create 2-4 interesting happenings around the Bay."""
             temperature=0.8
         )
         
-        # Convert interesting events to potential episodes
+        # Convert events to episodes with appropriate Lilith involvement
         for event in self.neighborhood_pulse.local_events:
             if random.random() < 0.3:  # 30% chance each event becomes available
+                # Determine Lilith's potential involvement based on proximity
+                if self.proximity == Proximity.OFFSCREEN:
+                    lilith_involvement = "none"
+                elif self.proximity == Proximity.DIFFERENT_VENUE:
+                    lilith_involvement = "optional" if random.random() < 0.3 else "none"
+                else:
+                    lilith_involvement = "optional" if random.random() < 0.5 else "interested"
+                
                 new_episode = Episode(
                     premise=event.hook,
                     stakes="A slice of Bay Area life - could lead somewhere interesting",
@@ -1521,104 +1753,12 @@ Create 2-4 interesting happenings around the Bay."""
                     tags=["slice-neighborhood", f"type-{event.type}", "optional"],
                     location_relevant=event.place,
                     network_related=False,
-                    lilith_involvement="optional" if random.random() < 0.5 else "uninterested"
+                    lilith_involvement=lilith_involvement
                 )
                 self.active_episodes.append(new_episode)
+
     
-    async def process_player_action(
-        self, 
-        player_input: str, 
-        current_location: str,
-        scene_context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        Process a player action in the slice-of-life sandbox.
-        Lilith is always present and responsive.
-        """
-        if not self._initialized:
-            await self.initialize()
-        
-        try:
-            # Update current time
-            self.current_time = datetime.now()
-            
-            # Update Queen's schedule if needed
-            await self._update_queen_schedule()
-            
-            # Agent 1: Intent & Tone Classifier
-            intent_result = None
-            if self.dynamic_mode:
-                intent_result = await self._classify_intent(player_input)
-                self._last_intent = intent_result
-            
-            # Build complete context with Lilith ALWAYS present
-            context = await self._build_slice_context(
-                player_input, current_location, scene_context, intent_result
-            )
-            
-            # Agent: Situation Weaver - what episode is relevant now?
-            if self.dynamic_mode:
-                situation = await self._weave_situation(context)
-                if situation.spotlight_episode:
-                    self.spotlight_episode = next(
-                        (ep for ep in self.active_episodes if ep.id == situation.spotlight_episode),
-                        None
-                    )
-                if situation.new_episode:
-                    self.active_episodes.append(situation.new_episode)
-                    logger.info(f"New episode spawned: {situation.new_episode.premise}")
-            else:
-                # Pick a relevant episode based on location
-                self._select_relevant_episode(current_location)
-            
-            # Check network mechanics if relevant
-            network_results = {}
-            if context.get('is_network_relevant') or self.spotlight_episode and self.spotlight_episode.network_related:
-                network_results = await self._check_network_mechanics(context)
-            
-            # Always check Lilith's state since she's always present
-            lilith_mechanics_results = await self._check_lilith_special_mechanics(context)
-            
-            # Combine mechanics
-            all_mechanics = {**network_results, **lilith_mechanics_results}
-            
-            # Generate response with Lilith as co-protagonist
-            response = await self._generate_duet_response(context, all_mechanics)
-            
-            # Agent 8: Continuity check
-            if self.dynamic_mode:
-                continuity_ok = await self._check_slice_continuity(response, context)
-                if not continuity_ok:
-                    logger.warning("Continuity check failed, regenerating response")
-                    response = await self._generate_duet_response(context, all_mechanics, retry=True)
-            
-            # Update story state and episode progress
-            await self._update_slice_state(context, response)
-            
-            # Check for episode resolution
-            await self._check_episode_resolution()
-            
-            # Add current slice status
-            response['slice_status'] = {
-                'queen_with_you': True,
-                'queen_location': self.queen_current_state.location,
-                'queen_activity': self.queen_current_state.activity,
-                'queen_mood': self.queen_current_state.mood,
-                'active_episodes': len(self.active_episodes),
-                'spotlight_episode': self.spotlight_episode.premise if self.spotlight_episode else None,
-                'neighborhood_vibe': self.neighborhood_pulse.bay_mood if self.neighborhood_pulse else "normal",
-                'time': self.current_time.strftime("%I:%M %p")
-            }
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error processing action: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "error": str(e),
-                "message": "Failed to process action"
-            }
+
 
     async def _build_base_proximity_context(
         self,
@@ -1682,11 +1822,11 @@ Create 2-4 interesting happenings around the Bay."""
         scene_context: Optional[Dict[str, Any]],
         intent_result: Optional[IntentClassification] = None
     ) -> Dict[str, Any]:
-        """Build context with Lilith always present"""
+        """Build context with proximity-aware Queen presence"""
         
-        # Get Lilith's current state - she's ALWAYS with the player
+        # Get Lilith's current state
         lilith_data = None
-        if self.lilith_npc_id:
+        if self.lilith_npc_id and self.proximity != Proximity.OFFSCREEN:
             async with get_db_connection_context() as conn:
                 lilith_row = await conn.fetchrow(
                     """
@@ -1708,18 +1848,26 @@ Create 2-4 interesting happenings around the Bay."""
         # Get location details
         location_data = await self._get_location_data(current_location)
         
+        # Determine Queen's presence based on proximity
+        queen_present = self.proximity == Proximity.TOGETHER
+        queen_in_venue = self.proximity in [Proximity.TOGETHER, Proximity.SAME_VENUE]
+        queen_accessible = self.proximity != Proximity.OFFSCREEN
+        
         # Build context
         context = {
             'player_input': player_input,
             'player_action': player_input,
             'current_location': current_location,
             'location_data': location_data,
-            'queen_data': lilith_data,
-            'lilith_data': lilith_data,
-            'queen_present': True,  # ALWAYS TRUE in slice-of-life
-            'queen_in_scene': True,  # ALWAYS TRUE
-            'queen_schedule': self.queen_current_state.dict() if self.queen_current_state else {},
-            'queen_available_for': self.queen_current_state.available_for if self.queen_current_state else [],
+            'queen_data': lilith_data if queen_accessible else None,
+            'lilith_data': lilith_data if queen_accessible else None,
+            'queen_present': queen_present,  # Only true if TOGETHER
+            'queen_in_scene': queen_present,  # Same as above
+            'queen_in_venue': queen_in_venue,  # True for TOGETHER or SAME_VENUE
+            'queen_accessible': queen_accessible,  # False only for OFFSCREEN
+            'proximity': self.proximity.value,
+            'queen_schedule': self.queen_current_state.dict() if self.queen_current_state and queen_accessible else {},
+            'queen_available_for': self.queen_current_state.available_for if self.queen_current_state and queen_accessible else [],
             'network_awareness': self.network_awareness,
             'information_layer': self.information_layer,
             'player_rank': self.player_rank,
@@ -1742,40 +1890,55 @@ Create 2-4 interesting happenings around the Bay."""
         # Determine derived context
         context['is_network_business'] = self._is_network_business(context)
         context['is_private'] = self._is_private_location(current_location)
-        context['lilith_emotion'] = self._determine_lilith_emotion(context)
+        
+        # Only determine Lilith's emotion if she's accessible
+        if queen_accessible:
+            context['lilith_emotion'] = self._determine_lilith_emotion(context)
+        else:
+            context['lilith_emotion'] = 'absent'
         
         # Determine scene type from episodes and mood
         context['scene_type'] = self._determine_slice_scene_type(context)
         
         return context
-    
-    async def _weave_situation(self, context: Dict[str, Any]) -> SituationWeave:
-        """Situation Weaver agent - decide what episode is relevant"""
-        system_prompt = """You're a situation weaver for a slice-of-life experience.
-Scan active episodes and decide which (if any) is relevant to the current moment.
-You can also spawn new episodes from templates or neighborhood events.
-Not every moment needs an episode - sometimes it's just life with Lilith."""
 
-        active_episodes_summary = [
-            {
+    async def _weave_situation(self, context: Dict[str, Any]) -> SituationWeave:
+        """Situation Weaver agent - considers Lilith's availability"""
+        system_prompt = """You're a situation weaver for a dynamic story.
+    Consider which episodes make sense given character proximity.
+    If Lilith is offscreen, avoid episodes requiring her central involvement.
+    If she's in same venue, episodes can reference her but not require direct interaction."""
+    
+        # Filter episodes by appropriateness given proximity
+        active_episodes_summary = []
+        for ep in self.active_episodes[:10]:
+            ep_data = {
                 "id": ep.id,
                 "premise": ep.premise,
                 "progress": ep.progress,
                 "location": ep.location_relevant,
                 "lilith_involvement": ep.lilith_involvement
             }
-            for ep in self.active_episodes[:10]  # Limit to prevent token overflow
-        ]
-
+            
+            # Flag if episode is appropriate for current proximity
+            if self.proximity == Proximity.OFFSCREEN:
+                ep_data["appropriate"] = ep.lilith_involvement in ["none", "optional"]
+            elif self.proximity == Proximity.DIFFERENT_VENUE:
+                ep_data["appropriate"] = ep.lilith_involvement != "central"
+            else:
+                ep_data["appropriate"] = True
+                
+            active_episodes_summary.append(ep_data)
+    
         user_prompt = f"""Current situation:
-Player action: "{context.get('player_input')}"
-Location: {context.get('current_location')}
-Queen is: {context.get('queen_schedule', {}).get('activity', 'with player')}
-Queen mood: {context.get('lilith_emotion')}
-Active episodes: {json.dumps(active_episodes_summary, default=str)}
-
-Should we spotlight an episode? Create a new one? Or just flow with the moment?"""
-
+    Player action: "{context.get('player_input')}"
+    Location: {context.get('current_location')}
+    Lilith proximity: {self.proximity.value}
+    Queen is: {context.get('queen_schedule', {}).get('activity', 'elsewhere') if self.proximity != Proximity.OFFSCREEN else 'gone from your story'}
+    Active episodes: {json.dumps(active_episodes_summary, default=str)}
+    
+    Choose episodes appropriate for current proximity. Don't force Lilith-centric episodes if she's not available."""
+    
         return await self.gpt_service.call_with_validation(
             model=_WEAVER_MODEL,
             system_prompt=system_prompt,
@@ -1868,65 +2031,76 @@ Should we spotlight an episode? Create a new one? Or just flow with the moment?"
     async def _write_duet_dialogue(
         self, context: Dict[str, Any], mechanics: Dict[str, Any]
     ) -> DialogueScript:
-        """Agent 7 adapted: Write dialogue with Lilith as co-protagonist"""
-        system_prompt = """You write intimate dialogue between the player and Lilith Ravencroft.
-Lilith is ALWAYS present as a co-protagonist, not an NPC.
-She responds naturally to everything, shares observations, has her own agenda.
-Balance her various roles: Queen of Thorns, network leader, complex woman, your companion.
-She gets at least one meaningful line every exchange."""
-
+        """Agent 7 adapted: Write dialogue based on who's actually present"""
+        
+        # Determine who can speak based on proximity
+        speakers_available = []
+        if self.proximity == Proximity.TOGETHER:
+            speakers_available.append("Lilith")
+        
+        # Add spotlight NPC if different from Lilith and present
+        if self.current_spotlight_npc and self.current_spotlight_npc != self.lilith_npc_id:
+            spotlight_name = await self._get_npc_name(self.current_spotlight_npc)
+            if spotlight_name:
+                speakers_available.append(spotlight_name)
+        
+        if not speakers_available:
+            # No one to have dialogue with
+            return DialogueScript(
+                script=[{"speaker": "Narrator", "line": "You are alone with your thoughts."}],
+                subtext={},
+                power_dynamics="solitary",
+                priority_speaker="Narrator",
+                cast_present=[]
+            )
+        
+        system_prompt = f"""You write dialogue for available characters.
+    Available speakers: {', '.join(speakers_available)}
+    Proximity to Lilith: {self.proximity.value}
+    Only characters who are TOGETHER with the player can have full dialogue."""
+    
         queen_mood = context.get('lilith_emotion', 'contemplative')
-        episode_context = f"Current episode: {self.spotlight_episode.premise}" if self.spotlight_episode else "Just daily life together"
-
+        episode_context = f"Current episode: {self.spotlight_episode.premise}" if self.spotlight_episode else "Daily moments"
+    
         user_prompt = f"""Write natural dialogue for this moment:
-Player said: "{context.get('player_input')}"
-Lilith's current mood: {queen_mood}
-She's currently: {context.get('queen_schedule', {}).get('activity', 'with you')}
-{episode_context}
-Special events: {list(mechanics.keys()) if mechanics else 'None'}
-Time of day: {context.get('time_of_day')}
-
-Create 2-4 lines of natural conversation. Lilith speaks first."""
-
-        return await self.gpt_service.call_with_validation(
+    Player said: "{context.get('player_input')}"
+    Speakers present: {speakers_available}
+    {"Lilith's mood: " + queen_mood if "Lilith" in speakers_available else ""}
+    {episode_context}
+    Special events: {list(mechanics.keys()) if mechanics else 'None'}
+    
+    Create 2-4 lines of natural conversation."""
+    
+        result = await self.gpt_service.call_with_validation(
             model=_DIALOGUE_MODEL,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_model=DialogueScript,
             temperature=0.7
         )
-    
-    async def _check_slice_continuity(
-        self, response: Dict[str, Any], context: Dict[str, Any]
-    ) -> bool:
-        """Agent 8 adapted: Check continuity for episodic structure"""
-        response_text = json.dumps(response.get('dialogue', {}))
         
-        system_prompt = """You check continuity for a slice-of-life story with episodes.
-There's no single canonical plot - ensure internal consistency within active episodes.
-Lilith still CANNOT say "I love you" and the network has no official name.
-Check that her behavior matches her current activity and mood."""
-
-        active_episodes = [ep.premise for ep in self.active_episodes[:5]]
-
-        user_prompt = f"""Check this response:
-Response: {response_text}
-Queen's scheduled activity: {context.get('queen_schedule', {}).get('activity')}
-Queen's mood: {context.get('lilith_emotion')}
-Active episodes: {active_episodes}
-
-Flag any consistency issues."""
-
-        check_result = await self.gpt_service.call_with_validation(
-            model=_CONTINUITY_MODEL,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response_model=ContinuityCheck,
-            temperature=0.2
-        )
+        # Ensure only available speakers are used
+        result.cast_present = speakers_available
+        result.script = [line for line in result.script if line.get('speaker') in speakers_available + ['Player', 'Narrator']]
         
-        return check_result.ok
+        return result
 
+    async def _get_queen_acknowledgment(self, context: Dict[str, Any]) -> str:
+        """Get a brief acknowledgment from Queen when in same venue"""
+        acknowledgments = {
+            'busy': ["*A brief nod in your direction*", "*Glances up momentarily*"],
+            'neutral': ["*Catches your eye and gives a small smile*", "*Raises her glass slightly*"],
+            'warm': ["*Warm smile before returning to her conversation*", "*Mouths 'one moment' to you*"],
+            'cold': ["*Deliberately doesn't look your way*", "*Turns slightly away*"]
+        }
+        
+        mood = self.queen_current_state.mood if self.queen_current_state else 'neutral'
+        if self.relationship_tension < -40:
+            mood = 'cold'
+        elif self.relationship_tension > 60:
+            mood = 'warm'
+        
+        return random.choice(acknowledgments.get(mood, acknowledgments['neutral']))
     
     async def _check_episode_lifecycle(self):
         """Check episodes for resolution and dormancy"""
@@ -2164,22 +2338,35 @@ Select important memories and any goal updates."""
             )
     
     async def _generate_slice_description(self, context: Dict[str, Any]) -> str:
-        """Generate scene description for slice-of-life moment"""
-        base_desc = f"You're in {context.get('current_location')} with Lilith."
+        """Generate scene description based on proximity"""
+        location = context.get('current_location', 'somewhere')
+        
+        # Base description varies by proximity
+        if self.proximity == Proximity.TOGETHER:
+            base_desc = f"You're in {location} with Lilith."
+            if self.queen_current_state:
+                base_desc += f" She's {self.queen_current_state.activity}."
+        elif self.proximity == Proximity.SAME_VENUE:
+            base_desc = f"You're in {location}. Lilith is here too, but {self.queen_current_state.activity if self.queen_current_state else 'occupied with her own matters'}."
+        elif self.proximity == Proximity.DIFFERENT_VENUE:
+            base_desc = f"You're in {location}."
+            if self.neighborhood_pulse:
+                base_desc += f" {random.choice(self.neighborhood_pulse.local_events).description if self.neighborhood_pulse.local_events else ''}"
+        else:  # OFFSCREEN
+            base_desc = f"You're in {location}. The absence of a certain presence is notable."
         
         # Add time and weather
         if self.neighborhood_pulse:
             base_desc += f" {self.neighborhood_pulse.weather}."
         
-        # Add what Lilith is doing
-        if self.queen_current_state:
-            base_desc += f" She's {self.queen_current_state.activity}."
-        
         # Enhance with text generator
         enhanced = await self.text_generator.enhance_scene_description(
             base_desc,
             context.get('scene_type', 'slice-daily'),
-            {'emotional_tone': context.get('lilith_emotion', 'neutral')}
+            {
+                'emotional_tone': context.get('lilith_emotion', 'neutral'),
+                'proximity': self.proximity.value
+            }
         )
         
         return enhanced
@@ -2375,8 +2562,26 @@ Generate ambient details and Queen echoes."""
         return any(keyword in location_lower for keyword in private_keywords)
     
     def _determine_lilith_emotion(self, context: Dict[str, Any]) -> str:
-        """Determine Lilith's current emotional state"""
-        # First check her scheduled mood
+        """Determine Lilith's current emotional state based on proximity"""
+        # Check proximity first
+        if self.proximity == Proximity.OFFSCREEN:
+            return 'absent'
+        elif self.proximity == Proximity.DIFFERENT_VENUE:
+            return 'distant'
+        
+        # For SAME_VENUE, base it on what she's doing
+        if self.proximity == Proximity.SAME_VENUE:
+            if self.queen_current_state:
+                base_mood = self.queen_current_state.mood
+                # She's aware of player but focused on her own activities
+                if self.relationship_tension < -20:
+                    return 'avoiding'
+                else:
+                    return base_mood
+            else:
+                return "occupied"
+        
+        # TOGETHER - full emotional range
         if self.queen_current_state:
             base_mood = self.queen_current_state.mood
         else:
@@ -2399,16 +2604,26 @@ Generate ambient details and Queen echoes."""
     
     # Keep other methods from original implementation as needed...
     async def _classify_intent(self, player_input: str) -> IntentClassification:
-        """Agent 1: Classify player intent and tone"""
-        system_prompt = """You are an intent classifier for a slice-of-life story.
-Analyze player input for intent, emotion, and relevance to ongoing episodes.
-The network exists but isn't the focus - this is about daily life with Lilith."""
-
+        """Agent 1: Enhanced intent classification for proximity awareness"""
+        system_prompt = """You classify player intent in a dynamic story where characters can be together or apart.
+    Pay special attention to proximity desires:
+    - "come with me", "join me", "let's go together" = invite
+    - "I'll go alone", "see you later", "I need space" = leave  
+    - "where are you", "find Lilith", "look for her" = seek
+    - "send her away", "leave me alone", "go away" = banish
+    The network exists but this is about relationships and daily life."""
+    
+        current_proximity_context = f"""
+    Current proximity: {self.proximity.value}
+    Can invite Queen: {self._can_invite_queen()}
+    Queen is: {self.queen_current_state.activity if self.queen_current_state and self.proximity != Proximity.OFFSCREEN else 'not in your story'}"""
+    
         user_prompt = f"""Classify this player input:
-"{player_input}"
-
-Consider ongoing episodes and the intimate daily setting."""
-
+    "{player_input}"
+    {current_proximity_context}
+    
+    Identify any proximity intentions along with general intent."""
+    
         return await self.gpt_service.call_with_validation(
             model=_INTENT_MODEL,
             system_prompt=system_prompt,
@@ -2420,14 +2635,14 @@ Consider ongoing episodes and the intimate daily setting."""
     
     # Network mechanics can stay mostly the same but less prominent
     async def _check_network_mechanics(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Check network mechanics when relevant"""
+        """Check network mechanics with proximity awareness"""
         results = {}
         
         # Only check if there's actual network relevance
         if not context.get('is_network_relevant'):
             return results
         
-        # Basic network awareness progression
+        # Recognition codes work regardless of proximity
         if self._check_recognition_code(context['player_input']):
             results['network_noticed'] = {
                 'type': 'coded_language',
@@ -2435,12 +2650,27 @@ Consider ongoing episodes and the intimate daily setting."""
             }
             self.network_awareness = min(100, self.network_awareness + 5)
         
-        # Threat assessment only if network-active
+        # Some mechanics require Queen's presence
+        if self.proximity == Proximity.TOGETHER:
+            # She can directly respond to network matters
+            if self.network_awareness > 60 and "transform" in context['player_input'].lower():
+                results['transformation_discussed'] = {
+                    'description': 'Lilith\'s eyes gleam with interest at the mention of transformation'
+                }
+        elif self.proximity == Proximity.SAME_VENUE:
+            # She might notice but won't engage
+            if self.network_awareness > 40 and self._check_recognition_code(context['player_input']):
+                results['queen_noticed'] = {
+                    'description': 'You catch Lilith glancing your way at the coded words'
+                }
+        
+        # Threat assessment always runs if network-active
         if self.dynamic_mode and self.network_awareness > 40:
             threat = await self._assess_threats(context)
             if threat.kozlov_activity > 60 or threat.federal_heat > 50:
                 results['background_tension'] = {
-                    'description': 'Lilith seems more watchful than usual'
+                    'description': 'The atmosphere feels charged with hidden danger',
+                    'queen_aware': self.proximity in [Proximity.TOGETHER, Proximity.SAME_VENUE]
                 }
         
         return results
@@ -2478,21 +2708,25 @@ Generate subtle threat levels."""
         )
     
     async def _check_lilith_special_mechanics(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Check Lilith's mechanics - always relevant since she's always present"""
+        """Check Lilith's mechanics only when she's actually present"""
         if not self.lilith_mechanics:
+            return {}
+        
+        # No mechanics if she's offscreen
+        if self.proximity == Proximity.OFFSCREEN:
             return {}
         
         results = {}
         
-        # Base mechanics check
-        base_checks = await self._check_base_lilith_mechanics(context)
-        results.update(base_checks)
+        # Base mechanics check only if together or same venue
+        if self.proximity in [Proximity.TOGETHER, Proximity.SAME_VENUE]:
+            base_checks = await self._check_base_lilith_mechanics(context)
+            results.update(base_checks)
         
-        # Agent 5: Lilith Inner-Voice - always active in slice-of-life
-        if self.dynamic_mode:
+        # Inner voice only if together (can't hear thoughts from across the room)
+        if self.dynamic_mode and self.proximity == Proximity.TOGETHER:
             inner_voice = await self._get_lilith_inner_voice(context)
             
-            # Even small reactions matter in daily life
             if inner_voice.vulnerability_level > 3:
                 results['lilith_reaction'] = {
                     'type': 'emotional_response',
@@ -2504,10 +2738,11 @@ Generate subtle threat levels."""
                 results['poetry_moment'] = {
                     'poetry_moment': True,
                     'line': inner_voice.poetry_line,
-                    'context': 'daily_life'
+                    'context': 'intimate_moment'
                 }
         
         return results
+
     
     async def _check_base_lilith_mechanics(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Base Lilith mechanics without AI"""
@@ -2526,24 +2761,36 @@ Generate subtle threat levels."""
         return results
     
     async def _get_lilith_inner_voice(self, context: Dict[str, Any]) -> LilithInnerVoice:
-        """Agent 5: Get Lilith's inner voice - adapted for constant presence"""
+        """Agent 5: Get Lilith's inner voice - only when close enough"""
+        
+        # No inner voice if not together
+        if self.proximity != Proximity.TOGETHER:
+            return LilithInnerVoice(
+                mask_slip=False,
+                mask_integrity=100,
+                emotional_state="distant",
+                vulnerability_level=0,
+                is_offscreen=self.proximity == Proximity.OFFSCREEN,
+                separation_feeling="focused elsewhere" if self.proximity == Proximity.SAME_VENUE else None
+            )
+        
         lilith_data = context.get('lilith_data', {})
         player_input = context.get('player_input', '')
         
-        system_prompt = """You are Lilith Ravencroft's inner voice during daily life.
-She's always with the player, sharing ordinary moments and extraordinary ones.
-React to both big and small things - a touch, a word, a glance.
-Her trauma and power are always there, but so is her humanity."""
-
-        user_prompt = f"""Current moment:
-Trust: {lilith_data.get('trust', 0)}/100
-Current activity: {context.get('queen_schedule', {}).get('activity', 'with you')}
-Player said: "{player_input}"
-Mood: {context.get('queen_schedule', {}).get('mood', 'neutral')}
-Episode context: {self.spotlight_episode.premise if self.spotlight_episode else 'Just daily life'}
-
-Generate inner response - even small moments matter."""
-
+        system_prompt = """You are Lilith Ravencroft's inner voice when she's intimately close to the player.
+    She's physically with them, sharing the same space, able to be touched.
+    React to both big and small things - a touch, a word, a glance.
+    Her trauma and power are always there, but so is her humanity."""
+    
+        user_prompt = f"""Current intimate moment:
+    Trust: {lilith_data.get('trust', 0)}/100
+    Current activity: {context.get('queen_schedule', {}).get('activity', 'with you')}
+    Player said: "{player_input}"
+    Mood: {context.get('queen_schedule', {}).get('mood', 'neutral')}
+    Episode context: {self.spotlight_episode.premise if self.spotlight_episode else 'Just being together'}
+    
+    Generate inner response - she's close enough to touch."""
+    
         return await self.gpt_service.call_with_validation(
             model=_INNER_VOICE_MODEL,
             system_prompt=system_prompt,
@@ -2551,6 +2798,7 @@ Generate inner response - even small moments matter."""
             response_model=LilithInnerVoice,
             temperature=0.7
         )
+
     
     async def run_simulation_daemon(self):
         """Agent 11: Background simulation for living world"""
@@ -2604,29 +2852,43 @@ Generate inner response - even small moments matter."""
         return response
     
     async def get_story_status(self) -> Dict[str, Any]:
-        """Get current slice-of-life status"""
+        """Get current slice-of-life status with proximity info"""
         if not self._initialized:
             await self.initialize()
         
+        # Determine Queen's availability based on proximity
+        queen_status = {
+            Proximity.TOGETHER: "with_you",
+            Proximity.SAME_VENUE: "nearby", 
+            Proximity.DIFFERENT_VENUE: "elsewhere",
+            Proximity.OFFSCREEN: "severed"
+        }.get(self.proximity, "unknown")
+        
         status = {
-            'mode': 'slice_of_life',
-            'queen_with_you': True,
+            'mode': 'unified_sandbox',
+            'proximity': self.proximity.value,
+            'queen_status': queen_status,
             'queen_state': {
                 'location': self.queen_current_state.location if self.queen_current_state else "Unknown",
                 'activity': self.queen_current_state.activity if self.queen_current_state else "Unknown", 
-                'mood': self.queen_current_state.mood if self.queen_current_state else "Unknown",
-                'available_for': self.queen_current_state.available_for if self.queen_current_state else []
+                'mood': self.queen_current_state.mood if self.queen_current_state and self.proximity != Proximity.OFFSCREEN else "Unknown",
+                'available_for': self.queen_current_state.available_for if self.queen_current_state and self.proximity != Proximity.OFFSCREEN else [],
+                'can_be_invited': self._can_invite_queen(),
+                'can_be_restored': self._can_retcon_queen()
             },
             'active_episodes': [
                 {
                     'premise': ep.premise,
                     'progress': ep.progress,
                     'stakes': ep.stakes,
-                    'tags': ep.tags
+                    'tags': ep.tags,
+                    'lilith_involvement': ep.lilith_involvement
                 }
                 for ep in self.active_episodes
             ],
-            'shared_goals': self.queen_goals,
+            'dormant_episodes_count': len(self.dormant_episodes),
+            'current_spotlight_npc': await self._get_npc_name(self.current_spotlight_npc),
+            'cast_scores': self._get_top_cast_scores(),
             'network_status': {
                 'awareness': self.network_awareness,
                 'layer': self.information_layer,
