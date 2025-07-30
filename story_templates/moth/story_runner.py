@@ -10,12 +10,13 @@ import json
 import asyncio
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
+import random
 
 from db.connection import get_db_connection_context
 from story_templates.moth.story_initializer import QueenOfThornsStoryInitializer, QueenOfThornsStoryProgression
 from story_templates.moth.poem_enhanced_generation import ThornsEnhancedTextGenerator, integrate_thorns_enhancement
-from story_templates.moth.npcs.queen_mechanics import QueenMechanicsHandler
-from story_templates.moth.lore import SFBayQueenOfThornsPreset, QueenOfThornsLoreAccess
+from story_templates.moth.npcs.lilith_mechanics import LilithMechanicsHandler
+from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
 from memory.wrapper import MemorySystem
 from lore.core import canon
 
@@ -34,15 +35,14 @@ class QueenOfThornsStoryRunner:
         
         # Component handlers
         self.text_generator = None
-        self.queen_mechanics = None
+        self.lilith_mechanics = None
         self.memory_system = None
-        self.lore_access = None
         
         # Story state
         self.current_act = 1
         self.current_beat = None
         self.story_flags = {}
-        self.queen_npc_id = None
+        self.lilith_npc_id = None
         
         # Network state
         self.network_awareness = 0
@@ -83,9 +83,9 @@ class QueenOfThornsStoryRunner:
                 if init_result['status'] != 'success':
                     return init_result
                 
-                self.queen_npc_id = init_result['main_npc_id']
+                self.lilith_npc_id = init_result['main_npc_id']
                 
-                logger.info(f"Story initialized with Queen ID: {self.queen_npc_id}")
+                logger.info(f"Story initialized with Lilith ID: {self.lilith_npc_id}")
             else:
                 # Load existing story state
                 await self._load_story_state()
@@ -137,7 +137,7 @@ class QueenOfThornsStoryRunner:
             row = await conn.fetchrow(
                 """
                 SELECT current_act, current_beat, story_flags, progress,
-                       story_flags->>'queen_npc_id' as queen_id,
+                       story_flags->>'lilith_npc_id' as lilith_id,
                        story_flags->>'network_awareness' as awareness,
                        story_flags->>'information_layer' as info_layer,
                        story_flags->>'player_rank' as rank
@@ -151,7 +151,7 @@ class QueenOfThornsStoryRunner:
                 self.current_act = row['current_act']
                 self.current_beat = row['current_beat']
                 self.story_flags = json.loads(row['story_flags'])
-                self.queen_npc_id = int(row['queen_id']) if row['queen_id'] else None
+                self.lilith_npc_id = int(row['lilith_id']) if row['lilith_id'] else None
                 self.network_awareness = int(row['awareness'] or 0)
                 self.information_layer = row['info_layer'] or 'public'
                 self.player_rank = row['rank'] or 'outsider'
@@ -164,68 +164,17 @@ class QueenOfThornsStoryRunner:
         )
         await self.text_generator.initialize()
         
-        # Queen mechanics handler
-        if self.queen_npc_id:
-            self.queen_mechanics = QueenMechanicsHandler(
-                self.user_id, self.conversation_id, self.queen_npc_id
+        # Lilith mechanics handler
+        if self.lilith_npc_id:
+            self.lilith_mechanics = LilithMechanicsHandler(
+                self.user_id, self.conversation_id, self.lilith_npc_id
             )
-            await self.queen_mechanics.initialize()
+            await self.lilith_mechanics.initialize()
         
         # Memory system
         self.memory_system = await MemorySystem.get_instance(
             self.user_id, self.conversation_id
         )
-        
-        # Lore access
-        self.lore_access = QueenOfThornsLoreAccess(
-            self.user_id, self.conversation_id
-        )
-    
-    async def get_current_location_lore(self) -> Dict[str, Any]:
-        """Get lore for current location"""
-        from lore.managers.local_lore import get_location_lore
-        
-        # Get player's current location
-        async with get_db_connection_context() as conn:
-            current_loc = await conn.fetchval(
-                """
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
-                """,
-                self.user_id, self.conversation_id
-            )
-        
-        if not current_loc:
-            return {}
-        
-        # Map to location ID
-        ctx = self.create_context()
-        location_id = await self._ensure_location_exists(ctx, current_loc)
-        
-        # Get all lore for this location
-        lore_result = await get_location_lore(ctx, location_id)
-        
-        return lore_result.model_dump() if hasattr(lore_result, 'model_dump') else lore_result
-    
-    async def _ensure_location_exists(self, ctx, location_name: str) -> int:
-        """Ensure a location exists and return its ID"""
-        from lore.core import canon
-        
-        async with get_db_connection_context() as conn:
-            location_id = await canon.find_or_create_location(
-                ctx, conn, location_name
-            )
-            
-        return location_id
-    
-    def create_context(self):
-        """Create a context object for function calls"""
-        return type('Context', (), {
-            'context': {
-                'user_id': self.user_id,
-                'conversation_id': self.conversation_id
-            }
-        })()
     
     async def process_player_action(
         self, 
@@ -253,13 +202,8 @@ class QueenOfThornsStoryRunner:
                 player_input, current_location, scene_context
             )
             
-            # Enhance context with location lore
-            location_lore = self.lore_access.get_location_by_name(current_location)
-            if location_lore:
-                context['location_lore'] = location_lore
-                
-            # Get current location lore from the lore system
-            context['full_location_lore'] = await self.get_current_location_lore()
+            # Get location rules from consistency guide
+            context['location_rules'] = QueenOfThornsConsistencyGuide.get_location_rules()
                 
             # Check if we're in a special network location
             context['network_location'] = self._check_network_location(current_location)
@@ -274,13 +218,13 @@ class QueenOfThornsStoryRunner:
             # Check network mechanics
             network_results = await self._check_network_mechanics(context)
             
-            # Check Queen's special mechanics if she's present
-            queen_mechanics_results = {}
-            if context.get('queen_present') and self.queen_mechanics:
-                queen_mechanics_results = await self._check_queen_special_mechanics(context)
+            # Check Lilith's special mechanics if she's present
+            lilith_mechanics_results = {}
+            if context.get('queen_present') and self.lilith_mechanics:
+                lilith_mechanics_results = await self._check_lilith_special_mechanics(context)
             
             # Combine all mechanics results
-            all_mechanics = {**network_results, **queen_mechanics_results}
+            all_mechanics = {**network_results, **lilith_mechanics_results}
             
             # Generate enhanced response
             response = await self._generate_response(
@@ -344,6 +288,13 @@ class QueenOfThornsStoryRunner:
                 "special_rules": ["art_reveals_nature", "psychological_evaluation"],
                 "npc_present": "Isabella Montenegro"
             }
+        elif 'velvet sanctum' in location_lower:
+            return {
+                "type": "power_display",
+                "network_layer": "public",
+                "special_rules": ["queen_performances", "transformation_theater"],
+                "atmosphere": "dangerous_allure"
+            }
         
         return None
     
@@ -354,28 +305,27 @@ class QueenOfThornsStoryRunner:
         scene_context: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Build complete context for action processing"""
-        # Get Queen's current state if relevant
-        queen_data = None
-        if self.queen_npc_id:
+        # Get Lilith's current state if relevant
+        lilith_data = None
+        if self.lilith_npc_id:
             async with get_db_connection_context() as conn:
-                # Check if Queen is present
-                queen_row = await conn.fetchrow(
+                # Check if Lilith is present
+                lilith_row = await conn.fetchrow(
                     """
-                    SELECT npc_name, trust, dominance, network_role, current_location,
-                           mystery_mechanics, information_layers
+                    SELECT npc_name, trust, dominance, current_mask, current_location,
+                           network_role, network_knowledge, operational_knowledge
                     FROM NPCStats
                     WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
                     """,
-                    self.user_id, self.conversation_id, self.queen_npc_id
+                    self.user_id, self.conversation_id, self.lilith_npc_id
                 )
                 
-                if queen_row:
-                    queen_data = dict(queen_row)
+                if lilith_row:
+                    lilith_data = dict(lilith_row)
                     # Parse JSON fields
-                    if queen_data.get('mystery_mechanics'):
-                        queen_data['mystery_mechanics'] = json.loads(queen_data['mystery_mechanics'])
-                    if queen_data.get('information_layers'):
-                        queen_data['information_layers'] = json.loads(queen_data['information_layers'])
+                    for field in ['network_knowledge', 'operational_knowledge']:
+                        if lilith_data.get(field):
+                            lilith_data[field] = json.loads(lilith_data[field])
         
         # Get location details
         location_data = await self._get_location_data(current_location)
@@ -386,8 +336,9 @@ class QueenOfThornsStoryRunner:
             'player_action': player_input,
             'current_location': current_location,
             'location_data': location_data,
-            'queen_data': queen_data,
-            'queen_present': queen_data is not None and queen_data.get('current_location') == current_location,
+            'queen_data': lilith_data,
+            'lilith_data': lilith_data,  # Keep both for compatibility
+            'queen_present': lilith_data is not None and lilith_data.get('current_location') == current_location,
             'network_awareness': self.network_awareness,
             'information_layer': self.information_layer,
             'player_rank': self.player_rank,
@@ -404,6 +355,7 @@ class QueenOfThornsStoryRunner:
         # Determine derived context
         context['is_network_business'] = self._is_network_business(context)
         context['is_private'] = self._is_private_location(current_location)
+        context['lilith_emotion'] = self._determine_lilith_emotion(context) if lilith_data else 'neutral'
         
         return context
     
@@ -450,6 +402,24 @@ class QueenOfThornsStoryRunner:
         private_keywords = ['private', 'chambers', 'bedroom', 'personal', 'hidden', 'inner']
         
         return any(keyword in location_lower for keyword in private_keywords)
+    
+    def _determine_lilith_emotion(self, context: Dict[str, Any]) -> str:
+        """Determine Lilith's current emotional state"""
+        player_input = context.get('player_input', '').lower()
+        trust = context.get('lilith_data', {}).get('trust', 0)
+        
+        if any(word in player_input for word in ['disappear', 'leave', 'goodbye']):
+            return 'fear'
+        elif any(word in player_input for word in ['love', 'stay', 'promise']):
+            return 'vulnerability' if trust > 60 else 'defensive'
+        elif any(word in player_input for word in ['kneel', 'submit', 'obey']):
+            return 'dominant'
+        elif any(word in player_input for word in ['network', 'transform', 'save']):
+            return 'protective'
+        elif trust > 70 and context.get('is_private'):
+            return 'vulnerable'
+        else:
+            return 'dominant'
     
     async def _check_beat_triggers(self, context: Dict[str, Any]) -> Optional[str]:
         """Check if any story beats should trigger"""
@@ -536,7 +506,7 @@ class QueenOfThornsStoryRunner:
         
         # Check for recruitment moment
         if self.player_rank == "outsider" and self.network_awareness > 10:
-            if self.lore_access.check_recognition_code(context['player_input']):
+            if self._check_recognition_code(context['player_input']):
                 results['recruitment_possible'] = {
                     'type': 'subtle_assessment',
                     'description': 'Your words carry weight they might not realize'
@@ -575,6 +545,19 @@ class QueenOfThornsStoryRunner:
         
         return results
     
+    def _check_recognition_code(self, player_input: str) -> bool:
+        """Check if player used network recognition codes"""
+        codes = [
+            "interesting energy",
+            "needs pruning",
+            "ready to bloom",
+            "growth-oriented",
+            "the garden",
+            "roses and thorns"
+        ]
+        input_lower = player_input.lower()
+        return any(code in input_lower for code in codes)
+    
     def _get_layer_revelation(self, new_layer: str) -> str:
         """Get revelation text for information layer progression"""
         revelations = {
@@ -584,33 +567,47 @@ class QueenOfThornsStoryRunner:
         }
         return revelations.get(new_layer, "New understanding dawns")
     
-    async def _check_queen_special_mechanics(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Check Queen-specific mechanics if she's present"""
-        if not self.queen_mechanics or not context.get('queen_present'):
+    async def _check_lilith_special_mechanics(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Check Lilith's special mechanics if she's present"""
+        if not self.lilith_mechanics or not context.get('queen_present'):
             return {}
         
         results = {}
         
-        # Check identity mystery mechanics
-        identity_check = await self.queen_mechanics.check_identity_mystery(context)
-        if identity_check.get('mystery_deepens'):
-            results['identity_mystery'] = identity_check
+        # Check mask state
+        mask_check = await self.lilith_mechanics.check_mask_state(context)
+        if mask_check.get('slipped'):
+            results['mask_event'] = mask_check
         
-        # Check for power display
-        power_check = await self.queen_mechanics.check_power_display(context)
-        if power_check.get('power_demonstrated'):
-            results['power_display'] = power_check
+        # Check for network revelation
+        network_check = await self.lilith_mechanics.check_network_revelation(context)
+        if network_check.get('reveal_possible'):
+            results['network_revelation'] = network_check
         
-        # Check for coded language moment
-        coded_check = await self.queen_mechanics.check_coded_language(context)
-        if coded_check.get('coded_message'):
-            results['coded_language'] = coded_check
+        # Check for transformation witness
+        transform_check = await self.lilith_mechanics.check_transformation_witness(context)
+        if transform_check.get('witness_possible'):
+            results['transformation_witness'] = transform_check
         
-        # Check for transformation opportunity
-        if self.information_layer != 'public':
-            transform_check = await self.queen_mechanics.check_transformation_moment(context)
-            if transform_check.get('transformation_possible'):
-                results['transformation_moment'] = transform_check
+        # Check for poetry moment
+        poetry_check = await self.lilith_mechanics.check_poetry_moment(context)
+        if poetry_check.get('poetry_moment'):
+            results['poetry_moment'] = poetry_check
+        
+        # Check for three words moment
+        three_words_check = await self.lilith_mechanics.check_three_words_moment(context)
+        if three_words_check.get('three_words_possible'):
+            results['three_words_moment'] = three_words_check
+        
+        # Check for trust test
+        trust_check = await self.lilith_mechanics.check_trust_test(context)
+        if trust_check.get('test_needed'):
+            results['trust_test'] = trust_check
+        
+        # Check for trauma trigger
+        trauma_check = await self.lilith_mechanics.check_trauma_trigger(context)
+        if trauma_check.get('trauma_triggered'):
+            results['trauma_response'] = trauma_check
         
         return results
     
@@ -636,16 +633,16 @@ class QueenOfThornsStoryRunner:
             context, mechanics_results
         )
         
-        # Get dialogue style from Queen mechanics if applicable
-        if self.queen_mechanics and context.get('queen_present'):
-            dialogue_style = await self.queen_mechanics.get_dialogue_style(context)
+        # Get dialogue style from Lilith mechanics if applicable
+        if self.lilith_mechanics and context.get('queen_present'):
+            dialogue_style = await self.lilith_mechanics.get_dialogue_style(context)
             response['dialogue_style'] = dialogue_style
         
         # Generate enhanced content
         enhanced_content = await integrate_thorns_enhancement(
             self.user_id,
             self.conversation_id,
-            context.get('queen_data', {}),
+            context.get('lilith_data', {}),
             context['player_input'],
             context
         )
@@ -665,14 +662,26 @@ class QueenOfThornsStoryRunner:
                 response['revelation'] = mechanics_results['layer_progression']['revelation']
                 response['new_understanding'] = True
             
-            if 'identity_mystery' in mechanics_results:
-                response['mystery_deepens'] = mechanics_results['identity_mystery']
+            if 'mask_event' in mechanics_results:
+                response['mask_slippage'] = mechanics_results['mask_event']
             
-            if 'transformation_possible' in mechanics_results:
+            if 'network_revelation' in mechanics_results:
+                response['network_reveal'] = mechanics_results['network_revelation']
+            
+            if 'transformation_witness' in mechanics_results:
                 response['witness_opportunity'] = True
             
-            if 'coded_language' in mechanics_results:
-                response['coded_message'] = mechanics_results['coded_language']['message']
+            if 'poetry_moment' in mechanics_results:
+                response['poetic_speech'] = mechanics_results['poetry_moment']
+            
+            if 'three_words_moment' in mechanics_results:
+                response['climactic_moment'] = mechanics_results['three_words_moment']
+            
+            if 'trust_test' in mechanics_results:
+                response['being_tested'] = mechanics_results['trust_test']
+            
+            if 'trauma_response' in mechanics_results:
+                response['triggered_response'] = mechanics_results['trauma_response']
         
         # Add current story context
         response['story_context'] = {
@@ -753,7 +762,7 @@ class QueenOfThornsStoryRunner:
             intensity += 0.2
         if mechanics.get('transformation_moment'):
             intensity += 0.25
-        if mechanics.get('identity_mystery'):
+        if mechanics.get('mask_event'):
             intensity += 0.2
         
         # Information layer depth
@@ -788,9 +797,9 @@ class QueenOfThornsStoryRunner:
         if response.get('coded_language'):
             awareness_gain += 5
         if response.get('special_events'):
-            if 'transformation_moment' in response['special_events']:
+            if 'transformation_witness' in response['special_events']:
                 awareness_gain += 15
-            if 'identity_mystery' in response['special_events']:
+            if 'network_revelation' in response['special_events']:
                 awareness_gain += 10
             if 'layer_progression' in response['special_events']:
                 awareness_gain += 20
@@ -904,9 +913,9 @@ class QueenOfThornsStoryRunner:
         act_beats = [b.id for b in QUEEN_OF_THORNS_STORY.story_beats if b.id in completed_beats]
         
         act_requirements = {
-            1: ['the_garden_gate', 'interesting_energy', 'first_pruning'],
-            2: ['deeper_soil', 'the_greenhouse', 'witnessing_transformation'],
-            3: ['the_inner_garden', 'queen_or_queens']
+            1: ['first_glimpse', 'the_performance', 'invitation'],
+            2: ['after_hours', 'glimpse_beneath', 'the_confession'],
+            3: ['the_test', 'breaking_point', 'eternal_dance']
         }
         
         current_requirements = act_requirements.get(self.current_act, [])
@@ -1064,22 +1073,24 @@ class QueenOfThornsStoryRunner:
         completed_beats = len(self.story_flags.get('completed_beats', []))
         progress_percentage = (completed_beats / total_beats) * 100 if total_beats > 0 else 0
         
-        # Get Queen's current state if relevant
-        queen_state = {}
-        if self.queen_npc_id:
+        # Get Lilith's current state if relevant
+        lilith_state = {}
+        if self.lilith_npc_id:
             async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT trust, mystery_mechanics
+                    SELECT trust, current_mask, network_role, three_words_spoken
                     FROM NPCStats
                     WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
                     """,
-                    self.user_id, self.conversation_id, self.queen_npc_id
+                    self.user_id, self.conversation_id, self.lilith_npc_id
                 )
                 if row:
-                    queen_state = {
+                    lilith_state = {
                         'trust': row['trust'],
-                        'mystery_active': bool(row['mystery_mechanics'])
+                        'current_mask': row['current_mask'],
+                        'network_role': row['network_role'],
+                        'three_words_spoken': row['three_words_spoken'] or False
                     }
         
         status = {
@@ -1091,14 +1102,16 @@ class QueenOfThornsStoryRunner:
             'network_awareness': self.network_awareness,
             'information_layer': self.information_layer,
             'player_rank': self.player_rank,
-            'queen_state': queen_state,
+            'lilith_state': lilith_state,
             'key_flags': {
                 'network_member': self.player_rank not in ['outsider', 'noticed'],
                 'queen_met': self.story_flags.get('queen_encountered', False),
                 'transformation_witnessed': self.story_flags.get('transformation_witnessed', False),
                 'safehouse_known': self.information_layer in ['hidden', 'deep_secret'],
                 'chosen_path': self.story_flags.get('chosen_path'),
-                'queen_theory': self.story_flags.get('queen_theory')
+                'queen_theory': self.story_flags.get('queen_theory'),
+                'three_words_spoken': self.story_flags.get('three_words_spoken', False),
+                'network_identity_revealed': self.story_flags.get('network_identity_revealed', False)
             },
             'setting': 'San Francisco Bay Area, 2025',
             'network_elements': {
