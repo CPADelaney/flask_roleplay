@@ -13,7 +13,7 @@ from datetime import datetime
 
 from npcs.new_npc_creation import NPCCreationHandler
 from db.connection import get_db_connection_context
-from story_templates.moth.poem_integrated_loader import PoemIntegratedStoryLoader
+from story_templates.moth.poem_integrated_loader import ThornsIntegratedStoryLoader
 from story_templates.character_profiles.lilith_ravencroft import LILITH_RAVENCROFT
 from lore.core import canon
 from memory.wrapper import MemorySystem
@@ -50,9 +50,9 @@ class QueenOfThornsStoryInitializer:
             logger.info("SF Bay Area lore initialized")
             
             # Step 2: Load story structure and poems
-            from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
-            await PoemIntegratedStoryLoader.load_story_with_poems(
-                THE_MOTH_AND_FLAME, user_id, conversation_id
+            from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY
+            await ThornsIntegratedStoryLoader.load_story_with_themes(
+                QUEEN_OF_THORNS_STORY, user_id, conversation_id
             )
             logger.info("Story structure and poems loaded")
             
@@ -106,7 +106,7 @@ class QueenOfThornsStoryInitializer:
             
             return {
                 "status": "success",
-                "story_id": THE_MOTH_AND_FLAME.id,
+                "story_id": QUEEN_OF_THORNS_STORY.id,
                 "main_npc_id": lilith_id,
                 "support_npc_ids": support_npc_ids,
                 "location_ids": location_ids,
@@ -1235,7 +1235,7 @@ class QueenOfThornsStoryInitializer:
                     current_beat = EXCLUDED.current_beat,
                     started_at = NOW()
                 """,
-                user_id, conversation_id, "the_moth_and_flame",
+                user_id, conversation_id, "queen_of_thorns",
                 1, "not_started",
                 json.dumps({
                     "lilith_npc_id": lilith_id,
@@ -1290,7 +1290,7 @@ class QueenOfThornsStoryInitializer:
                 ON CONFLICT (user_id, conversation_id, story_id)
                 DO UPDATE SET stats = EXCLUDED.stats
                 """,
-                user_id, conversation_id, "the_moth_and_flame",
+                user_id, conversation_id, "queen_of_thorns",
                 json.dumps({
                     "submission": 0,
                     "dominance": 0,
@@ -1644,7 +1644,7 @@ class QueenOfThornsStoryProgression:
                 FROM story_states
                 WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
                 """,
-                user_id, conversation_id, "the_moth_and_flame"
+                user_id, conversation_id, "queen_of_thorns"
             )
             
             if not state_row:
@@ -1656,12 +1656,12 @@ class QueenOfThornsStoryProgression:
             completed_beats = story_flags.get('completed_beats', [])
             
             # Get story definition
-            from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
+            from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY
             
             # Sort beats by priority (act number, then order in story)
-            sorted_beats = sorted(THE_MOTH_AND_FLAME.story_beats, 
+            sorted_beats = sorted(QUEEN_OF_THORNS_STORY.story_beats, 
                                 key=lambda b: (QueenOfThornsStoryProgression._get_beat_act(b), 
-                                             THE_MOTH_AND_FLAME.story_beats.index(b)))
+                                             QUEEN_OF_THORNS_STORY.story_beats.index(b)))
             
             # Check each beat's trigger conditions
             for beat in sorted_beats:
@@ -1760,45 +1760,45 @@ class QueenOfThornsStoryProgression:
                     if visit_count < value:
                         return False
                 
-                # Network awareness level (NEW)
+                # Network awareness level
                 elif condition == "network_awareness":
                     awareness = story_flags.get("network_awareness", 0)
                     if awareness < value:
                         return False
                 
-                # Rose Council awareness (NEW)
+                # Rose Council awareness
                 elif condition == "rose_council_awareness":
                     awareness = story_flags.get("rose_council_awareness", 0)
                     if awareness < value:
                         return False
                 
-                # Transformations witnessed (NEW)
+                # Transformations witnessed
                 elif condition == "transformations_witnessed":
                     count = story_flags.get("transformations_witnessed", 0)
                     if count < value:
                         return False
                 
-                # Network identity revealed (NEW)
+                # Network identity revealed
                 elif condition == "network_identity_revealed" and value:
                     if not story_flags.get("network_identity_revealed", False):
                         return False
                 
-                # Queen identity suspected (NEW)
+                # Queen identity suspected
                 elif condition == "queen_identity_suspected" and value:
                     if not story_flags.get("queen_identity_suspected", False):
                         return False
                 
-                # Met Rose Council member (NEW)
+                # Met Rose Council member
                 elif condition == "met_rose_council_member" and value:
                     if not story_flags.get("met_rose_council_member", False):
                         return False
                 
-                # Helped save trafficking victim (NEW)
+                # Helped save trafficking victim
                 elif condition == "helped_save_victim" and value:
                     if not story_flags.get("helped_save_victim", False):
                         return False
                 
-                # Kozlov threat level (NEW)
+                # Kozlov threat level
                 elif condition == "kozlov_threat_level":
                     threat = story_flags.get("kozlov_threat_level", 0)
                     if threat < value:
@@ -1931,12 +1931,12 @@ class QueenOfThornsStoryProgression:
                         if not trust or trust < 40:  # Minimum trust threshold
                             return False
                 
-                # Network test passed (NEW)
+                # Network test passed
                 elif condition == "network_test_passed" and value:
                     if not story_flags.get("passed_network_test", False):
                         return False
                 
-                # Player alignment (NEW)
+                # Player alignment
                 elif condition == "player_alignment":
                     alignment = story_flags.get("player_alignment", "neutral")
                     if alignment != value:
@@ -1967,7 +1967,7 @@ class QueenOfThornsStoryProgression:
                     if not story_flags.get("helped_trafficking_victim", False):
                         return False
                 
-                # Garden knowledge level (NEW)
+                # Garden knowledge level
                 elif condition == "garden_knowledge":
                     knowledge = story_flags.get("garden_knowledge", 0)
                     if knowledge < value:
@@ -1980,7 +1980,7 @@ class QueenOfThornsStoryProgression:
                         SELECT stats->>'devotion' as devotion 
                         FROM player_story_stats
                         WHERE user_id = $1 AND conversation_id = $2 
-                        AND story_id = 'the_moth_and_flame'
+                        AND story_id = 'queen_of_thorns'
                         """,
                         user_id, conversation_id
                     )
@@ -2000,7 +2000,7 @@ class QueenOfThornsStoryProgression:
                     if value not in secrets:
                         return False
                 
-                # Rose signal understood (NEW)
+                # Rose signal understood
                 elif condition == "rose_signal_understood" and value:
                     if not story_flags.get("understands_rose_signals", False):
                         return False
@@ -2056,10 +2056,10 @@ class QueenOfThornsStoryProgression:
     ) -> Dict[str, Any]:
         """Trigger a specific story beat"""
         
-        from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
+        from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY
         
         # Find the beat
-        beat = next((b for b in THE_MOTH_AND_FLAME.story_beats if b.id == beat_id), None)
+        beat = next((b for b in QUEEN_OF_THORNS_STORY.story_beats if b.id == beat_id), None)
         if not beat:
             logger.error(f"Beat {beat_id} not found in story definition")
             return {"error": "Beat not found"}
@@ -2072,7 +2072,7 @@ class QueenOfThornsStoryProgression:
                     SELECT story_flags, progress FROM story_states
                     WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
                     """,
-                    user_id, conversation_id, "the_moth_and_flame"
+                    user_id, conversation_id, "queen_of_thorns"
                 )
                 
                 if not state_row:
@@ -2095,7 +2095,7 @@ class QueenOfThornsStoryProgression:
                 story_flags['last_beat_timestamp'] = datetime.now().isoformat()
                 
                 # Calculate new progress
-                total_beats = len(THE_MOTH_AND_FLAME.story_beats)
+                total_beats = len(QUEEN_OF_THORNS_STORY.story_beats)
                 progress = (len(completed_beats) / total_beats) * 100
                 
                 # Update in database
@@ -2105,7 +2105,7 @@ class QueenOfThornsStoryProgression:
                     SET current_beat = $4, story_flags = $5, progress = $6, updated_at = NOW()
                     WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
                     """,
-                    user_id, conversation_id, "the_moth_and_flame",
+                    user_id, conversation_id, "queen_of_thorns",
                     beat_id, json.dumps(story_flags), progress
                 )
                 
@@ -2226,7 +2226,7 @@ class QueenOfThornsStoryProgression:
                         """
                         SELECT stats FROM player_story_stats
                         WHERE user_id = $1 AND conversation_id = $2 
-                        AND story_id = 'the_moth_and_flame'
+                        AND story_id = 'queen_of_thorns'
                         """,
                         user_id, conversation_id
                     )
@@ -2251,7 +2251,7 @@ class QueenOfThornsStoryProgression:
                             UPDATE player_story_stats
                             SET stats = $3
                             WHERE user_id = $1 AND conversation_id = $2 
-                            AND story_id = 'the_moth_and_flame'
+                            AND story_id = 'queen_of_thorns'
                             """,
                             user_id, conversation_id, json.dumps(current_stats)
                         )
@@ -2268,7 +2268,7 @@ class QueenOfThornsStoryProgression:
                     
                     applied_outcomes["location_unlocked"] = outcome_data
                 
-                # Network awareness changes (NEW)
+                # Network awareness changes
                 elif outcome_type == "network_awareness":
                     current = story_flags.get("network_awareness", 0)
                     if isinstance(outcome_data, str) and outcome_data.startswith(('+', '-')):
@@ -2279,7 +2279,7 @@ class QueenOfThornsStoryProgression:
                     
                     applied_outcomes["network_awareness"] = outcome_data
                 
-                # Rose Council awareness (NEW)
+                # Rose Council awareness
                 elif outcome_type == "rose_council_awareness":
                     current = story_flags.get("rose_council_awareness", 0)
                     if isinstance(outcome_data, str) and outcome_data.startswith(('+', '-')):
@@ -2290,7 +2290,7 @@ class QueenOfThornsStoryProgression:
                     
                     applied_outcomes["rose_council_awareness"] = outcome_data
                 
-                # Transformation witnessed (NEW)
+                # Transformation witnessed
                 elif outcome_type == "transformation_witnessed":
                     story_flags["transformations_witnessed"] = story_flags.get("transformations_witnessed", 0) + 1
                     story_flags["watched_transformation"] = True
@@ -2306,7 +2306,7 @@ class QueenOfThornsStoryProgression:
                     
                     applied_outcomes["transformation_witnessed"] = outcome_data
                 
-                # Met Rose Council member (NEW)
+                # Met Rose Council member
                 elif outcome_type == "met_rose_council_member":
                     story_flags["met_rose_council_member"] = True
                     council_members_met = story_flags.get("rose_council_members_met", [])
@@ -2316,14 +2316,14 @@ class QueenOfThornsStoryProgression:
                     
                     applied_outcomes["met_rose_council_member"] = outcome_data
                 
-                # Network role offered (NEW)
+                # Network role offered
                 elif outcome_type == "network_role_offered":
                     story_flags["network_role_offered"] = outcome_data
                     story_flags["player_network_status"] = "recruit"
                     
                     applied_outcomes["network_role_offered"] = outcome_data
                 
-                # Safehouse access granted (NEW)
+                # Safehouse access granted
                 elif outcome_type == "safehouse_access":
                     safehouse_access = story_flags.get("safehouse_access", [])
                     if outcome_data not in safehouse_access:
@@ -2332,7 +2332,7 @@ class QueenOfThornsStoryProgression:
                     
                     applied_outcomes["safehouse_access"] = outcome_data
                 
-                # Kozlov threat increase (NEW)
+                # Kozlov threat increase
                 elif outcome_type == "kozlov_threat":
                     current = story_flags.get("kozlov_threat_level", 0)
                     if isinstance(outcome_data, str) and outcome_data.startswith(('+', '-')):
@@ -2343,7 +2343,7 @@ class QueenOfThornsStoryProgression:
                     
                     applied_outcomes["kozlov_threat"] = outcome_data
                 
-                # Rose signals learned (NEW)
+                # Rose signals learned
                 elif outcome_type == "rose_signal_learned":
                     signals_known = story_flags.get("rose_signals_known", [])
                     if outcome_data not in signals_known:
@@ -2478,7 +2478,7 @@ class QueenOfThornsStoryProgression:
                     story_flags["potential_loss_risk"] = outcome_data
                     applied_outcomes["potential_loss"] = outcome_data
                 
-                # Player alignment shifts (NEW)
+                # Player alignment shifts
                 elif outcome_type == "player_alignment":
                     story_flags["player_alignment"] = outcome_data
                     if outcome_data == "protector":
@@ -2505,7 +2505,7 @@ class QueenOfThornsStoryProgression:
                 SELECT story_flags FROM story_states
                 WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
                 """,
-                user_id, conversation_id, "the_moth_and_flame"
+                user_id, conversation_id, "queen_of_thorns"
             )
             
             if not state_row:
@@ -2569,7 +2569,7 @@ class QueenOfThornsStoryProgression:
                 SELECT story_flags FROM story_states
                 WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
                 """,
-                user_id, conversation_id, "the_moth_and_flame"
+                user_id, conversation_id, "queen_of_thorns"
             )
             
             if not state_row:
@@ -2578,13 +2578,15 @@ class QueenOfThornsStoryProgression:
             story_flags = json.loads(state_row['story_flags'] or '{}')
             
             # Update appropriate knowledge
+            revelations = []
+            new_value = 0
+            
             if knowledge_type == "network":
                 current = story_flags.get("network_awareness", 0)
                 new_value = min(100, current + amount)
                 story_flags["network_awareness"] = new_value
                 
                 # Check for thresholds
-                revelations = []
                 if current < 30 <= new_value:
                     revelations.append("You begin to understand this is more than a BDSM club")
                 if current < 50 <= new_value:
@@ -2599,7 +2601,6 @@ class QueenOfThornsStoryProgression:
                 new_value = min(100, current + amount)
                 story_flags["rose_council_awareness"] = new_value
                 
-                revelations = []
                 if current < 40 <= new_value:
                     revelations.append("Seven women meet on Mondays to shape the Bay Area's hidden currents")
                 if current < 80 <= new_value:
@@ -2610,7 +2611,6 @@ class QueenOfThornsStoryProgression:
                 new_value = min(100, current + amount)
                 story_flags["garden_knowledge"] = new_value
                 
-                revelations = []
                 if current < 25 <= new_value:
                     revelations.append("The garden metaphors aren't just poetry - they're operational language")
                 if current < 50 <= new_value:
@@ -2623,7 +2623,7 @@ class QueenOfThornsStoryProgression:
                 """
                 UPDATE story_states
                 SET story_flags = $3
-                WHERE user_id = $1 AND conversation_id = $2 AND story_id = 'the_moth_and_flame'
+                WHERE user_id = $1 AND conversation_id = $2 AND story_id = 'queen_of_thorns'
                 """,
                 user_id, conversation_id, json.dumps(story_flags)
             )
@@ -2633,7 +2633,7 @@ class QueenOfThornsStoryProgression:
                 "new_value": new_value,
                 "revelations": revelations
             }
-
+            
 # Maintain compatibility
 MothFlameStoryProgression = QueenOfThornsStoryProgression
 
