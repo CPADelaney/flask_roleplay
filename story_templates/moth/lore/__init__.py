@@ -15,7 +15,7 @@ from .religion import SFReligionLore
 
 # Import the main preset manager
 from .world_lore_manager import (
-    QueenOfThornsPreset,
+    SFBayQueenOfThornsPreset,
     EnhancedQueenOfThornsInitializer
 )
 
@@ -29,7 +29,7 @@ __all__ = [
     'SFReligionLore',
     
     # Main managers
-    'QueenOfThornsPreset',
+    'SFBayQueenOfThornsPreset',
     'EnhancedQueenOfThornsInitializer',
 ]
 
