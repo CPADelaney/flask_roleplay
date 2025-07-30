@@ -1,7 +1,7 @@
 # story_templates/moth/poem_integrated_loader.py
 """
 Enhanced poem integration system that loads poems as AI context
-Ensures consistent gothic tone throughout interactions
+Ensures consistent tone for Queen of Thorns story
 """
 
 import json
@@ -12,41 +12,86 @@ from story_templates.preset_stories import PresetStory
 
 logger = logging.getLogger(__name__)
 
-class PoemIntegratedStoryLoader:
-    """Enhanced story loader that integrates poems into the AI's context"""
+class ThornsIntegratedStoryLoader:
+    """Enhanced story loader that integrates poems and network lore into AI context"""
     
     @staticmethod
-    async def load_story_with_poems(story: PresetStory, user_id: int, conversation_id: int):
-        """Load a story and seed its poems as special memories for consistent tone"""
+    async def load_story_with_themes(story: PresetStory, user_id: int, conversation_id: int):
+        """Load a story and seed its themes, poems, and network rules as special memories"""
         
         try:
             async with get_db_connection_context() as conn:
                 # First, load the basic story structure
-                await PoemIntegratedStoryLoader._load_base_story(story, conn)
+                await ThornsIntegratedStoryLoader._load_base_story(story, conn)
+                
+                # Load network consistency rules
+                await ThornsIntegratedStoryLoader._load_network_rules(
+                    story, user_id, conversation_id, conn
+                )
                 
                 # If story has poems, load them as special memories
                 if hasattr(story, 'source_material') and 'poems' in story.source_material:
-                    await PoemIntegratedStoryLoader._load_poems_as_memories(
+                    await ThornsIntegratedStoryLoader._load_poems_as_memories(
                         story, user_id, conversation_id, conn
                     )
                     
                 # Load tone instructions if present
                 if hasattr(story, 'source_material') and 'tone_prompt' in story.source_material:
-                    await PoemIntegratedStoryLoader._load_tone_instructions(
+                    await ThornsIntegratedStoryLoader._load_tone_instructions(
                         story, user_id, conversation_id, conn
                     )
                     
                 # Extract and store key imagery for quick reference
                 if hasattr(story, 'source_material') and 'poems' in story.source_material:
-                    await PoemIntegratedStoryLoader._extract_and_store_imagery(
+                    await ThornsIntegratedStoryLoader._extract_and_store_imagery(
                         story, user_id, conversation_id, conn
                     )
                     
-                logger.info(f"Successfully loaded story {story.id} with poem integration")
+                logger.info(f"Successfully loaded story {story.id} with Queen of Thorns integration")
                 
         except Exception as e:
-            logger.error(f"Failed to load story with poems: {e}", exc_info=True)
+            logger.error(f"Failed to load story with themes: {e}", exc_info=True)
             raise
+    
+    @staticmethod
+    async def _load_network_rules(story: PresetStory, user_id: int, conversation_id: int, conn):
+        """Load network-specific consistency rules"""
+        
+        # Critical rules from consistency guide
+        network_rules = {
+            "no_official_name": "The network has NO official name. Always refer to it as 'the network' or 'the garden'.",
+            "queen_ambiguity": "The Queen's identity is ALWAYS ambiguous. Never confirm if she's one person or many.",
+            "geographic_scope": "The network controls the Bay Area ONLY. Other cities have allies, not branches.",
+            "transformation_time": "Transformation takes months or years, never instant.",
+            "information_layers": "All information exists in four layers: PUBLIC, SEMI_PRIVATE, HIDDEN, DEEP_SECRET"
+        }
+        
+        for rule_id, rule_text in network_rules.items():
+            await conn.execute(
+                """
+                INSERT INTO unified_memories
+                (entity_type, entity_id, user_id, conversation_id,
+                 memory_text, memory_type, tags, significance, metadata, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+                ON CONFLICT DO NOTHING
+                """,
+                "story_directive",
+                0,
+                user_id,
+                conversation_id,
+                rule_text,
+                "consistency_rule",
+                ["network", "rules", story.id, "critical"],
+                10,  # Maximum significance
+                json.dumps({
+                    "rule_id": rule_id,
+                    "story_id": story.id,
+                    "rule_type": "critical",
+                    "enforcement": "always"
+                })
+            )
+        
+        logger.info(f"Loaded {len(network_rules)} network consistency rules")
     
     @staticmethod
     async def _load_base_story(story: PresetStory, conn):
@@ -65,7 +110,7 @@ class PoemIntegratedStoryLoader:
                 WHERE story_id = $1
                 """,
                 story.id,
-                json.dumps(PoemIntegratedStoryLoader._serialize_story(story))
+                json.dumps(ThornsIntegratedStoryLoader._serialize_story(story))
             )
         else:
             await conn.execute(
@@ -74,7 +119,7 @@ class PoemIntegratedStoryLoader:
                 VALUES ($1, $2, NOW())
                 """,
                 story.id,
-                json.dumps(PoemIntegratedStoryLoader._serialize_story(story))
+                json.dumps(ThornsIntegratedStoryLoader._serialize_story(story))
             )
         
         logger.info(f"Loaded preset story: {story.name}")
@@ -115,25 +160,25 @@ class PoemIntegratedStoryLoader:
                  memory_text, memory_type, tags, significance, metadata, created_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
                 """,
-                "story_source",  # Special entity type for story materials
-                0,  # Generic ID for story sources
+                "story_source",
+                0,
                 user_id,
                 conversation_id,
                 poem_text,
                 "source_poem",
-                ["poetry", "mood", "tone", story.id, poem_id, "gothic", "romantic"],
-                10,  # Maximum significance
+                ["poetry", "mood", "tone", story.id, poem_id, "gothic", "power"],
+                10,
                 json.dumps({
                     "poem_id": poem_id,
                     "poem_title": poem_title,
                     "story_id": story.id,
                     "usage": "tone_reference",
-                    "themes": PoemIntegratedStoryLoader._extract_themes(poem_text)
+                    "themes": ThornsIntegratedStoryLoader._extract_themes(poem_text)
                 })
             )
             
-            # Also store individual stanzas for targeted retrieval
-            for i, stanza in enumerate(stanzas[1:], 1):  # Skip title
+            # Store individual stanzas for targeted retrieval
+            for i, stanza in enumerate(stanzas[1:], 1):
                 if stanza.strip():
                     await conn.execute(
                         """
@@ -154,7 +199,7 @@ class PoemIntegratedStoryLoader:
                             "poem_id": poem_id,
                             "stanza_number": i,
                             "story_id": story.id,
-                            "mood": PoemIntegratedStoryLoader._analyze_stanza_mood(stanza)
+                            "mood": ThornsIntegratedStoryLoader._analyze_stanza_mood(stanza)
                         })
                     )
             
@@ -207,7 +252,7 @@ class PoemIntegratedStoryLoader:
                 conversation_id,
                 tone_prompt,
                 "writing_style",
-                ["directive", "tone", "style", story.id, "gothic", "poetic"],
+                ["directive", "tone", "style", story.id, "gothic", "power"],
                 10,
                 json.dumps({
                     "story_id": story.id,
@@ -226,11 +271,42 @@ class PoemIntegratedStoryLoader:
         poems = story.source_material.get('poems', {})
         all_imagery = []
         
+        # Also add network-specific imagery
+        network_imagery = [
+            "the network", "the garden", "roses and thorns",
+            "pruning the unworthy", "seeds of power",
+            "cultivation of control", "harvest of submission"
+        ]
+        
+        for phrase in network_imagery:
+            await conn.execute(
+                """
+                INSERT INTO unified_memories
+                (entity_type, entity_id, user_id, conversation_id,
+                 memory_text, memory_type, tags, significance, metadata, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+                ON CONFLICT DO NOTHING
+                """,
+                "story_source",
+                0,
+                user_id,
+                conversation_id,
+                phrase,
+                "key_imagery",
+                ["imagery", "network", story.id],
+                9,
+                json.dumps({
+                    "source": "network_lore",
+                    "story_id": story.id,
+                    "imagery_type": "network",
+                    "associated_themes": ["power", "control", "transformation"]
+                })
+            )
+        
         for poem_id, poem_text in poems.items():
-            imagery = PoemIntegratedStoryLoader._extract_key_imagery(poem_text)
+            imagery = ThornsIntegratedStoryLoader._extract_key_imagery(poem_text)
             
             for phrase in imagery:
-                # Store each imagery phrase
                 await conn.execute(
                     """
                     INSERT INTO unified_memories
@@ -250,40 +326,37 @@ class PoemIntegratedStoryLoader:
                     json.dumps({
                         "source_poem": poem_id,
                         "story_id": story.id,
-                        "imagery_type": PoemIntegratedStoryLoader._classify_imagery(phrase),
-                        "associated_themes": PoemIntegratedStoryLoader._get_imagery_themes(phrase)
+                        "imagery_type": ThornsIntegratedStoryLoader._classify_imagery(phrase),
+                        "associated_themes": ThornsIntegratedStoryLoader._get_imagery_themes(phrase)
                     })
                 )
                 all_imagery.append(phrase)
         
-        logger.info(f"Extracted and stored {len(all_imagery)} imagery phrases")
+        logger.info(f"Extracted and stored {len(all_imagery) + len(network_imagery)} imagery phrases")
     
     @staticmethod
     def _extract_key_imagery(poem_text: str) -> List[str]:
         """Extract key imagery phrases from poems"""
         key_phrases = []
         
-        # Direct powerful phrases
+        # Network and power-focused phrases
         powerful_phrases = [
-            # From the poems
-            "porcelain curves", "painted smile", "queen of thorns",
-            "velvet night", "fortress forged from glass", "altar of her throne",
-            "bone-deep doubt", "wings of broken glass", "invisible tattoos",
-            "Don't disappear", "Be mine", "velvet affliction",
-            "three syllables", "tasting of burning stars", "binary stars",
-            "lunar edict", "unopened letter", "sanctified ruin",
-            "rough geography of breaks", "moth with wings of broken glass",
-            "the mask now heavy in her trembling hands",
-            "fingers trace invisible tattoos", "each touch a brand",
-            "your skin tastes of prayers", "carved in basalt",
-            "my sweetest fall", "my silent scream"
+            "queen of thorns", "the network", "the garden",
+            "roses", "thorns", "power", "control",
+            "transformation", "cultivation", "pruning",
+            "shadow matriarchy", "invisible authority"
         ]
         
-        # Add found powerful phrases
+        # Look for these in the poem
         poem_lower = poem_text.lower()
         for phrase in powerful_phrases:
-            if phrase.lower() in poem_lower:
-                key_phrases.append(phrase)
+            if phrase in poem_lower:
+                # Extract the line containing this phrase
+                lines = poem_text.split('\n')
+                for line in lines:
+                    if phrase in line.lower() and len(line) < 100:
+                        key_phrases.append(line.strip())
+                        break
         
         # Look for metaphorical patterns
         lines = poem_text.split('\n')
@@ -292,19 +365,15 @@ class PoemIntegratedStoryLoader:
             if not line:
                 continue
                 
-            # Metaphors and similes
-            if any(indicator in line.lower() for indicator in ["like", "as if", "as though"]):
-                if len(line) < 100:  # Not too long
+            # Power dynamics language
+            if any(word in line.lower() for word in ["power", "control", "authority", "submission"]):
+                if len(line) < 100:
                     key_phrases.append(line)
             
-            # Identity statements
-            if any(phrase in line.lower() for phrase in ["i am", "you are", "she is", "we are"]):
-                if "moth" in line.lower() or "flame" in line.lower() or "star" in line.lower():
+            # Network metaphors
+            if any(word in line.lower() for word in ["network", "garden", "rose", "thorn"]):
+                if len(line) < 100:
                     key_phrases.append(line)
-            
-            # Commands and pleas
-            if line.startswith(("Don't", "Be ", "Stay", "Come", "Kneel", "Remember")):
-                key_phrases.append(line)
         
         # Remove duplicates while preserving order
         seen = set()
@@ -314,7 +383,7 @@ class PoemIntegratedStoryLoader:
                 seen.add(phrase.lower())
                 unique_phrases.append(phrase)
         
-        return unique_phrases[:30]  # Limit to 30 most important
+        return unique_phrases[:30]
     
     @staticmethod
     def _extract_themes(poem_text: str) -> List[str]:
@@ -323,14 +392,12 @@ class PoemIntegratedStoryLoader:
         poem_lower = poem_text.lower()
         
         theme_keywords = {
-            "masks": ["mask", "porcelain", "facade", "performance"],
-            "vulnerability": ["trembling", "breaks", "fragile", "doubt"],
-            "abandonment": ["disappear", "leave", "gone", "promise"],
-            "devotion": ["worship", "kneel", "prayer", "altar"],
-            "duality": ["binary", "two", "both", "beneath"],
-            "control": ["command", "queen", "throne", "rule"],
-            "transformation": ["moth", "flame", "burn", "transform"],
-            "forbidden_love": ["three words", "unspoken", "beneath tongue"]
+            "power": ["power", "control", "authority", "dominance"],
+            "transformation": ["transform", "change", "remake", "cultivate"],
+            "network": ["network", "garden", "roses", "thorns"],
+            "protection": ["protect", "save", "guard", "shelter"],
+            "duality": ["hidden", "shadow", "beneath", "mask"],
+            "hierarchy": ["queen", "throne", "rule", "command"]
         }
         
         for theme, keywords in theme_keywords.items():
@@ -344,16 +411,14 @@ class PoemIntegratedStoryLoader:
         """Analyze the emotional mood of a stanza"""
         stanza_lower = stanza.lower()
         
-        if any(word in stanza_lower for word in ["trembling", "fear", "doubt", "heavy"]):
-            return "vulnerable"
-        elif any(word in stanza_lower for word in ["command", "queen", "throne", "worship"]):
+        if any(word in stanza_lower for word in ["command", "control", "power", "throne"]):
             return "dominant"
-        elif any(word in stanza_lower for word in ["disappear", "gone", "leave", "goodbye"]):
-            return "desperate"
-        elif any(word in stanza_lower for word in ["touch", "kiss", "skin", "close"]):
-            return "intimate"
-        elif any(word in stanza_lower for word in ["burn", "flame", "moth", "destroy"]):
-            return "dangerous"
+        elif any(word in stanza_lower for word in ["protect", "save", "guard", "shelter"]):
+            return "protective"
+        elif any(word in stanza_lower for word in ["transform", "change", "cultivate"]):
+            return "transformative"
+        elif any(word in stanza_lower for word in ["network", "garden", "thorns"]):
+            return "strategic"
         else:
             return "contemplative"
     
@@ -362,16 +427,16 @@ class PoemIntegratedStoryLoader:
         """Classify the type of imagery"""
         phrase_lower = phrase.lower()
         
-        if any(word in phrase_lower for word in ["mask", "porcelain", "fortress"]):
+        if any(word in phrase_lower for word in ["network", "garden", "cultivation"]):
+            return "network"
+        elif any(word in phrase_lower for word in ["queen", "throne", "authority"]):
+            return "power"
+        elif any(word in phrase_lower for word in ["transform", "change", "remake"]):
+            return "transformation"
+        elif any(word in phrase_lower for word in ["rose", "thorn", "flower"]):
+            return "botanical"
+        elif any(word in phrase_lower for word in ["protect", "save", "shelter"]):
             return "protection"
-        elif any(word in phrase_lower for word in ["moth", "flame", "burn"]):
-            return "attraction"
-        elif any(word in phrase_lower for word in ["break", "shatter", "trembl"]):
-            return "vulnerability"
-        elif any(word in phrase_lower for word in ["queen", "throne", "command"]):
-            return "authority"
-        elif any(word in phrase_lower for word in ["touch", "skin", "kiss"]):
-            return "intimacy"
         else:
             return "atmospheric"
     
@@ -382,20 +447,19 @@ class PoemIntegratedStoryLoader:
         phrase_lower = phrase.lower()
         
         theme_map = {
-            "masks": ["identity", "protection", "deception"],
-            "moth": ["attraction", "destruction", "devotion"],
-            "flame": ["danger", "illumination", "consumption"],
-            "queen": ["authority", "isolation", "performance"],
-            "break": ["vulnerability", "trauma", "truth"],
-            "disappear": ["abandonment", "fear", "loss"],
-            "three": ["love", "unspoken", "forbidden"]
+            "network": ["connection", "power", "organization"],
+            "garden": ["cultivation", "growth", "control"],
+            "rose": ["beauty", "danger", "duality"],
+            "thorn": ["protection", "pain", "defense"],
+            "queen": ["authority", "leadership", "mystery"],
+            "transform": ["change", "power", "control"]
         }
         
         for keyword, associated_themes in theme_map.items():
             if keyword in phrase_lower:
                 themes.extend(associated_themes)
         
-        return list(set(themes))  # Remove duplicates
+        return list(set(themes))
     
     @staticmethod
     def _serialize_story(story: PresetStory) -> dict:
@@ -441,14 +505,29 @@ class PoemIntegratedStoryLoader:
         return story_data
 
 
-class PoemAwarePromptGenerator:
-    """Generates prompts that reference stored poems for consistent tone"""
+class NetworkAwarePromptGenerator:
+    """Generates prompts that enforce network consistency"""
     
     @staticmethod
     async def get_story_context_prompt(user_id: int, conversation_id: int, story_id: str) -> str:
-        """Generate a context prompt that includes poem references"""
+        """Generate a context prompt that includes network rules"""
         
         async with get_db_connection_context() as conn:
+            # Fetch consistency rules
+            rules = await conn.fetch(
+                """
+                SELECT memory_text, metadata
+                FROM unified_memories
+                WHERE user_id = $1
+                AND conversation_id = $2
+                AND entity_type = 'story_directive'
+                AND memory_type = 'consistency_rule'
+                AND metadata->>'story_id' = $3
+                ORDER BY significance DESC
+                """,
+                user_id, conversation_id, story_id
+            )
+            
             # Fetch tone directive
             tone_directive = await conn.fetchval(
                 """
@@ -482,6 +561,13 @@ class PoemAwarePromptGenerator:
             # Build the context prompt
             context_parts = []
             
+            # Add critical rules first
+            if rules:
+                context_parts.append("=== CRITICAL CONSISTENCY RULES ===")
+                for rule in rules:
+                    context_parts.append(f"• {rule['memory_text']}")
+                context_parts.append("")
+            
             if tone_directive:
                 context_parts.append(f"=== STORY TONE AND STYLE ===\n{tone_directive}\n")
             
@@ -496,8 +582,15 @@ class PoemAwarePromptGenerator:
                 context_parts.append("=== KEY IMAGERY TO INCORPORATE ===")
                 for img_type, phrases in imagery_by_type.items():
                     context_parts.append(f"\n{img_type.upper()}:")
-                    for phrase in phrases[:3]:  # Limit per type
+                    for phrase in phrases[:3]:
                         context_parts.append(f"  • {phrase}")
+            
+            # Add quick reference
+            context_parts.append("\n=== QUICK REFERENCE ===")
+            context_parts.append("✗ Official names → ✓ 'the network'")
+            context_parts.append("✗ 'Queen [Name]' → ✓ 'The Queen, whoever she is'")
+            context_parts.append("✗ 'Our Seattle chapter' → ✓ 'Allied network in Seattle'")
+            context_parts.append("✗ 'Instant transformation' → ✓ 'Months of careful work'")
             
             return "\n".join(context_parts)
     
@@ -506,13 +599,13 @@ class PoemAwarePromptGenerator:
         user_id: int, conversation_id: int, npc_id: int, 
         emotional_state: str = "neutral"
     ) -> str:
-        """Get dialogue context for a specific NPC based on poems"""
+        """Get dialogue context for a specific NPC based on network themes"""
         
         async with get_db_connection_context() as conn:
             # Get NPC data
             npc_row = await conn.fetchrow(
                 """
-                SELECT npc_name, current_mask, trust, dialogue_patterns
+                SELECT npc_name, trust, dialogue_patterns, affiliations
                 FROM NPCStats
                 WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
                 """,
@@ -522,34 +615,27 @@ class PoemAwarePromptGenerator:
             if not npc_row:
                 return ""
             
-            # Get relevant poem stanzas based on mood
-            mood_stanzas = await conn.fetch(
-                """
-                SELECT memory_text
-                FROM unified_memories
-                WHERE user_id = $1
-                AND conversation_id = $2
-                AND entity_type = 'story_source'
-                AND memory_type = 'poem_stanza'
-                AND metadata->>'mood' = $3
-                LIMIT 3
-                """,
-                user_id, conversation_id, emotional_state
-            )
+            # Check if NPC is network-affiliated
+            affiliations = json.loads(npc_row.get('affiliations', '[]'))
+            is_network = any('network' in aff.lower() or 'garden' in aff.lower() 
+                           or 'thorn' in aff.lower() for aff in affiliations)
             
             # Build dialogue context
             context_parts = [
                 f"=== DIALOGUE CONTEXT FOR {npc_row['npc_name'].upper()} ===",
-                f"Current Mask: {npc_row.get('current_mask', 'Unknown')}",
                 f"Trust Level: {npc_row.get('trust', 0)}/100",
                 f"Emotional State: {emotional_state}",
-                ""
             ]
             
-            if mood_stanzas:
-                context_parts.append("MOOD REFERENCE FROM POEMS:")
-                for stanza in mood_stanzas:
-                    context_parts.append(f"\n{stanza['memory_text']}\n")
+            if is_network:
+                context_parts.extend([
+                    "",
+                    "NETWORK MEMBER - Use coded language:",
+                    "• Refer to 'the network' or 'the garden', never official names",
+                    "• Use botanical metaphors: pruning, cultivation, growth",
+                    "• Speak in layers - surface meaning and deeper meaning",
+                    "• Never reveal network structure or the Queen's identity"
+                ])
             
             # Add dialogue patterns if available
             if npc_row.get('dialogue_patterns'):
@@ -564,7 +650,7 @@ class PoemAwarePromptGenerator:
         user_id: int, conversation_id: int, 
         location: str, atmosphere: str = "neutral"
     ) -> str:
-        """Enhance scene descriptions with poetic imagery"""
+        """Enhance scene descriptions with network-appropriate imagery"""
         
         async with get_db_connection_context() as conn:
             # Get atmospheric imagery
@@ -576,7 +662,8 @@ class PoemAwarePromptGenerator:
                 AND conversation_id = $2
                 AND entity_type = 'story_source'
                 AND memory_type = 'key_imagery'
-                AND metadata->>'imagery_type' = 'atmospheric'
+                AND (metadata->>'imagery_type' = 'atmospheric' 
+                     OR metadata->>'imagery_type' = 'network')
                 LIMIT 5
                 """,
                 user_id, conversation_id
@@ -586,17 +673,23 @@ class PoemAwarePromptGenerator:
             
             # Add location-specific imagery
             location_lower = location.lower()
-            if "sanctum" in location_lower:
+            if "rose garden" in location_lower:
                 enhancements.extend([
-                    "Candles gutter in silver stands, casting dancing shadows.",
-                    "The air tastes of velvet night and unspoken prayers.",
-                    "Every surface whispers of power and submission."
+                    "The scent of roses mingles with lavender and intent.",
+                    "Every table holds potential recruitment or pruning.",
+                    "Conversations layer meaning like petals."
                 ])
-            elif "chamber" in location_lower:
+            elif "safehouse" in location_lower:
                 enhancements.extend([
-                    "Moths dance against windows, seeking their destruction.",
-                    "Masks rest heavy on mahogany stands.",
-                    "The space breathes with whispered confessions."
+                    "Safety has a different texture when you've known its absence.",
+                    "The network's other face - protector, not predator.",
+                    "Here, thorns point outward."
+                ])
+            elif "network" in location_lower or "garden" in location_lower:
+                enhancements.extend([
+                    "Power flows through invisible channels.",
+                    "Every gesture carries coded meaning.",
+                    "The air tastes of secrets and strength."
                 ])
             
             # Add imagery from poems
