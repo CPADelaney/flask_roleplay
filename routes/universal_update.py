@@ -106,11 +106,16 @@ async def get_aggregated_roleplay_context_endpoint():
         
     except ValueError:
         return jsonify({"error": "Invalid conversation_id"}), 400
+    except asyncpg.exceptions.PostgresSyntaxError as e:
+        # This is the actual database syntax error
+        logger.error(f"PostgreSQL syntax error: {e}")
+        logger.error(f"Query causing error: {e.query if hasattr(e, 'query') else 'Unknown'}")
+        return jsonify({"error": f"Database syntax error: {str(e)}"}), 500
     except SyntaxError as e:
-        # Log the actual syntax error details
-        logger.error(f"SyntaxError in get_aggregated_roleplay_context: {e}")
+        # This is a Python syntax error
+        logger.error(f"Python SyntaxError: {e}")
         logger.error(f"Error details: {e.filename}:{e.lineno} - {e.text}")
-        return jsonify({"error": f"Syntax error: {str(e)}"}), 500
+        return jsonify({"error": f"Python syntax error: {str(e)}"}), 500
     except Exception as e:
         logger.error(f"Error getting aggregated context: {e}", exc_info=True)
         import traceback
