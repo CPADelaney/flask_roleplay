@@ -21,7 +21,7 @@ class PresetStoryManager:
                 SELECT story_id, story_flags, current_act, current_beat, progress
                 FROM story_states 
                 WHERE conversation_id = $1 
-                AND story_id IN ('the_moth_and_flame')  -- Add more preset story IDs here
+                AND story_id IN ('queen_of_thorns')  -- Updated story ID
                 ORDER BY started_at DESC
                 LIMIT 1
             """, conversation_id)
@@ -30,12 +30,15 @@ class PresetStoryManager:
                 flags = json.loads(story_row['story_flags']) if story_row['story_flags'] else {}
                 return {
                     'story_id': story_row['story_id'],
-                    'uses_sf_preset': flags.get('uses_sf_preset', False),
+                    'uses_sf_preset': True,  # Queen of Thorns always uses SF preset
                     'preset_active': True,
                     'current_act': story_row['current_act'],
                     'current_beat': story_row['current_beat'],
                     'progress': story_row['progress'],
-                    'story_flags': flags
+                    'story_flags': flags,
+                    'network_awareness': flags.get('network_awareness', 0),
+                    'information_layer': flags.get('information_layer', 'public'),
+                    'player_rank': flags.get('player_rank', 'outsider')
                 }
             
             # Also check CurrentRoleplay for preset marker
@@ -56,14 +59,19 @@ class PresetStoryManager:
                 
                 result = {
                     'story_id': story_id,
-                    'preset_active': True
+                    'preset_active': True,
+                    'uses_sf_preset': story_id == 'queen_of_thorns'
                 }
                 
                 if story_info:
+                    flags = json.loads(story_info['story_flags']) if story_info['story_flags'] else {}
                     result.update({
                         'current_act': story_info['current_act'],
                         'current_beat': story_info['current_beat'],
-                        'story_flags': json.loads(story_info['story_flags']) if story_info['story_flags'] else {}
+                        'story_flags': flags,
+                        'network_awareness': flags.get('network_awareness', 0),
+                        'information_layer': flags.get('information_layer', 'public'),
+                        'player_rank': flags.get('player_rank', 'outsider')
                     })
                 
                 return result
@@ -81,7 +89,7 @@ class PresetStoryManager:
             'quick_reference': ''
         }
         
-        if story_id == 'the_moth_and_flame':
+        if story_id == 'queen_of_thorns':
             from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
             
             constraints.update({
@@ -92,19 +100,22 @@ class PresetStoryManager:
                 'forbidden_phrases': [
                     "The Rose & Thorn Society announced",
                     "The Garden's official",
+                    "The Shadow Matriarchy decreed",
                     "Queen [Name]",
                     "our Seattle chapter",
-                    "instantly transformed"
+                    "branches in other cities",
+                    "instantly transformed",
+                    "The Moth Queen"  # Old reference
                 ],
                 'correct_usage': {
                     'network_reference': 'the network',
-                    'queen_reference': 'The Queen, whoever she is',
+                    'organization_reference': 'the garden',
+                    'queen_reference': 'The Queen of Thorns, whoever she is',
                     'other_cities': 'allied networks in [city]',
-                    'transformation_time': 'months of careful work'
+                    'transformation_time': 'months of careful work',
+                    'information': 'exists in four layers'
                 }
             })
-        
-        # Add more preset stories here as they're created
         
         return constraints
     
@@ -168,6 +179,9 @@ Current Story State:
 - Act: {preset_info.get('current_act', 1)}
 - Beat: {preset_info.get('current_beat', 'unknown')}
 - Progress: {preset_info.get('progress', 0)}%
+- Network Awareness: {preset_info.get('network_awareness', 0)}
+- Information Layer: {preset_info.get('information_layer', 'public')}
+- Player Rank: {preset_info.get('player_rank', 'outsider')}
 
 Quick Reference:
 {constraints['quick_reference']}
@@ -179,9 +193,12 @@ Quick Reference:
 VALIDATION REQUIREMENTS:
 Before generating ANY response:
 1. Check all consistency rules are followed
-2. Verify no forbidden phrases are used
-3. Ensure correct terminology is applied
-4. Validate character behaviors match established patterns
+2. NEVER use official organization names
+3. The Queen's identity is a secret
+4. Maintain the four-layer information system
+5. Remember the network controls Bay Area ONLY
+6. Transformation takes months/years
+7. Use coded garden language appropriately
 
 If you detect any violations in your planned response, revise before outputting.
 """
@@ -199,11 +216,11 @@ If you detect any violations in your planned response, revise before outputting.
         if not preset_info:
             return {}
         
-        if preset_info['story_id'] == 'the_moth_and_flame':
-            from story_templates.moth.lore import SFBayMothFlamePreset
+        if preset_info['story_id'] == 'queen_of_thorns':
+            from story_templates.moth.lore import SFBayQueenOfThornsPreset
             
             # Get all locations from preset
-            all_locations = SFBayMothFlamePreset.get_specific_locations()
+            all_locations = SFBayQueenOfThornsPreset.get_specific_locations()
             
             # Find matching location
             location_lower = location_name.lower()
@@ -216,32 +233,33 @@ If you detect any violations in your planned response, revise before outputting.
             
             if not matching_location:
                 # Check districts
-                districts = SFBayMothFlamePreset.get_districts()
+                districts = SFBayQueenOfThornsPreset.get_districts()
                 for district in districts:
                     if district['name'].lower() in location_lower:
                         return {
                             'district': district,
                             'type': 'district',
-                            'special_rules': district.get('special_rules', []),
-                            'atmosphere': district.get('atmosphere', {})
+                            'hidden_elements': district.get('hidden_elements'),
+                            'danger_level': district.get('danger_level')
                         }
                 return {}
             
             # Get relevant myths
-            all_myths = SFBayMothFlamePreset.get_urban_myths()
+            all_myths = SFBayQueenOfThornsPreset.get_urban_myths()
             relevant_myths = [
                 myth for myth in all_myths
-                if any(keyword in location_lower for keyword in 
-                      ['sanctum', 'garden', 'underground', matching_location['name'].lower()])
+                if 'queen' in myth.get('name', '').lower() 
+                or 'rose' in myth.get('name', '').lower()
+                or matching_location['name'].lower() in myth.get('origin_location', '').lower()
             ]
             
             return {
                 'location': matching_location,
                 'type': 'specific_location',
                 'myths': relevant_myths,
-                'access_level': matching_location.get('access_level', 'public'),
-                'special_mechanics': matching_location.get('special_mechanics', []),
-                'atmosphere': matching_location.get('atmosphere', {}),
+                'public_function': matching_location.get('public_function'),
+                'hidden_function': matching_location.get('hidden_function'),
+                'recognition_signs': matching_location.get('recognition_signs', []),
                 'operational_details': matching_location.get('operational_details', {})
             }
         
@@ -259,25 +277,32 @@ If you detect any violations in your planned response, revise before outputting.
         if not preset_info:
             return False
         
-        if preset_info['story_id'] == 'the_moth_and_flame':
+        if preset_info['story_id'] == 'queen_of_thorns':
             story_flags = preset_info.get('story_flags', {})
             
-            if mechanic_type == 'fog_protection':
-                # Fog protection applies at night in outdoor locations
+            if mechanic_type == 'network_assessment':
+                # Assessment happens at cafes and galleries
+                location = context.get('current_location', '').lower()
                 return (
-                    context.get('time_of_day', '').lower() in ['night', 'late night'] and
-                    'outdoor' in context.get('current_location', '').lower()
+                    'rose garden' in location or 
+                    'gallery' in location or
+                    'thornfield' in location
                 )
             
-            elif mechanic_type == 'safehouse_sanctuary':
-                # Safehouse rules apply in specific locations
-                location = context.get('current_location', '').lower()
-                return any(safe in location for safe in ['safehouse', 'butterfly house'])
+            elif mechanic_type == 'transformation_witnessing':
+                # Can witness transformations at higher awareness
+                return (
+                    preset_info.get('network_awareness', 0) >= 40 and
+                    preset_info.get('information_layer') != 'public'
+                )
             
-            elif mechanic_type == 'queen_presence':
-                # Queen presence mechanics in her domains
-                location = context.get('current_location', '').lower()
-                return 'velvet sanctum' in location or 'inner garden' in location
+            elif mechanic_type == 'coded_language':
+                # Always active in network spaces
+                return context.get('npc_is_network_member', False)
+            
+            elif mechanic_type == 'queen_ambiguity':
+                # Always active when Queen is referenced
+                return 'queen' in context.get('dialogue', '').lower()
         
         return False
     
@@ -292,23 +317,49 @@ If you detect any violations in your planned response, revise before outputting.
         if not preset_info:
             return {}
         
-        if preset_info['story_id'] == 'the_moth_and_flame' and character_name.lower() == 'lilith':
-            return {
-                'dialogue_rules': [
-                    'Always speak in character as the Queen of Thorns',
-                    'Use poetic, gothic language',
-                    'Reference roses, flames, and transformation',
-                    'Never directly say "I love you" unless trust > 95'
-                ],
-                'behavior_constraints': [
-                    'Maintain dominant persona',
-                    'Show vulnerability only in private and high trust',
-                    'React strongly to abandonment triggers',
-                    'Protect trafficking victims fiercely'
-                ],
-                'mask_system': True,
-                'three_words_mechanic': True
-            }
+        if preset_info['story_id'] == 'queen_of_thorns':
+            char_lower = character_name.lower()
+            
+            if 'queen' in char_lower and 'thorns' in char_lower:
+                return {
+                    'dialogue_rules': [
+                        'NEVER reveal your true identity',
+                        'Speak in layers - surface meaning and deeper meaning',
+                        'Use garden/cultivation metaphors',
+                        'Maintain absolute ambiguity about singular/plural nature',
+                        'Command through presence, not volume'
+                    ],
+                    'behavior_constraints': [
+                        'Never appear weak or uncertain',
+                        'Show different faces to different awareness levels',
+                        'Protect the network above all',
+                        'Transform predators, protect victims'
+                    ],
+                    'information_layers': True,
+                    'identity_mystery': True
+                }
+            
+            elif 'lily chen' in char_lower:
+                return {
+                    'dialogue_rules': [
+                        'Friendly but observant',
+                        'Assess everyone for "interesting energy"',
+                        'Never mention the network directly to outsiders',
+                        'Use coffee orders as personality reading'
+                    ],
+                    'role': 'network_recruiter'
+                }
+            
+            elif 'victoria chen' in char_lower:
+                return {
+                    'dialogue_rules': [
+                        'Professional with hidden edge',
+                        'Discuss "founder coaching" euphemistically',
+                        'Reference portfolio companies as examples',
+                        'Never reveal transformation methods'
+                    ],
+                    'role': 'network_transformer'
+                }
         
         return {}
     
@@ -330,8 +381,9 @@ If you detect any violations in your planned response, revise before outputting.
             await conn.execute("""
                 INSERT INTO preset_story_metrics
                 (conversation_id, story_id, generation_type, success, 
-                 violations, response_time, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                 violations, response_time, network_awareness, information_layer, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
             """, conversation_id, preset_info['story_id'], generation_type,
                 success, json.dumps(violations) if violations else None,
-                response_time)
+                response_time, preset_info.get('network_awareness', 0),
+                preset_info.get('information_layer', 'public'))
