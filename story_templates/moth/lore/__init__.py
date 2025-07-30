@@ -15,8 +15,8 @@ from .religion import SFReligionLore
 
 # Import the main preset manager
 from .world_lore_manager import (
-    SFBayMothFlamePreset,
-    EnhancedMothFlameInitializer
+    QueenOfThornsPreset,
+    EnhancedQueenOfThornsInitializer
 )
 
 # Define what's available when someone does "from lore import *"
@@ -29,10 +29,10 @@ __all__ = [
     'SFReligionLore',
     
     # Main managers
-    'SFBayMothFlamePreset',
-    'EnhancedMothFlameInitializer',
+    'QueenOfThornsPreset',
+    'EnhancedQueenOfThornsInitializer',
 ]
 
 # Version info
 __version__ = '1.0.0'
-__author__ = 'The Moth and Flame Story Team'
+__author__ = 'The Queen of Thorns Story Team'
