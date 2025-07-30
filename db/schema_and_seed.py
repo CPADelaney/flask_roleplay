@@ -25,7 +25,7 @@ import asyncpg
 import asyncio
 from typing import Dict, Any
 
-from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME, MOTH_FLAME_POEMS, STORY_TONE_PROMPT
+from story_templates.moth.queen_of_thorns_story import THE_QUEEN_OF_THORNS_STORY, THORNS_POEMS, STORY_TONE_PROMPT
 
 # Import system prompts for Nyx
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
