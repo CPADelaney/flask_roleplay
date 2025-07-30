@@ -35,6 +35,8 @@ from context.context_performance import PerformanceMonitor, track_performance
 
 # Using new async context manager for DB connections
 from db.connection import get_db_connection_context
+from story_templates.preset_manager import PresetStoryManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +199,7 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
         }
         
         # Check for preset story
-        preset_info = await check_preset_story(conversation_id)
+        preset_info = await PresetStoryManager.check_preset_story(conversation_id)
         
         if preset_info and preset_info.get('story_id') == 'the_moth_and_flame':
             from story_templates.moth.lore import SFBayMothFlamePreset
