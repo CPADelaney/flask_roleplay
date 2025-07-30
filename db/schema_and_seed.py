@@ -3550,7 +3550,7 @@ async def initialize_conflict_system():
     await seed_initial_vitals()  # Call the async version
     logger.info("Conflict system initialized (vitals seeded).")
 
-async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
+async def seed_story_poems_as_memories(story_id: str = "queen_of_thorns"):
     """
     Seeds story poems as core memories that the AI can reference for tone and imagery.
     Call this during database initialization for each story that has poems.
@@ -3558,8 +3558,8 @@ async def seed_story_poems_as_memories(story_id: str = "the_moth_and_flame"):
     logger.info(f"Seeding poems for story: {story_id}")
     
     # Get poems from the story
-    if story_id == "the_moth_and_flame":
-        poems = MOTH_FLAME_POEMS
+    if story_id == "queen_of_thorns":
+        poems = THORNS_POEMS
         tone_prompt = STORY_TONE_PROMPT
     else:
         logger.warning(f"No poems found for story: {story_id}")
@@ -3876,7 +3876,7 @@ async def initialize_all_data():
         await initialize_conflict_system()
         
         # Seed story poems
-        await seed_story_poems_as_memories("the_moth_and_flame")
+        await seed_story_poems_as_memories("queen_of_thorns")
         
         logger.info("All initialization steps completed successfully!")
     except Exception as e:
