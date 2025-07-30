@@ -1,4 +1,4 @@
-# story_templates/moth/the_moth_and_flame.py
+# story_templates/moth/queen_of_thorns_story.py
 """
 The Moth and Flame - A Gothic Romance
 Complete story definition with poem integration and complex character dynamics
