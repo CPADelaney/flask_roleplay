@@ -8,7 +8,7 @@ from story_templates.preset_stories import PresetStory, StoryBeat
 from story_templates.character_profiles.lilith_ravencroft import LILITH_RAVENCROFT
 
 # The foundational poems that define tone, imagery, and themes
-MOTH_FLAME_POEMS = {
+THORNS_POEMS = {
     "when_curtain_falls": """When the Curtain Falls
 
 Behind porcelain curves, a painted smile,
@@ -197,15 +197,15 @@ Key phrases to echo:
 - "My sanctified ruin"
 """
 
-THE_MOTH_AND_FLAME = PresetStory(
-    id="the_moth_and_flame",
-    name="The Moth and the Flame",
+QUEEN_OF_THORNS_STORY = PresetStory(
+    id="queen_of_thorns",
+    name="Queen of Thorns",
     theme="A gothic romance exploring masks, vulnerability, and the consuming nature of devotion",
     synopsis="You encounter a mysterious dominatrix who rules the night, but beneath her porcelain mask lies a soul haunted by abandonment. As you're drawn deeper into her world, you must navigate the delicate balance between worship and understanding.",
     
     # Include poems and tone instructions
     source_material={
-        "poems": MOTH_FLAME_POEMS,
+        "poems": THORNS_POEMS,
         "tone_prompt": STORY_TONE_PROMPT,
         "reference_style": "gothic_poetry"
     },
