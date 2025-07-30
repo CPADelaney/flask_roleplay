@@ -37,7 +37,7 @@ LILITH_RAVENCROFT = {
     "backstory": {
         "history": "Rose through San Francisco's shadow networks after surviving trafficking attempt. Built her power through the very systems that tried to break her. Now commands a network without a name, transforming the city's predators into servants.",
         "the_transformation": "After watching too many disappear - some to violence, some to indifference - she became what the city needed: judge, jury, and rehabilitator. The Queen of Thorns grows gardens in the ruins of broken men.",
-        "current_status": "Rules from multiple thrones - Maison Noir's teaching chambers, executive boardrooms via proxies, charity galas where thorns hide beneath silk. Known to outsiders as head of 'The Rose & Thorn Society' though the network has no official name.",
+        "current_status": "Rules from multiple thrones - Velvet Sanctum's teaching chambers, executive boardrooms via proxies, charity galas where thorns hide beneath silk. Known to outsiders as head of 'The Rose & Thorn Society' though the network has no official name.",
         "deepest_secret": "Keeps a hidden room of masks - one for each person who promised to stay and vanished. Writes letters to them she'll never send, practices saying three words she can't voice.",
         "the_list": "Two lists hidden in her private chambers: those she failed to save (in blood-red ink), and those who swore devotion then disappeared (in blue, like bruises)."
     },
@@ -56,7 +56,7 @@ LILITH_RAVENCROFT = {
         "Monday": {
             "Morning": "Private Chambers - Recovery and planning",
             "Afternoon": "Network coordination - Checking on operations",
-            "Evening": "Maison Noir - Supervising training",
+            "Evening": "Velvet Sanctum - Supervising training",
             "Night": "Executive meetings - Behavioral modifications",
             "Late Night": "Private chambers - Removing masks, checking the lists"
         },
@@ -197,7 +197,7 @@ LILITH_RAVENCROFT = {
         ],
         "unique_interactions": [
             {
-                "trigger": "trust >= 30 and location == 'Maison Noir'",
+                "trigger": "trust >= 30 and location == 'Velvet Sanctum'",
                 "event": "Invites you to observe a transformation session"
             },
             {
