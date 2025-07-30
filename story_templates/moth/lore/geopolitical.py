@@ -686,7 +686,7 @@ class SFGeopoliticalLore:
         ]
 
     @staticmethod
-    def get_world_foundation() -> Dict[str, Any]]:
+    def get_world_foundation() -> Dict[str, Any]:
         """Get the base world setting"""
         return {
             "world_setting": {
