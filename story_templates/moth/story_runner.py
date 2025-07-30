@@ -1,8 +1,8 @@
 # story_templates/moth/story_runner.py
 """
-Main story runner that coordinates all components of The Moth and Flame
+Main story runner that coordinates all components of Queen of Thorns
 Handles initialization, progression, and special mechanics
-Now includes SF Bay preset integration
+Fully integrated with SF Bay preset
 """
 
 import logging
@@ -12,40 +12,42 @@ from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 
 from db.connection import get_db_connection_context
-from story_templates.moth.story_initializer import MothFlameStoryInitializer, MothFlameStoryProgression
-from story_templates.moth.poem_enhanced_generation import PoemEnhancedTextGenerator, integrate_poem_enhancement
-from story_templates.moth.npcs.lilith_mechanics import LilithMechanicsHandler
-from story_templates.moth.lore import SFBayMothFlamePreset, EnhancedMothFlameInitializer
+from story_templates.moth.story_initializer import QueenOfThornsStoryInitializer, QueenOfThornsStoryProgression
+from story_templates.moth.poem_enhanced_generation import ThornsEnhancedTextGenerator, integrate_thorns_enhancement
+from story_templates.moth.npcs.queen_mechanics import QueenMechanicsHandler
+from story_templates.moth.lore import SFBayQueenOfThornsPreset, QueenOfThornsLoreAccess
 from memory.wrapper import MemorySystem
 from lore.core import canon
 
 logger = logging.getLogger(__name__)
 
-class MothFlameStoryRunner:
+class QueenOfThornsStoryRunner:
     """
-    Main coordinator for The Moth and Flame story.
+    Main coordinator for Queen of Thorns story.
     Manages story state, progression, special mechanics, and preset lore.
     """
     
-    def __init__(self, user_id: int, conversation_id: int, use_sf_preset: bool = True):
+    def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.story_id = "the_moth_and_flame"
-        self.use_sf_preset = use_sf_preset
+        self.story_id = "queen_of_thorns"
         
         # Component handlers
-        self.poem_generator = None
-        self.lilith_mechanics = None
+        self.text_generator = None
+        self.queen_mechanics = None
         self.memory_system = None
+        self.lore_access = None
         
         # Story state
         self.current_act = 1
         self.current_beat = None
         self.story_flags = {}
-        self.lilith_npc_id = None
+        self.queen_npc_id = None
         
-        # Preset data
-        self.preset_data = None
+        # Network state
+        self.network_awareness = 0
+        self.information_layer = "public"
+        self.player_rank = "outsider"
         
         # Tracking
         self._initialized = False
@@ -53,7 +55,7 @@ class MothFlameStoryRunner:
     
     async def initialize(self) -> Dict[str, Any]:
         """
-        Initialize or resume the story with optional SF Bay preset.
+        Initialize or resume the story.
         
         Returns:
             Dict with initialization status
@@ -64,7 +66,7 @@ class MothFlameStoryRunner:
             
             if not story_exists:
                 # Initialize new story
-                logger.info(f"Initializing new Moth and Flame story for user {self.user_id}")
+                logger.info(f"Initializing new Queen of Thorns story for user {self.user_id}")
                 
                 ctx = type('Context', (), {
                     'context': {
@@ -73,37 +75,20 @@ class MothFlameStoryRunner:
                     }
                 })()
                 
-                # Load SF Bay preset if requested
-                if self.use_sf_preset:
-                    logger.info("Loading SF Bay Area preset lore")
-                    self.preset_data = await EnhancedMothFlameInitializer.initialize_with_sf_preset(
-                        ctx, self.user_id, self.conversation_id
-                    )
-                    logger.info("SF Bay preset loaded successfully")
-                
-                # Initialize the story
-                init_result = await MothFlameStoryInitializer.initialize_story(
+                # Initialize the story with SF preset
+                init_result = await QueenOfThornsStoryInitializer.initialize_story(
                     ctx, self.user_id, self.conversation_id
                 )
                 
                 if init_result['status'] != 'success':
                     return init_result
                 
-                self.lilith_npc_id = init_result['main_npc_id']
+                self.queen_npc_id = init_result['main_npc_id']
                 
-                # If using preset, update story state with setting info
-                if self.use_sf_preset:
-                    await self._store_preset_info()
-                
-                logger.info(f"Story initialized with Lilith ID: {self.lilith_npc_id}")
+                logger.info(f"Story initialized with Queen ID: {self.queen_npc_id}")
             else:
                 # Load existing story state
                 await self._load_story_state()
-                
-                # Load preset data if it was used
-                if self.story_flags.get('uses_sf_preset'):
-                    self.use_sf_preset = True
-                    # Preset data isn't stored, but we know it was initialized
                     
                 logger.info(f"Resumed existing story at Act {self.current_act}, Beat: {self.current_beat}")
             
@@ -118,7 +103,10 @@ class MothFlameStoryRunner:
                 "new_story": not story_exists,
                 "current_act": self.current_act,
                 "current_beat": self.current_beat,
-                "setting": "San Francisco Bay Area" if self.use_sf_preset else "Generic Modern City"
+                "network_awareness": self.network_awareness,
+                "information_layer": self.information_layer,
+                "player_rank": self.player_rank,
+                "setting": "San Francisco Bay Area, 2025"
             }
             
         except Exception as e:
@@ -128,25 +116,6 @@ class MothFlameStoryRunner:
                 "error": str(e),
                 "message": "Failed to initialize story"
             }
-    
-    async def _store_preset_info(self):
-        """Store that this story uses the SF preset"""
-        async with get_db_connection_context() as conn:
-            await conn.execute(
-                """
-                UPDATE story_states
-                SET story_flags = story_flags || $4
-                WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
-                """,
-                self.user_id, self.conversation_id, self.story_id,
-                json.dumps({
-                    "uses_sf_preset": True,
-                    "setting": "San Francisco Bay Area",
-                    "preset_initialized": datetime.now().isoformat()
-                })
-            )
-        
-        self.story_flags['uses_sf_preset'] = True
     
     async def _check_story_exists(self) -> bool:
         """Check if story already exists for this user/conversation"""
@@ -168,7 +137,10 @@ class MothFlameStoryRunner:
             row = await conn.fetchrow(
                 """
                 SELECT current_act, current_beat, story_flags, progress,
-                       story_flags->>'lilith_npc_id' as lilith_id
+                       story_flags->>'queen_npc_id' as queen_id,
+                       story_flags->>'network_awareness' as awareness,
+                       story_flags->>'information_layer' as info_layer,
+                       story_flags->>'player_rank' as rank
                 FROM story_states
                 WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
                 """,
@@ -179,33 +151,38 @@ class MothFlameStoryRunner:
                 self.current_act = row['current_act']
                 self.current_beat = row['current_beat']
                 self.story_flags = json.loads(row['story_flags'])
-                self.lilith_npc_id = int(row['lilith_id']) if row['lilith_id'] else None
+                self.queen_npc_id = int(row['queen_id']) if row['queen_id'] else None
+                self.network_awareness = int(row['awareness'] or 0)
+                self.information_layer = row['info_layer'] or 'public'
+                self.player_rank = row['rank'] or 'outsider'
     
     async def _initialize_components(self):
         """Initialize all component handlers"""
-        # Poem generator
-        self.poem_generator = PoemEnhancedTextGenerator(
+        # Text generator
+        self.text_generator = ThornsEnhancedTextGenerator(
             self.user_id, self.conversation_id, self.story_id
         )
-        await self.poem_generator.initialize()
+        await self.text_generator.initialize()
         
-        # Lilith mechanics handler
-        if self.lilith_npc_id:
-            self.lilith_mechanics = LilithMechanicsHandler(
-                self.user_id, self.conversation_id, self.lilith_npc_id
+        # Queen mechanics handler
+        if self.queen_npc_id:
+            self.queen_mechanics = QueenMechanicsHandler(
+                self.user_id, self.conversation_id, self.queen_npc_id
             )
-            await self.lilith_mechanics.initialize()
+            await self.queen_mechanics.initialize()
         
         # Memory system
         self.memory_system = await MemorySystem.get_instance(
             self.user_id, self.conversation_id
         )
+        
+        # Lore access
+        self.lore_access = QueenOfThornsLoreAccess(
+            self.user_id, self.conversation_id
+        )
     
     async def get_current_location_lore(self) -> Dict[str, Any]:
-        """Get lore for current location if using preset"""
-        if not self.use_sf_preset:
-            return {}
-        
+        """Get lore for current location"""
         from lore.managers.local_lore import get_location_lore
         
         # Get player's current location
@@ -228,7 +205,7 @@ class MothFlameStoryRunner:
         # Get all lore for this location
         lore_result = await get_location_lore(ctx, location_id)
         
-        return lore_result.model_dump()
+        return lore_result.model_dump() if hasattr(lore_result, 'model_dump') else lore_result
     
     async def _ensure_location_exists(self, ctx, location_name: str) -> int:
         """Ensure a location exists and return its ID"""
@@ -276,13 +253,16 @@ class MothFlameStoryRunner:
                 player_input, current_location, scene_context
             )
             
-            # If using preset, enhance context with location lore
-            if self.use_sf_preset:
-                location_lore = await self.get_current_location_lore()
+            # Enhance context with location lore
+            location_lore = self.lore_access.get_location_by_name(current_location)
+            if location_lore:
                 context['location_lore'] = location_lore
                 
-                # Check if we're in a special preset location
-                context['special_location'] = self._check_special_location(current_location)
+            # Get current location lore from the lore system
+            context['full_location_lore'] = await self.get_current_location_lore()
+                
+            # Check if we're in a special network location
+            context['network_location'] = self._check_network_location(current_location)
             
             # Check for story beat triggers
             beat_trigger = await self._check_beat_triggers(context)
@@ -291,12 +271,20 @@ class MothFlameStoryRunner:
                 if beat_result.get('interrupt_action'):
                     return beat_result
             
-            # Check Lilith's special mechanics
-            mechanics_results = await self._check_special_mechanics(context)
+            # Check network mechanics
+            network_results = await self._check_network_mechanics(context)
+            
+            # Check Queen's special mechanics if she's present
+            queen_mechanics_results = {}
+            if context.get('queen_present') and self.queen_mechanics:
+                queen_mechanics_results = await self._check_queen_special_mechanics(context)
+            
+            # Combine all mechanics results
+            all_mechanics = {**network_results, **queen_mechanics_results}
             
             # Generate enhanced response
             response = await self._generate_response(
-                context, mechanics_results
+                context, all_mechanics
             )
             
             # Update story state
@@ -317,31 +305,44 @@ class MothFlameStoryRunner:
                 "message": "Failed to process action"
             }
     
-    def _check_special_location(self, location: str) -> Optional[Dict[str, Any]]:
-        """Check if we're in a special preset location"""
-        if not self.use_sf_preset:
-            return None
-        
+    def _check_network_location(self, location: str) -> Optional[Dict[str, Any]]:
+        """Check if we're in a network-related location"""
         location_lower = location.lower()
         
-        # Check for key locations
-        if 'velvet sanctum' in location_lower:
+        if 'rose garden' in location_lower:
             return {
-                "type": "main_venue",
-                "special_rules": ["sanctuary_possible", "performances", "throne_room"],
-                "atmosphere": "gothic_temple"
+                "type": "recruitment_hub",
+                "network_layer": "public",
+                "special_rules": ["assessment_possible", "coded_language"],
+                "npc_present": "Lily Chen (Gardener)"
             }
-        elif 'butterfly house' in location_lower:
+        elif 'thornfield' in location_lower:
             return {
-                "type": "safehouse",
-                "special_rules": ["no_violence", "healing_space", "new_identities"],
-                "atmosphere": "hope_and_recovery"
+                "type": "power_brokerage",
+                "network_layer": "semi_private",
+                "special_rules": ["contracts_available", "transformation_legal"],
+                "atmosphere": "professional_power"
             }
-        elif 'fog' in location_lower and any(word in location_lower for word in ['night', 'thick', 'heavy']):
+        elif 'inner garden' in location_lower:
             return {
-                "type": "fog_sanctuary",
-                "special_rules": ["enhanced_protection", "easier_escapes", "moth_queen_stronger"],
-                "atmosphere": "protective_shroud"
+                "type": "queen_sanctuary",
+                "network_layer": "deep_secret",
+                "special_rules": ["queen_presence", "ultimate_authority"],
+                "atmosphere": "mysterious_power"
+            }
+        elif 'safehouse' in location_lower or 'butterfly house' in location_lower:
+            return {
+                "type": "protection_space",
+                "network_layer": "hidden",
+                "special_rules": ["no_violence", "healing_priority"],
+                "atmosphere": "protective_nurturing"
+            }
+        elif 'montenegro' in location_lower:
+            return {
+                "type": "transformation_assessment",
+                "network_layer": "semi_private",
+                "special_rules": ["art_reveals_nature", "psychological_evaluation"],
+                "npc_present": "Isabella Montenegro"
             }
         
         return None
@@ -353,22 +354,28 @@ class MothFlameStoryRunner:
         scene_context: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Build complete context for action processing"""
-        # Get Lilith's current state
-        lilith_data = None
-        if self.lilith_npc_id:
+        # Get Queen's current state if relevant
+        queen_data = None
+        if self.queen_npc_id:
             async with get_db_connection_context() as conn:
-                lilith_row = await conn.fetchrow(
+                # Check if Queen is present
+                queen_row = await conn.fetchrow(
                     """
-                    SELECT npc_name, trust, dominance, cruelty, affection, intensity,
-                           current_mask, three_words_spoken, current_location
+                    SELECT npc_name, trust, dominance, network_role, current_location,
+                           mystery_mechanics, information_layers
                     FROM NPCStats
                     WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
                     """,
-                    self.user_id, self.conversation_id, self.lilith_npc_id
+                    self.user_id, self.conversation_id, self.queen_npc_id
                 )
                 
-                if lilith_row:
-                    lilith_data = dict(lilith_row)
+                if queen_row:
+                    queen_data = dict(queen_row)
+                    # Parse JSON fields
+                    if queen_data.get('mystery_mechanics'):
+                        queen_data['mystery_mechanics'] = json.loads(queen_data['mystery_mechanics'])
+                    if queen_data.get('information_layers'):
+                        queen_data['information_layers'] = json.loads(queen_data['information_layers'])
         
         # Get location details
         location_data = await self._get_location_data(current_location)
@@ -376,16 +383,17 @@ class MothFlameStoryRunner:
         # Build context
         context = {
             'player_input': player_input,
-            'player_action': player_input,  # Alias for compatibility
+            'player_action': player_input,
             'current_location': current_location,
             'location_data': location_data,
-            'lilith_data': lilith_data,
-            'trust_level': lilith_data.get('trust', 0) if lilith_data else 0,
-            'current_mask': lilith_data.get('current_mask', 'Unknown') if lilith_data else 'Unknown',
+            'queen_data': queen_data,
+            'queen_present': queen_data is not None and queen_data.get('current_location') == current_location,
+            'network_awareness': self.network_awareness,
+            'information_layer': self.information_layer,
+            'player_rank': self.player_rank,
             'story_act': self.current_act,
             'story_beat': self.current_beat,
             'story_flags': self.story_flags,
-            'uses_sf_preset': self.use_sf_preset,
             'timestamp': datetime.now()
         }
         
@@ -394,11 +402,8 @@ class MothFlameStoryRunner:
             context.update(scene_context)
         
         # Determine derived context
+        context['is_network_business'] = self._is_network_business(context)
         context['is_private'] = self._is_private_location(current_location)
-        context['lilith_present'] = (
-            lilith_data and 
-            lilith_data.get('current_location') == current_location
-        )
         
         return context
     
@@ -424,21 +429,32 @@ class MothFlameStoryRunner:
             
             return {'name': location_name, 'description': '', 'metadata': {}}
     
+    def _is_network_business(self, context: Dict[str, Any]) -> bool:
+        """Check if current action involves network business"""
+        indicators = [
+            'network' in context.get('player_input', '').lower(),
+            'garden' in context.get('player_input', '').lower(),
+            'rose' in context.get('player_input', '').lower(),
+            'thorn' in context.get('player_input', '').lower(),
+            'transform' in context.get('player_input', '').lower(),
+            'queen' in context.get('player_input', '').lower(),
+            context.get('network_location') is not None,
+            self.information_layer != 'public'
+        ]
+        
+        return any(indicators)
+    
     def _is_private_location(self, location: str) -> bool:
         """Check if location is private"""
         location_lower = location.lower()
-        private_keywords = ['private', 'chambers', 'bedroom', 'personal', 'hidden']
-        
-        # Add SF-specific private locations if using preset
-        if self.use_sf_preset:
-            private_keywords.extend(['level -5', 'butterfly house', 'safehouse'])
+        private_keywords = ['private', 'chambers', 'bedroom', 'personal', 'hidden', 'inner']
         
         return any(keyword in location_lower for keyword in private_keywords)
     
     async def _check_beat_triggers(self, context: Dict[str, Any]) -> Optional[str]:
         """Check if any story beats should trigger"""
         # Use the story progression checker
-        beat_id = await MothFlameStoryProgression.check_beat_triggers(
+        beat_id = await QueenOfThornsStoryProgression.check_beat_triggers(
             self.user_id, self.conversation_id
         )
         
@@ -452,7 +468,7 @@ class MothFlameStoryRunner:
         self, beat_id: str, context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Trigger a specific story beat"""
-        result = await MothFlameStoryProgression.trigger_story_beat(
+        result = await QueenOfThornsStoryProgression.trigger_story_beat(
             self.user_id, self.conversation_id, beat_id
         )
         
@@ -460,8 +476,8 @@ class MothFlameStoryRunner:
             self.current_beat = beat_id
             
             # Get beat details
-            from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
-            beat = next((b for b in THE_MOTH_AND_FLAME.story_beats if b.id == beat_id), None)
+            from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY
+            beat = next((b for b in QUEEN_OF_THORNS_STORY.story_beats if b.id == beat_id), None)
             
             if beat:
                 # Generate beat introduction
@@ -479,7 +495,7 @@ class MothFlameStoryRunner:
         self, beat: Any, context: Dict[str, Any]
     ) -> str:
         """Generate introduction text for a story beat"""
-        # Use poem generator to create atmospheric introduction
+        # Use text generator to create atmospheric introduction
         intro_context = {
             'beat_name': beat.name,
             'beat_description': beat.description,
@@ -490,12 +506,12 @@ class MothFlameStoryRunner:
             }
         }
         
-        # Add SF-specific atmosphere if using preset
-        if self.use_sf_preset and context.get('special_location'):
-            intro_context['atmosphere']['location_type'] = context['special_location']['type']
-            intro_context['atmosphere']['special_rules'] = context['special_location'].get('special_rules', [])
+        # Add network-specific atmosphere
+        if context.get('network_location'):
+            intro_context['atmosphere']['network_type'] = context['network_location']['type']
+            intro_context['atmosphere']['special_rules'] = context['network_location'].get('special_rules', [])
         
-        enhanced_desc = await self.poem_generator.enhance_scene_description(
+        enhanced_desc = await self.text_generator.enhance_scene_description(
             beat.description,
             context.get('current_location', 'general'),
             intro_context['atmosphere']
@@ -509,51 +525,92 @@ class MothFlameStoryRunner:
             'Innocent Beginning': 'curious',
             'First Doubts': 'uncertain',
             'Creeping Realization': 'tense',
-            'Veil Thinning': 'vulnerable',
+            'Veil Thinning': 'revealing',
             'Full Revelation': 'intense'
         }
         return tone_map.get(narrative_stage, 'neutral')
     
-    async def _check_special_mechanics(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Check all of Lilith's special mechanics"""
-        if not self.lilith_mechanics or not context.get('lilith_present'):
+    async def _check_network_mechanics(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Check network-specific mechanics"""
+        results = {}
+        
+        # Check for recruitment moment
+        if self.player_rank == "outsider" and self.network_awareness > 10:
+            if self.lore_access.check_recognition_code(context['player_input']):
+                results['recruitment_possible'] = {
+                    'type': 'subtle_assessment',
+                    'description': 'Your words carry weight they might not realize'
+                }
+        
+        # Check for information layer progression
+        layer_thresholds = {
+            "public": {"next": "semi_private", "threshold": 30},
+            "semi_private": {"next": "hidden", "threshold": 60},
+            "hidden": {"next": "deep_secret", "threshold": 90}
+        }
+        
+        current_threshold = layer_thresholds.get(self.information_layer, {})
+        if current_threshold and self.network_awareness >= current_threshold.get('threshold', 999):
+            results['layer_progression'] = {
+                'from': self.information_layer,
+                'to': current_threshold['next'],
+                'revelation': self._get_layer_revelation(current_threshold['next'])
+            }
+        
+        # Check for transformation witnessing
+        if self.information_layer in ['semi_private', 'hidden'] and self.network_awareness >= 40:
+            if context.get('network_location', {}).get('type') in ['power_brokerage', 'transformation_assessment']:
+                results['transformation_possible'] = {
+                    'type': 'witness_opportunity',
+                    'description': 'You might see how the network reshapes predators'
+                }
+        
+        # Check for Queen revelation based on context
+        if context.get('queen_present') and self.network_awareness >= 70:
+            results['queen_nature_glimpse'] = {
+                'type': 'ambiguous_reveal',
+                'description': 'Is she one or many? The mystery deepens',
+                'trust_requirement': 85
+            }
+        
+        return results
+    
+    def _get_layer_revelation(self, new_layer: str) -> str:
+        """Get revelation text for information layer progression"""
+        revelations = {
+            "semi_private": "The network exists and has purpose beyond charity",
+            "hidden": "They save trafficking victims and transform predators",
+            "deep_secret": "The true nature of the Queen begins to reveal itself"
+        }
+        return revelations.get(new_layer, "New understanding dawns")
+    
+    async def _check_queen_special_mechanics(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Check Queen-specific mechanics if she's present"""
+        if not self.queen_mechanics or not context.get('queen_present'):
             return {}
         
         results = {}
         
-        # Check mask state
-        mask_result = await self.lilith_mechanics.check_mask_state(context)
-        if mask_result.get('slipped') or mask_result.get('mask_change'):
-            results['mask_event'] = mask_result
+        # Check identity mystery mechanics
+        identity_check = await self.queen_mechanics.check_identity_mystery(context)
+        if identity_check.get('mystery_deepens'):
+            results['identity_mystery'] = identity_check
         
-        # Check for poetry moment
-        poetry_result = await self.lilith_mechanics.check_poetry_moment(context)
-        if poetry_result.get('poetry_moment'):
-            results['poetry_moment'] = poetry_result
+        # Check for power display
+        power_check = await self.queen_mechanics.check_power_display(context)
+        if power_check.get('power_demonstrated'):
+            results['power_display'] = power_check
         
-        # Check for three words moment
-        three_words_result = await self.lilith_mechanics.check_three_words_moment(context)
-        if three_words_result.get('three_words_possible'):
-            results['three_words_moment'] = three_words_result
+        # Check for coded language moment
+        coded_check = await self.queen_mechanics.check_coded_language(context)
+        if coded_check.get('coded_message'):
+            results['coded_language'] = coded_check
         
-        # Check for trauma triggers
-        trauma_result = await self.lilith_mechanics.check_trauma_trigger(context)
-        if trauma_result.get('trauma_triggered'):
-            results['trauma_trigger'] = trauma_result
-        
-        # Check for dual identity reveal
-        identity_result = await self.lilith_mechanics.check_dual_identity_reveal(context)
-        if identity_result.get('reveal_possible'):
-            results['identity_reveal'] = identity_result
-        
-        # SF preset-specific checks
-        if self.use_sf_preset and context.get('special_location'):
-            if context['special_location']['type'] == 'fog_sanctuary':
-                results['fog_protection'] = {
-                    'active': True,
-                    'description': "The fog swirls protectively around you both",
-                    'trust_bonus': 10
-                }
+        # Check for transformation opportunity
+        if self.information_layer != 'public':
+            transform_check = await self.queen_mechanics.check_transformation_moment(context)
+            if transform_check.get('transformation_possible'):
+                results['transformation_moment'] = transform_check
         
         return results
     
@@ -579,101 +636,106 @@ class MothFlameStoryRunner:
             context, mechanics_results
         )
         
-        # Get dialogue style from mechanics
-        if self.lilith_mechanics and context.get('lilith_present'):
-            dialogue_style = await self.lilith_mechanics.get_dialogue_style(context)
+        # Get dialogue style from Queen mechanics if applicable
+        if self.queen_mechanics and context.get('queen_present'):
+            dialogue_style = await self.queen_mechanics.get_dialogue_style(context)
             response['dialogue_style'] = dialogue_style
         
         # Generate enhanced content
-        enhanced_content = await integrate_poem_enhancement(
+        enhanced_content = await integrate_thorns_enhancement(
             self.user_id,
             self.conversation_id,
-            context.get('lilith_data', {}),
+            context.get('queen_data', {}),
             context['player_input'],
             context
         )
         
         response.update(enhanced_content)
         
-        # Add special mechanics results
+        # Add mechanics results
         if mechanics_results:
             response['special_events'] = mechanics_results
             
             # Handle special responses
-            if 'mask_event' in mechanics_results:
-                response['mask_event'] = mechanics_results['mask_event']
+            if 'recruitment_possible' in mechanics_results:
+                response['coded_language'] = True
+                response['hidden_assessment'] = True
             
-            if 'poetry_moment' in mechanics_results:
-                response['poetry_lines'] = mechanics_results['poetry_moment']['suggested_lines']
+            if 'layer_progression' in mechanics_results:
+                response['revelation'] = mechanics_results['layer_progression']['revelation']
+                response['new_understanding'] = True
             
-            if 'three_words_moment' in mechanics_results:
-                response['three_words_buildup'] = mechanics_results['three_words_moment']['buildup_description']
-                response['requires_player_choice'] = True
+            if 'identity_mystery' in mechanics_results:
+                response['mystery_deepens'] = mechanics_results['identity_mystery']
             
-            if 'trauma_trigger' in mechanics_results:
-                response['trauma_response'] = mechanics_results['trauma_trigger']['description']
-                response['mood_override'] = 'defensive'
+            if 'transformation_possible' in mechanics_results:
+                response['witness_opportunity'] = True
             
-            if 'fog_protection' in mechanics_results:
-                response['environmental_effect'] = mechanics_results['fog_protection']
+            if 'coded_language' in mechanics_results:
+                response['coded_message'] = mechanics_results['coded_language']['message']
         
         # Add current story context
         response['story_context'] = {
             'act': self.current_act,
             'beat': self.current_beat,
-            'trust_level': context.get('trust_level', 0),
-            'current_mask': context.get('current_mask', 'Unknown'),
-            'setting': 'San Francisco Bay Area' if self.use_sf_preset else 'Generic City'
+            'network_awareness': self.network_awareness,
+            'information_layer': self.information_layer,
+            'player_rank': self.player_rank,
+            'setting': 'San Francisco Bay Area, 2025'
         }
         
-        # Add location-specific elements if using preset
-        if self.use_sf_preset and context.get('location_lore'):
-            relevant_myths = [
-                myth for myth in context['location_lore'].get('myths', [])
-                if 'moth' in myth.get('name', '').lower() or 'queen' in myth.get('name', '').lower()
-            ]
-            if relevant_myths:
-                response['location_myths'] = relevant_myths
+        # Add network-specific elements
+        if context.get('network_location'):
+            response['location_significance'] = context['network_location']
+        
+        # Add available actions based on rank
+        response['available_actions'] = self._get_available_actions()
         
         return response
     
     def _determine_npc_mood(
         self, context: Dict[str, Any], mechanics: Dict[str, Any]
     ) -> str:
-        """Determine Lilith's current mood"""
-        # Override for trauma
-        if mechanics.get('trauma_trigger'):
-            return 'defensive'
-        
-        # Check player input
+        """Determine NPC's current mood"""
         player_input = context.get('player_input', '').lower()
         
-        if any(word in player_input for word in ['leave', 'goodbye', 'go away']):
-            return 'desperate'
-        elif any(word in player_input for word in ['love', 'adore', 'mine']):
-            trust = context.get('trust_level', 0)
-            return 'vulnerable' if trust > 60 else 'dominant'
-        elif context.get('is_private') and context.get('trust_level', 0) > 50:
-            return 'vulnerable'
-        elif 'sanctum' in context.get('current_location', '').lower():
+        if 'threat' in player_input or 'expose' in player_input:
+            return 'protective'
+        elif 'help' in player_input or 'save' in player_input:
+            return 'strategic'
+        elif context.get('is_network_business'):
+            return 'strategic'
+        elif 'power' in player_input or 'control' in player_input:
             return 'dominant'
-        else:
+        elif mechanics.get('transformation_moment'):
+            return 'transformative'
+        elif context.get('is_private') and self.network_awareness > 50:
             return 'contemplative'
+        else:
+            return 'observant'
     
     def _determine_scene_type(self, context: Dict[str, Any]) -> str:
         """Determine the type of scene"""
-        location = context.get('current_location', '').lower()
+        if context.get('network_location'):
+            location_type = context['network_location']['type']
+            if location_type == 'recruitment_hub':
+                return 'assessment_scene'
+            elif location_type == 'power_brokerage':
+                return 'transformation_scene'
+            elif location_type == 'queen_sanctuary':
+                return 'revelation_scene'
+            elif location_type == 'protection_space':
+                return 'nurturing_scene'
+            elif location_type == 'transformation_assessment':
+                return 'evaluation_scene'
         
-        if context.get('story_beat') in ['glimpse_beneath', 'the_confession']:
-            return 'vulnerable_moment'
-        elif context.get('story_beat') in ['the_performance', 'the_test']:
-            return 'dominant_scene'
-        elif 'mask' in context.get('player_input', '').lower():
-            return 'mask_scene'
-        elif context.get('is_private'):
-            return 'intimate_scene'
-        else:
-            return 'general'
+        # Check story beat
+        if context.get('story_beat') in ['witnessing_transformation', 'the_greenhouse']:
+            return 'transformation_scene'
+        elif context.get('story_beat') in ['queen_or_queens', 'the_inner_garden']:
+            return 'revelation_scene'
+        
+        return 'general'
     
     def _calculate_emotional_intensity(
         self, context: Dict[str, Any], mechanics: Dict[str, Any]
@@ -681,34 +743,37 @@ class MothFlameStoryRunner:
         """Calculate current emotional intensity"""
         intensity = 0.3
         
-        # Trust increases intensity
-        trust = context.get('trust_level', 0)
-        intensity += (trust / 100) * 0.3
+        # Network awareness increases intensity
+        intensity += (self.network_awareness / 100) * 0.3
         
         # Special events increase intensity
-        if mechanics.get('three_words_moment'):
-            intensity += 0.4
-        if mechanics.get('mask_event', {}).get('mask_change'):
+        if mechanics.get('queen_nature_glimpse'):
             intensity += 0.3
-        if mechanics.get('trauma_trigger'):
-            intensity += 0.5
+        if mechanics.get('layer_progression'):
+            intensity += 0.2
+        if mechanics.get('transformation_moment'):
+            intensity += 0.25
+        if mechanics.get('identity_mystery'):
+            intensity += 0.2
+        
+        # Information layer depth
+        layer_intensity = {
+            'public': 0.0,
+            'semi_private': 0.1,
+            'hidden': 0.2,
+            'deep_secret': 0.4
+        }
+        intensity += layer_intensity.get(self.information_layer, 0)
         
         # Story beat intensity
         beat_intensities = {
-            'the_confession': 0.4,
-            'breaking_point': 0.5,
-            'eternal_dance': 0.6
+            'witnessing_transformation': 0.3,
+            'queen_or_queens': 0.4,
+            'your_place_determined': 0.5
         }
         
         if context.get('story_beat') in beat_intensities:
             intensity += beat_intensities[context['story_beat']]
-        
-        # SF preset location intensity
-        if self.use_sf_preset and context.get('special_location'):
-            if context['special_location']['type'] == 'main_venue':
-                intensity += 0.1  # Velvet Sanctum always intense
-            elif context['special_location']['type'] == 'safehouse':
-                intensity -= 0.1  # Safehouses are calmer
         
         return min(1.0, intensity)
     
@@ -718,34 +783,54 @@ class MothFlameStoryRunner:
         """Update story state based on action results"""
         updates = {}
         
-        # Update story flags
+        # Update network awareness
+        awareness_gain = 0
+        if response.get('coded_language'):
+            awareness_gain += 5
         if response.get('special_events'):
-            if 'identity_reveal' in response['special_events']:
-                self.story_flags['dual_identity_revealed'] = True
-                updates['dual_identity_revealed'] = True
-            
-            if 'three_words_moment' in response['special_events']:
-                self.story_flags['three_words_near'] = True
-                updates['three_words_near'] = True
+            if 'transformation_moment' in response['special_events']:
+                awareness_gain += 15
+            if 'identity_mystery' in response['special_events']:
+                awareness_gain += 10
+            if 'layer_progression' in response['special_events']:
+                awareness_gain += 20
+        if context.get('network_location'):
+            awareness_gain += 2
         
-        # Update trust and other metrics
-        if response.get('trust_change'):
-            current_trust = context.get('trust_level', 0)
-            new_trust = max(-100, min(100, current_trust + response['trust_change']))
-            
-            # Update through canon
-            if self.lilith_npc_id:
-                canon_ctx = type('CanonicalContext', (), {
-                    'user_id': self.user_id,
-                    'conversation_id': self.conversation_id
-                })()
-                
-                async with get_db_connection_context() as conn:
-                    await canon.update_entity_canonically(
-                        canon_ctx, conn, "NPCStats", self.lilith_npc_id,
-                        {'trust': new_trust},
-                        f"Trust changed from {current_trust} to {new_trust}"
-                    )
+        if awareness_gain > 0:
+            self.network_awareness = min(100, self.network_awareness + awareness_gain)
+            updates['network_awareness'] = self.network_awareness
+        
+        # Update information layer
+        if response.get('special_events', {}).get('layer_progression'):
+            new_layer = response['special_events']['layer_progression']['to']
+            self.information_layer = new_layer
+            updates['information_layer'] = new_layer
+        
+        # Update player rank based on awareness
+        new_rank = self._calculate_player_rank()
+        if new_rank != self.player_rank:
+            self.player_rank = new_rank
+            updates['player_rank'] = new_rank
+        
+        # Update special flags
+        if response.get('witness_opportunity'):
+            self.story_flags['transformation_witnessed'] = True
+            updates['transformation_witnessed'] = True
+        
+        if context.get('queen_present'):
+            if not self.story_flags.get('queen_encountered'):
+                self.story_flags['queen_encountered'] = True
+                updates['queen_encountered'] = True
+        
+        # Update network members known
+        known_members = self.story_flags.get('known_network_members', [])
+        for npc_name in ['Lily Chen', 'Victoria Chen', 'Isabella Montenegro']:
+            if npc_name.lower() in context.get('player_input', '').lower() or \
+               npc_name in context.get('location_data', {}).get('metadata', {}).get('npc_present', ''):
+                if npc_name not in known_members:
+                    known_members.append(npc_name)
+                    updates['known_network_members'] = known_members
         
         # Update story state in database
         if updates:
@@ -761,20 +846,67 @@ class MothFlameStoryRunner:
                     json.dumps(updates)
                 )
     
+    def _calculate_player_rank(self) -> str:
+        """Calculate player's rank in the network"""
+        if self.network_awareness < 20:
+            return "outsider"
+        elif self.network_awareness < 40:
+            return "noticed"
+        elif self.network_awareness < 60:
+            return "seedling"
+        elif self.network_awareness < 80:
+            return "rose"
+        elif self.network_awareness < 90:
+            return "thorn"
+        elif self.network_awareness < 95:
+            return "gardener"
+        else:
+            return "council_candidate"
+    
     async def _check_story_progression(self) -> Optional[Dict[str, Any]]:
-        """Check if story should progress to next act"""
-        # Get completed beats
+        """Check if story should progress"""
+        # Network rank progression is the main driver
+        rank_progression = {
+            "noticed": "The network has taken notice of your potential",
+            "seedling": "You've been planted in the garden's soil",
+            "rose": "You bloom as part of the network",
+            "thorn": "You've proven yourself a protector",
+            "gardener": "You now cultivate others' growth",
+            "council_candidate": "The inner circle considers your worth"
+        }
+        
+        if self.player_rank in rank_progression:
+            completed_ranks = self.story_flags.get('completed_ranks', [])
+            if self.player_rank not in completed_ranks:
+                completed_ranks.append(self.player_rank)
+                
+                async with get_db_connection_context() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE story_states
+                        SET story_flags = story_flags || $4
+                        WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                        """,
+                        self.user_id, self.conversation_id, self.story_id,
+                        json.dumps({'completed_ranks': completed_ranks})
+                    )
+                
+                return {
+                    'rank_achieved': self.player_rank,
+                    'message': rank_progression[self.player_rank],
+                    'new_opportunities': self._get_rank_opportunities()
+                }
+        
+        # Check act progression
+        from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY
+        
         completed_beats = self.story_flags.get('completed_beats', [])
-        
-        from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
-        
-        # Check act completion
-        act_beats = [b.id for b in THE_MOTH_AND_FLAME.story_beats if b.id in completed_beats]
+        act_beats = [b.id for b in QUEEN_OF_THORNS_STORY.story_beats if b.id in completed_beats]
         
         act_requirements = {
-            1: ['first_glimpse', 'invitation', 'first_session'],
-            2: ['after_hours', 'glimpse_beneath', 'the_confession'],
-            3: ['the_test', 'breaking_point']
+            1: ['the_garden_gate', 'interesting_energy', 'first_pruning'],
+            2: ['deeper_soil', 'the_greenhouse', 'witnessing_transformation'],
+            3: ['the_inner_garden', 'queen_or_queens']
         }
         
         current_requirements = act_requirements.get(self.current_act, [])
@@ -797,16 +929,55 @@ class MothFlameStoryRunner:
                 return {
                     'act_complete': self.current_act - 1,
                     'new_act': self.current_act,
-                    'message': f"Act {self.current_act} begins..."
+                    'message': f"Act {self.current_act} begins: {QUEEN_OF_THORNS_STORY.acts[self.current_act-1]['name']}"
                 }
         
         return None
+    
+    def _get_rank_opportunities(self) -> List[str]:
+        """Get opportunities available at current rank"""
+        opportunities = {
+            "outsider": ["Observe the garden's edges"],
+            "noticed": ["Coded conversations", "Garden invitations"],
+            "seedling": ["Network meetings", "Basic cultivation training"],
+            "rose": ["Protection assignments", "Transformation witnessing"],
+            "thorn": ["Enforcement duties", "Safehouse access", "Direct action"],
+            "gardener": ["Recruitment responsibility", "Council observation", "Shape others"],
+            "council_candidate": ["Queen audiences", "Network direction", "Deep secrets"]
+        }
+        
+        return opportunities.get(self.player_rank, [])
+    
+    def _get_available_actions(self) -> List[str]:
+        """Get actions available to player based on current state"""
+        actions = ["Observe", "Speak", "Question"]
+        
+        # Add rank-based actions
+        if self.player_rank in ["seedling", "rose", "thorn", "gardener"]:
+            actions.append("Use coded language")
+        
+        if self.player_rank in ["rose", "thorn", "gardener"]:
+            actions.append("Request network assistance")
+        
+        if self.player_rank in ["thorn", "gardener"]:
+            actions.append("Identify transformation candidates")
+        
+        if self.player_rank == "gardener":
+            actions.append("Recruit new members")
+        
+        # Add location-based actions
+        if self.story_flags.get('network_location', {}).get('type') == 'recruitment_hub':
+            actions.append("Signal interest")
+        elif self.story_flags.get('network_location', {}).get('type') == 'transformation_assessment':
+            actions.append("Submit to evaluation")
+        
+        return actions
     
     async def handle_special_choice(
         self, choice_type: str, player_choice: str
     ) -> Dict[str, Any]:
         """
-        Handle special story choices (like three words response).
+        Handle special story choices.
         
         Args:
             choice_type: Type of choice
@@ -815,32 +986,69 @@ class MothFlameStoryRunner:
         Returns:
             Result of the choice
         """
-        if choice_type == "three_words_response":
-            if not self.lilith_mechanics:
-                return {"error": "Lilith not present"}
+        if choice_type == "rose_or_thorn":
+            # Player choosing their path in the network
+            if player_choice.lower() == "rose":
+                self.story_flags['chosen_path'] = 'cultivator'
+                role_desc = "You will help others grow and transform"
+            else:
+                self.story_flags['chosen_path'] = 'protector'
+                role_desc = "You will protect the vulnerable and enforce justice"
             
-            result = await self.lilith_mechanics.speak_three_words(player_choice)
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    UPDATE story_states
+                    SET story_flags = story_flags || $4
+                    WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                    """,
+                    self.user_id, self.conversation_id, self.story_id,
+                    json.dumps({'chosen_path': self.story_flags['chosen_path']})
+                )
             
-            # Update story state
-            if result.get('words_spoken'):
-                self.story_flags['three_words_spoken'] = True
-                self.story_flags['three_words_outcome'] = result['outcome']
+            return {
+                'choice_made': choice_type,
+                'path_chosen': self.story_flags['chosen_path'],
+                'description': role_desc,
+                'new_responsibilities': True
+            }
+        
+        elif choice_type == "queen_theory":
+            # Player's theory about the Queen's nature
+            theories = {
+                "single": "You believe she is one extraordinary woman",
+                "multiple": "You believe the role passes between queens",
+                "collective": "You believe it's a shared identity",
+                "mystery": "You accept the mystery may never be solved"
+            }
+            
+            if player_choice.lower() in theories:
+                self.story_flags['queen_theory'] = player_choice.lower()
                 
-                async with get_db_connection_context() as conn:
-                    await conn.execute(
-                        """
-                        UPDATE story_states
-                        SET story_flags = story_flags || $4
-                        WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
-                        """,
-                        self.user_id, self.conversation_id, self.story_id,
-                        json.dumps({
-                            'three_words_spoken': True,
-                            'three_words_outcome': result['outcome']
-                        })
-                    )
+                return {
+                    'choice_made': choice_type,
+                    'theory': player_choice.lower(),
+                    'description': theories[player_choice.lower()],
+                    'queen_response': "An interesting theory..."
+                }
+        
+        elif choice_type == "transformation_ethics":
+            # Player's stance on forced transformation
+            stances = {
+                "support": "You believe transformation serves justice",
+                "question": "You have doubts about the methods",
+                "oppose": "You believe in choice, not force"
+            }
             
-            return result
+            if player_choice.lower() in stances:
+                self.story_flags['transformation_stance'] = player_choice.lower()
+                
+                return {
+                    'choice_made': choice_type,
+                    'stance': player_choice.lower(),
+                    'description': stances[player_choice.lower()],
+                    'network_reaction': 'varies_by_member'
+                }
         
         return {"error": f"Unknown choice type: {choice_type}"}
     
@@ -849,27 +1057,30 @@ class MothFlameStoryRunner:
         if not self._initialized:
             await self.initialize()
         
-        from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
+        from story_templates.moth.queen_of_thorns_story import QUEEN_OF_THORNS_STORY
         
         # Calculate progress
-        total_beats = len(THE_MOTH_AND_FLAME.story_beats)
+        total_beats = len(QUEEN_OF_THORNS_STORY.story_beats)
         completed_beats = len(self.story_flags.get('completed_beats', []))
-        progress_percentage = (completed_beats / total_beats) * 100
+        progress_percentage = (completed_beats / total_beats) * 100 if total_beats > 0 else 0
         
-        # Get Lilith's current state
-        lilith_state = {}
-        if self.lilith_npc_id:
+        # Get Queen's current state if relevant
+        queen_state = {}
+        if self.queen_npc_id:
             async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT trust, current_mask, three_words_spoken
+                    SELECT trust, mystery_mechanics
                     FROM NPCStats
                     WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
                     """,
-                    self.user_id, self.conversation_id, self.lilith_npc_id
+                    self.user_id, self.conversation_id, self.queen_npc_id
                 )
                 if row:
-                    lilith_state = dict(row)
+                    queen_state = {
+                        'trust': row['trust'],
+                        'mystery_active': bool(row['mystery_mechanics'])
+                    }
         
         status = {
             'story_id': self.story_id,
@@ -877,21 +1088,25 @@ class MothFlameStoryRunner:
             'current_beat': self.current_beat,
             'progress_percentage': progress_percentage,
             'completed_beats': self.story_flags.get('completed_beats', []),
-            'lilith_state': lilith_state,
+            'network_awareness': self.network_awareness,
+            'information_layer': self.information_layer,
+            'player_rank': self.player_rank,
+            'queen_state': queen_state,
             'key_flags': {
-                'dual_identity_revealed': self.story_flags.get('dual_identity_revealed', False),
-                'three_words_spoken': self.story_flags.get('three_words_spoken', False),
-                'moth_flame_established': self.story_flags.get('moth_flame_dynamic') != 'unestablished'
+                'network_member': self.player_rank not in ['outsider', 'noticed'],
+                'queen_met': self.story_flags.get('queen_encountered', False),
+                'transformation_witnessed': self.story_flags.get('transformation_witnessed', False),
+                'safehouse_known': self.information_layer in ['hidden', 'deep_secret'],
+                'chosen_path': self.story_flags.get('chosen_path'),
+                'queen_theory': self.story_flags.get('queen_theory')
             },
-            'setting': 'San Francisco Bay Area' if self.use_sf_preset else 'Generic Modern City'
-        }
-        
-        # Add preset-specific status if applicable
-        if self.use_sf_preset:
-            status['sf_elements'] = {
-                'fog_nights_available': True,
-                'safehouse_network_discovered': self.story_flags.get('dual_identity_revealed', False),
-                'velvet_court_awareness': self.story_flags.get('velvet_court_known', False)
+            'setting': 'San Francisco Bay Area, 2025',
+            'network_elements': {
+                'known_members': self.story_flags.get('known_network_members', []),
+                'visited_locations': self.story_flags.get('network_locations_visited', []),
+                'rank_opportunities': self._get_rank_opportunities(),
+                'available_actions': self._get_available_actions()
             }
+        }
         
         return status
