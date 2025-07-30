@@ -644,32 +644,31 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 pass  # fallback to the existing 'count'
     
             # Gather context from DB
-            async with manager.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    regions = await conn.fetch("""
-                        SELECT id, name, region_type, climate, resources,
-                               terrain_features, strategic_value, matriarchal_influence
-                        FROM GeographicRegions
-                        LIMIT 10
+            async with get_db_connection_context() as conn:
+                regions = await conn.fetch("""
+                    SELECT id, name, region_type, climate, resources,
+                           terrain_features, strategic_value, matriarchal_influence
+                    FROM GeographicRegions
+                    LIMIT 10
+                """)
+                region_data = [dict(r) for r in regions]
+            
+                # Some cultural elements - try to fetch if table exists
+                try:
+                    cultures = await conn.fetch("""
+                        SELECT name, element_type, description
+                        FROM CulturalElements
+                        LIMIT 8
                     """)
-                    region_data = [dict(r) for r in regions]
-    
-                    # Some cultural elements - try to fetch if table exists
-                    try:
-                        cultures = await conn.fetch("""
-                            SELECT name, element_type, description
-                            FROM CulturalElements
-                            LIMIT 8
-                        """)
-                        culture_data = [dict(c) for c in cultures]
-                    except:
-                        # If table doesn't exist, use default data
-                        culture_data = [
-                            {"name": "Maternal Lineage", "element_type": "social", 
-                             "description": "Society traces lineage through the maternal line"},
-                            {"name": "Women's Councils", "element_type": "governance",
-                             "description": "Councils of elder women make important decisions"}
-                        ]
+                    culture_data = [dict(c) for c in cultures]
+                except:
+                    # If table doesn't exist, use default data
+                    culture_data = [
+                        {"name": "Maternal Lineage", "element_type": "social", 
+                         "description": "Society traces lineage through the maternal line"},
+                        {"name": "Women's Councils", "element_type": "governance",
+                         "description": "Councils of elder women make important decisions"}
+                    ]
     
             # Create agent for nation generation with structured output
             nation_agent = Agent(
@@ -814,41 +813,40 @@ class GeopoliticalSystemManager(BaseLoreManager):
             entities_data = {}
             regions_data = {}
             
-            async with manager.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    for entity_id in entity_ids:
-                        entity = await conn.fetchrow("""
-                            SELECT * FROM PoliticalEntities WHERE id = $1
-                        """, entity_id)
+            async with get_db_connection_context() as conn:
+                for entity_id in entity_ids:
+                    entity = await conn.fetchrow("""
+                        SELECT * FROM PoliticalEntities WHERE id = $1
+                    """, entity_id)
+                    
+                    if not entity:
+                        return {"error": f"Entity {entity_id} not found"}
+                    
+                    entity_data = dict(entity)
+                    
+                    # Parse JSON fields
+                    if "relations" in entity_data and entity_data["relations"]:
+                        try:
+                            entity_data["relations"] = json.loads(entity_data["relations"])
+                        except:
+                            entity_data["relations"] = {}
+                    
+                    if "power_centers" in entity_data and entity_data["power_centers"]:
+                        try:
+                            entity_data["power_centers"] = json.loads(entity_data["power_centers"])
+                        except:
+                            entity_data["power_centers"] = []
+                    
+                    entities_data[entity_id] = entity_data
+                    
+                    # Fetch region if exists
+                    if entity["region_id"]:
+                        region = await conn.fetchrow("""
+                            SELECT * FROM GeographicRegions WHERE id = $1
+                        """, entity["region_id"])
                         
-                        if not entity:
-                            return {"error": f"Entity {entity_id} not found"}
-                        
-                        entity_data = dict(entity)
-                        
-                        # Parse JSON fields
-                        if "relations" in entity_data and entity_data["relations"]:
-                            try:
-                                entity_data["relations"] = json.loads(entity_data["relations"])
-                            except:
-                                entity_data["relations"] = {}
-                        
-                        if "power_centers" in entity_data and entity_data["power_centers"]:
-                            try:
-                                entity_data["power_centers"] = json.loads(entity_data["power_centers"])
-                            except:
-                                entity_data["power_centers"] = []
-                        
-                        entities_data[entity_id] = entity_data
-                        
-                        # Fetch region if exists
-                        if entity["region_id"]:
-                            region = await conn.fetchrow("""
-                                SELECT * FROM GeographicRegions WHERE id = $1
-                            """, entity["region_id"])
-                            
-                            if region:
-                                regions_data[entity_id] = dict(region)
+                        if region:
+                            regions_data[entity_id] = dict(region)
             
             # Calculate power dynamics and relationships
             power_analysis = await _analyze_multi_party_dynamics(
@@ -1227,35 +1225,34 @@ class GeopoliticalSystemManager(BaseLoreManager):
             run_ctx = manager.create_run_context(ctx)
             
             # Fetch dispute details
-            async with manager.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    dispute = await conn.fetchrow("""
-                        SELECT * FROM BorderDisputes WHERE id = $1
-                    """, dispute_id)
-                    
-                    if not dispute:
-                        return {"error": "Border dispute not found"}
-                    
-                    # Fetch involved regions
-                    region1 = await conn.fetchrow("""
-                        SELECT * FROM GeographicRegions WHERE id = $1
-                    """, dispute["region1_id"])
-                    
-                    region2 = await conn.fetchrow("""
-                        SELECT * FROM GeographicRegions WHERE id = $1
-                    """, dispute["region2_id"])
-                    
-                    if not region1 or not region2:
-                        return {"error": "One or both regions not found"}
-                    
-                    # Fetch political entities in these regions
-                    entities1 = await conn.fetch("""
-                        SELECT * FROM PoliticalEntities WHERE region_id = $1
-                    """, dispute["region1_id"])
-                    
-                    entities2 = await conn.fetch("""
-                        SELECT * FROM PoliticalEntities WHERE region_id = $1
-                    """, dispute["region2_id"])
+            async with get_db_connection_context() as conn:
+                dispute = await conn.fetchrow("""
+                    SELECT * FROM BorderDisputes WHERE id = $1
+                """, dispute_id)
+                
+                if not dispute:
+                    return {"error": "Border dispute not found"}
+                
+                # Fetch involved regions
+                region1 = await conn.fetchrow("""
+                    SELECT * FROM GeographicRegions WHERE id = $1
+                """, dispute["region1_id"])
+                
+                region2 = await conn.fetchrow("""
+                    SELECT * FROM GeographicRegions WHERE id = $1
+                """, dispute["region2_id"])
+                
+                if not region1 or not region2:
+                    return {"error": "One or both regions not found"}
+                
+                # Fetch political entities in these regions
+                entities1 = await conn.fetch("""
+                    SELECT * FROM PoliticalEntities WHERE region_id = $1
+                """, dispute["region1_id"])
+                
+                entities2 = await conn.fetch("""
+                    SELECT * FROM PoliticalEntities WHERE region_id = $1
+                """, dispute["region2_id"])
             
             # Parse JSON fields
             dispute_data = dict(dispute)
