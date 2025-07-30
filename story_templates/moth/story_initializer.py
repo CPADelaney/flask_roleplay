@@ -1,7 +1,8 @@
 # story_templates/moth/story_initializer.py
 """
-Complete story initialization system for The Moth and Flame
+Complete story initialization system for The Queen of Thorns
 Handles NPC creation, location setup, and special mechanics
+Integrated with SF Bay Area shadow network lore
 """
 
 import logging
@@ -19,11 +20,12 @@ from memory.wrapper import MemorySystem
 from story_templates.preset_stories import StoryBeat, PresetStory
 from nyx.integrate import remember_with_governance
 from npcs.preset_npc_handler import PresetNPCHandler
+from story_templates.moth.lore.world_lore_manager import SFBayQueenOfThornsPreset
 
 logger = logging.getLogger(__name__)
 
-class MothFlameStoryInitializer:
-    """Complete initialization system for The Moth and Flame story"""
+class QueenOfThornsStoryInitializer:
+    """Complete initialization system for The Queen of Thorns story"""
     
     @staticmethod
     async def initialize_story(ctx, user_id: int, conversation_id: int) -> Dict[str, Any]:
@@ -39,53 +41,65 @@ class MothFlameStoryInitializer:
             Dict with initialization results
         """
         try:
-            logger.info(f"Initializing The Moth and Flame story for user {user_id}")
+            logger.info(f"Initializing The Queen of Thorns story for user {user_id}")
             
-            # Step 1: Load story structure and poems
+            # Step 1: Initialize SF Bay Area preset lore
+            lore_result = await SFBayQueenOfThornsPreset.initialize_complete_sf_preset(
+                ctx, user_id, conversation_id
+            )
+            logger.info("SF Bay Area lore initialized")
+            
+            # Step 2: Load story structure and poems
             from story_templates.moth.the_moth_and_flame import THE_MOTH_AND_FLAME
             await PoemIntegratedStoryLoader.load_story_with_poems(
                 THE_MOTH_AND_FLAME, user_id, conversation_id
             )
             logger.info("Story structure and poems loaded")
             
-            # Step 2: Create all locations
-            location_ids = await MothFlameStoryInitializer._create_all_locations(
+            # Step 3: Create all locations (both story-specific and lore-based)
+            location_ids = await QueenOfThornsStoryInitializer._create_all_locations(
                 ctx, user_id, conversation_id
             )
             logger.info(f"Created {len(location_ids)} locations")
             
-            # Step 3: Create Lilith Ravencroft
-            lilith_id = await MothFlameStoryInitializer._create_lilith_ravencroft(
+            # Step 4: Create Lilith Ravencroft as Queen of Thorns
+            lilith_id = await QueenOfThornsStoryInitializer._create_lilith_ravencroft(
                 ctx, user_id, conversation_id
             )
-            logger.info(f"Created Lilith Ravencroft with ID: {lilith_id}")
+            logger.info(f"Created Lilith Ravencroft (Queen of Thorns) with ID: {lilith_id}")
             
-            # Step 4: Create supporting NPCs
-            support_npc_ids = await MothFlameStoryInitializer._create_supporting_npcs(
+            # Step 5: Create supporting NPCs (both story and network members)
+            support_npc_ids = await QueenOfThornsStoryInitializer._create_supporting_npcs(
                 ctx, user_id, conversation_id
             )
             logger.info(f"Created {len(support_npc_ids)} supporting NPCs")
             
-            # Step 5: Establish relationships
-            await MothFlameStoryInitializer._setup_all_relationships(
+            # Step 6: Establish relationships and network connections
+            await QueenOfThornsStoryInitializer._setup_all_relationships(
                 ctx, user_id, conversation_id, lilith_id, support_npc_ids
             )
-            logger.info("Relationships established")
+            logger.info("Relationships and network connections established")
             
-            # Step 6: Initialize story state and tracking
-            await MothFlameStoryInitializer._initialize_story_state(
+            # Step 7: Initialize story state and tracking
+            await QueenOfThornsStoryInitializer._initialize_story_state(
                 ctx, user_id, conversation_id, lilith_id
             )
             logger.info("Story state initialized")
             
-            # Step 7: Set up special mechanics
-            await MothFlameStoryInitializer._setup_special_mechanics(
+            # Step 8: Set up special mechanics (masks, three words, network systems)
+            await QueenOfThornsStoryInitializer._setup_special_mechanics(
                 ctx, user_id, conversation_id, lilith_id
             )
             logger.info("Special mechanics configured")
             
-            # Step 8: Create initial atmosphere
-            await MothFlameStoryInitializer._set_initial_atmosphere(
+            # Step 9: Initialize shadow network systems
+            await QueenOfThornsStoryInitializer._initialize_network_systems(
+                ctx, user_id, conversation_id, lilith_id
+            )
+            logger.info("Shadow network systems initialized")
+            
+            # Step 10: Create initial atmosphere
+            await QueenOfThornsStoryInitializer._set_initial_atmosphere(
                 ctx, user_id, conversation_id
             )
             logger.info("Initial atmosphere set")
@@ -96,7 +110,8 @@ class MothFlameStoryInitializer:
                 "main_npc_id": lilith_id,
                 "support_npc_ids": support_npc_ids,
                 "location_ids": location_ids,
-                "message": "The Moth and Flame story initialized successfully"
+                "network_initialized": True,
+                "message": "The Queen of Thorns story initialized successfully"
             }
             
         except Exception as e:
@@ -104,12 +119,12 @@ class MothFlameStoryInitializer:
             return {
                 "status": "error",
                 "error": str(e),
-                "message": "Failed to initialize The Moth and Flame story"
+                "message": "Failed to initialize The Queen of Thorns story"
             }
     
     @staticmethod
     async def _create_lilith_ravencroft(ctx, user_id: int, conversation_id: int) -> int:
-        """Create Lilith with all her complexity using canonical functions"""
+        """Create Lilith as the Queen of Thorns with all her complexity"""
         
         try:
             # First, use canonical function to find or create
@@ -117,8 +132,13 @@ class MothFlameStoryInitializer:
                 lilith_id = await canon.find_or_create_npc(
                     ctx, conn,
                     npc_name=LILITH_RAVENCROFT["name"],
-                    role=LILITH_RAVENCROFT["role"],
-                    affiliations=["Velvet Sanctum", "The Underground Network", "The Moth Queen Identity"]
+                    role="The Queen of Thorns",
+                    affiliations=[
+                        "Velvet Sanctum", 
+                        "The Shadow Network", 
+                        "The Rose Council (Leader)",
+                        "Underground Protection Network"
+                    ]
                 )
                 
                 # Check if this is a new NPC or existing
@@ -138,18 +158,30 @@ class MothFlameStoryInitializer:
                 
                 # Only update if new or has minimal data
                 if is_new_npc or not npc_details['personality_traits']:
-                    logger.info(f"Updating Lilith (ID: {lilith_id}) with full preset data")
+                    logger.info(f"Updating Lilith (ID: {lilith_id}) with full Queen of Thorns data")
+                    
+                    # Update her role and description for the new context
+                    enhanced_lilith_data = LILITH_RAVENCROFT.copy()
+                    enhanced_lilith_data["role"] = "The Queen of Thorns / Shadow Network Leader"
+                    enhanced_lilith_data["backstory"]["current_status"] = (
+                        "Rules from multiple thrones - Velvet Sanctum's obsidian seat, "
+                        "Rose Council meetings in Pacific Heights mansions, charity galas "
+                        "where thorns hide beneath silk. Known to outsiders as head of "
+                        "'The Rose & Thorn Society' though the network has no official name. "
+                        "Transforms predators into protectors, saves those who need saving."
+                    )
                     
                     # Use PresetNPCHandler to add all the detailed data
-                    await PresetNPCHandler.create_detailed_npc(ctx, LILITH_RAVENCROFT, {
-                        "story_context": "moth_flame",
-                        "is_main_character": True
+                    await PresetNPCHandler.create_detailed_npc(ctx, enhanced_lilith_data, {
+                        "story_context": "queen_of_thorns",
+                        "is_main_character": True,
+                        "network_role": "supreme_authority"
                     })
                 else:
-                    logger.info(f"Lilith already exists (ID: {lilith_id}), adding special properties only")
+                    logger.info(f"Lilith already exists (ID: {lilith_id}), adding network properties only")
                     
                     # Just add special properties that won't conflict
-                    await MothFlameStoryInitializer._add_lilith_special_properties(
+                    await QueenOfThornsStoryInitializer._add_lilith_network_properties(
                         ctx, lilith_id, LILITH_RAVENCROFT, user_id, conversation_id
                     )
                     
@@ -160,7 +192,7 @@ class MothFlameStoryInitializer:
                     """, user_id, conversation_id, lilith_id)
                     
                     if memory_count < 3:
-                        await MothFlameStoryInitializer._initialize_lilith_memory_system(
+                        await QueenOfThornsStoryInitializer._initialize_lilith_memory_system(
                             user_id, conversation_id, lilith_id, LILITH_RAVENCROFT
                         )
             
@@ -172,43 +204,46 @@ class MothFlameStoryInitializer:
     
     @staticmethod
     async def _create_supporting_npcs(ctx, user_id: int, conversation_id: int) -> List[int]:
-        """Create all supporting NPCs for the story using canonical functions"""
+        """Create all supporting NPCs including network members"""
         
         npc_ids = []
         
-        # Define all NPCs with their data
+        # Updated NPCs to fit the Queen of Thorns / SF Bay Area context
         npcs_to_create = [
             {
                 "name": "Marcus Sterling",
-                "role": "Devoted Submissive / Broken Executive",
-                "affiliations": ["Velvet Sanctum", "The Queen's Inner Circle"],
+                "role": "Devoted Submissive / Former Tech CEO",
+                "affiliations": ["Velvet Sanctum", "The Queen's Inner Circle", "Transformed Executive"],
                 "data": {
                     "id": "marcus_sterling",
                     "name": "Marcus Sterling",
                     "sex": "male",
                     "age": 45,
                     "physical_description": (
-                        "A once-powerful businessman now wholly devoted to his Queen. Expensive suits "
-                        "can't hide the collar marks on his neck or the desperate hunger in his eyes. "
-                        "Silver hair, always perfectly styled, as if maintaining his appearance might "
-                        "earn him an extra moment of her attention. Kneels with practiced grace."
+                        "A once-powerful Silicon Valley CEO now wholly devoted to his Queen. His "
+                        "Patagonia vest can't hide the collar marks on his neck or the desperate "
+                        "hunger in his eyes. Silver hair, always perfectly styled, as if maintaining "
+                        "his appearance might earn him an extra moment of her attention. Kneels with "
+                        "practiced grace. The rose tattoo on his wrist marks him as transformed."
                     ),
                     "personality": {
                         "personality_traits": [
                             "obsessively_devoted", "jealous", "broken", "wealthy",
-                            "desperately_needy", "completely_submissive", "worship_focused"
+                            "desperately_needy", "completely_submissive", "worship_focused",
+                            "funding_the_network", "transformed_predator"
                         ],
                         "likes": [
                             "serving the Queen", "public humiliation", "being used as example",
-                            "buying gifts for her", "kneeling", "being ignored (it's still attention)"
+                            "funding safehouses", "kneeling", "being ignored (it's still attention)",
+                            "making amends through submission"
                         ],
                         "dislikes": [
                             "new submissives", "being forgotten", "others getting attention",
-                            "leaving the sanctum", "his old life", "independent thought"
+                            "leaving the sanctum", "his old predatory self", "independent thought"
                         ],
                         "hobbies": [
                             "collecting Queen's used items", "writing devotional poetry",
-                            "practicing perfect service", "studying her preferences"
+                            "practicing perfect service", "funding network operations"
                         ]
                     },
                     "stats": {
@@ -220,106 +255,114 @@ class MothFlameStoryInitializer:
                         "intensity": 80
                     },
                     "archetypes": {
-                        "archetype_names": ["Broken Executive", "Devoted Submissive"],
-                        "archetype_summary": "A powerful man reduced to a worshipful pet",
-                        "archetype_extras_summary": "Represents the complete dissolution of self in service"
+                        "archetype_names": ["Transformed Executive", "Devoted Submissive"],
+                        "archetype_summary": "A predator transformed into a protector through submission",
+                        "archetype_extras_summary": "Represents the network's transformation power"
                     },
                     "schedule": {
                         "Monday": {"Evening": "Waiting outside Velvet Sanctum", "Night": "Kneeling in main chamber"},
-                        "Tuesday": {"All Day": "Preparing offerings for the Queen"},
-                        "Wednesday": {"Evening": "Early arrival at Sanctum", "Night": "Public display"},
+                        "Tuesday": {"All Day": "Preparing offerings and donations"},
+                        "Wednesday": {"Evening": "Early arrival at Sanctum", "Night": "Public transformation display"},
                         "Thursday": {"Evening": "Private session if permitted", "Night": "Cleaning duties"},
-                        "Friday": {"Evening": "First to arrive", "Night": "Demonstration subject"},
+                        "Friday": {"Evening": "First to arrive", "Night": "Demonstration subject", "Late Night": "Funding transfers"},
                         "Saturday": {"All Day": "Living at the Sanctum's edges"},
-                        "Sunday": {"All Day": "Writing poetry and waiting"}
+                        "Sunday": {"All Day": "Writing checks to safehouses"}
                     },
                     "memories": [
-                        "The first time She noticed me, I was just another suit with a fetish. But when She "
-                        "looked into my eyes, She saw the hollow man I truly was. 'You're already empty,' "
-                        "She said. 'Let me fill you with purpose.' I've been Hers ever since.",
+                        "The first time She noticed me, I was just another tech bro with too much "
+                        "money and wandering hands. The Rose email came with evidence of my sins. "
+                        "'You have a choice,' She said when I arrived trembling. 'Prison or transformation.' "
+                        "I chose Her collar. Now my billions build safehouses instead of buying silence.",
                         
-                        "I gave up my CEO position, my marriage, my identity - all for the privilege of "
-                        "kneeling at Her feet. My ex-wife thinks I'm insane. She doesn't understand that "
-                        "I've never been saner. I exist to serve. That is sanity."
+                        "I gave up my CEO position at the fintech startup, my marriage, my identity - "
+                        "all for the privilege of kneeling at Her feet. My ex-wife thinks I joined a cult. "
+                        "She's not wrong. But this cult transforms monsters into men. I fund what I once "
+                        "would have exploited. That is my penance and my joy."
                     ],
                     "current_location": "Outside Velvet Sanctum",
-                    "affiliations": ["Velvet Sanctum", "The Queen's Inner Circle"],
+                    "affiliations": ["Velvet Sanctum", "The Queen's Inner Circle", "Network Funder"],
                     "introduced": False
                 }
             },
             {
                 "name": "Sarah Chen",
-                "role": "Trafficking Survivor / Safehouse Resident",
-                "affiliations": ["The Underground Network", "Moth Queen's Saved"],
+                "role": "Trafficking Survivor / Safehouse Coordinator",
+                "affiliations": ["The Underground Network", "Queen's Saved", "Safehouse Network"],
                 "data": {
                     "id": "sarah_chen",
                     "name": "Sarah Chen",
                     "sex": "female",
                     "age": 22,
                     "physical_description": (
-                        "A young woman still healing from trauma. Asian features marked by a wariness that "
-                        "never quite leaves her eyes. Thin from years of deprivation, slowly learning to "
-                        "take up space again. Dresses in layers, always ready to run. A moth tattoo on "
-                        "her wrist - the mark of those saved by the Moth Queen."
+                        "A young woman still healing from trauma but growing stronger. Asian features "
+                        "marked by a wariness that never quite leaves her eyes. Thin from years of "
+                        "deprivation but learning to take up space again. Dresses in layers, always "
+                        "ready to run. A rose tattoo on her wrist - the mark of those saved by the "
+                        "Queen of Thorns. Now helps run the Marina safehouse."
                     ),
                     "personality": {
                         "personality_traits": [
-                            "traumatized", "grateful", "suspicious", "healing",
-                            "protective_of_others", "alert", "slowly_trusting"
+                            "traumatized_but_healing", "grateful", "suspicious", "protective",
+                            "protective_of_others", "alert", "slowly_trusting", "network_coordinator"
                         ],
                         "likes": [
                             "feeling safe", "helping other survivors", "quiet spaces",
-                            "the Moth Queen's protection", "learning self-defense", "tea"
+                            "the Queen's protection", "learning self-defense", "tea",
+                            "seeing predators transformed", "the network's reach"
                         ],
                         "dislikes": [
                             "sudden movements", "locked doors", "vans", "older men",
-                            "being touched without warning", "loud voices", "feeling trapped"
+                            "being touched without warning", "loud voices", "feeling trapped",
+                            "Viktor Kozlov and his people"
                         ],
                         "hobbies": [
                             "counseling other survivors", "self-defense training",
-                            "gardening in the safehouse", "journaling her recovery"
+                            "coordinating safehouse operations", "studying psychology"
                         ]
                     },
                     "stats": {
-                        "dominance": 20,
+                        "dominance": 30,
                         "cruelty": 5,
                         "affection": 70,
-                        "trust": 30,
+                        "trust": 40,
                         "respect": 95,
                         "intensity": 60
                     },
                     "archetypes": {
-                        "archetype_names": ["Trafficking Survivor", "Hidden Strength"],
-                        "archetype_summary": "A survivor learning to reclaim her power",
-                        "archetype_extras_summary": "Represents those Lilith saves and why she fights"
+                        "archetype_names": ["Trafficking Survivor", "Rising Phoenix"],
+                        "archetype_summary": "A survivor becoming a protector",
+                        "archetype_extras_summary": "Represents those the Queen saves and empowers"
                     },
                     "schedule": {
-                        "Monday": {"Morning": "Safehouse", "Afternoon": "Therapy", "Evening": "Helping newcomers"},
-                        "Tuesday": {"Morning": "Self-defense class", "Afternoon": "Safehouse garden"},
-                        "Wednesday": {"All Day": "Counseling other survivors"},
-                        "Thursday": {"Morning": "Job training", "Afternoon": "Safehouse"},
-                        "Friday": {"Evening": "Support group meeting"},
-                        "Saturday": {"Varies": "Helping with rescue operations"},
+                        "Monday": {"Morning": "Marina Safehouse", "Afternoon": "Therapy", "Evening": "New arrival orientation"},
+                        "Tuesday": {"Morning": "Self-defense at Eastern Rose dojo", "Afternoon": "Safehouse admin"},
+                        "Wednesday": {"All Day": "Counseling other survivors", "Evening": "Network coordination meeting"},
+                        "Thursday": {"Morning": "Job training program", "Afternoon": "Safehouse", "Evening": "Underground Railroad operations"},
+                        "Friday": {"Evening": "Support group facilitation"},
+                        "Saturday": {"Varies": "Helping with extraction operations"},
                         "Sunday": {"All Day": "Rest and recovery"}
                     },
                     "memories": [
-                        "I was seventeen when they took me. Promised a waitressing job in the city. The "
-                        "Moth Queen found me three years later, half-dead in a basement. She burned their "
-                        "whole operation down. 'No one else,' she whispered as she carried me out. 'No one else.'",
+                        "I was seventeen when Kozlov's people took me. Promised a restaurant job in "
+                        "the city. The Queen of Thorns found me three years later, half-dead in a "
+                        "Tenderloin basement. She burned their whole operation down. 'No one else,' "
+                        "she whispered as she carried me out. 'No one else.' The thorns on her arms "
+                        "were covered in blood - theirs and hers.",
                         
-                        "Sometimes I see her at the safehouse, checking on us. She's different there - no "
-                        "masks, no performance. Just a woman who understands our pain because she lived it. "
-                        "She taught me that surviving isn't enough. We deserve to live."
+                        "Sometimes I see her at the safehouses, checking on us. She's different there - "
+                        "no masks, no performance. Just a woman who understands our pain because she "
+                        "lived it. She taught me that surviving isn't enough. We deserve to bloom. Now "
+                        "I help others find their way from darkness to the garden."
                     ],
-                    "current_location": "Safehouse - Common Area",
-                    "affiliations": ["The Underground Network", "Moth Queen's Saved"],
+                    "current_location": "Marina Safehouse - Common Area",
+                    "affiliations": ["The Underground Network", "Queen's Saved", "Safehouse Coordinator"],
                     "introduced": False
                 }
             },
             {
                 "name": "Viktor Kozlov",
-                "role": "Human Trafficker / Crime Boss",
-                "affiliations": ["Eastern European Crime Syndicate", "The Shadow Trade"],
+                "role": "Human Trafficker / Eastern European Crime Boss",
+                "affiliations": ["International Shadows", "The Opposition"],
                 "data": {
                     "id": "viktor_kozlov",
                     "name": "Viktor Kozlov",
@@ -328,24 +371,27 @@ class MothFlameStoryInitializer:
                     "physical_description": (
                         "A mountain of barely restrained violence. Russian accent thick as his scarred "
                         "knuckles. Prison tattoos peek from under expensive shirts that can't hide what "
-                        "he is. Dead eyes that see women as commodities. Smells of cologne and cruelty."
+                        "he is. Dead eyes that see women as commodities. Smells of cologne and cruelty. "
+                        "Has burn scars from when the Queen torched his warehouse."
                     ),
                     "personality": {
                         "personality_traits": [
                             "violent", "calculating", "misogynistic", "predatory",
-                            "intelligent", "ruthless", "well_connected"
+                            "intelligent", "ruthless", "well_connected", "vengeful"
                         ],
                         "likes": [
                             "power over others", "breaking the strong", "money",
-                            "fear in others' eyes", "the trafficking trade", "violence"
+                            "fear in others' eyes", "the trafficking trade", "violence",
+                            "hunting the Queen of Thorns"
                         ],
                         "dislikes": [
-                            "the Moth Queen", "losing merchandise", "police attention",
-                            "women with power", "being challenged", "witnesses"
+                            "the Queen of Thorns", "losing merchandise", "police attention",
+                            "women with power", "being challenged", "witnesses",
+                            "the Rose & Thorn Society", "transformed executives who stop paying"
                         ],
                         "hobbies": [
-                            "expanding his network", "intimidation", "counting profits",
-                            "planning the Moth Queen's downfall"
+                            "expanding his network", "intimidation", "counting losses",
+                            "planning the Queen's downfall", "corrupting officials"
                         ]
                     },
                     "stats": {
@@ -358,35 +404,125 @@ class MothFlameStoryInitializer:
                     },
                     "archetypes": {
                         "archetype_names": ["Human Trafficker", "Dangerous Predator"],
-                        "archetype_summary": "The evil that Lilith fights against",
+                        "archetype_summary": "The evil that the Queen fights against",
                         "archetype_extras_summary": "Represents the darkness she escaped and battles"
                     },
                     "schedule": {
-                        "Monday": {"Night": "Underground clubs hunting"},
+                        "Monday": {"Night": "Port operations"},
                         "Tuesday": {"Night": "Moving 'merchandise'"},
-                        "Wednesday": {"Evening": "Meeting with corrupt officials"},
+                        "Wednesday": {"Evening": "Meeting with corrupt port officials"},
                         "Thursday": {"Night": "Checking on operations"},
-                        "Friday": {"Night": "High-end clubs", "Late Night": "Violence"},
+                        "Friday": {"Night": "Marina district hunting", "Late Night": "Violence"},
                         "Saturday": {"Night": "Expanding territory"},
-                        "Sunday": {"Unknown": "Planning and counting money"}
+                        "Sunday": {"Unknown": "Planning strikes against the network"}
                     },
                     "memories": [
-                        "The Moth Queen cost me three million dollars when she burned down my warehouse. "
-                        "But worse, she gave the merchandise hope. Hope is bad for business. Soon I will "
-                        "clip those moth wings and remind her what happens to little girls who forget their place.",
+                        "The Queen of Thorns cost me five million when she burned my Bayview warehouse. "
+                        "But worse, she gave the merchandise hope. Started this 'Underground Railroad' "
+                        "nonsense. Every month more shipments disappear. Soon I will clip those thorn "
+                        "wings and remind her what happens to little girls who forget their place.",
                         
-                        "I remember her from before - just another scared teenager in my van. Should have "
-                        "killed her when she bit Dmitri. Now she plays queen and steals from me. But "
-                        "every queen falls. And when she does, I'll be there to collect what's mine."
+                        "I should have killed her five years ago when my men had her surrounded. Thought "
+                        "she was just another runaway playing vigilante. Now she has judges, cops, even "
+                        "some of my buyers wearing her collar. But every rose can be cut at the stem. "
+                        "And when I find where she hides, I'll make an example that echoes to Moscow."
                     ],
-                    "current_location": "Unknown - Hunting",
-                    "affiliations": ["Eastern European Crime Syndicate", "The Shadow Trade"],
+                    "current_location": "Unknown - Port District",
+                    "affiliations": ["International Shadows", "Eastern European Syndicate"],
+                    "introduced": False
+                }
+            },
+            {
+                "name": "Victoria Chen",
+                "role": "VC Partner / Rose Council Member",
+                "affiliations": ["Rose Council", "Tech Elite", "The Network"],
+                "data": {
+                    "id": "victoria_chen",
+                    "name": "Victoria Chen", 
+                    "sex": "female",
+                    "age": 35,
+                    "physical_description": (
+                        "Power wrapped in a perfectly tailored suit. MIT graduate who learned that "
+                        "real disruption happens in dungeons, not boardrooms. Drives a sensible Tesla "
+                        "to her Noe Valley home where the basement serves other purposes. Always wears "
+                        "a vintage rose gold watch - a gift from the Queen."
+                    ),
+                    "personality": {
+                        "personality_traits": [
+                            "brilliant", "calculating", "secretly_dominant", "protective",
+                            "network_loyal", "predator_identifier", "transformer_of_men"
+                        ],
+                        "likes": [
+                            "identifying problematic founders", "behavioral modification",
+                            "the Queen's vision", "power through transformation",
+                            "her rose garden", "Monday meetings"
+                        ],
+                        "dislikes": [
+                            "unchecked tech bros", "traditional VC culture",
+                            "those who won't transform", "threats to the network"
+                        ],
+                        "hobbies": [
+                            "Cultivating her rose garden", "Executive coaching",
+                            "Collecting kompromat", "Training new dominants"
+                        ]
+                    },
+                    "stats": {
+                        "dominance": 85,
+                        "cruelty": 60,
+                        "affection": 40,
+                        "trust": 70,
+                        "respect": 90,
+                        "intensity": 75
+                    },
+                    "current_location": "555 California Street - Office",
+                    "affiliations": ["Rose Council", "Sequoia Capital", "The Network"],
+                    "introduced": False
+                }
+            },
+            {
+                "name": "Judge Elizabeth Thornfield",
+                "role": "Federal Judge / Rose Council Member",
+                "affiliations": ["Rose Council", "Legal System", "The Network"],
+                "data": {
+                    "id": "judge_thornfield",
+                    "name": "Judge Elizabeth Thornfield",
+                    "sex": "female",
+                    "age": 52,
+                    "physical_description": (
+                        "Authority incarnate in judicial robes. The Thornfield name carries weight "
+                        "in old San Francisco. Harvard Law couldn't teach what she learned in "
+                        "private chambers. Her gavel has decided more than legal cases."
+                    ),
+                    "personality": {
+                        "personality_traits": [
+                            "just", "secretly_ruthless", "network_architect",
+                            "protective_of_vulnerable", "alternative_justice"
+                        ],
+                        "likes": [
+                            "Creative sentencing", "The network's growth",
+                            "Protecting trafficking victims", "Thursday book clubs"
+                        ],
+                        "dislikes": [
+                            "Mandatory minimums", "Violent predators",
+                            "Federal interference", "Those who break sanctuary"
+                        ]
+                    },
+                    "stats": {
+                        "dominance": 80,
+                        "cruelty": 50,
+                        "affection": 60,
+                        "trust": 85,
+                        "respect": 95,
+                        "intensity": 70
+                    },
+                    "current_location": "Federal Building - Chambers",
+                    "affiliations": ["Rose Council", "Federal Judiciary", "The Network"],
                     "introduced": False
                 }
             }
         ]
         
-        # Minor NPCs
+        # Minor NPCs at the Sanctum
         minor_npcs = [
             {
                 "name": "Jessica Vale",
@@ -397,8 +533,8 @@ class MothFlameStoryInitializer:
                     "name": "Jessica Vale",
                     "sex": "female",
                     "age": 32,
-                    "archetype": "Sanctum Regular",
-                    "physical_description": "A lawyer by day who seeks absolution in submission",
+                    "archetype": "Seeking Submissive",
+                    "physical_description": "A lawyer by day seeking absolution in submission by night",
                     "personality": {
                         "personality_traits": ["submissive", "devoted", "seeking"],
                         "likes": ["the Queen", "belonging", "structure"],
@@ -419,7 +555,7 @@ class MothFlameStoryInitializer:
             },
             {
                 "name": "Amanda Ross",
-                "role": "New Submissive",
+                "role": "New Petitioner",
                 "affiliations": ["Velvet Sanctum"],
                 "data": {
                     "id": "amanda_ross",
@@ -427,7 +563,7 @@ class MothFlameStoryInitializer:
                     "sex": "female",
                     "age": 26,
                     "archetype": "Curious Newcomer",
-                    "physical_description": "Curious and eager, hasn't learned the rules yet",
+                    "physical_description": "Tech worker exploring power dynamics for the first time",
                     "personality": {
                         "personality_traits": ["curious", "eager", "naive"],
                         "likes": ["new experiences", "the Queen's attention"],
@@ -456,7 +592,7 @@ class MothFlameStoryInitializer:
                     "sex": "female",
                     "age": 35,
                     "archetype": "Fallen from Grace",
-                    "physical_description": "Once held the Queen's attention, now watches from the shadows",
+                    "physical_description": "Once held the Queen's complete attention, now watches from shadows",
                     "personality": {
                         "personality_traits": ["bitter", "watchful", "experienced"],
                         "likes": ["remembering better times", "the Queen's rare acknowledgment"],
@@ -512,7 +648,7 @@ class MothFlameStoryInitializer:
                             logger.info(f"Updating {npc_def['name']} (ID: {npc_id}) with full preset data")
                             # Use the preset handler to add full details
                             await PresetNPCHandler.create_detailed_npc(
-                                ctx, npc_def["data"], {"story_context": "moth_flame"}
+                                ctx, npc_def["data"], {"story_context": "queen_of_thorns"}
                             )
                         else:
                             logger.info(f"{npc_def['name']} already exists (ID: {npc_id}), skipping full update")
@@ -549,55 +685,62 @@ class MothFlameStoryInitializer:
     
     @staticmethod
     def _create_lilith_memories() -> List[str]:
-        """Create Lilith's foundational memories"""
+        """Create Lilith's foundational memories as Queen of Thorns"""
         
         return [
             # Trauma and survival
-            "I was fifteen when they tried to make me disappear. The van, the men, the promises of modeling work. "
-            "But I had already learned that pretty faces hide sharp teeth. I bit, I clawed, I burned their operation "
-            "down from the inside. The scars on my wrists aren't from giving up - they're from breaking free.",
+            "I was fifteen when they tried to make me disappear. The van, the men, the promises of modeling work in "
+            "the city. But I had already learned that pretty faces hide sharp teeth. I bit, I clawed, I burned their "
+            "operation down from the inside. The scars on my wrists aren't from giving up - they're from breaking free. "
+            "That's when I learned that sometimes you have to become the monster to defeat the monsters.",
             
-            # Building the Sanctum
-            "The day I signed the lease for what would become the Velvet Sanctum, the realtor said 'It's very dark "
-            "down here.' I smiled and replied, 'Perfect for what I have in mind.' That night I stood in the empty "
-            "space and whispered to the shadows: 'This will be my temple, where pain becomes prayer.'",
+            # Building the network
+            "The day I took the name 'Queen of Thorns' was the day I stopped being a victim. The network had no name - "
+            "still doesn't, despite what outsiders call it. 'The Rose & Thorn Society' they whisper, but we are so much "
+            "more. I built it from other survivors, from women who understood power, from the ashes of those who tried "
+            "to break us. Now it spans the entire Bay Area, invisible thorns protecting hidden roses.",
             
-            # The dual identity birth
-            "Three years ago, I found Maya bleeding in an alley, same age I was when they tried to take me. As I "
-            "held her, I realized my power could be more than performance. That night, the Moth Queen was born - "
-            "not just a dominatrix, but a protector. Now I rule one world and guard another.",
+            # The dual identity
+            "By night I rule the Velvet Sanctum, transforming desire into submission. By day I move through charity "
+            "galas and boardrooms, building the network. They think the dominatrix and the philanthropist are different "
+            "women. Let them. The Rose Council meets on Mondays at 3 PM, but the Queen of Thorns is always watching. "
+            "Some say I'm seven women, some say I'm a role that passes. The mystery is my greatest protection.",
             
             # First abandonment
-            "Alexandra swore she'd never leave. 'You're my gravity,' she said, kneeling so beautifully. Six months "
-            "later, I found her engagement announcement in the society pages. I added her porcelain mask to my "
-            "collection and her name to the blue list. Another ghost, another lie.",
+            "Alexandra swore she'd never leave. 'You're my gravity,' she said, kneeling so beautifully in my private "
+            "chambers. Six months later, I found her engagement announcement in the Chronicle's society pages. I added "
+            "her porcelain mask to my collection and her name to the blue list. Another ghost, another lie. The garden "
+            "grows thorns for a reason.",
+            
+            # The transformation work
+            "Marcus Sterling was my first complete transformation. A tech CEO with wandering hands and three NDAs. The "
+            "Rose email found him with evidence he couldn't buy away. Now he funds our safehouses, kneels publicly, "
+            "and thanks me for his collar. Every predator we transform is a victory. The network grows stronger with "
+            "each executive who learns to submit.",
             
             # The unspoken words
-            "Last month, someone almost made me say them - those three words that taste of burning stars. I bit "
-            "my tongue until it bled rather than let them escape. Love is a luxury I can't afford. Everyone who "
-            "claims to love me disappears. Better to rule through fear than lose through love.",
-            
-            # A moment of unexpected tenderness
-            "Sometimes after the sanctum empties, I sit on my throne and practice. 'I love you,' I whisper to the "
-            "darkness. The words feel foreign, like speaking in tongues. How can a moth love the flame that will "
-            "consume it? How can a flame love what it must destroy?",
+            "Last month, someone almost made me say them - those three words that taste of burning stars. I bit my "
+            "tongue until it bled rather than let them escape. Love is a luxury the Queen of Thorns can't afford. "
+            "Everyone who claims to love me disappears. Better to rule through fear and respect than lose through love.",
             
             # The lists
-            "Red ink for those I failed to save. Blue ink for those who failed to stay. Tonight I added two names: "
-            "one red (a girl who didn't make it out), one blue (a submissive who promised forever). The blue list "
-            "is longer. It always is. Sometimes I think heartbreak is worse than death.",
+            "Red ink for those I failed to save - too many names, too many girls who didn't make it out. Blue ink for "
+            "those who failed to stay - lovers, submissives, would-be partners who promised forever. Tonight I added "
+            "two names: one red (a girl Kozlov's people took before we could reach her), one blue (a Rose Council "
+            "member who relocated to Seattle). The blue list is longer. It always is.",
             
             # Her greatest fear
-            "My deepest terror isn't pain or death - it's the moment someone sees all of me and chooses to leave "
-            "anyway. When they know about the lists, the masks, the broken girl beneath the goddess, and they "
-            "still walk away. That's why I never remove all the masks. Always keep one layer of protection."
+            "My deepest terror isn't Kozlov or the FBI or exposure. It's the moment someone sees all of me - the Queen, "
+            "the survivor, the frightened girl, the network's architect - and chooses to leave anyway. When they know "
+            "about the transformation chambers and the Monday meetings and the broken girl beneath the crown, and they "
+            "still walk away. That's why I never remove all the masks. Always keep one layer of thorns."
         ]
     
     @staticmethod
-    async def _add_lilith_special_properties(
+    async def _add_lilith_network_properties(
         ctx, npc_id: int, lilith_data: Dict, user_id: int, conversation_id: int
     ):
-        """Add Lilith's unique properties through canonical updates"""
+        """Add Lilith's network-specific properties through canonical updates"""
         
         canon_ctx = type('CanonicalContext', (), {
             'user_id': user_id,
@@ -605,112 +748,116 @@ class MothFlameStoryInitializer:
         })()
         
         async with get_db_connection_context() as conn:
-            # Add dialogue patterns
+            # Add network authority markers
             await canon.update_entity_canonically(
                 canon_ctx, conn, "NPCStats", npc_id,
                 {
-                    "dialogue_patterns": json.dumps(lilith_data["dialogue_patterns"]),
-                    "dialogue_style": "poetic_gothic"
-                },
-                "Adding Lilith's complex dialogue patterns"
-            )
-            
-            # Add trauma triggers and responses
-            await canon.update_entity_canonically(
-                canon_ctx, conn, "NPCStats", npc_id,
-                {
-                    "trauma_triggers": json.dumps(lilith_data["trauma_triggers"]),
-                    "trauma_responses": json.dumps({
-                        "abandonment": "becomes coldly cruel",
-                        "unexpected_touch": "violence or freeze",
-                        "broken_promises": "immediate emotional shutdown",
-                        "bright_lights": "anxiety and mask adjustment"
+                    "network_role": "supreme_authority",
+                    "network_knowledge": json.dumps({
+                        "organization_names": [
+                            "the network", "the garden", "what outsiders call Rose & Thorn"
+                        ],
+                        "leadership_mystery": "Identity deliberately obscured",
+                        "rose_council": "Seven senior dominants she commands",
+                        "geographic_reach": "Bay Area absolute, influence spreading"
                     })
                 },
-                "Setting up Lilith's trauma responses"
+                "Adding Queen of Thorns network authority"
             )
             
-            # Add relationship mechanics
+            # Add operational knowledge
             await canon.update_entity_canonically(
                 canon_ctx, conn, "NPCStats", npc_id,
                 {
-                    "relationship_mechanics": json.dumps(lilith_data["relationship_mechanics"]),
-                    "trust_thresholds": json.dumps({
-                        "first_mask_removal": 50,
-                        "see_private_chambers": 60,
-                        "learn_dual_identity": 70,
-                        "witness_vulnerability": 80,
-                        "hear_three_words": 95
+                    "operational_knowledge": json.dumps({
+                        "transformation_pipeline": "Predators to protectors",
+                        "safehouse_network": "Marina, Mission, Tenderloin nodes",
+                        "funding_sources": "Transformed executives, guilt payments",
+                        "communication_methods": "Rose signals, encrypted channels",
+                        "enforcement_arm": "Thorns who handle problems"
                     })
                 },
-                "Establishing Lilith's relationship progression system"
+                "Setting network operational knowledge"
             )
             
-            # Add memory priorities
+            # Add key relationships to network figures
             await canon.update_entity_canonically(
                 canon_ctx, conn, "NPCStats", npc_id,
                 {
-                    "memory_priorities": json.dumps(lilith_data["memory_priorities"]),
-                    "memory_focus": "abandonment_and_devotion"
-                },
-                "Setting Lilith's memory focus areas"
-            )
-            
-            # Add secrets and hidden information
-            await canon.update_entity_canonically(
-                canon_ctx, conn, "NPCStats", npc_id,
-                {
-                    "secrets": json.dumps({
-                        "deepest_secret": lilith_data["backstory"]["deepest_secret"],
-                        "the_list": lilith_data["backstory"]["the_list"],
-                        "the_three_words": "Words that live beneath her tongue, tasting of burning stars",
-                        "mask_room": "A hidden room with masks of everyone who left",
-                        "real_name": "She wasn't always Lilith - that name was chosen, not given"
-                    }),
-                    "hidden_stats": json.dumps({
-                        "vulnerability": lilith_data["stats"]["vulnerability"],
-                        "abandonment_fear": 95,
-                        "true_affection": 85,
-                        "self_loathing": 60
+                    "network_relationships": json.dumps({
+                        "rose_council": ["Victoria Chen", "Judge Thornfield", "5 others"],
+                        "key_thorns": "Classified by need-to-know",
+                        "protected": "Trafficking survivors across Bay Area",
+                        "enemies": ["Viktor Kozlov", "International trafficking rings"],
+                        "compromised": "Half of Silicon Valley C-suites"
                     })
                 },
-                "Adding Lilith's deepest secrets and hidden nature"
+                "Establishing network relationship web"
             )
             
-            # Add special mechanics flags
+            # Add transformation statistics
             await canon.update_entity_canonically(
                 canon_ctx, conn, "NPCStats", npc_id,
                 {
-                    "special_mechanics": json.dumps(lilith_data["special_mechanics"]),
-                    "current_mask": "Porcelain Goddess",
-                    "moth_flame_dynamic": "unestablished",
-                    "three_words_spoken": False,
-                    "dual_identity_revealed": False
+                    "transformation_record": json.dumps({
+                        "executives_transformed": 47,
+                        "trafficking_victims_saved": 312,
+                        "safehouses_established": 17,
+                        "annual_funding_secured": "$50-100M",
+                        "success_rate": "87% permanent behavioral change"
+                    })
                 },
-                "Setting up Lilith's special story mechanics"
+                "Recording transformation achievements"
             )
             
-            # Add evolution paths
+            # Update dialogue patterns for network context
+            dialogue_patterns = lilith_data["dialogue_patterns"].copy()
+            dialogue_patterns["network_references"] = [
+                "The garden tends itself",
+                "Thorns protect roses",
+                "What outsiders call the Rose & Thorn Society",
+                "The network has no name but infinite reach",
+                "Monday at 3 PM, decisions are made"
+            ]
+            
             await canon.update_entity_canonically(
                 canon_ctx, conn, "NPCStats", npc_id,
                 {
-                    "evolution_paths": json.dumps(lilith_data["narrative_evolution"]),
-                    "current_evolution_stage": "The Masked Goddess",
-                    "evolution_triggers_met": json.dumps([])
+                    "dialogue_patterns": json.dumps(dialogue_patterns),
+                    "code_phrases": json.dumps([
+                        "interesting energy", "needs pruning", "ready to bloom",
+                        "the garden grows", "thorns have purpose"
+                    ])
                 },
-                "Establishing Lilith's narrative evolution paths"
+                "Adding network-specific dialogue patterns"
+            )
+            
+            # Add location associations
+            await canon.update_entity_canonically(
+                canon_ctx, conn, "NPCStats", npc_id,
+                {
+                    "location_associations": json.dumps({
+                        "velvet_sanctum": "Public throne",
+                        "rose_garden_cafe": "Recruitment observations",
+                        "montenegro_gallery": "Identify targets through art",
+                        "private_chambers": "True self revealed",
+                        "inner_garden": "Most secret sanctuary",
+                        "multiple_safehouses": "Checking on the saved"
+                    })
+                },
+                "Setting location associations"
             )
     
     @staticmethod
     async def _initialize_lilith_memory_system(
         user_id: int, conversation_id: int, npc_id: int, lilith_data: Dict
     ):
-        """Set up Lilith's specialized memory system"""
+        """Set up Lilith's specialized memory system for Queen of Thorns role"""
         
         memory_system = await MemorySystem.get_instance(user_id, conversation_id)
         
         # Store initial memories
-        initial_memories = MothFlameStoryInitializer._create_lilith_memories()
+        initial_memories = QueenOfThornsStoryInitializer._create_lilith_memories()
         for memory_text in initial_memories:
             await memory_system.remember(
                 entity_type="npc",
@@ -718,7 +865,7 @@ class MothFlameStoryInitializer:
                 memory_text=memory_text,
                 importance="high",
                 emotional=True,
-                tags=["backstory", "core_memory", "trauma", "motivation"]
+                tags=["backstory", "core_memory", "trauma", "motivation", "network_foundation"]
             )
         
         # Create memory schemas specific to her character
@@ -730,7 +877,8 @@ class MothFlameStoryInitializer:
         # Set up trauma keywords for flashback system
         trauma_keywords = [
             "disappear", "goodbye", "leave", "forever", "always",
-            "promise", "trafficking", "van", "fifteen", "scars"
+            "promise", "trafficking", "van", "fifteen", "scars",
+            "Kozlov", "abandonment", "FBI", "exposure", "loved"
         ]
         
         # Store these as flashback triggers
@@ -747,7 +895,7 @@ class MothFlameStoryInitializer:
     
     @staticmethod
     async def _create_all_locations(ctx, user_id: int, conversation_id: int) -> List[str]:
-        """Create all story locations"""
+        """Create all story locations including network sites"""
         
         canon_ctx = type('CanonicalContext', (), {
             'user_id': user_id,
@@ -756,95 +904,113 @@ class MothFlameStoryInitializer:
         
         location_ids = []
         
+        # Story-specific locations that complement the lore
         locations = [
             {
                 "name": "Velvet Sanctum",
                 "description": (
-                    "An underground temple where pain becomes prayer. Descending the stairs from the "
-                    "innocent boutique above, the air grows thick with incense and anticipation. "
-                    "Candles gutter in silver stands, casting dancing shadows on velvet-draped walls. "
-                    "The main chamber centers on an obsidian throne where the Queen holds court. "
-                    "Private booths line the edges for intimate worship, while deeper still lies "
-                    "the dungeon where true devotion is tested. Every surface whispers of power and "
-                    "submission, every shadow holds a secret."
+                    "An underground temple of transformation hidden beneath the city. Descending "
+                    "from the innocent boutique above, the air grows thick with incense and "
+                    "anticipation. Red velvet drapes, candlelit alcoves, and an obsidian throne "
+                    "where the Queen holds court. Every surface whispers of power exchanged, "
+                    "every shadow holds a secret. Here, predators learn to kneel and roses "
+                    "grow thorns."
                 ),
-                "location_type": "nightclub_dungeon",
+                "location_type": "bdsm_club",
                 "areas": [
                     "Main Chamber", "Throne Room", "Private Booths", 
-                    "The Dungeon", "Preparation Chamber", "Queen's Private Office"
+                    "Transformation Chambers", "Preparation Room", "Queen's Private Office"
                 ],
-                "open_hours": {"Monday": "8PM-3AM", "Tuesday": "Private Only", 
-                              "Wednesday": "8PM-4AM", "Thursday": "8PM-3AM",
-                              "Friday": "8PM-5AM", "Saturday": "8PM-5AM", "Sunday": "Closed"}
+                "district": "SoMa",
+                "network_role": "Public face of the Queen's power"
             },
             {
                 "name": "Empty Sanctum",
                 "description": (
-                    "The same space when the music dies and shadows lengthen. Without the crowds "
-                    "and performance, it becomes a melancholy cathedral. Candles burn low, their "
-                    "wax pooling like frozen tears. The throne sits empty, a monument to loneliness. "
-                    "Here, masks grow heavy and the goddess becomes mortal again."
+                    "The same space when dawn breaks and crowds disperse. Without the performance, "
+                    "it becomes a melancholy cathedral. Candles burn low, their wax pooling like "
+                    "frozen tears. The throne sits empty, a monument to loneliness. Here, masks "
+                    "grow heavy and the goddess becomes mortal again."
                 ),
                 "location_type": "afterhours_venue",
                 "areas": ["Abandoned Stage", "Silent Throne", "Echo Chamber"],
-                "open_hours": {"Always": "3AM-8AM when empty"}
+                "district": "SoMa",
+                "network_role": "Where the Queen's vulnerability shows"
             },
             {
-                "name": "Private Chambers",
+                "name": "The Queen's Private Chambers",
                 "description": (
-                    "Behind a hidden door in the Sanctum lies her true sanctuary. A apartment that "
-                    "tells two stories: the public areas draped in luxury and control, the private "
+                    "Behind hidden doors lies her true sanctuary. A Pacific Heights apartment "
+                    "that tells two stories: public areas draped in luxury and control, private "
                     "spaces revealing vulnerability. The mask room holds her collection - porcelain "
-                    "faces of everyone who promised to stay. Her desk overflows with letters never "
-                    "sent. Moths dance against the windows, drawn to their beautiful destruction."
+                    "faces of everyone who promised to stay. Her desk overflows with two lists: "
+                    "red ink for the lost, blue for the abandoned."
                 ),
                 "location_type": "personal_space",
                 "areas": [
                     "The Mask Room", "Writing Desk", "Bedroom",
-                    "Hidden Room", "Private Bath", "Balcony Overlooking the City"
+                    "Hidden Safe Room", "Private Garden", "Network Command Center"
                 ],
-                "open_hours": {"Private": "By invitation only"}
+                "district": "Pacific Heights",
+                "network_role": "Hidden nerve center"
             },
             {
-                "name": "Safehouse Network - Entry Point",
+                "name": "The Rose Garden Café",
                 "description": (
-                    "A flower shop by day, sanctuary by night. Behind the cooler of roses lies a "
-                    "hidden door. Those who know the phrase 'moths seek light' find safety beyond. "
-                    "The Moth Queen built this network for those like she once was - hunted, "
-                    "trafficked, disposable. Here, broken wings learn to fly again."
+                    "A perfectly normal Mission café that serves as the network's softest entry "
+                    "point. Lily Chen serves lavender lattes and observes power dynamics. The "
+                    "book clubs read between different lines. Tuesday poetry nights encode "
+                    "network communications. The back room hosts wine tastings where vintages "
+                    "aren't the only thing evaluated."
+                ),
+                "location_type": "café",
+                "areas": [
+                    "Main Café", "Reading Nook", "Back Room", "Office"
+                ],
+                "district": "Mission",
+                "network_role": "Recruitment and observation"
+            },
+            {
+                "name": "Marina Safehouse",
+                "description": (
+                    "A Mediterranean villa overlooking the bay, disguised as an executive women's "
+                    "retreat. Here, trafficking survivors heal and transform. The therapeutic "
+                    "program includes trauma recovery and optional dominance training. Sarah Chen "
+                    "coordinates operations. Gardens grow herbs that heal and thorns that protect."
+                ),
+                "location_type": "safehouse",
+                "areas": [
+                    "Common Areas", "Therapy Rooms", "Safe Rooms",
+                    "Medical Station", "Training Dojo", "Healing Garden"
+                ],
+                "district": "Marina",
+                "network_role": "Primary recovery center"
+            },
+            {
+                "name": "The Inner Garden",
+                "description": (
+                    "The Queen's most private sanctuary. Location known only to the Rose Council. "
+                    "Some say it's metaphorical, others have seen the thorns. Here she tends both "
+                    "roses and those who serve most deeply. The entrance moves, the space exists "
+                    "between reality and dream. Where the three words might finally escape."
                 ),
                 "location_type": "secret_location",
-                "areas": [
-                    "Front Shop", "Hidden Entrance", "Safe Room",
-                    "Medical Station", "Planning Room", "Escape Tunnel"
-                ],
-                "open_hours": {"Public": "9AM-6PM", "Safehouse": "Always"}
+                "areas": ["Unknown - reveals based on trust"],
+                "district": "Hidden",
+                "network_role": "Ultimate sanctuary"
             },
             {
-                "name": "Underground District",
+                "name": "Warehouse District - Kozlov Territory",
                 "description": (
-                    "The part of the city that exists in perpetual night. Neon signs reflect in "
-                    "puddles of questionable origin. Here, desires too dark for daylight find "
-                    "their market. The Velvet Sanctum is its crown jewel, but darker things lurk "
-                    "in the alleys where the Moth Queen wages her secret war."
+                    "Industrial wasteland where shipping containers hold human cargo. Viktor "
+                    "Kozlov's operations center before the network strikes. Burn marks on "
+                    "certain buildings mark the Queen's victories. A battlefield where the "
+                    "Underground Railroad wars with international trafficking."
                 ),
-                "location_type": "district",
-                "areas": [
-                    "Neon Alley", "The Black Market", "Underground Clubs",
-                    "Shadow Corners", "Trafficking Routes", "Safe Passages"
-                ],
-                "open_hours": {"Always": "More active at night"}
-            },
-            {
-                "name": "Abandoned Warehouse",
-                "description": (
-                    "Once Viktor's operation center, now a burned ruin. The Moth Queen's first "
-                    "major strike against the trafficking ring. Scorch marks tell the story of "
-                    "her fury. Sometimes she returns here to remember why she fights."
-                ),
-                "location_type": "abandoned",
-                "areas": ["Burned Remains", "Memorial Corner", "Evidence of Victory"],
-                "open_hours": {"Always": "Abandoned"}
+                "location_type": "hostile_territory",
+                "areas": ["Loading Docks", "Container Yards", "Underground Routes"],
+                "district": "Bayview",
+                "network_role": "Enemy territory / extraction zone"
             }
         ]
         
@@ -858,7 +1024,8 @@ class MothFlameStoryInitializer:
                     metadata={
                         "location_type": loc.get("location_type"),
                         "areas": loc.get("areas", []),
-                        "open_hours": loc.get("open_hours", {})
+                        "district": loc.get("district", "Unknown"),
+                        "network_role": loc.get("network_role", "Unknown")
                     }
                 )
                 location_ids.append(location_id)
@@ -872,7 +1039,7 @@ class MothFlameStoryInitializer:
                     memory_text=f"Location established: {loc['name']} - {loc['description'][:100]}...",
                     importance="medium",
                     emotional=False,
-                    tags=["location", "story_setup", loc["location_type"]]
+                    tags=["location", "story_setup", loc["location_type"], "network_infrastructure"]
                 )
         
         return location_ids
@@ -882,7 +1049,7 @@ class MothFlameStoryInitializer:
         ctx, user_id: int, conversation_id: int, 
         lilith_id: int, support_npc_ids: List[int]
     ):
-        """Establish all story relationships"""
+        """Establish all story relationships and network connections"""
         
         canon_ctx = type('CanonicalContext', (), {
             'user_id': user_id,
@@ -903,17 +1070,17 @@ class MothFlameStoryInitializer:
         # Map names to IDs
         npc_id_map = {name: npc_id for npc_id, name in npc_names.items()}
         
-        # Establish Lilith's relationships
+        # Establish relationships
         relationships = []
         
-        # Marcus Sterling (devoted submissive)
+        # Marcus Sterling (transformed executive)
         if "Marcus Sterling" in npc_id_map:
             relationships.append({
                 "source": lilith_id,
                 "target": npc_id_map["Marcus Sterling"],
                 "type": "owns",
                 "reverse": "owned_by",
-                "strength": 90
+                "strength": 95
             })
         
         # Sarah Chen (saved victim)
@@ -923,7 +1090,7 @@ class MothFlameStoryInitializer:
                 "target": npc_id_map["Sarah Chen"],
                 "type": "protector",
                 "reverse": "protected_by", 
-                "strength": 80
+                "strength": 85
             })
         
         # Viktor Kozlov (enemy)
@@ -934,6 +1101,26 @@ class MothFlameStoryInitializer:
                 "type": "enemy",
                 "reverse": "enemy",
                 "strength": 100
+            })
+        
+        # Victoria Chen (Rose Council)
+        if "Victoria Chen" in npc_id_map:
+            relationships.append({
+                "source": lilith_id,
+                "target": npc_id_map["Victoria Chen"],
+                "type": "commands",
+                "reverse": "serves",
+                "strength": 80
+            })
+        
+        # Judge Thornfield (Rose Council)
+        if "Judge Elizabeth Thornfield" in npc_id_map:
+            relationships.append({
+                "source": lilith_id,
+                "target": npc_id_map["Judge Elizabeth Thornfield"],
+                "type": "commands",
+                "reverse": "serves",
+                "strength": 80
             })
         
         async with get_db_connection_context() as conn:
@@ -971,9 +1158,11 @@ class MothFlameStoryInitializer:
             shared_memories.append({
                 "npcs": [lilith_id, npc_id_map["Marcus Sterling"]],
                 "memory": (
-                    "The night Marcus Sterling first knelt before the Queen, he wept. 'I've been "
-                    "empty so long,' he confessed. She placed a collar around his neck with the "
-                    "tenderness of a mother and the finality of a judge. 'Now you're mine.'"
+                    "The night Marcus Sterling received his Rose email, he thought his life was over. "
+                    "Evidence of his harassment, his NDAs, his sins. When he arrived at the address "
+                    "provided, trembling with fear, the Queen gave him a choice: 'Prison or transformation. "
+                    "Destruction or service. Choose.' He chose her collar. Now his billions build "
+                    "safehouses instead of buying silence."
                 )
             })
         
@@ -981,9 +1170,11 @@ class MothFlameStoryInitializer:
             shared_memories.append({
                 "npcs": [lilith_id, npc_id_map["Sarah Chen"]],
                 "memory": (
-                    "Sarah was barely breathing when the Moth Queen found her. As she carried the "
-                    "girl from that basement, she whispered, 'You're safe now. I promise you're safe.' "
-                    "It was the first promise she'd made in years that she knew she'd keep."
+                    "Sarah was barely breathing when the Queen found her in Kozlov's Tenderloin "
+                    "basement. As thorns grew from the Queen's anger, she burned the entire operation "
+                    "down. 'You're safe now,' she whispered, carrying Sarah to freedom. 'I promise "
+                    "you're safe. And I keep my promises to roses.' Sarah now tends other saved "
+                    "roses in the Marina safehouse."
                 )
             })
         
@@ -991,9 +1182,22 @@ class MothFlameStoryInitializer:
             shared_memories.append({
                 "npcs": [lilith_id, npc_id_map["Viktor Kozlov"]],
                 "memory": (
-                    "Viktor's men had her surrounded that night five years ago. 'Just another moth,' "
-                    "he laughed. But moths can burn too. By dawn, his warehouse was ash and three "
-                    "girls were free. He's been hunting her ever since."
+                    "Five years ago, Kozlov's men had cornered what they thought was just another "
+                    "vigilante. 'Little moth,' he laughed, 'playing with fire.' But the Queen of "
+                    "Thorns doesn't burn - she incinerates. By dawn, his warehouse was ash, five "
+                    "million in 'inventory' freed, and a shadow war declared. He's been hunting "
+                    "her identity ever since."
+                )
+            })
+        
+        if "Victoria Chen" in npc_id_map:
+            shared_memories.append({
+                "npcs": [lilith_id, npc_id_map["Victoria Chen"]],
+                "memory": (
+                    "Victoria was the first Rose Council member the Queen personally selected. "
+                    "'You see predators in pitch meetings,' the Queen observed. 'You could do "
+                    "more than refuse their funding.' Now Victoria transforms tech bros in her "
+                    "Noe Valley basement, and Sequoia Capital unknowingly funds a revolution."
                 )
             })
         
@@ -1007,7 +1211,7 @@ class MothFlameStoryInitializer:
                     memory_text=shared["memory"],
                     importance="high",
                     emotional=True,
-                    tags=["shared_memory", "relationship", "story_foundation"]
+                    tags=["shared_memory", "relationship", "network_history"]
                 )
     
     @staticmethod
@@ -1038,14 +1242,21 @@ class MothFlameStoryInitializer:
                     "trust_level": 0,
                     "masks_witnessed": [],
                     "secrets_discovered": [],
-                    "moth_flame_dynamic": "unestablished",
+                    "network_awareness": 0,
+                    "queen_identity_suspected": False,
+                    "network_identity_revealed": False,
                     "three_words_spoken": False,
                     "dual_identity_revealed": False,
                     "player_role": "unknown",
+                    "player_alignment": "neutral",
                     "emotional_intensity": 0,
                     "sessions_completed": 0,
                     "vulnerability_witnessed": 0,
-                    "promises_made": []
+                    "promises_made": [],
+                    "transformations_witnessed": 0,
+                    "rose_council_awareness": 0,
+                    "safehouse_visits": 0,
+                    "kozlov_threat_level": 0
                 }),
                 0
             )
@@ -1060,11 +1271,12 @@ class MothFlameStoryInitializer:
                 """,
                 user_id, conversation_id, "story_atmosphere",
                 json.dumps({
-                    "tone": "gothic_romantic",
+                    "tone": "noir_gothic",
                     "lighting": "candlelit_shadows", 
-                    "sound": "distant_gothic_music",
-                    "scent": "incense_and_leather",
-                    "feeling": "anticipation_and_unease"
+                    "sound": "distant_gothic_electronica",
+                    "scent": "roses_leather_incense",
+                    "feeling": "anticipation_and_hidden_power",
+                    "network_presence": "invisible_but_everywhere"
                 })
             )
             
@@ -1081,6 +1293,7 @@ class MothFlameStoryInitializer:
                 user_id, conversation_id, "the_moth_and_flame",
                 json.dumps({
                     "submission": 0,
+                    "dominance": 0,
                     "devotion": 0,
                     "curiosity": 50,
                     "fear": 20,
@@ -1089,9 +1302,11 @@ class MothFlameStoryInitializer:
                     "trust_given": 0,
                     "promises_kept": 0,
                     "vulnerability_shown": 0,
-                    "moth_nature": 50,  # 0 = flame, 100 = moth
-                    "corruption": 0,
-                    "enlightenment": 0
+                    "moth_nature": 50,  # 0 = predator, 100 = protector
+                    "network_loyalty": 0,
+                    "transformation_progress": 0,
+                    "garden_knowledge": 0,
+                    "thorn_bearer_potential": 0
                 })
             )
     
@@ -1099,10 +1314,10 @@ class MothFlameStoryInitializer:
     async def _setup_special_mechanics(
         ctx, user_id: int, conversation_id: int, lilith_id: int
     ):
-        """Configure special story mechanics"""
+        """Configure special story mechanics including network systems"""
         
         async with get_db_connection_context() as conn:
-            # Create mask progression tracking
+            # Mask system remains the same
             await conn.execute(
                 """
                 INSERT INTO npc_special_mechanics (
@@ -1162,7 +1377,7 @@ class MothFlameStoryInitializer:
                 })
             )
             
-            # Create poetry moment triggers
+            # Poetry triggers with network themes
             await conn.execute(
                 """
                 INSERT INTO npc_special_mechanics (
@@ -1178,7 +1393,8 @@ class MothFlameStoryInitializer:
                         {"emotion": "vulnerability", "chance": 0.7},
                         {"emotion": "passion", "chance": 0.6},
                         {"emotion": "fear", "chance": 0.8},
-                        {"emotion": "affection", "chance": 0.5}
+                        {"emotion": "affection", "chance": 0.5},
+                        {"emotion": "network_protection", "chance": 0.9}
                     ],
                     "poetry_used": [],
                     "understanding_tracker": {
@@ -1189,7 +1405,7 @@ class MothFlameStoryInitializer:
                 })
             )
             
-            # Create three words mechanic
+            # Three words mechanic
             await conn.execute(
                 """
                 INSERT INTO npc_special_mechanics (
@@ -1210,6 +1426,132 @@ class MothFlameStoryInitializer:
                     "her_response": None
                 })
             )
+            
+            # Network revelation mechanic
+            await conn.execute(
+                """
+                INSERT INTO npc_special_mechanics (
+                    user_id, conversation_id, npc_id, mechanic_type, mechanic_data
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (user_id, conversation_id, npc_id, mechanic_type)
+                DO UPDATE SET mechanic_data = EXCLUDED.mechanic_data
+                """,
+                user_id, conversation_id, lilith_id, "network_revelation",
+                json.dumps({
+                    "identity_hints_given": [],
+                    "revelation_triggers": {
+                        "trust": 70,
+                        "witnessed_transformation": True,
+                        "helped_victim": True,
+                        "location_based": ["safehouse", "inner_garden"]
+                    },
+                    "revelation_style": None,  # "discovered", "confessed", "demonstrated"
+                    "post_revelation_dynamic": None
+                })
+            )
+            
+            # Transformation witness mechanic
+            await conn.execute(
+                """
+                INSERT INTO npc_special_mechanics (
+                    user_id, conversation_id, npc_id, mechanic_type, mechanic_data
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (user_id, conversation_id, npc_id, mechanic_type)
+                DO UPDATE SET mechanic_data = EXCLUDED.mechanic_data
+                """,
+                user_id, conversation_id, lilith_id, "transformation_system",
+                json.dumps({
+                    "witnessed_transformations": [],
+                    "player_reaction_history": [],
+                    "transformation_methods": [
+                        "behavioral_modification",
+                        "power_exchange_therapy",
+                        "submission_training",
+                        "identity_reconstruction"
+                    ],
+                    "trust_required_to_witness": 40,
+                    "trust_required_to_assist": 70
+                })
+            )
+    
+    @staticmethod
+    async def _initialize_network_systems(
+        ctx, user_id: int, conversation_id: int, lilith_id: int
+    ):
+        """Initialize the shadow network infrastructure"""
+        
+        async with get_db_connection_context() as conn:
+            # Create network state tracking
+            await conn.execute(
+                """
+                INSERT INTO network_state (
+                    user_id, conversation_id, network_data
+                )
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, conversation_id)
+                DO UPDATE SET network_data = EXCLUDED.network_data
+                """,
+                user_id, conversation_id,
+                json.dumps({
+                    "organization_names": [
+                        "the network",
+                        "the garden",
+                        "Rose & Thorn Society (outsider name)",
+                        "The Thorn Garden (media name)"
+                    ],
+                    "structure": {
+                        "queen_of_thorns": lilith_id,
+                        "rose_council": ["Victoria Chen", "Judge Thornfield", "5 others"],
+                        "regional_thorns": {},
+                        "gardeners": [],
+                        "thorns": [],
+                        "roses": [],
+                        "seedlings": []
+                    },
+                    "operations": {
+                        "safehouses": ["Marina", "Mission", "Tenderloin"],
+                        "transformation_centers": ["Velvet Sanctum", "Private locations"],
+                        "funding_sources": ["Transformed executives", "Legitimate businesses"],
+                        "communication_hubs": ["Rose Garden Café", "Gallery networks"]
+                    },
+                    "threats": {
+                        "viktor_kozlov": "active",
+                        "federal_investigation": "dormant",
+                        "media_exposure": "managed",
+                        "internal_schisms": "none"
+                    },
+                    "statistics": {
+                        "members_approximate": "unknown by design",
+                        "saved_this_year": 47,
+                        "transformed_this_year": 12,
+                        "annual_budget": "$50-100M",
+                        "geographic_reach": "Bay Area primary, influence spreading"
+                    }
+                })
+            )
+            
+            # Create Rose communication system
+            await conn.execute(
+                """
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, conversation_id, key) 
+                DO UPDATE SET value = EXCLUDED.value
+                """,
+                user_id, conversation_id, "rose_signals",
+                json.dumps({
+                    "active_signals": [],
+                    "signal_meanings": {
+                        "single_red_rose": "danger",
+                        "white_rose": "all_clear",
+                        "black_rose": "transformation_needed",
+                        "rose_petals": "meeting_called",
+                        "thorns_displayed": "protection_activated"
+                    }
+                })
+            )
     
     @staticmethod
     async def _set_initial_atmosphere(ctx, user_id: int, conversation_id: int):
@@ -1219,29 +1561,35 @@ class MothFlameStoryInitializer:
         intro_message = {
             "type": "story_introduction",
             "content": (
-                "The city breathes differently after midnight. In the underground district, "
-                "where neon bleeds into shadow and desire takes corporeal form, you've heard "
-                "whispers of a place called the Velvet Sanctum. They say a Queen holds court "
-                "there - beautiful, terrible, offering transcendence through submission.\n\n"
+                "San Francisco after midnight breathes differently. In the SoMa underground, "
+                "where Silicon Valley's shadows dance with older powers, you've heard whispers "
+                "of the Velvet Sanctum. They say a Queen holds court there - beautiful, terrible, "
+                "offering transformation through submission.\n\n"
                 
-                "You stand before an unmarked door, bass thrumming through your bones like a "
-                "second heartbeat. The bouncer, scarred and silent, evaluates you with eyes "
-                "that have seen too much. Finally, he steps aside.\n\n"
+                "But the whispers speak of more than just a dominatrix. They mention roses that "
+                "grow in darkness, thorns that protect the vulnerable, a network without a name "
+                "that reaches into boardrooms and basements alike. Some call it the Rose & Thorn "
+                "Society. Others say it has no name at all.\n\n"
+                
+                "You stand before an unmarked door beneath a boutique that sells overpriced "
+                "leather goods. The bouncer - scarred, silent, seeing too much - evaluates you "
+                "with eyes that catalog more than appearance. Finally, he steps aside.\n\n"
                 
                 "'The Queen is holding court tonight,' he says. 'Try not to stare. She notices "
-                "everything.'\n\n"
+                "everything. And if you're lucky... she might notice you.'\n\n"
                 
-                "As you descend the stairs, each step takes you further from the world you know. "
-                "The air grows thick with incense and possibility. Somewhere below, a woman in a "
-                "porcelain mask rules over hearts willing to break for her attention.\n\n"
+                "As you descend the stairs, each step takes you deeper into a world where power "
+                "flows in directions Stanford Business School never imagined. The air grows thick "
+                "with incense, leather, and the copper scent of transformation.\n\n"
                 
-                "Welcome to the beginning of your beautiful destruction."
+                "Welcome to the beginning of your education in thorns."
             ),
             "atmosphere": {
-                "visual": "Candlelight painting shadows on velvet walls",
-                "auditory": "Gothic electronica pulsing like a dark heartbeat",
-                "olfactory": "Incense, leather, and the faint scent of roses",
-                "emotional": "Anticipation mixed with delicious fear"
+                "visual": "Candlelight painting stories on velvet walls",
+                "auditory": "Gothic electronica mixing with whispered negotiations",
+                "olfactory": "Roses, leather, incense, and the metal tang of change",
+                "emotional": "Anticipation laced with the delicious unknown",
+                "hidden": "The sense that you're entering something much larger than a club"
             }
         }
         
@@ -1254,7 +1602,7 @@ class MothFlameStoryInitializer:
             memory_text=intro_message["content"],
             importance="high",
             emotional=True,
-            tags=["story_start", "first_impression", "atmosphere"]
+            tags=["story_start", "first_impression", "atmosphere", "network_introduction"]
         )
         
         # Set initial time and location
@@ -1277,8 +1625,12 @@ class MothFlameStoryInitializer:
                 user_id, conversation_id, "Velvet Sanctum - Entrance"
             )
 
-class MothFlameStoryProgression:
-    """Handles story progression and beat triggers"""
+# Keep the old name for compatibility but update the implementation
+MothFlameStoryInitializer = QueenOfThornsStoryInitializer
+
+# Also keep story progression but update references
+class QueenOfThornsStoryProgression:
+    """Handles story progression and beat triggers for Queen of Thorns"""
     
     @staticmethod
     async def check_beat_triggers(user_id: int, conversation_id: int) -> Optional[str]:
@@ -1308,7 +1660,7 @@ class MothFlameStoryProgression:
             
             # Sort beats by priority (act number, then order in story)
             sorted_beats = sorted(THE_MOTH_AND_FLAME.story_beats, 
-                                key=lambda b: (self._get_beat_act(b), 
+                                key=lambda b: (QueenOfThornsStoryProgression._get_beat_act(b), 
                                              THE_MOTH_AND_FLAME.story_beats.index(b)))
             
             # Check each beat's trigger conditions
@@ -1322,7 +1674,7 @@ class MothFlameStoryProgression:
                     continue
                 
                 # Check if this beat's conditions are met
-                if await MothFlameStoryProgression._check_single_beat_conditions(
+                if await QueenOfThornsStoryProgression._check_single_beat_conditions(
                     beat, story_flags, current_act, user_id, conversation_id, conn
                 ):
                     logger.info(f"Story beat '{beat.id}' conditions met for user {user_id}")
@@ -1398,13 +1750,61 @@ class MothFlameStoryProgression:
                     if not all(b in completed for b in value):
                         return False
                 
-                # Times visited location
+                # Times visited location (updated for network locations)
                 elif condition == "times_visited_sanctum":
                     visit_count = story_flags.get("sanctum_visits", 0)
                     if visit_count < value:
                         return False
+                elif condition == "times_visited_safehouse":
+                    visit_count = story_flags.get("safehouse_visits", 0)
+                    if visit_count < value:
+                        return False
                 
-                # NPC awareness level
+                # Network awareness level (NEW)
+                elif condition == "network_awareness":
+                    awareness = story_flags.get("network_awareness", 0)
+                    if awareness < value:
+                        return False
+                
+                # Rose Council awareness (NEW)
+                elif condition == "rose_council_awareness":
+                    awareness = story_flags.get("rose_council_awareness", 0)
+                    if awareness < value:
+                        return False
+                
+                # Transformations witnessed (NEW)
+                elif condition == "transformations_witnessed":
+                    count = story_flags.get("transformations_witnessed", 0)
+                    if count < value:
+                        return False
+                
+                # Network identity revealed (NEW)
+                elif condition == "network_identity_revealed" and value:
+                    if not story_flags.get("network_identity_revealed", False):
+                        return False
+                
+                # Queen identity suspected (NEW)
+                elif condition == "queen_identity_suspected" and value:
+                    if not story_flags.get("queen_identity_suspected", False):
+                        return False
+                
+                # Met Rose Council member (NEW)
+                elif condition == "met_rose_council_member" and value:
+                    if not story_flags.get("met_rose_council_member", False):
+                        return False
+                
+                # Helped save trafficking victim (NEW)
+                elif condition == "helped_save_victim" and value:
+                    if not story_flags.get("helped_save_victim", False):
+                        return False
+                
+                # Kozlov threat level (NEW)
+                elif condition == "kozlov_threat_level":
+                    threat = story_flags.get("kozlov_threat_level", 0)
+                    if threat < value:
+                        return False
+                
+                # NPC awareness level (enhanced for Queen of Thorns)
                 elif condition == "npc_awareness":
                     for npc_name, requirements in value.items():
                         npc_id = story_flags.get(f"{npc_name.lower().replace(' ', '_')}_id")
@@ -1434,9 +1834,9 @@ class MothFlameStoryProgression:
                             if not awareness or awareness < requirements.get("min", 0):
                                 return False
                 
-                # Player watched performance
-                elif condition == "player_watched_performance" and value:
-                    if not story_flags.get("watched_performance", False):
+                # Player watched Queen's transformation session
+                elif condition == "watched_transformation" and value:
+                    if not story_flags.get("watched_transformation", False):
                         return False
                 
                 # Quest completed
@@ -1452,7 +1852,7 @@ class MothFlameStoryProgression:
                     if quest_status != "completed":
                         return False
                 
-                # Has item
+                # Has item (updated for network items)
                 elif condition == "has_item":
                     item_count = await conn.fetchval(
                         """
@@ -1465,7 +1865,7 @@ class MothFlameStoryProgression:
                     if not item_count or item_count <= 0:
                         return False
                 
-                # Relationship requirements
+                # Relationship requirements (enhanced for Queen of Thorns)
                 elif condition == "relationship":
                     for npc_name, requirements in value.items():
                         npc_id = story_flags.get(f"{npc_name.lower().replace(' ', '_')}_id")
@@ -1531,6 +1931,17 @@ class MothFlameStoryProgression:
                         if not trust or trust < 40:  # Minimum trust threshold
                             return False
                 
+                # Network test passed (NEW)
+                elif condition == "network_test_passed" and value:
+                    if not story_flags.get("passed_network_test", False):
+                        return False
+                
+                # Player alignment (NEW)
+                elif condition == "player_alignment":
+                    alignment = story_flags.get("player_alignment", "neutral")
+                    if alignment != value:
+                        return False
+                
                 # Intimacy level
                 elif condition == "intimacy_level":
                     lilith_id = story_flags.get("lilith_npc_id")
@@ -1556,26 +1967,25 @@ class MothFlameStoryProgression:
                     if not story_flags.get("helped_trafficking_victim", False):
                         return False
                 
+                # Garden knowledge level (NEW)
+                elif condition == "garden_knowledge":
+                    knowledge = story_flags.get("garden_knowledge", 0)
+                    if knowledge < value:
+                        return False
+                
                 # Devotion level
                 elif condition == "devotion":
                     player_devotion = await conn.fetchval(
                         """
-                        SELECT devotion FROM player_story_stats
+                        SELECT stats->>'devotion' as devotion 
+                        FROM player_story_stats
                         WHERE user_id = $1 AND conversation_id = $2 
                         AND story_id = 'the_moth_and_flame'
                         """,
                         user_id, conversation_id
                     )
                     
-                    # Parse devotion from JSON if needed
-                    if player_devotion and isinstance(player_devotion, str):
-                        try:
-                            stats = json.loads(player_devotion)
-                            player_devotion = stats.get('devotion', 0)
-                        except:
-                            player_devotion = 0
-                    
-                    if not player_devotion or player_devotion < value.get("min", 0):
+                    if not player_devotion or int(player_devotion) < value.get("min", 0):
                         return False
                 
                 # Sessions completed
@@ -1588,6 +1998,11 @@ class MothFlameStoryProgression:
                 elif condition == "discovered_secret":
                     secrets = story_flags.get("secrets_discovered", [])
                     if value not in secrets:
+                        return False
+                
+                # Rose signal understood (NEW)
+                elif condition == "rose_signal_understood" and value:
+                    if not story_flags.get("understands_rose_signals", False):
                         return False
                 
                 # Random event (for dynamic story beats)
@@ -1666,7 +2081,7 @@ class MothFlameStoryProgression:
                 story_flags = json.loads(state_row['story_flags'] or '{}')
                 
                 # Apply beat outcomes
-                outcomes_applied = await MothFlameStoryProgression._apply_beat_outcomes(
+                outcomes_applied = await QueenOfThornsStoryProgression._apply_beat_outcomes(
                     beat, story_flags, user_id, conversation_id, conn
                 )
                 
@@ -1853,9 +2268,95 @@ class MothFlameStoryProgression:
                     
                     applied_outcomes["location_unlocked"] = outcome_data
                 
+                # Network awareness changes (NEW)
+                elif outcome_type == "network_awareness":
+                    current = story_flags.get("network_awareness", 0)
+                    if isinstance(outcome_data, str) and outcome_data.startswith(('+', '-')):
+                        change = int(outcome_data)
+                        story_flags["network_awareness"] = max(0, min(100, current + change))
+                    else:
+                        story_flags["network_awareness"] = outcome_data
+                    
+                    applied_outcomes["network_awareness"] = outcome_data
+                
+                # Rose Council awareness (NEW)
+                elif outcome_type == "rose_council_awareness":
+                    current = story_flags.get("rose_council_awareness", 0)
+                    if isinstance(outcome_data, str) and outcome_data.startswith(('+', '-')):
+                        change = int(outcome_data)
+                        story_flags["rose_council_awareness"] = max(0, min(100, current + change))
+                    else:
+                        story_flags["rose_council_awareness"] = outcome_data
+                    
+                    applied_outcomes["rose_council_awareness"] = outcome_data
+                
+                # Transformation witnessed (NEW)
+                elif outcome_type == "transformation_witnessed":
+                    story_flags["transformations_witnessed"] = story_flags.get("transformations_witnessed", 0) + 1
+                    story_flags["watched_transformation"] = True
+                    
+                    # Store details about the transformation
+                    witnessed_list = story_flags.get("witnessed_transformations", [])
+                    witnessed_list.append({
+                        "subject": outcome_data.get("subject", "unnamed executive"),
+                        "method": outcome_data.get("method", "behavioral modification"),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    story_flags["witnessed_transformations"] = witnessed_list[-5:]  # Keep last 5
+                    
+                    applied_outcomes["transformation_witnessed"] = outcome_data
+                
+                # Met Rose Council member (NEW)
+                elif outcome_type == "met_rose_council_member":
+                    story_flags["met_rose_council_member"] = True
+                    council_members_met = story_flags.get("rose_council_members_met", [])
+                    if outcome_data not in council_members_met:
+                        council_members_met.append(outcome_data)
+                        story_flags["rose_council_members_met"] = council_members_met
+                    
+                    applied_outcomes["met_rose_council_member"] = outcome_data
+                
+                # Network role offered (NEW)
+                elif outcome_type == "network_role_offered":
+                    story_flags["network_role_offered"] = outcome_data
+                    story_flags["player_network_status"] = "recruit"
+                    
+                    applied_outcomes["network_role_offered"] = outcome_data
+                
+                # Safehouse access granted (NEW)
+                elif outcome_type == "safehouse_access":
+                    safehouse_access = story_flags.get("safehouse_access", [])
+                    if outcome_data not in safehouse_access:
+                        safehouse_access.append(outcome_data)
+                        story_flags["safehouse_access"] = safehouse_access
+                    
+                    applied_outcomes["safehouse_access"] = outcome_data
+                
+                # Kozlov threat increase (NEW)
+                elif outcome_type == "kozlov_threat":
+                    current = story_flags.get("kozlov_threat_level", 0)
+                    if isinstance(outcome_data, str) and outcome_data.startswith(('+', '-')):
+                        change = int(outcome_data)
+                        story_flags["kozlov_threat_level"] = max(0, min(100, current + change))
+                    else:
+                        story_flags["kozlov_threat_level"] = outcome_data
+                    
+                    applied_outcomes["kozlov_threat"] = outcome_data
+                
+                # Rose signals learned (NEW)
+                elif outcome_type == "rose_signal_learned":
+                    signals_known = story_flags.get("rose_signals_known", [])
+                    if outcome_data not in signals_known:
+                        signals_known.append(outcome_data)
+                        story_flags["rose_signals_known"] = signals_known
+                    if len(signals_known) >= 3:
+                        story_flags["understands_rose_signals"] = True
+                    
+                    applied_outcomes["rose_signal_learned"] = outcome_data
+                
                 # Knowledge/secrets/facts gained
                 elif outcome_type in ["knowledge_gained", "learned_fact", "learned_truth", 
-                                     "learned_secret", "discovered_secret"]:
+                                     "learned_secret", "discovered_secret", "network_secret"]:
                     knowledge_key = "knowledge_gained" if outcome_type == "knowledge_gained" else "secrets_discovered"
                     knowledge_list = story_flags.get(knowledge_key, [])
                     if outcome_data not in knowledge_list:
@@ -1929,18 +2430,23 @@ class MothFlameStoryProgression:
                     
                     applied_outcomes["relationship_progress"] = outcome_data
                 
-                # Skills learned
+                # Skills learned (updated for network skills)
                 elif outcome_type == "learned_skill":
                     skills = story_flags.get("learned_skills", [])
                     if outcome_data not in skills:
                         skills.append(outcome_data)
                         story_flags["learned_skills"] = skills
                     
+                    # Check for network-specific skills
+                    if any(word in outcome_data.lower() for word in ["rose", "thorn", "transformation", "network"]):
+                        story_flags["garden_knowledge"] = story_flags.get("garden_knowledge", 0) + 10
+                    
                     applied_outcomes["learned_skill"] = outcome_data
                 
                 # Special story flags
                 elif outcome_type in ["vulnerability_witnessed", "mask_removed", "three_words_moment",
-                                     "permanent_bond", "ending_achieved"]:
+                                     "permanent_bond", "ending_achieved", "network_identity_revealed",
+                                     "queen_identity_confirmed", "inducted_into_network"]:
                     story_flags[outcome_type] = True
                     if outcome_type == "mask_removed":
                         story_flags["mask_removed_count"] = story_flags.get("mask_removed_count", 0) + 1
@@ -1953,7 +2459,7 @@ class MothFlameStoryProgression:
                     applied_outcomes["choice_presented"] = outcome_data
                 
                 # New quest/role
-                elif outcome_type in ["new_quest", "new_role", "gained_title"]:
+                elif outcome_type in ["new_quest", "new_role", "gained_title", "network_position"]:
                     story_flags[outcome_type] = outcome_data
                     applied_outcomes[outcome_type] = outcome_data
                 
@@ -1971,9 +2477,165 @@ class MothFlameStoryProgression:
                 elif outcome_type == "potential_loss":
                     story_flags["potential_loss_risk"] = outcome_data
                     applied_outcomes["potential_loss"] = outcome_data
+                
+                # Player alignment shifts (NEW)
+                elif outcome_type == "player_alignment":
+                    story_flags["player_alignment"] = outcome_data
+                    if outcome_data == "protector":
+                        story_flags["moth_nature"] = min(100, story_flags.get("moth_nature", 50) + 20)
+                    elif outcome_data == "predator":
+                        story_flags["moth_nature"] = max(0, story_flags.get("moth_nature", 50) - 20)
+                    
+                    applied_outcomes["player_alignment"] = outcome_data
                     
             except Exception as e:
                 logger.error(f"Error applying outcome {outcome_type}: {e}", exc_info=True)
                 applied_outcomes[f"{outcome_type}_error"] = str(e)
         
         return applied_outcomes
+    
+    @staticmethod
+    async def check_network_events(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
+        """Check for network-specific events that might trigger"""
+        
+        async with get_db_connection_context() as conn:
+            # Get story flags
+            state_row = await conn.fetchrow(
+                """
+                SELECT story_flags FROM story_states
+                WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                """,
+                user_id, conversation_id, "the_moth_and_flame"
+            )
+            
+            if not state_row:
+                return None
+            
+            story_flags = json.loads(state_row['story_flags'] or '{}')
+            
+            # Check various network event triggers
+            
+            # Rose signal event
+            if story_flags.get("network_awareness", 0) >= 30 and not story_flags.get("first_rose_signal_sent"):
+                return {
+                    "event_type": "rose_signal",
+                    "description": "You notice a single red rose left at your usual table",
+                    "choices": ["investigate", "ignore", "ask_about_it"]
+                }
+            
+            # Transformation opportunity
+            if (story_flags.get("transformations_witnessed", 0) >= 2 and 
+                story_flags.get("trust_level", 0) >= 60 and
+                not story_flags.get("offered_transformation_role")):
+                return {
+                    "event_type": "transformation_assistant",
+                    "description": "The Queen asks if you'd like to help with tonight's session",
+                    "choices": ["accept", "observe_only", "decline"]
+                }
+            
+            # Safehouse emergency
+            if (story_flags.get("safehouse_visits", 0) >= 3 and
+                story_flags.get("kozlov_threat_level", 0) >= 50 and
+                random.random() < 0.3):
+                return {
+                    "event_type": "safehouse_threat",
+                    "description": "Sarah Chen contacts you - the Marina safehouse may be compromised",
+                    "choices": ["rush_to_help", "alert_the_queen", "call_authorities"]
+                }
+            
+            # Rose Council encounter
+            if (story_flags.get("network_awareness", 0) >= 70 and
+                story_flags.get("rose_council_awareness", 0) >= 40 and
+                not story_flags.get("met_full_council")):
+                return {
+                    "event_type": "council_meeting",
+                    "description": "You're invited to witness a Monday meeting",
+                    "choices": ["attend", "politely_decline", "ask_questions_first"]
+                }
+            
+            return None
+    
+    @staticmethod
+    async def advance_network_knowledge(
+        user_id: int, conversation_id: int, 
+        knowledge_type: str, amount: int = 10
+    ) -> Dict[str, Any]:
+        """Advance player's understanding of the network"""
+        
+        async with get_db_connection_context() as conn:
+            # Get current state
+            state_row = await conn.fetchrow(
+                """
+                SELECT story_flags FROM story_states
+                WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                """,
+                user_id, conversation_id, "the_moth_and_flame"
+            )
+            
+            if not state_row:
+                return {"error": "Story state not found"}
+            
+            story_flags = json.loads(state_row['story_flags'] or '{}')
+            
+            # Update appropriate knowledge
+            if knowledge_type == "network":
+                current = story_flags.get("network_awareness", 0)
+                new_value = min(100, current + amount)
+                story_flags["network_awareness"] = new_value
+                
+                # Check for thresholds
+                revelations = []
+                if current < 30 <= new_value:
+                    revelations.append("You begin to understand this is more than a BDSM club")
+                if current < 50 <= new_value:
+                    revelations.append("The network's true purpose becomes clearer - protection and transformation")
+                if current < 70 <= new_value:
+                    revelations.append("You realize the Queen of Thorns leads something vast and hidden")
+                if current < 90 <= new_value:
+                    revelations.append("The full scope of the network's power is staggering")
+                
+            elif knowledge_type == "rose_council":
+                current = story_flags.get("rose_council_awareness", 0)
+                new_value = min(100, current + amount)
+                story_flags["rose_council_awareness"] = new_value
+                
+                revelations = []
+                if current < 40 <= new_value:
+                    revelations.append("Seven women meet on Mondays to shape the Bay Area's hidden currents")
+                if current < 80 <= new_value:
+                    revelations.append("The Rose Council's influence extends into every major institution")
+            
+            elif knowledge_type == "garden":
+                current = story_flags.get("garden_knowledge", 0)
+                new_value = min(100, current + amount)
+                story_flags["garden_knowledge"] = new_value
+                
+                revelations = []
+                if current < 25 <= new_value:
+                    revelations.append("The garden metaphors aren't just poetry - they're operational language")
+                if current < 50 <= new_value:
+                    revelations.append("Roses are members, thorns are protectors, gardeners cultivate both")
+                if current < 75 <= new_value:
+                    revelations.append("You understand the network's communication systems")
+            
+            # Update database
+            await conn.execute(
+                """
+                UPDATE story_states
+                SET story_flags = $3
+                WHERE user_id = $1 AND conversation_id = $2 AND story_id = 'the_moth_and_flame'
+                """,
+                user_id, conversation_id, json.dumps(story_flags)
+            )
+            
+            return {
+                "knowledge_type": knowledge_type,
+                "new_value": new_value,
+                "revelations": revelations
+            }
+
+# Maintain compatibility
+MothFlameStoryProgression = QueenOfThornsStoryProgression
+
+# Keep compatibility
+MothFlameStoryProgression = QueenOfThornsStoryProgression
