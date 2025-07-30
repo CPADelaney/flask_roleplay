@@ -171,14 +171,14 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
                     AND end_time IS NOT NULL
                     AND start_time != ''
                     AND end_time != ''
-                    AND CASE 
-                        WHEN start_time ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN start_time::timestamp <= NOW()
-                        ELSE FALSE
-                    END
-                    AND CASE
-                        WHEN end_time ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN end_time::timestamp >= NOW()
-                        ELSE FALSE
-                    END
+                    AND (
+                        (LENGTH(start_time) >= 10 AND SUBSTRING(start_time, 1, 10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND start_time::timestamp <= NOW())
+                        OR FALSE
+                    )
+                    AND (
+                        (LENGTH(end_time) >= 10 AND SUBSTRING(end_time, 1, 10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND end_time::timestamp >= NOW())
+                        OR FALSE
+                    )
                 )
             )
         """, user_id, conversation_id, 
