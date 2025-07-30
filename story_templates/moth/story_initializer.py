@@ -434,18 +434,44 @@ class QueenOfThornsStoryInitializer:
         
         service = GPTService()
         
+        # First load base lore to use as context
+        base_lore = {
+            "districts": SFGeopoliticalLore.get_districts(),
+            "factions": SFGeopoliticalLore.get_factions(),
+            "myths": SFLocalLore.get_urban_myths(),
+            "consistency_rules": QueenOfThornsConsistencyGuide.get_critical_rules()
+        }
+        
         try:
             system_prompt = """You generate contemporary San Francisco Bay Area lore for a supernatural shadow network story.
-Focus on: recent gentrification, tech culture shadows, underground movements, urban legends.
-Return JSON with the specified structure."""
-
-            user_prompt = """Generate current Bay Area shadow network lore including:
-- 3-5 recent news items that hint at supernatural activity
-- 4-6 underground subcultures that could hide occult activities  
-- 5-7 rumors about gentrification hiding something darker
-- 3-5 supernatural whispers specific to SF neighborhoods
-
-Make it feel contemporary (2024-2025) with tech culture undertones."""
+    You must ENHANCE existing lore, not contradict it.
+    
+    CRITICAL RULES TO MAINTAIN:
+    1. The network has NO official name - only "the network" or outsider names like "Rose & Thorn Society"
+    2. The Queen's identity is ALWAYS ambiguous
+    3. The network controls Bay Area ONLY - other cities have allies, not branches
+    4. Transformation takes months/years, never instant
+    
+    Focus on: recent gentrification, tech culture shadows, underground movements, urban legends.
+    Return JSON with the specified structure."""
+    
+            # Include base lore summary in prompt
+            base_summary = f"""
+    Existing factions include: {', '.join(f['name'] for f in base_lore['factions'][:3])}
+    Existing myths include: {', '.join(m['name'] for m in base_lore['myths'][:3])}
+    Key districts: {', '.join(d['name'] for d in base_lore['districts'][:3])}
+    """
+    
+            user_prompt = f"""Generate current Bay Area shadow network lore that ADDS TO this foundation:
+    {base_summary}
+    
+    Generate:
+    - 3-5 recent news items that hint at supernatural activity (connected to existing factions)
+    - 4-6 underground subcultures that could hide occult activities (in existing districts)
+    - 5-7 rumors about gentrification hiding something darker (referencing known locations)
+    - 3-5 supernatural whispers specific to SF neighborhoods (building on existing myths)
+    
+    Make it feel contemporary (2024-2025) with tech culture undertones."""
 
             lore_data = await service.call_with_validation(
                 model=_DEFAULT_LORE_MODEL,
@@ -673,15 +699,24 @@ Create variations that match the player's style while maintaining dark gothic th
     ) -> str:
         """Create a single location with enhanced description"""
         
-        system_prompt = """You create rich, atmospheric location descriptions for a supernatural story.
-Include sensory details, hidden purposes, and subtle power dynamics."""
-
-        user_prompt = f"""Enhance this location:
-Name: {template['name']}
-Concept: {template['base_desc']}
-Type: {template['type']}
-
-Create 3-4 paragraphs with rich detail and hidden supernatural elements."""
+        # Get base location data from lore
+        base_locations = SFLocalLore.get_specific_locations()
+        base_data = next((loc for loc in base_locations if loc['name'] == template['name']), None)
+        
+        if base_data:
+            system_prompt = """You ENHANCE existing location descriptions for a supernatural story.
+    You must maintain all established facts while adding atmospheric details.
+    Include sensory details, hidden purposes, and subtle power dynamics."""
+    
+            user_prompt = f"""Enhance this EXISTING location (do not contradict established facts):
+    Name: {template['name']}
+    Established description: {base_data.get('description', template['base_desc'])}
+    Type: {template['type']}
+    Known features: {json.dumps(base_data.get('areas', {}), indent=2)}
+    Schedule: {json.dumps(base_data.get('schedule', {}), indent=2)}
+    
+    ADD 2-3 paragraphs of atmospheric detail that complement the existing description.
+    Focus on sensory details and hidden supernatural elements that don't contradict what's established."""
 
         try:
             # Use cache key to avoid regenerating identical locations
@@ -752,13 +787,30 @@ Create 3-4 paragraphs with rich detail and hidden supernatural elements."""
                     
                     # Generate evolution
                     system_prompt = """You evolve character backstories with contemporary touches.
-Focus on recent struggles, current challenges, and character growth."""
-
-                    user_prompt = """Evolve Lilith Ravencroft for a new story:
-Base: Queen of Thorns, trauma survivor turned protector
-Setting: Modern San Francisco with tech predators
-
-Generate recent character developments that add depth."""
+            You must RESPECT the established character profile and only ADD new details that complement it.
+            
+            ESTABLISHED FACTS TO MAINTAIN:
+            - Name: Lilith Ravencroft, The Queen of Thorns
+            - Core trauma: Trafficking attempt at 15, built network from survivors
+            - Personality: Masks vulnerability, fears abandonment, speaks in poetry when emotional
+            - The three words: She cannot speak "I love you" - this is central to her character
+            - Dual life: Dominatrix by night, network leader always
+            - Lists: Red ink for failed saves, blue for those who left
+            
+            Focus on recent struggles, current challenges, and character growth that ADDS to this foundation."""
+            
+                    user_prompt = f"""Evolve Lilith Ravencroft for a new story while maintaining her core:
+            Base backstory: {json.dumps(LILITH_RAVENCROFT["backstory"], indent=2)}
+            Core traits: {', '.join(LILITH_RAVENCROFT["traits"])}
+            Central mechanic: Cannot speak the three words "I love you"
+            
+            Generate ONLY:
+            - 2-3 recent events that deepen her character (last 6 months)
+            - 1-2 new scars (emotional or physical) from recent network operations
+            - 2-3 evolution in her masks/personas
+            - 3-4 new dialogue patterns that fit her poetic style
+            
+            Do NOT change: her name, core trauma, fear of abandonment, the three words mechanic, or her lists."""
 
                     evolution = await service.call_with_validation(
                         model=_DEFAULT_MEMORY_MODEL,
@@ -1287,16 +1339,30 @@ The memory should reveal their power dynamic and emotional connection."""
     ):
         """Set up special mechanics with dynamic triggers and conditions"""
         
+        # Get Lilith's established triggers from character data
+        base_triggers = LILITH_RAVENCROFT.get("trauma_triggers", [])
+        base_mechanics = LILITH_RAVENCROFT.get("special_mechanics", {})
+        
         async with get_db_connection_context() as conn:
             # Generate dynamic mask slippage triggers
             system_prompt = """You create psychological triggers for mask slippage in a character.
-Return JSON: {"triggers": [...], "physical_tells": [...], "verbal_patterns": [...]}"""
-
-            user_prompt = """Generate mask slippage triggers for Lilith Ravencroft:
-Character: Controlled dominant who hides trauma and vulnerability
-Context: Modern San Francisco, tech predators, human trafficking
-
-Create varied, subtle triggers that would cause her mask to slip."""
+    You must BUILD ON these established trauma triggers, not replace them.
+    
+    ESTABLISHED TRIGGERS TO MAINTAIN:
+    - Sudden departures without warning
+    - The phrase 'I'll always be here' (too many liars)
+    - Being seen without consent
+    - Betrayal of the network's trust
+    - Being called 'weak' or 'broken'
+    
+    Return JSON: {"additional_triggers": [...], "physical_tells": [...], "verbal_patterns": [...]}"""
+    
+            user_prompt = f"""Generate ADDITIONAL mask slippage triggers for Lilith Ravencroft:
+    Character: Controlled dominant who hides trauma and vulnerability
+    Existing triggers: {json.dumps(base_triggers)}
+    Context: Modern San Francisco, tech predators, human trafficking
+    
+    Create 3-5 NEW subtle triggers that complement the existing ones."""
 
             try:
                 raw_response = await _responses_json_call(
@@ -1361,16 +1427,30 @@ Create varied, subtle triggers that would cause her mask to slip."""
     ):
         """Initialize network with dynamic threat assessments and operations"""
         
+        # Get base network structure
+        base_network_structure = SFBayQueenOfThornsPreset.get_network_structure()
+        consistency_rules = QueenOfThornsConsistencyGuide.get_critical_rules()
+        
         # Generate current network state
         system_prompt = """You create dynamic shadow network operational data.
-Return JSON: {"active_operations": [...], "threat_assessment": {...}, "resource_allocation": {...}}"""
-
-        user_prompt = """Generate current state for the Queen of Thorns shadow network:
-Network purpose: Saving trafficking victims, transforming predators
-Setting: San Francisco Bay Area, 2024-2025
-Main antagonist: Viktor Kozlov (human trafficker)
-
-Create realistic operations, threats, and resource challenges."""
+    You must RESPECT the established network structure and naming conventions.
+    
+    CRITICAL RULES:
+    1. NEVER give the network an official name - it's just "the network"
+    2. Maintain the established hierarchy: Seedlings → Roses → Thorns → Gardeners → Regional Thorns → Rose Council → The Queen
+    3. Bay Area control only - other cities are allies, not branches
+    
+    Return JSON: {"active_operations": [...], "threat_assessment": {...}, "resource_allocation": {...}}"""
+    
+        user_prompt = f"""Generate current state for the Queen of Thorns shadow network:
+    Established structure:
+    {json.dumps(base_network_structure, indent=2)}
+    
+    Network purpose: Saving trafficking victims, transforming predators
+    Setting: San Francisco Bay Area, 2024-2025
+    Main antagonist: Viktor Kozlov (human trafficker)
+    
+    Create realistic operations that fit within the established structure."""
 
         try:
             raw_response = await _responses_json_call(
@@ -1413,6 +1493,82 @@ Create realistic operations, threats, and resource challenges."""
             await QueenOfThornsStoryInitializer._initialize_network_systems(
                 ctx, user_id, conversation_id, lilith_id
             )
+
+    @staticmethod
+    async def _generate_with_lore_context(
+        service: GPTService,
+        generation_type: str,
+        base_context: Dict[str, Any],
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+        temperature: float = 0.7
+    ) -> BaseModel:
+        """Generate content that respects established lore"""
+        
+        # Always include consistency rules
+        consistency_rules = QueenOfThornsConsistencyGuide.get_quick_reference()
+        
+        enhanced_system_prompt = f"""{system_prompt}
+    
+    MANDATORY CONSISTENCY RULES:
+    {consistency_rules}
+    
+    You are ADDING to established lore, not replacing it. Any generated content must complement and respect what already exists."""
+        
+        # Add base context summary to user prompt
+        context_summary = f"""
+    ESTABLISHED CONTEXT YOU MUST RESPECT:
+    {json.dumps(base_context, indent=2)}
+    
+    ---
+    {user_prompt}"""
+        
+        return await service.call_with_validation(
+            model=_DEFAULT_LORE_MODEL,
+            system_prompt=enhanced_system_prompt,
+            user_prompt=context_summary,
+            response_model=response_model,
+            temperature=temperature
+        )
+    
+    @staticmethod
+    async def _validate_generated_content(
+        content_type: str,
+        generated_content: Any,
+        base_data: Dict[str, Any]
+    ) -> Tuple[bool, List[str]]:
+        """Validate that generated content doesn't contradict base lore"""
+        
+        violations = []
+        
+        if content_type == "location":
+            # Check location consistency
+            if "name" in generated_content and generated_content["name"] != base_data.get("name"):
+                violations.append(f"Location name changed from {base_data['name']} to {generated_content['name']}")
+        
+        elif content_type == "character":
+            # Check character consistency
+            if "name" in generated_content and generated_content["name"] != "Lilith Ravencroft":
+                violations.append("Character name cannot be changed")
+            
+            if "can_say_three_words" in generated_content and generated_content["can_say_three_words"]:
+                violations.append("Lilith cannot speak the three words - this is core to her character")
+        
+        elif content_type == "network":
+            # Check network consistency
+            content_str = json.dumps(generated_content)
+            if any(name in content_str for name in ["The Rose & Thorn Society's official", "The Garden announced"]):
+                violations.append("Network given official name - it has none")
+        
+        # Use the consistency validator
+        validation_result = QueenOfThornsConsistencyGuide.validate_content(
+            json.dumps(generated_content) if not isinstance(generated_content, str) else generated_content
+        )
+        
+        violations.extend(validation_result.get("violations", []))
+        
+        return len(violations) == 0, violations
 
     @staticmethod
     async def _set_dynamic_atmosphere(ctx, user_id: int, conversation_id: int):
