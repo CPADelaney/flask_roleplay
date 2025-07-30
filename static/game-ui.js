@@ -129,7 +129,7 @@ async function loadPlayerStats() {
     }
     
     // Get and display resources
-    const resourceData = await fetchJson(`/player/resources?conversation_id=${AppState.currentConvId}&player_name=Chase`);
+    const resourceData = await fetchJson(`/universal/player/resources?conversation_id=${AppState.currentConvId}&player_name=Chase`);
     
     const resourceContainer = document.getElementById('playerResources');
     if (resourceData.resources) {
