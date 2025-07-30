@@ -122,20 +122,32 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
         
         npcs_present = []
         for npc in npc_rows:
-            npcs_present.append({
-                'id': npc['npc_id'],
-                'name': npc['npc_name'],
-                'description': npc['physical_description'],
-                'traits': json.loads(npc['personality_traits']) if npc['personality_traits'] else [],
-                'stats': {
-                    'trust': npc['trust'],
-                    'dominance': npc['dominance'],
-                    'cruelty': npc['cruelty'],
-                    'affection': npc['affection'],
-                    'intensity': npc['intensity']
-                },
-                'introduced': npc['introduced']
-            })
+            try:
+                personality_traits = []
+                if npc['personality_traits']:
+                    try:
+                        personality_traits = json.loads(npc['personality_traits'])
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse personality_traits for NPC {npc['npc_id']}")
+                        personality_traits = []
+                
+                npcs_present.append({
+                    'id': npc['npc_id'],
+                    'name': npc['npc_name'],
+                    'description': npc['physical_description'],
+                    'traits': personality_traits,
+                    'stats': {
+                        'trust': npc['trust'],
+                        'dominance': npc['dominance'],
+                        'cruelty': npc['cruelty'],
+                        'affection': npc['affection'],
+                        'intensity': npc['intensity']
+                    },
+                    'introduced': npc['introduced']
+                })
+            except Exception as e:
+                logger.error(f"Error processing NPC {npc.get('npc_id', 'unknown')}: {e}")
+                continue
         
         # Get player stats
         player_stats_row = await conn.fetchrow("""
@@ -160,11 +172,11 @@ async def get_aggregated_roleplay_context(user_id: int, conversation_id: int, pl
                     AND start_time != ''
                     AND end_time != ''
                     AND CASE 
-                        WHEN start_time ~ '^\d{4}-\d{2}-\d{2}' THEN start_time::timestamp <= NOW()
+                        WHEN start_time ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN start_time::timestamp <= NOW()
                         ELSE FALSE
                     END
                     AND CASE
-                        WHEN end_time ~ '^\d{4}-\d{2}-\d{2}' THEN end_time::timestamp >= NOW()
+                        WHEN end_time ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN end_time::timestamp >= NOW()
                         ELSE FALSE
                     END
                 )
