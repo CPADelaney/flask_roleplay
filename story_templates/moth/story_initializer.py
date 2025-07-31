@@ -54,12 +54,12 @@ from logic.dynamic_relationships import (
 logger = logging.getLogger(__name__)
 
 # Environment variable overrides with sensible defaults
-_DEFAULT_LORE_MODEL = os.getenv("OPENAI_LORE_MODEL", "gpt-4.1-nano")
-_DEFAULT_MEMORY_MODEL = os.getenv("OPENAI_MEMORY_MODEL", "gpt-4.1-nano")
-_DEFAULT_ATMOSPHERE_MODEL = os.getenv("OPENAI_ATMOSPHERE_MODEL", "gpt-4.1-nano")
-_DEFAULT_LOCATION_MODEL = os.getenv("OPENAI_LOCATION_MODEL", "gpt-4.1-nano")
-_DEFAULT_POETRY_MODEL = os.getenv("OPENAI_POETRY_MODEL", "gpt-4.1-nano")
-_DEFAULT_EPISODE_MODEL = os.getenv("OPENAI_EPISODE_MODEL", "gpt-4.1-nano")
+_DEFAULT_LORE_MODEL = os.getenv("OPENAI_LORE_MODEL", "gpt-4o-mini")
+_DEFAULT_MEMORY_MODEL = os.getenv("OPENAI_MEMORY_MODEL", "gpt-4o-mini")
+_DEFAULT_ATMOSPHERE_MODEL = os.getenv("OPENAI_ATMOSPHERE_MODEL", "gpt-4o-mini")
+_DEFAULT_LOCATION_MODEL = os.getenv("OPENAI_LOCATION_MODEL", "gpt-4o-mini")
+_DEFAULT_POETRY_MODEL = os.getenv("OPENAI_POETRY_MODEL", "gpt-4o-mini")
+_DEFAULT_EPISODE_MODEL = os.getenv("OPENAI_EPISODE_MODEL", "gpt-4o-mini")
 
 # Performance settings
 MAX_CONCURRENT_GPT_CALLS = int(os.getenv("MAX_CONCURRENT_GPT_CALLS", "3"))
