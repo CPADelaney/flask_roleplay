@@ -1,4 +1,5 @@
 # story_agent/story_director_agent.py
+from __future__ import annotations
 
 import asyncio
 import logging
