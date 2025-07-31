@@ -38,6 +38,18 @@ from logic.stats_logic import (
     STAT_COMBINATIONS
 )
 
+# Import the new dynamic relationships system
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    RelationshipState,
+    RelationshipDimensions,
+    event_generator,
+    process_relationship_interaction_tool,
+    get_relationship_summary_tool,
+    poll_relationship_events_tool,
+    drain_relationship_events_tool
+)
+
 # Import agent-based architecture components
 from npcs.npc_agent import NPCAgent
 from npcs.npc_agent_system import NPCAgentSystem
@@ -97,10 +109,12 @@ class TimeSystemError(NPCSystemError):
 @dataclass
 class CrossroadsEvent:
     """Data class for relationship crossroads events"""
-    link_id: int
-    npc_id: int
-    npc_name: str
-    type: str
+    entity1_type: str
+    entity1_id: int
+    entity2_type: str
+    entity2_id: int
+    relationship_state: RelationshipState
+    event_type: str
     description: str
     options: List[Dict[str, Any]]
     expires_in: int
@@ -153,6 +167,9 @@ class IntegratedNPCSystem:
         
         # Initialize the NPC creation handler from the new system
         self.npc_creation_handler = NPCCreationHandler()
+        
+        # Initialize the relationship manager
+        self.relationship_manager = OptimizedRelationshipManager(user_id, conversation_id)
         
         logger.info(f"Initialized IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
         
@@ -299,9 +316,7 @@ class IntegratedNPCSystem:
                     f"{len(expired_rel_keys)} relationship cache entries, " +
                     f"{len(expired_mem_keys)} memory cache entries")
     
-    # UPDATED: Removed _initialize_pool method
-    
-    # UPDATED: Database access methods
+    # Database access methods
     async def execute_query(self, query, *args, timeout=10.0):
         """Execute a database query with error handling."""
         start_time = datetime.now()
@@ -478,6 +493,9 @@ class IntegratedNPCSystem:
                 current_location=current_location
             )
             
+            # Create initial relationship with player if this is the first NPC
+            await self._initialize_npc_player_relationship(npc_id)
+            
             logger.info(f"Successfully created NPC {npc_id} ({npc_name})")
             return npc_id
             
@@ -488,6 +506,28 @@ class IntegratedNPCSystem:
                 f"NPC_{datetime.now().timestamp()}",
                 sex
             )
+    
+    async def _initialize_npc_player_relationship(self, npc_id: int):
+        """Initialize the relationship between a new NPC and the player."""
+        try:
+            # Create an initial neutral relationship with the player
+            interaction = {
+                "type": "first_encounter",
+                "context": "meeting"
+            }
+            
+            await self.relationship_manager.process_interaction(
+                entity1_type="npc",
+                entity1_id=npc_id,
+                entity2_type="player", 
+                entity2_id=self.user_id,
+                interaction=interaction
+            )
+            
+            logger.info(f"Initialized relationship between NPC {npc_id} and player")
+            
+        except Exception as e:
+            logger.error(f"Error initializing NPC-player relationship: {e}")
     
     async def _initialize_advanced_npc_systems(
         self, 
@@ -908,6 +948,9 @@ class IntegratedNPCSystem:
                         "npc_name": npc_name,
                         "last_updated": datetime.now()
                     }
+                    
+            # Initialize relationship with player
+            await self._initialize_npc_player_relationship(npc_id)
         
         return npc_ids
 
@@ -1005,8 +1048,8 @@ class IntegratedNPCSystem:
                     logger.error(error_msg)
                     raise NPCNotFoundError(error_msg)
                 
-                # Get social links (with single query for performance)
-                links = await self._fetch_npc_relationships(npc_id, conn)
+                # Get relationships using the new system
+                relationships = await self._fetch_npc_relationships_dynamic(npc_id)
                 
                 query_time = (datetime.now() - start_time).total_seconds()
                 self.perf_metrics['query_times'].append(query_time)
@@ -1053,7 +1096,7 @@ class IntegratedNPCSystem:
                     "emotional_state": emotional_state,
                     "beliefs": beliefs,
                     "current_perception": current_perception,
-                    "relationships": links
+                    "relationships": relationships
                 }
                 
                 # Update cache
@@ -1113,43 +1156,46 @@ class IntegratedNPCSystem:
             "memories": memories
         }
     
-    async def _fetch_npc_relationships(self, npc_id: int, conn) -> List[Dict[str, Any]]:
+    async def _fetch_npc_relationships_dynamic(self, npc_id: int) -> List[Dict[str, Any]]:
         """
-        Fetch relationships for an NPC using a single database query.
+        Fetch relationships for an NPC using the new dynamic relationship system.
         
         Args:
             npc_id: The NPC ID
-            conn: Database connection
             
         Returns:
             List of relationship information
         """
-        links = []
+        relationships = []
         
-        # Get all relationships in a single query
-        rows = await conn.fetch("""
-            SELECT sl.link_id, sl.entity2_type, sl.entity2_id, sl.link_type, sl.link_level,
-                   CASE WHEN sl.entity2_type = 'npc' THEN n.npc_name ELSE 'Chase' END as target_name
-            FROM SocialLinks sl
-            LEFT JOIN NPCStats n ON sl.entity2_type = 'npc' AND sl.entity2_id = n.npc_id 
-                                 AND n.user_id = sl.user_id AND n.conversation_id = sl.conversation_id
-            WHERE sl.entity1_type = 'npc' 
-              AND sl.entity1_id = $1
-              AND sl.user_id = $2 
-              AND sl.conversation_id = $3
-        """, npc_id, self.user_id, self.conversation_id)
-        
-        for row in rows:
-            links.append({
-                "link_id": row["link_id"],
-                "target_type": row["entity2_type"],
-                "target_id": row["entity2_id"],
-                "target_name": row["target_name"],
-                "link_type": row["link_type"],
-                "link_level": row["link_level"]
-            })
-        
-        return links
+        try:
+            # Get player relationship
+            player_rel = await self.relationship_manager.get_relationship_state(
+                entity1_type="npc",
+                entity1_id=npc_id,
+                entity2_type="player",
+                entity2_id=self.user_id
+            )
+            
+            if player_rel:
+                relationships.append({
+                    "target_type": "player",
+                    "target_id": self.user_id,
+                    "target_name": "Chase",
+                    "dimensions": player_rel.dimensions.to_dict(),
+                    "momentum": player_rel.momentum.get_magnitude(),
+                    "patterns": list(player_rel.history.active_patterns),
+                    "archetypes": list(player_rel.active_archetypes)
+                })
+            
+            # Get other NPC relationships if needed
+            # This could be expanded to fetch relationships with other NPCs
+            
+            return relationships
+            
+        except Exception as e:
+            logger.error(f"Error fetching dynamic relationships for NPC {npc_id}: {e}")
+            return []
     
     async def introduce_npc(self, npc_id: int) -> bool:
         """
@@ -1217,6 +1263,20 @@ class IntegratedNPCSystem:
                 intensity=0.7
             )
             
+            # Update the relationship with a formal introduction interaction
+            interaction = {
+                "type": "formal_introduction",
+                "context": "meeting"
+            }
+            
+            await self.relationship_manager.process_interaction(
+                entity1_type="npc",
+                entity1_id=npc_id,
+                entity2_type="player",
+                entity2_id=self.user_id,
+                interaction=interaction
+            )
+            
             # Update cache if present
             cache_key = f"npc:{npc_id}"
             if cache_key in self.npc_cache:
@@ -1233,42 +1293,60 @@ class IntegratedNPCSystem:
             return False
 
     #=================================================================
-    # SOCIAL LINKS AND RELATIONSHIPS
+    # SOCIAL LINKS AND RELATIONSHIPS - REFACTORED FOR DYNAMIC SYSTEM
     #=================================================================
     
     async def create_direct_social_link(self, 
                                       entity1_type: str, entity1_id: int,
                                       entity2_type: str, entity2_id: int,
                                       link_type: str = "neutral", 
-                                      link_level: int = 0) -> int:
+                                      link_level: int = 0) -> Dict[str, Any]:
         """
-        Create a direct social link between two entities.
+        Create a relationship between two entities using the dynamic system.
         
         Args:
             entity1_type: Type of first entity
             entity1_id: ID of first entity
             entity2_type: Type of second entity
             entity2_id: ID of second entity
-            link_type: Type of link
-            link_level: Level of the link
+            link_type: Type of link (now maps to interaction type)
+            link_level: Level of the link (now affects initial dimensions)
             
         Returns:
-            The ID of the created link
+            Dictionary with relationship information
             
         Raises:
             RelationshipError: If there's an issue creating the relationship
         """
-        from logic.social_links import create_social_link                                    
         try:
-            # Using create_social_link
-            link_id = create_social_link(
-                self.user_id, self.conversation_id,
-                entity1_type, entity1_id,
-                entity2_type, entity2_id,
-                link_type, link_level
+            # Map old link types to new interaction types
+            interaction_type_map = {
+                "friendly": "genuine_compliment",
+                "hostile": "criticism_harsh",
+                "neutral": "first_encounter",
+                "rival": "conflict_resolved",
+                "romantic": "vulnerability_shared"
+            }
+            
+            interaction_type = interaction_type_map.get(link_type, "first_encounter")
+            
+            # Create initial interaction
+            interaction = {
+                "type": interaction_type,
+                "context": "establishing_relationship",
+                "initial_level": link_level
+            }
+            
+            # Process the interaction
+            result = await self.relationship_manager.process_interaction(
+                entity1_type=entity1_type,
+                entity1_id=entity1_id,
+                entity2_type=entity2_type,
+                entity2_id=entity2_id,
+                interaction=interaction
             )
             
-            # If this involves an NPC, update their relationship manager
+            # If this involves an NPC, update their memory
             if entity1_type == "npc":
                 # Get or create NPC agent
                 if entity1_id not in self.agent_system.npc_agents:
@@ -1296,22 +1374,33 @@ class IntegratedNPCSystem:
             if cache_key in self.relationship_cache:
                 del self.relationship_cache[cache_key]
             
-            logger.info(f"Created social link (ID: {link_id}) between {entity1_type}:{entity1_id} and {entity2_type}:{entity2_id}")
-            return link_id
+            logger.info(f"Created relationship between {entity1_type}:{entity1_id} and {entity2_type}:{entity2_id}")
+            
+            return {
+                "success": result.get("success", True),
+                "dimensions": result.get("dimensions_diff", {}),
+                "patterns": result.get("new_patterns", []),
+                "archetypes": result.get("new_archetypes", [])
+            }
             
         except Exception as e:
-            error_msg = f"Failed to create social link: {e}"
+            error_msg = f"Failed to create relationship: {e}"
             logger.error(error_msg)
             raise RelationshipError(error_msg)
     
-    async def update_link_details(self, link_id: int, new_type: str = None, level_change: int = 0) -> Dict[str, Any]:
+    async def update_link_details(self, entity1_type: str, entity1_id: int, 
+                                entity2_type: str, entity2_id: int,
+                                new_type: str = None, level_change: int = 0) -> Dict[str, Any]:
         """
-        Update the type and level of a social link.
+        Update a relationship using the dynamic system.
         
         Args:
-            link_id: ID of the link
-            new_type: New type for the link (or None to keep current type)
-            level_change: Amount to change the level by
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            new_type: New type for the link (maps to interaction)
+            level_change: Amount to change dimensions by
             
         Returns:
             Dictionary with update results
@@ -1319,34 +1408,43 @@ class IntegratedNPCSystem:
         Raises:
             RelationshipError: If there's an issue updating the relationship
         """
-        from logic.social_links import update_link_type_and_level
         try:
-            # Get the relationship details before update
-            async with get_db_connection_context() as conn:
-                row = await conn.fetchrow("""
-                    SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
-                    FROM SocialLinks
-                    WHERE link_id=$1 AND user_id=$2 AND conversation_id=$3
-                """, link_id, self.user_id, self.conversation_id)
-                
-                if not row:
-                    return {"error": "Link not found"}
-                    
-                entity1_type = row["entity1_type"]
-                entity1_id = row["entity1_id"]
-                entity2_type = row["entity2_type"]
-                entity2_id = row["entity2_id"]
-                old_type = row["link_type"]
-                old_level = row["link_level"]
+            # Map link type changes to interactions
+            if new_type:
+                interaction_map = {
+                    "friendly": "support_provided",
+                    "hostile": "boundary_violated",
+                    "rival": "shared_success",
+                    "romantic": "vulnerability_shared"
+                }
+                interaction_type = interaction_map.get(new_type, "helpful_action")
+            else:
+                # Use level change to determine interaction
+                if level_change > 0:
+                    interaction_type = "helpful_action"
+                elif level_change < 0:
+                    interaction_type = "criticism_harsh"
+                else:
+                    interaction_type = "neutral_interaction"
             
-            # Using update_link_type_and_level
-            result = update_link_type_and_level(
-                self.user_id, self.conversation_id,
-                link_id, new_type, level_change
+            # Create interaction
+            interaction = {
+                "type": interaction_type,
+                "context": "relationship_update",
+                "intensity": abs(level_change) / 10.0  # Scale to 0-1
+            }
+            
+            # Process the interaction
+            result = await self.relationship_manager.process_interaction(
+                entity1_type=entity1_type,
+                entity1_id=entity1_id,
+                entity2_type=entity2_type,
+                entity2_id=entity2_id,
+                interaction=interaction
             )
             
             # Update agent memory if an NPC is involved
-            if result and entity1_type == "npc":
+            if entity1_type == "npc":
                 # Get or create NPC agent
                 if entity1_id not in self.agent_system.npc_agents:
                     self.agent_system.npc_agents[entity1_id] = NPCAgent(entity1_id, self.user_id, self.conversation_id)
@@ -1357,11 +1455,11 @@ class IntegratedNPCSystem:
                 # Get target name for better memory context
                 target_name = await self._get_entity_name(entity2_type, entity2_id)
                 
-                if new_type and new_type != old_type:
-                    memory_text = f"My relationship with {target_name} changed from {old_type} to {new_type}."
+                if new_type:
+                    memory_text = f"My relationship with {target_name} changed to {new_type}."
                 else:
                     direction = "improved" if level_change > 0 else "worsened"
-                    memory_text = f"My relationship with {target_name} {direction} from level {old_level} to {result['new_level']}."
+                    memory_text = f"My relationship with {target_name} {direction}."
                 
                 await memory_system.remember(
                     entity_type="npc",
@@ -1391,22 +1489,24 @@ class IntegratedNPCSystem:
             if cache_key in self.relationship_cache:
                 del self.relationship_cache[cache_key]
             
-            if result:
-                logger.info(f"Updated link {link_id}: type={result['new_type']}, level={result['new_level']}")
-            
             return result
             
         except Exception as e:
-            error_msg = f"Failed to update link details: {e}"
+            error_msg = f"Failed to update relationship: {e}"
             logger.error(error_msg)
             raise RelationshipError(error_msg)
     
-    async def add_event_to_link(self, link_id: int, event_text: str) -> bool:
+    async def add_event_to_link(self, entity1_type: str, entity1_id: int,
+                              entity2_type: str, entity2_id: int,
+                              event_text: str) -> bool:
         """
-        Add an event to a social link's history.
+        Add an event to a relationship using the dynamic system.
         
         Args:
-            link_id: ID of the link
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
             event_text: Text describing the event
             
         Returns:
@@ -1415,28 +1515,30 @@ class IntegratedNPCSystem:
         Raises:
             RelationshipError: If there's an issue adding the event
         """
-        from logic.social_links import add_link_event      
         try:
-            # Get the relationship details
-            async with get_db_connection_context() as conn:
-                row = await conn.fetchrow("""
-                    SELECT entity1_type, entity1_id, entity2_type, entity2_id
-                    FROM SocialLinks
-                    WHERE link_id=$1 AND user_id=$2 AND conversation_id=$3
-                """, link_id, self.user_id, self.conversation_id)
-                
-                if not row:
-                    return False
-                    
-                entity1_type = row["entity1_type"]
-                entity1_id = row["entity1_id"]
-                entity2_type = row["entity2_type"]
-                entity2_id = row["entity2_id"]
+            # Parse event text to determine interaction type
+            interaction_type = "neutral_interaction"
+            if any(word in event_text.lower() for word in ["help", "assist", "support"]):
+                interaction_type = "helpful_action"
+            elif any(word in event_text.lower() for word in ["betray", "hurt", "attack"]):
+                interaction_type = "betrayal"
+            elif any(word in event_text.lower() for word in ["love", "care", "intimate"]):
+                interaction_type = "vulnerability_shared"
             
-            # Using add_link_event
-            add_link_event(
-                self.user_id, self.conversation_id,
-                link_id, event_text
+            # Create interaction
+            interaction = {
+                "type": interaction_type,
+                "context": "event",
+                "description": event_text
+            }
+            
+            # Process the interaction
+            result = await self.relationship_manager.process_interaction(
+                entity1_type=entity1_type,
+                entity1_id=entity1_id,
+                entity2_type=entity2_type,
+                entity2_id=entity2_id,
+                interaction=interaction
             )
             
             # Create memory record for NPC agents involved
@@ -1466,11 +1568,11 @@ class IntegratedNPCSystem:
             if cache_key in self.relationship_cache:
                 del self.relationship_cache[cache_key]
             
-            logger.info(f"Added event to link {link_id}: {event_text[:50]}...")
+            logger.info(f"Added event to relationship: {event_text[:50]}...")
             return True
             
         except Exception as e:
-            error_msg = f"Failed to add event to link: {e}"
+            error_msg = f"Failed to add event to relationship: {e}"
             logger.error(error_msg)
             raise RelationshipError(error_msg)
     
@@ -1481,7 +1583,7 @@ class IntegratedNPCSystem:
                                                context: Dict[str, Any] = None) -> bool:
         """
         Update relationship between NPC and player based on an interaction.
-        Enhanced to use agent's relationship manager and memory system for more nuanced updates.
+        Enhanced to use the dynamic relationship system.
         
         Args:
             npc_id: ID of the NPC
@@ -1496,9 +1598,6 @@ class IntegratedNPCSystem:
             RelationshipError: If there's an issue updating the relationship
         """
         try:
-            # Get or create NPCRelationshipManager for this NPC
-            relationship_manager = NPCRelationshipManager(npc_id, self.user_id, self.conversation_id)
-            
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
                 self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
@@ -1513,29 +1612,34 @@ class IntegratedNPCSystem:
             if context is None:
                 context = {}
             
-            # Enhance relationship update with emotional context
+            # Enhance context with emotional state
             enhanced_context = {
                 "emotional_state": emotional_state,
-                "recent_interactions": [],  # Will populate from memory
-                "interaction_type": player_action.get("type", "unknown")
+                "player_action_type": player_action.get("type", "unknown"),
+                "npc_action_type": npc_action.get("type", "unknown")
             }
             
             # Update context with provided context
             enhanced_context.update(context)
             
-            # Get recent memories to inform relationship change
-            memory_result = await memory_system.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                query="player interaction",
-                limit=3
-            )
+            # Determine interaction type based on actions
+            interaction_type = self._determine_interaction_type(player_action, npc_action)
             
-            enhanced_context["recent_interactions"] = memory_result.get("memories", [])
+            # Create interaction
+            interaction = {
+                "type": interaction_type,
+                "context": enhanced_context.get("situation", "general"),
+                "player_action": player_action.get("description", ""),
+                "npc_response": npc_action.get("description", "")
+            }
             
-            # Update relationship with enhanced context
-            await relationship_manager.update_relationship_from_interaction(
-                "player", self.user_id, player_action, npc_action, enhanced_context
+            # Process through dynamic relationship system
+            result = await self.relationship_manager.process_interaction(
+                entity1_type="npc",
+                entity1_id=npc_id,
+                entity2_type="player",
+                entity2_id=self.user_id,
+                interaction=interaction
             )
             
             # Create a memory of this relationship change
@@ -1566,48 +1670,38 @@ class IntegratedNPCSystem:
             error_msg = f"Failed to update relationship from interaction: {e}"
             logger.error(error_msg)
             raise RelationshipError(error_msg)
-
-    async def record_memory_event(self, npc_id: int, memory_text: str, tags: List[str] = None) -> bool:
-        """
-        Record a memory event for an NPC using the agent's memory system.
+    
+    def _determine_interaction_type(self, player_action: Dict[str, Any], npc_action: Dict[str, Any]) -> str:
+        """Determine the interaction type based on player and NPC actions."""
+        player_type = player_action.get("type", "").lower()
         
-        Args:
-            npc_id: ID of the NPC
-            memory_text: The memory text to record
-            tags: Optional tags for the memory
-            
-        Returns:
-            True if successful, False otherwise
-            
-        Raises:
-            MemorySystemError: If there's an issue recording the memory
-        """
-        try:
-            # Get or create the NPC agent
-            if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-            
-            agent = self.agent_system.npc_agents[npc_id]
-            memory_system = await agent._get_memory_system()
-            
-            # Create the memory
-            await memory_system.remember(
-                entity_type="npc",
-                entity_id=npc_id,
-                memory_text=memory_text,
-                importance="medium",  # Default importance
-                tags=tags or ["player_interaction"]
-            )
-            return True
-            
-        except Exception as e:
-            error_msg = f"Error recording memory for NPC {npc_id}: {e}"
-            logger.error(error_msg)
-            raise MemorySystemError(error_msg)
+        # Map player action types to interaction types
+        if player_type in ["help", "assist", "support"]:
+            return "helpful_action"
+        elif player_type in ["betray", "lie", "deceive"]:
+            return "betrayal"
+        elif player_type in ["compliment", "praise", "flatter"]:
+            return "genuine_compliment"
+        elif player_type in ["share", "confide", "reveal"]:
+            return "vulnerability_shared"
+        elif player_type in ["resolve", "apologize", "reconcile"]:
+            return "conflict_resolved"
+        elif player_type in ["violate", "cross", "ignore"]:
+            return "boundary_violated"
+        elif player_type in ["provide", "give", "offer"]:
+            return "support_provided"
+        elif player_type in ["criticize", "insult", "mock"]:
+            return "criticism_harsh"
+        elif player_type in ["achieve", "accomplish", "win"]:
+            return "shared_success"
+        elif player_type in ["lie", "deceive", "trick"]:
+            return "deception_discovered"
+        else:
+            return "neutral_interaction"
 
     async def check_for_relationship_events(self) -> List[Dict[str, Any]]:
         """
-        Check for special relationship events like crossroads or rituals.
+        Check for special relationship events using the dynamic event system.
         
         Returns:
             List of relationship events
@@ -1618,78 +1712,58 @@ class IntegratedNPCSystem:
         try:
             events = []
             
-            # Use connection for performance
-            async with get_db_connection_context() as conn:
-                # Get social links with sufficiently high levels that might trigger events
-                rows = await conn.fetch("""
-                    SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, 
-                           link_type, link_level
-                    FROM SocialLinks
-                    WHERE user_id = $1 AND conversation_id = $2
-                      AND (entity1_type = 'player' OR entity2_type = 'player')
-                      AND link_level >= 50
-                """, self.user_id, self.conversation_id)
-                
-                links = []
-                for row in rows:
-                    link_id = row["link_id"]
-                    e1_type = row["entity1_type"]
-                    e1_id = row["entity1_id"]
-                    e2_type = row["entity2_type"]
-                    e2_id = row["entity2_id"]
-                    link_type = row["link_type"]
-                    link_level = row["link_level"]
-                    
-                    # Get NPC details if applicable
-                    npc_id = None
-                    npc_name = None
-                    
-                    if e1_type == 'npc':
-                        npc_id = e1_id
-                    elif e2_type == 'npc':
-                        npc_id = e2_id
-                    
-                    if npc_id:
-                        npc_row = await conn.fetchrow("""
-                            SELECT npc_name FROM NPCStats
-                            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                        """, npc_id, self.user_id, self.conversation_id)
-                        
-                        if npc_row:
-                            npc_name = npc_row["npc_name"]
-                    
-                    links.append({
-                        "link_id": link_id,
-                        "entity1_type": e1_type,
-                        "entity1_id": e1_id,
-                        "entity2_type": e2_type,
-                        "entity2_id": e2_id,
-                        "link_type": link_type,
-                        "link_level": link_level,
-                        "npc_id": npc_id,
-                        "npc_name": npc_name
-                    })
+            # Poll for events from the dynamic system
+            event_data = await event_generator.get_next_event(timeout=0.5)
             
-            # Check each link for potential events
-            for link in links:
-                # Check for crossroads event - significant decision point
-                if link["link_level"] >= 70 and random.random() < 0.2:  # 20% chance for high level links
-                    # Get or create NPC agent for better decision making
-                    npc_id = link["npc_id"]
-                    if npc_id and npc_id not in self.agent_system.npc_agents:
-                        self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            while event_data:
+                # Parse the event
+                if event_data and "event" in event_data:
+                    event = event_data["event"]
+                    state_key = event_data.get("state_key", "")
                     
-                    # Get NPC agent if available
-                    agent = self.agent_system.npc_agents.get(npc_id) if npc_id else None
-                    
-                    # Generate crossroads event (potentially using agent for better decision modeling)
-                    crossroads_data = await self._generate_relationship_crossroads(link, agent)
-                    
-                    if crossroads_data:
-                        events.append({
-                            "type": "relationship_crossroads",
-                            "data": crossroads_data
-                        })
+                    # Extract entity information from state key
+                    parts = state_key.split("_")
+                    if len(parts) >= 4:
+                        entity1_type = parts[0]
+                        entity1_id = int(parts[1])
+                        entity2_type = parts[2]
+                        entity2_id = int(parts[3])
+                        
+                        # Get the relationship state
+                        rel_state = await self.relationship_manager.get_relationship_state(
+                            entity1_type, entity1_id,
+                            entity2_type, entity2_id
+                        )
+                        
+                        # Create crossroads event if appropriate
+                        if event.get("type") in ["moment_of_truth", "pattern_crisis", 
+                                               "archetype_crisis", "reconnection_opportunity"]:
+                            
+                            crossroads = CrossroadsEvent(
+                                entity1_type=entity1_type,
+                                entity1_id=entity1_id,
+                                entity2_type=entity2_type,
+                                entity2_id=entity2_id,
+                                relationship_state=rel_state,
+                                event_type=event.get("type"),
+                                description=event.get("description", ""),
+                                options=event.get("choices", []),
+                                expires_in=3
+                            )
+                            
+                            events.append({
+                                "type": "relationship_crossroads",
+                                "data": crossroads
+                            })
+                        else:
+                            # Other event types
+                            events.append({
+                                "type": event.get("type"),
+                                "data": event
+                            })
+                
+                # Try to get another event
+                event_data = await event_generator.get_next_event(timeout=0.1)
             
             return events
             
@@ -1698,203 +1772,12 @@ class IntegratedNPCSystem:
             logger.error(error_msg)
             raise RelationshipError(error_msg)
     
-    async def _generate_relationship_crossroads(self, link: Dict[str, Any], agent: Optional[NPCAgent] = None) -> Dict[str, Any]:
+    async def apply_crossroads_choice(self, crossroads: CrossroadsEvent, choice_index: int) -> Dict[str, Any]:
         """
-        Generate a relationship crossroads event based on link details and NPC agent.
+        Apply a choice in a relationship crossroads using the dynamic system.
         
         Args:
-            link: The social link data
-            agent: Optional NPC agent for better decision modeling
-            
-        Returns:
-            Crossroads event data
-        """
-        # Default crossroads types based on relationship level
-        crossroads_types = [
-            "trust_test",
-            "commitment_decision",
-            "loyalty_challenge",
-            "boundary_setting",
-            "power_dynamic_shift"
-        ]
-        
-        # Use agent to refine crossroads type if available
-        selected_type = random.choice(crossroads_types)
-        if agent:
-            try:
-                # Get agent's current emotional state and perception for better context
-                memory_system = await agent._get_memory_system()
-                emotional_state = await memory_system.get_npc_emotion(link["npc_id"])
-                
-                # Use emotional state to influence crossroads type
-                if emotional_state and "current_emotion" in emotional_state:
-                    emotion = emotional_state["current_emotion"]
-                    primary = emotion.get("primary", {})
-                    emotion_name = primary.get("name", "neutral")
-                    
-                    # Adjust crossroads type based on emotional state
-                    if emotion_name == "anger":
-                        selected_type = "boundary_setting" if random.random() < 0.7 else "power_dynamic_shift"
-                    elif emotion_name == "joy":
-                        selected_type = "commitment_decision" if random.random() < 0.7 else "trust_test"
-                    elif emotion_name == "fear":
-                        selected_type = "trust_test" if random.random() < 0.7 else "loyalty_challenge"
-            except Exception as e:
-                logger.warning(f"Error using agent for crossroads generation: {e}")
-                # Fall back to random selection
-        
-        # Generate crossroads options based on type
-        options = self._generate_crossroads_options(selected_type, link)
-        
-        # Create crossroads data
-        crossroads_data = {
-            "link_id": link["link_id"],
-            "npc_id": link["npc_id"],
-            "npc_name": link["npc_name"],
-            "type": selected_type,
-            "description": self._get_crossroads_description(selected_type, link),
-            "options": options,
-            "expires_in": 3  # Number of interactions before expiring
-        }
-        
-        return crossroads_data
-    
-    def _generate_crossroads_options(self, crossroads_type: str, link: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate options for a relationship crossroads based on type."""
-        npc_name = link.get('npc_name', 'The NPC')
-        
-        if crossroads_type == "trust_test":
-            return [
-                {
-                    "text": "Trust completely",
-                    "stat_effects": {"trust": 10, "respect": 5, "willpower": -5},
-                    "outcome": f"Your trust in {npc_name} deepens significantly."
-                },
-                {
-                    "text": "Remain cautious",
-                    "stat_effects": {"trust": 0, "willpower": 5, "respect": 0},
-                    "outcome": f"You maintain your guard with {npc_name}."
-                },
-                {
-                    "text": "Express distrust",
-                    "stat_effects": {"trust": -10, "respect": 0, "willpower": 10},
-                    "outcome": f"Your relationship with {npc_name} becomes more distant."
-                }
-            ]
-        elif crossroads_type == "commitment_decision":
-            # Generate options based on commitment decision
-            return [
-                {
-                    "text": "Commit fully",
-                    "stat_effects": {"closeness": 15, "willpower": -10, "obedience": 10},
-                    "outcome": f"Your relationship with {npc_name} becomes much closer."
-                },
-                {
-                    "text": "Partial commitment",
-                    "stat_effects": {"closeness": 5, "willpower": 0, "obedience": 0},
-                    "outcome": f"You become somewhat closer to {npc_name}."
-                },
-                {
-                    "text": "Maintain independence",
-                    "stat_effects": {"willpower": 10, "closeness": -5, "obedience": -5},
-                    "outcome": f"You maintain your independence from {npc_name}."
-                }
-            ]
-        elif crossroads_type == "loyalty_challenge":
-            return [
-                {
-                    "text": "Demonstrate unwavering loyalty",
-                    "stat_effects": {"respect": 15, "obedience": 10, "willpower": -5},
-                    "outcome": f"{npc_name} is deeply impressed by your loyalty."
-                },
-                {
-                    "text": "Balance loyalty with personal needs",
-                    "stat_effects": {"respect": 5, "willpower": 5, "obedience": 0},
-                    "outcome": f"You find a middle ground with {npc_name}."
-                },
-                {
-                    "text": "Prioritize your own interests",
-                    "stat_effects": {"willpower": 10, "respect": -5, "obedience": -10},
-                    "outcome": f"You choose your own path, disappointing {npc_name}."
-                }
-            ]
-        elif crossroads_type == "boundary_setting":
-            return [
-                {
-                    "text": "Allow boundaries to be pushed",
-                    "stat_effects": {"obedience": 15, "willpower": -10, "corruption": 5},
-                    "outcome": f"You let {npc_name} push your boundaries further."
-                },
-                {
-                    "text": "Negotiate reasonable boundaries",
-                    "stat_effects": {"respect": 5, "willpower": 5, "obedience": 0},
-                    "outcome": f"You establish healthy boundaries with {npc_name}."
-                },
-                {
-                    "text": "Firmly maintain strict boundaries",
-                    "stat_effects": {"willpower": 15, "respect": -5, "obedience": -10},
-                    "outcome": f"You stand firm against {npc_name}'s pressure."
-                }
-            ]
-        elif crossroads_type == "power_dynamic_shift":
-            return [
-                {
-                    "text": "Submit to their authority",
-                    "stat_effects": {"obedience": 15, "willpower": -10, "corruption": 10},
-                    "outcome": f"You accept {npc_name}'s dominance in the relationship."
-                },
-                {
-                    "text": "Seek balanced power",
-                    "stat_effects": {"respect": 5, "willpower": 5, "confidence": 5},
-                    "outcome": f"You work toward a more equal relationship with {npc_name}."
-                },
-                {
-                    "text": "Assert your dominance",
-                    "stat_effects": {"willpower": 10, "confidence": 15, "obedience": -15},
-                    "outcome": f"You take control in your relationship with {npc_name}."
-                }
-            ]
-        
-        # Default options if type not recognized
-        return [
-            {
-                "text": "Strengthen relationship",
-                "stat_effects": {"closeness": 10, "respect": 5},
-                "outcome": f"Your bond with {npc_name} strengthens."
-            },
-            {
-                "text": "Maintain status quo",
-                "stat_effects": {"closeness": 0, "respect": 0},
-                "outcome": f"Your relationship with {npc_name} continues unchanged."
-            },
-            {
-                "text": "Create distance",
-                "stat_effects": {"closeness": -10, "respect": -5, "willpower": 5},
-                "outcome": f"You create some distance between yourself and {npc_name}."
-            }
-        ]
-    
-    def _get_crossroads_description(self, crossroads_type: str, link: Dict[str, Any]) -> str:
-        """Get description text for a relationship crossroads."""
-        npc_name = link.get("npc_name", "The NPC")
-        
-        descriptions = {
-            "trust_test": f"{npc_name} has shared something important with you. How much will you trust them?",
-            "commitment_decision": f"Your relationship with {npc_name} has reached a critical point. How committed will you be?",
-            "loyalty_challenge": f"{npc_name} is testing your loyalty. How will you respond?",
-            "boundary_setting": f"{npc_name} is pushing boundaries in your relationship. How will you establish limits?",
-            "power_dynamic_shift": f"The power dynamic with {npc_name} is shifting. How will you position yourself?"
-        }
-        
-        return descriptions.get(crossroads_type, f"You've reached a crossroads in your relationship with {npc_name}.")
-    
-    async def apply_crossroads_choice(self, link_id: int, crossroads_name: str, choice_index: int) -> Dict[str, Any]:
-        """
-        Apply a choice in a relationship crossroads.
-        
-        Args:
-            link_id: ID of the social link
-            crossroads_name: Type/name of the crossroads
+            crossroads: The crossroads event
             choice_index: Index of the chosen option
             
         Returns:
@@ -1904,78 +1787,59 @@ class IntegratedNPCSystem:
             RelationshipError: If there's an issue applying the choice
         """
         try:
-            # Use connection for performance
-            async with get_db_connection_context() as conn:
-                # Get link details
-                row = await conn.fetchrow("""
-                    SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
-                    FROM SocialLinks
-                    WHERE link_id = $1 AND user_id = $2 AND conversation_id = $3
-                """, link_id, self.user_id, self.conversation_id)
-                
-                if not row:
-                    return {"error": "Link not found"}
-                
-                e1_type = row["entity1_type"]
-                e1_id = row["entity1_id"]
-                e2_type = row["entity2_type"]
-                e2_id = row["entity2_id"]
-                link_type = row["link_type"]
-                link_level = row["link_level"]
-                
-                # Get NPC details if applicable
-                npc_id = e1_id if e1_type == 'npc' else e2_id if e2_type == 'npc' else None
-                npc_name = await self._get_entity_name(e1_type if e1_type == 'npc' else e2_type, 
-                                                     npc_id) if npc_id else None
-                
-                # Reconstruct link data
-                link = {
-                    "link_id": link_id,
-                    "entity1_type": e1_type,
-                    "entity1_id": e1_id,
-                    "entity2_type": e2_type,
-                    "entity2_id": e2_id,
-                    "link_type": link_type,
-                    "link_level": link_level,
-                    "npc_id": npc_id,
-                    "npc_name": npc_name
-                }
-                
-                # Generate options to find the chosen one
-                options = self._generate_crossroads_options(crossroads_name, link)
-                
-                if choice_index < 0 or choice_index >= len(options):
-                    return {"error": "Invalid choice index"}
-                
-                chosen_option = options[choice_index]
-                
-                # Apply stat effects
-                if "stat_effects" in chosen_option:
-                    # Convert dict to a list of separate changes for apply_stat_change
-                    await self.apply_stat_changes(
-                        chosen_option["stat_effects"],
-                        f"Crossroads choice in relationship with {npc_name}"
-                    )
-                
-                # Apply relationship changes
-                # Determine change based on choice index
-                level_change = 10 if choice_index == 0 else 0 if choice_index == 1 else -10
-                
-                # Update relationship
-                await conn.execute("""
-                    UPDATE SocialLinks
-                    SET link_level = GREATEST(0, LEAST(100, link_level + $1))
-                    WHERE link_id = $2
-                """, level_change, link_id)
-                
-                # Add event to link history
-                await conn.execute("""
-                    UPDATE SocialLinks
-                    SET link_history = COALESCE(link_history, '[]'::jsonb) || $1::jsonb
-                    WHERE link_id = $2
-                """, json.dumps([f"Crossroads choice: {chosen_option['text']}"]), link_id)
+            options = crossroads.options
+            
+            if choice_index < 0 or choice_index >= len(options):
+                return {"error": "Invalid choice index"}
+            
+            chosen_option = options[choice_index]
+            
+            # Apply stat effects
+            if "stat_effects" in chosen_option:
+                await self.apply_stat_changes(
+                    chosen_option["stat_effects"],
+                    f"Crossroads choice in relationship"
+                )
+            
+            # Create interaction based on choice
+            interaction_map = {
+                "confront": "conflict_resolved",
+                "avoid": "boundary_violated",
+                "trust": "vulnerability_shared",
+                "distrust": "deception_discovered",
+                "embrace": "vulnerability_shared",
+                "boundaries": "boundary_setting",
+                "commit": "support_provided",
+                "independence": "boundary_setting"
+            }
+            
+            choice_id = chosen_option.get("id", "")
+            interaction_type = interaction_map.get(choice_id, "neutral_interaction")
+            
+            # Process interaction
+            interaction = {
+                "type": interaction_type,
+                "context": "crossroads_choice",
+                "choice": chosen_option.get("text", ""),
+                "impacts": chosen_option.get("potential_impacts", {})
+            }
+            
+            result = await self.relationship_manager.process_interaction(
+                entity1_type=crossroads.entity1_type,
+                entity1_id=crossroads.entity1_id,
+                entity2_type=crossroads.entity2_type,
+                entity2_id=crossroads.entity2_id,
+                interaction=interaction
+            )
             
             # Create memory for NPC
+            if crossroads.entity1_type == "npc":
+                npc_id = crossroads.entity1_id
+            elif crossroads.entity2_type == "npc":
+                npc_id = crossroads.entity2_id
+            else:
+                npc_id = None
+                
             if npc_id:
                 await self.add_memory_to_npc(
                     npc_id,
@@ -1985,14 +1849,15 @@ class IntegratedNPCSystem:
                 )
             
             # Invalidate relationship cache
-            cache_key = f"rel:{e1_type}:{e1_id}:{e2_type}:{e2_id}"
+            cache_key = f"rel:{crossroads.entity1_type}:{crossroads.entity1_id}:{crossroads.entity2_type}:{crossroads.entity2_id}"
             if cache_key in self.relationship_cache:
                 del self.relationship_cache[cache_key]
             
             return {
                 "success": True,
                 "outcome_text": chosen_option.get("outcome", "Your choice has been recorded."),
-                "stat_effects": chosen_option.get("stat_effects", {})
+                "stat_effects": chosen_option.get("stat_effects", {}),
+                "relationship_changes": result
             }
         
         except Exception as e:
@@ -2002,7 +1867,7 @@ class IntegratedNPCSystem:
     
     async def get_relationship(self, entity1_type: str, entity1_id: int, entity2_type: str, entity2_id: int) -> Dict[str, Any]:
         """
-        Get the relationship between two entities.
+        Get the relationship between two entities using the dynamic system.
         
         Args:
             entity1_type: Type of first entity
@@ -2022,43 +1887,17 @@ class IntegratedNPCSystem:
             if cache_key in self.relationship_cache and (datetime.now() - self.relationship_cache[cache_key].get("last_updated", datetime.min)).seconds < 300:
                 return self.relationship_cache[cache_key]
             
-            # Use connection for performance
-            async with get_db_connection_context() as conn:
-                # Check for direct relationship
-                row = await conn.fetchrow("""
-                    SELECT link_id, link_type, link_level, link_history
-                    FROM SocialLinks
-                    WHERE user_id = $1 AND conversation_id = $2
-                      AND ((entity1_type = $3 AND entity1_id = $4 AND entity2_type = $5 AND entity2_id = $6)
-                         OR (entity1_type = $5 AND entity1_id = $6 AND entity2_type = $3 AND entity2_id = $4))
-                """, 
-                    self.user_id, self.conversation_id,
-                    entity1_type, entity1_id, entity2_type, entity2_id
-                )
-                
-                if not row:
-                    return None
-                
-                link_id = row["link_id"]
-                link_type = row["link_type"]
-                link_level = row["link_level"]
-                link_history = row["link_history"]
-                
-                # Convert link_history to Python list if it's not None
-                if link_history:
-                    if isinstance(link_history, str):
-                        try:
-                            history = json.loads(link_history)
-                        except json.JSONDecodeError:
-                            history = []
-                    else:
-                        history = link_history
-                else:
-                    history = []
-                
-                # Get entity names
-                entity1_name = await self._get_entity_name(entity1_type, entity1_id)
-                entity2_name = await self._get_entity_name(entity2_type, entity2_id)
+            # Get relationship state
+            rel_state = await self.relationship_manager.get_relationship_state(
+                entity1_type=entity1_type,
+                entity1_id=entity1_id,
+                entity2_type=entity2_type,
+                entity2_id=entity2_id
+            )
+            
+            # Get entity names
+            entity1_name = await self._get_entity_name(entity1_type, entity1_id)
+            entity2_name = await self._get_entity_name(entity2_type, entity2_id)
             
             # Use agent system for memory-enriched relationship data if one of the entities is an NPC
             relationship_memories = []
@@ -2092,18 +1931,22 @@ class IntegratedNPCSystem:
                 
                 relationship_memories.extend(memory_result.get("memories", []))
             
+            # Build relationship info
             relationship = {
-                "link_id": link_id,
                 "entity1_type": entity1_type,
                 "entity1_id": entity1_id,
                 "entity1_name": entity1_name,
                 "entity2_type": entity2_type,
                 "entity2_id": entity2_id,
                 "entity2_name": entity2_name,
-                "link_type": link_type,
-                "link_level": link_level,
-                "link_history": history[-5:],  # Get last 5 events
-                "relationship_memories": relationship_memories
+                "dimensions": rel_state.dimensions.to_dict(),
+                "momentum": rel_state.momentum.get_magnitude(),
+                "patterns": list(rel_state.history.active_patterns),
+                "archetypes": list(rel_state.active_archetypes),
+                "relationship_memories": relationship_memories,
+                "created_at": rel_state.created_at.isoformat(),
+                "last_interaction": rel_state.last_interaction.isoformat(),
+                "duration_days": rel_state.get_duration_days()
             }
             
             # Update cache
@@ -2748,37 +2591,53 @@ class IntegratedNPCSystem:
             if source_npc_id not in self.agent_system.npc_agents:
                 self.agent_system.npc_agents[source_npc_id] = NPCAgent(source_npc_id, self.user_id, self.conversation_id)
             
-            # UPDATED: Use async connection context manager
+            # Find related NPCs using the new relationship system
             related_npcs = []
             source_name = "Unknown"
             
+            # Get all NPCs
             async with get_db_connection_context() as conn:
-                # Find related NPCs with a single query
                 rows = await conn.fetch("""
-                    SELECT sl.entity2_id, sl.link_level, n.npc_name as source_name
-                    FROM SocialLinks sl
-                    JOIN NPCStats n ON n.npc_id = sl.entity1_id 
-                                   AND n.user_id = sl.user_id 
-                                   AND n.conversation_id = sl.conversation_id
-                    WHERE sl.user_id = $1 
-                      AND sl.conversation_id = $2
-                      AND sl.entity1_type = 'npc' 
-                      AND sl.entity1_id = $3
-                      AND sl.entity2_type = 'npc'
-                      AND sl.link_level > 30
-                """, self.user_id, self.conversation_id, source_npc_id)
+                    SELECT npc_id, npc_name
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
                 
+                source_name_row = [r for r in rows if r["npc_id"] == source_npc_id]
+                if source_name_row:
+                    source_name = source_name_row[0]["npc_name"]
+                
+                # Check relationships with each NPC
                 for row in rows:
-                    related_npcs.append((row["entity2_id"], row["link_level"]))
-                    if not source_name or source_name == "Unknown":
-                        source_name = row["source_name"]
+                    if row["npc_id"] != source_npc_id:
+                        # Get relationship state
+                        rel_state = await self.relationship_manager.get_relationship_state(
+                            entity1_type="npc",
+                            entity1_id=source_npc_id,
+                            entity2_type="npc",
+                            entity2_id=row["npc_id"]
+                        )
+                        
+                        # Check if relationship is strong enough for memory propagation
+                        if (rel_state.dimensions.trust > 30 or 
+                            rel_state.dimensions.intimacy > 30 or
+                            rel_state.dimensions.frequency > 40):
+                            
+                            # Calculate propagation strength based on relationship
+                            propagation_strength = max(
+                                rel_state.dimensions.trust / 100,
+                                rel_state.dimensions.intimacy / 100,
+                                rel_state.dimensions.frequency / 100
+                            )
+                            
+                            related_npcs.append((row["npc_id"], propagation_strength))
             
             # Propagate memory to each related NPC
             propagation_tasks = []
-            for npc_id, link_level in related_npcs:
+            for npc_id, strength in related_npcs:
                 # Add task to propagate memory
                 propagation_tasks.append(
-                    self._propagate_single_memory(npc_id, source_name, memory_text, link_level, importance)
+                    self._propagate_single_memory_dynamic(npc_id, source_name, memory_text, strength, importance)
                 )
             
             # Run all propagation tasks concurrently
@@ -2792,31 +2651,29 @@ class IntegratedNPCSystem:
             logger.error(error_msg)
             raise MemorySystemError(error_msg)
     
-    async def _propagate_single_memory(self, npc_id: int, source_name: str, memory_text: str, 
-                                    link_level: int, importance: str):
+    async def _propagate_single_memory_dynamic(self, npc_id: int, source_name: str, memory_text: str, 
+                                             propagation_strength: float, importance: str):
         """
-        Propagate a single memory to an NPC.
+        Propagate a single memory to an NPC with dynamic distortion.
         
         Args:
             npc_id: Target NPC ID
             source_name: Source NPC name
             memory_text: Memory text
-            link_level: Relationship level
+            propagation_strength: Strength of propagation (0.0-1.0)
             importance: Memory importance
         """
         try:
-            # Modify the memory text based on relationship
-            relationship_factor = link_level / 100.0  # 0.0 to 1.0
-            
-            # Higher relationship means more accurate propagation
-            if relationship_factor > 0.7:
+            # Higher relationship strength means more accurate propagation
+            if propagation_strength > 0.7:
                 propagated_text = f"I heard from {source_name} that {memory_text}"
             else:
                 # Add potential distortion
                 words = memory_text.split()
-                if len(words) > 5:
-                    # Replace 1-2 words to create slight distortion
-                    for _ in range(random.randint(1, 2)):
+                if len(words) > 5 and propagation_strength < 0.5:
+                    # More distortion for weaker relationships
+                    distortion_count = int((1 - propagation_strength) * 3)  # 1-3 words
+                    for _ in range(min(distortion_count, len(words) // 3)):
                         if len(words) > 3:
                             idx = random.randint(0, len(words) - 1)
                             
@@ -2833,11 +2690,14 @@ class IntegratedNPCSystem:
                 distorted_text = " ".join(words)
                 propagated_text = f"I heard from {source_name} that {distorted_text}"
             
+            # Reduce importance for propagated memories
+            new_importance = "low" if importance == "medium" else "medium" if importance == "high" else "low"
+            
             # Create the propagated memory
             await self.add_memory_to_npc(
                 npc_id, 
                 propagated_text, 
-                "low" if importance == "medium" else "medium" if importance == "high" else "low",
+                new_importance,
                 tags=["hearsay", "secondhand", "rumor"]
             )
         except Exception as e:
@@ -3077,6 +2937,9 @@ class IntegratedNPCSystem:
             if result.get("time_advanced", False):
                 # Process in background task to avoid blocking the main thread
                 asyncio.create_task(self.process_npc_scheduled_activities())
+                
+                # Check for relationship events after time advance
+                asyncio.create_task(self._check_relationship_events_after_time())
             
             return result
             
@@ -3084,6 +2947,21 @@ class IntegratedNPCSystem:
             error_msg = f"Error advancing time with activity: {e}"
             logger.error(error_msg)
             raise TimeSystemError(error_msg)
+    
+    async def _check_relationship_events_after_time(self):
+        """Check for relationship events after time advances."""
+        try:
+            # Drain any pending relationship events
+            events = await event_generator.drain_events(max_events=10)
+            
+            # Process each event
+            for event_data in events:
+                if event_data and "event" in event_data:
+                    # Log the event for now
+                    logger.info(f"Relationship event occurred: {event_data['event'].get('type', 'unknown')}")
+                    # You could store these events for later retrieval or process them immediately
+        except Exception as e:
+            logger.error(f"Error checking relationship events after time advance: {e}")
     
     async def process_player_activity(
         self, 
@@ -3463,6 +3341,9 @@ class IntegratedNPCSystem:
                 except Exception as e:
                     logger.error(f"Error processing activity for NPC {npc_id}: {e}")
             
+            # Apply daily drift to relationships
+            await self.relationship_manager.apply_daily_drift()
+            
             # Return combined results
             return {
                 "npc_responses": npc_responses,
@@ -3731,17 +3612,31 @@ class IntegratedNPCSystem:
             # Get active and important NPCs in a single query
             # UPDATED: Use async connection context manager
             async with get_db_connection_context() as conn:
-                # Find NPCs with important relationships
-                rel_rows = await conn.fetch("""
-                    SELECT DISTINCT entity1_id as npc_id
-                    FROM SocialLinks
+                # Find NPCs with important relationships using the dynamic system
+                # Get all NPCs first
+                npc_rows = await conn.fetch("""
+                    SELECT npc_id
+                    FROM NPCStats
                     WHERE user_id = $1 AND conversation_id = $2
-                    AND entity1_type = 'npc'
-                    AND link_level > 50
                 """, self.user_id, self.conversation_id)
                 
-                for row in rel_rows:
-                    important_relationships.add(row["npc_id"])
+                # Check relationships for each NPC
+                for row in npc_rows:
+                    npc_id = row["npc_id"]
+                    
+                    # Get relationship with player
+                    rel_state = await self.relationship_manager.get_relationship_state(
+                        entity1_type="npc",
+                        entity1_id=npc_id,
+                        entity2_type="player",
+                        entity2_id=self.user_id
+                    )
+                    
+                    # Check if relationship is important
+                    if (rel_state.dimensions.trust > 50 or 
+                        rel_state.dimensions.affection > 50 or
+                        rel_state.dimensions.intimacy > 50):
+                        important_relationships.add(npc_id)
                 
                 # Find recently active NPCs
                 act_rows = await conn.fetch("""
@@ -4022,6 +3917,27 @@ class IntegratedNPCSystem:
             else:
                 belief_result = None
             
+            # Update relationship
+            npc_action = npc_response.get("npc_responses", [{}])[0] if npc_response.get("npc_responses") else {}
+            await self.update_relationship_from_interaction(
+                npc_id=npc_id,
+                player_action=player_action,
+                npc_action=npc_action,
+                context=context_obj
+            )
+            
+            # Calculate stat changes based on interaction
+            stat_changes = await self._calculate_stat_changes(
+                await self.get_npc_details(npc_id),
+                interaction_type
+            )
+            
+            if stat_changes:
+                await self.apply_stat_changes(
+                    stat_changes,
+                    f"Interaction with NPC {npc_id}: {interaction_type}"
+                )
+            
             # Combine results
             combined_result = {
                 "npc_id": npc_id,
@@ -4030,8 +3946,11 @@ class IntegratedNPCSystem:
                 "perception": perception_result.dict() if hasattr(perception_result, "dict") else perception_result,
                 "learning": learning_result,
                 "belief_formed": belief_result is not None,
-                "stat_changes": npc_response.get("stat_changes", {})
+                "stat_changes": stat_changes
             }
+            
+            # Cache the result
+            self._cache_interaction_result(cache_key, combined_result)
             
             return combined_result
             
@@ -4074,8 +3993,6 @@ class IntegratedNPCSystem:
             }
         
         return stat_changes
-    
-    # UPDATED: Transaction context manager already updated earlier
     
     async def _apply_stat_changes_transaction(self, conn, stat_changes, cause):
         """Apply stat changes within a transaction."""
@@ -4183,6 +4100,16 @@ class IntegratedNPCSystem:
             
             # Process the activity and potentially advance time
             activity_result = await self.process_player_activity(player_input, context_obj)
+            
+            # Update relationships with each NPC
+            for npc_id in npc_ids:
+                npc_response = next((r for r in result.get("npc_responses", []) if r.get("npc_id") == npc_id), {})
+                await self.update_relationship_from_interaction(
+                    npc_id=npc_id,
+                    player_action=player_action,
+                    npc_action=npc_response,
+                    context=context_obj
+                )
             
             # Combine results
             combined_result = {
