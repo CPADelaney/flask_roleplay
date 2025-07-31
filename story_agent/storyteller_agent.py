@@ -1323,6 +1323,29 @@ class StorytellerAgent:
                 # Add memories to NPC data
                 nearby_npcs[i]["interaction_history"] = memory_content
 
+            from logic.dynamic_relationships import OptimizedRelationshipManager
+            
+            rel_manager = OptimizedRelationshipManager(
+                ctx.context["user_id"],
+                ctx.context["conversation_id"]
+            )
+            
+            # Enhance NPC data with relationship info
+            for npc in nearby_npcs:
+                rel_state = await rel_manager.get_relationship_state(
+                    "player", 0,  # Assuming player ID is 0
+                    "npc", npc["npc_id"],
+                    skip_cache=False
+                )
+                
+                npc["relationship_state"] = {
+                    "dimensions": rel_state.dimensions.to_dict(),
+                    "patterns": list(rel_state.history.active_patterns),
+                    "archetypes": list(rel_state.active_archetypes),
+                    "momentum": rel_state.momentum.get_magnitude()
+                }
+            
+
             if nearby_npcs:
                 # Get active conflicts from context
                 comprehensive_context = await self.get_comprehensive_context(ctx, user_input)
@@ -1357,7 +1380,11 @@ class StorytellerAgent:
             - Maintain character consistency
             - Include subtle hints of control where appropriate
             - Consider the NPC's recent memories and interaction history
-
+            - Consider active relationship patterns (e.g., push_pull dynamics)
+            - Embody relationship archetypes (e.g., toxic_bond, mentor_student)
+            - React to relationship momentum (rapid changes vs. stable)
+            - Subtly express unresolved conflicts or hidden agendas
+            
             NPCs involved in conflicts should have their responses colored by their stakes,
             but don't make it heavy-handed or exposition-heavy.
             """
@@ -1380,6 +1407,27 @@ class StorytellerAgent:
                     "observation",
                     4
                 )
+
+            from logic.dynamic_relationships import process_relationship_interaction_tool
+            
+            for npc_response in npc_responses:
+                # Determine interaction type based on content
+                interaction_type = determine_interaction_type(user_input, npc_response.response)
+                
+                result = await process_relationship_interaction_tool(
+                    ctx,
+                    "player", 0,
+                    "npc", npc_response.npc_id,
+                    interaction_type,
+                    activity_type
+                )
+                
+                # Check for relationship events
+                if "triggered_event" in result:
+                    event = result["triggered_event"]
+                    # Add to narrative context for the narrator
+                    relationship_events.append(event)
+
             
             return npc_responses
         finally:
@@ -1387,6 +1435,26 @@ class StorytellerAgent:
             if timer_id and self.performance_monitor:
                 elapsed = self.performance_monitor.stop_timer(timer_id)
                 logger.info(f"NPC response processing took {elapsed:.3f}s")
+
+    def determine_interaction_type(user_input: str, npc_response: str) -> str:
+        """Determine the type of interaction based on content."""
+        # Simple heuristic - you can make this more sophisticated
+        combined = f"{user_input} {npc_response}".lower()
+        
+        if any(word in combined for word in ["help", "assist", "support"]):
+            return "helpful_action"
+        elif any(word in combined for word in ["betray", "lie", "deceive"]):
+            return "betrayal"
+        elif any(word in combined for word in ["compliment", "praise", "admire"]):
+            return "genuine_compliment"
+        elif any(word in combined for word in ["share", "confess", "admit"]):
+            return "vulnerability_shared"
+        elif any(word in combined for word in ["argue", "fight", "disagree"]):
+            return "conflict_resolved" if "sorry" in combined else "criticism_harsh"
+        elif any(word in combined for word in ["boundary", "limit", "no"]):
+            return "boundary_violated"
+        else:
+            return "conversation"  # Default
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
