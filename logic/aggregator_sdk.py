@@ -980,24 +980,35 @@ async def update_context_with_universal_updates(
         if "social_links" in universal_updates:
             if "relationships" not in updated_context:
                 updated_context["relationships"] = {}
-
+        
+            from logic.dynamic_relationships import RelationshipState
+            
             for link in universal_updates["social_links"]:
                 e1_type = link.get("entity1_type")
                 e1_id = link.get("entity1_id")
                 e2_type = link.get("entity2_type")
                 e2_id = link.get("entity2_id")
-
+        
                 if not all([e1_type, e1_id, e2_type, e2_id]):
                     continue
-
-                link_key = f"{e1_type}_{e1_id}_{e2_type}_{e2_id}"
+        
+                # Use canonical key from the new system
+                state = RelationshipState(
+                    entity1_type=e1_type,
+                    entity1_id=e1_id,
+                    entity2_type=e2_type,
+                    entity2_id=e2_id
+                )
+                link_key = state.canonical_key
+                
+                # Store the new format with dimensions, patterns, archetypes
                 updated_context["relationships"][link_key] = {
-                    "type": link.get("link_type", "neutral"),
-                    "level": link.get("link_level", 0),
-                    "group_context": link.get("group_context", ""),
-                    "events": link.get("events", [])
+                    "dimensions": link.get("dynamics", {}),  # New multi-dimensional system
+                    "patterns": link.get("patterns", []),
+                    "archetypes": link.get("archetypes", []),
+                    "momentum": link.get("momentum", {}),
+                    "version": link.get("version", 0)
                 }
-
         # Quest updates
         if "quest_updates" in universal_updates:
             if "quests" not in updated_context:
