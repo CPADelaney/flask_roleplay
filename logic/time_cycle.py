@@ -8,7 +8,7 @@ This module merges:
   - time_cycle_conflict_integration.py
 
 All integrated as a single "TimeCycleAgent" using the OpenAI Agents SDK.
-Updated to use NPC-specific narrative progression.
+Updated to use NPC-specific narrative progression and comprehensive vitals system.
 """
 
 import logging
@@ -33,41 +33,67 @@ MONTHS_PER_YEAR = 12
 TIME_PHASES = ["Morning", "Afternoon", "Evening", "Night"]
 TIME_PRIORITY = {"Morning": 1, "Afternoon": 2, "Evening": 3, "Night": 4}
 
+# Enhanced activity definitions with stat and vital effects
 TIME_CONSUMING_ACTIVITIES = {
     "class_attendance": {
         "time_advance": 1,
         "description": "Attending classes or lectures",
-        "stat_effects": {"mental_resilience": +2}
+        "stat_effects": {"intelligence": +1, "mental_resilience": +1},
+        "vital_effects": {"fatigue": +10, "hunger": -5, "thirst": -5}
     },
     "work_shift": {
         "time_advance": 1,
         "description": "Working at a job",
-        "stat_effects": {"physical_endurance": +2}
+        "stat_effects": {"endurance": +1},
+        "vital_effects": {"fatigue": +15, "hunger": -10, "thirst": -10}
     },
     "social_event": {
         "time_advance": 1,
         "description": "Attending a social gathering",
-        "stat_effects": {"confidence": +1}
+        "stat_effects": {"empathy": +1, "confidence": +1},
+        "vital_effects": {"fatigue": +5, "thirst": -15, "hunger": -5}
     },
     "training": {
         "time_advance": 1,
         "description": "Physical or mental training",
-        "stat_effects": {"willpower": +2}
+        "stat_effects": {"strength": +1, "endurance": +1, "willpower": +1},
+        "vital_effects": {"fatigue": +20, "hunger": -15, "thirst": -20}
     },
     "extended_conversation": {
         "time_advance": 1,
         "description": "A lengthy, significant conversation",
-        "stat_effects": {}
+        "stat_effects": {"empathy": +1},
+        "vital_effects": {"thirst": -10, "fatigue": +3}
     },
     "personal_time": {
         "time_advance": 1,
         "description": "Spending time on personal activities",
-        "stat_effects": {}
+        "stat_effects": {"mental_resilience": +1},
+        "vital_effects": {"fatigue": -10}  # Restful
     },
     "sleep": {
         "time_advance": 2,
         "description": "Going to sleep for the night",
-        "stat_effects": {"physical_endurance": +3, "mental_resilience": +3}
+        "stat_effects": {"hp": +20, "mental_resilience": +3},
+        "vital_effects": {"fatigue": -80, "hunger": -10, "thirst": -5}  # Reset fatigue
+    },
+    "eating": {
+        "time_advance": 0,  # Can be done without time advance
+        "description": "Having a meal",
+        "stat_effects": {},
+        "vital_effects": {"hunger": +30, "thirst": +10}
+    },
+    "drinking": {
+        "time_advance": 0,
+        "description": "Drinking water or beverages",
+        "stat_effects": {},
+        "vital_effects": {"thirst": +40}
+    },
+    "intense_activity": {
+        "time_advance": 1,
+        "description": "Engaging in intense physical or mental activity",
+        "stat_effects": {"varies": True},  # Depends on specific activity
+        "vital_effects": {"fatigue": +25, "hunger": -20, "thirst": -25}
     }
 }
 
@@ -75,17 +101,81 @@ OPTIONAL_ACTIVITIES = {
     "quick_chat": {
         "time_advance": 0,
         "description": "A brief conversation",
-        "stat_effects": {}
+        "stat_effects": {},
+        "vital_effects": {"thirst": -2}
     },
     "observe": {
         "time_advance": 0,
         "description": "Observing surroundings or people",
-        "stat_effects": {}
+        "stat_effects": {},
+        "vital_effects": {}
     },
     "check_phone": {
         "time_advance": 0,
         "description": "Looking at messages or notifications",
-        "stat_effects": {}
+        "stat_effects": {},
+        "vital_effects": {"fatigue": +1}  # Eye strain
+    },
+    "quick_snack": {
+        "time_advance": 0,
+        "description": "Having a quick snack",
+        "stat_effects": {},
+        "vital_effects": {"hunger": +10}
+    },
+    "rest": {
+        "time_advance": 0,
+        "description": "Taking a brief rest",
+        "stat_effects": {},
+        "vital_effects": {"fatigue": -5}
+    }
+}
+
+# Vital drain rates per time period
+VITAL_DRAIN_RATES = {
+    "Morning": {
+        "hunger": 3,
+        "thirst": 4,
+        "fatigue": 2
+    },
+    "Afternoon": {
+        "hunger": 4,
+        "thirst": 6,  # Higher in afternoon
+        "fatigue": 3
+    },
+    "Evening": {
+        "hunger": 5,  # Dinner time
+        "thirst": 4,
+        "fatigue": 4
+    },
+    "Night": {
+        "hunger": 2,
+        "thirst": 2,
+        "fatigue": 6  # Get tired faster at night
+    }
+}
+
+# Vital thresholds and their effects
+VITAL_THRESHOLDS = {
+    "hunger": {
+        "full": {"min": 80, "effects": {}},
+        "satisfied": {"min": 60, "effects": {}},
+        "hungry": {"min": 40, "effects": {"strength": -1, "concentration": -1}},
+        "very_hungry": {"min": 20, "effects": {"strength": -3, "agility": -2, "intelligence": -1}},
+        "starving": {"min": 0, "effects": {"strength": -5, "agility": -3, "intelligence": -2, "hp": -1}}
+    },
+    "thirst": {
+        "hydrated": {"min": 80, "effects": {}},
+        "normal": {"min": 60, "effects": {}},
+        "thirsty": {"min": 40, "effects": {"intelligence": -1, "empathy": -1}},
+        "very_thirsty": {"min": 20, "effects": {"intelligence": -3, "agility": -2, "mental_resilience": -2}},
+        "dehydrated": {"min": 0, "effects": {"all_stats": -3, "hp": -2}}
+    },
+    "fatigue": {
+        "rested": {"max": 20, "effects": {"all_stats": +1}},
+        "normal": {"max": 40, "effects": {}},
+        "tired": {"max": 60, "effects": {"agility": -2, "intelligence": -1}},
+        "exhausted": {"max": 80, "effects": {"strength": -3, "agility": -3, "mental_resilience": -3}},
+        "collapsing": {"max": 100, "effects": {"all_stats": -5, "forced_sleep": True}}
     }
 }
 
@@ -97,13 +187,269 @@ SPECIAL_EVENT_CHANCES = {
     "dream_sequence": 0.4,
     "moment_of_clarity": 0.25,
     "mask_slippage": 0.3,
-    "npc_revelation": 0.25  # New: chance for NPC-specific revelations
+    "npc_revelation": 0.25,
+    "vital_crisis": 0.3  # New: chance for hunger/thirst/fatigue events
 }
 
 logger = logging.getLogger(__name__)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Basic DB Helpers
+# Enhanced Vitals System
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+async def update_vitals_from_time(
+    user_id: int, 
+    conversation_id: int, 
+    player_name: str, 
+    periods_advanced: int,
+    time_of_day: str
+) -> Dict[str, Any]:
+    """
+    Update all vitals based on time passage, considering endurance and current conditions.
+    """
+    try:
+        async with get_db_connection_context() as conn:
+            # Get current stats and vitals
+            data = await conn.fetchrow("""
+                SELECT ps.endurance, ps.strength, ps.hp, ps.max_hp,
+                       pv.hunger, pv.thirst, pv.fatigue
+                FROM PlayerStats ps
+                LEFT JOIN PlayerVitals pv ON ps.user_id = pv.user_id 
+                    AND ps.conversation_id = pv.conversation_id 
+                    AND ps.player_name = pv.player_name
+                WHERE ps.user_id = $1 AND ps.conversation_id = $2 AND ps.player_name = $3
+            """, user_id, conversation_id, player_name)
+            
+            if not data:
+                logger.error(f"No player data found for {player_name}")
+                return {"success": False, "error": "Player not found"}
+                
+            endurance = data['endurance'] or 10
+            strength = data['strength'] or 10
+            current_hunger = data['hunger'] if data['hunger'] is not None else 100
+            current_thirst = data['thirst'] if data['thirst'] is not None else 100
+            current_fatigue = data['fatigue'] if data['fatigue'] is not None else 0
+            
+            # Get base drain rates for time of day
+            drain_rates = VITAL_DRAIN_RATES.get(time_of_day, VITAL_DRAIN_RATES["Morning"])
+            
+            # Calculate drains with stat modifiers
+            # Higher endurance = higher hunger drain but lower fatigue gain
+            endurance_modifier = 1 + (endurance - 10) / 20  # +5% per point above 10
+            strength_modifier = 1 + (strength - 10) / 30   # +3.3% hunger per point above 10
+            
+            # Calculate actual drains
+            hunger_drain = int(drain_rates["hunger"] * periods_advanced * 
+                             endurance_modifier * strength_modifier)
+            thirst_drain = int(drain_rates["thirst"] * periods_advanced)
+            fatigue_gain = int(drain_rates["fatigue"] * periods_advanced / endurance_modifier)
+            
+            # Apply environmental modifiers
+            current_location = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay 
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentLocation'
+            """, user_id, conversation_id)
+            
+            if current_location:
+                location_lower = current_location.lower()
+                if "desert" in location_lower or "hot" in location_lower:
+                    thirst_drain = int(thirst_drain * 1.5)
+                elif "cold" in location_lower or "arctic" in location_lower:
+                    hunger_drain = int(hunger_drain * 1.3)
+                    fatigue_gain = int(fatigue_gain * 1.2)
+                elif "gym" in location_lower or "training" in location_lower:
+                    thirst_drain = int(thirst_drain * 1.3)
+                    fatigue_gain = int(fatigue_gain * 1.3)
+            
+            # Calculate new values
+            new_hunger = max(0, current_hunger - hunger_drain)
+            new_thirst = max(0, current_thirst - thirst_drain)
+            new_fatigue = min(100, current_fatigue + fatigue_gain)
+            
+            # Update vitals
+            await conn.execute("""
+                INSERT INTO PlayerVitals (user_id, conversation_id, player_name, hunger, thirst, fatigue)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (user_id, conversation_id, player_name)
+                DO UPDATE SET 
+                    hunger = $4, 
+                    thirst = $5, 
+                    fatigue = $6,
+                    last_update = CURRENT_TIMESTAMP
+            """, user_id, conversation_id, player_name, new_hunger, new_thirst, new_fatigue)
+            
+            # Apply stat penalties based on vital thresholds
+            stat_changes = await calculate_vital_stat_effects(
+                new_hunger, new_thirst, new_fatigue
+            )
+            
+            # Check for vital crises
+            crises = []
+            if new_hunger < 20:
+                crises.append({
+                    "type": "hunger_crisis",
+                    "severity": "severe" if new_hunger < 10 else "moderate",
+                    "message": "You're dangerously hungry. Find food soon!"
+                })
+            
+            if new_thirst < 20:
+                crises.append({
+                    "type": "thirst_crisis", 
+                    "severity": "severe" if new_thirst < 10 else "moderate",
+                    "message": "You're severely dehydrated. You need water!"
+                })
+            
+            if new_fatigue > 80:
+                crises.append({
+                    "type": "fatigue_crisis",
+                    "severity": "severe" if new_fatigue > 90 else "moderate",
+                    "message": "You're about to collapse from exhaustion!"
+                })
+            
+            return {
+                "success": True,
+                "old_vitals": {
+                    "hunger": current_hunger,
+                    "thirst": current_thirst,
+                    "fatigue": current_fatigue
+                },
+                "new_vitals": {
+                    "hunger": new_hunger,
+                    "thirst": new_thirst,
+                    "fatigue": new_fatigue
+                },
+                "drains": {
+                    "hunger": hunger_drain,
+                    "thirst": thirst_drain,
+                    "fatigue": fatigue_gain
+                },
+                "stat_effects": stat_changes,
+                "crises": crises,
+                "forced_sleep": new_fatigue >= 100
+            }
+            
+    except Exception as e:
+        logger.error(f"Error updating vitals: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+async def calculate_vital_stat_effects(
+    hunger: int, 
+    thirst: int, 
+    fatigue: int
+) -> Dict[str, int]:
+    """
+    Calculate stat modifiers based on vital levels.
+    Returns temporary stat changes (not applied directly).
+    """
+    stat_effects = {}
+    
+    # Hunger effects
+    for threshold_name, threshold_data in VITAL_THRESHOLDS["hunger"].items():
+        if "min" in threshold_data and hunger >= threshold_data["min"]:
+            # This is the current threshold
+            for stat, modifier in threshold_data.get("effects", {}).items():
+                if stat != "hp":  # HP is handled separately
+                    stat_effects[stat] = stat_effects.get(stat, 0) + modifier
+            break
+    
+    # Thirst effects
+    for threshold_name, threshold_data in VITAL_THRESHOLDS["thirst"].items():
+        if "min" in threshold_data and thirst >= threshold_data["min"]:
+            for stat, modifier in threshold_data.get("effects", {}).items():
+                if stat == "all_stats":
+                    # Apply to all visible stats
+                    for s in ["strength", "endurance", "agility", "empathy", "intelligence"]:
+                        stat_effects[s] = stat_effects.get(s, 0) + modifier
+                elif stat != "hp":
+                    stat_effects[stat] = stat_effects.get(stat, 0) + modifier
+            break
+    
+    # Fatigue effects (reversed - higher fatigue is worse)
+    for threshold_name, threshold_data in VITAL_THRESHOLDS["fatigue"].items():
+        if "max" in threshold_data and fatigue <= threshold_data["max"]:
+            for stat, modifier in threshold_data.get("effects", {}).items():
+                if stat == "all_stats":
+                    for s in ["strength", "endurance", "agility", "empathy", "intelligence"]:
+                        stat_effects[s] = stat_effects.get(s, 0) + modifier
+                elif stat not in ["hp", "forced_sleep"]:
+                    stat_effects[stat] = stat_effects.get(stat, 0) + modifier
+            break
+    
+    return stat_effects
+
+async def process_activity_vitals(
+    user_id: int,
+    conversation_id: int,
+    player_name: str,
+    activity_type: str,
+    intensity: float = 1.0
+) -> Dict[str, Any]:
+    """
+    Process vital changes from a specific activity.
+    """
+    activity_data = TIME_CONSUMING_ACTIVITIES.get(
+        activity_type, 
+        OPTIONAL_ACTIVITIES.get(activity_type)
+    )
+    
+    if not activity_data:
+        return {"success": False, "error": "Unknown activity"}
+    
+    vital_effects = activity_data.get("vital_effects", {})
+    if not vital_effects:
+        return {"success": True, "message": "Activity has no vital effects"}
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Get current vitals
+            current = await conn.fetchrow("""
+                SELECT hunger, thirst, fatigue FROM PlayerVitals
+                WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+            """, user_id, conversation_id, player_name)
+            
+            if not current:
+                # Initialize vitals if missing
+                await conn.execute("""
+                    INSERT INTO PlayerVitals (user_id, conversation_id, player_name, hunger, thirst, fatigue)
+                    VALUES ($1, $2, $3, 100, 100, 0)
+                """, user_id, conversation_id, player_name)
+                current = {"hunger": 100, "thirst": 100, "fatigue": 0}
+            
+            # Apply effects with intensity modifier
+            new_vitals = {}
+            for vital, change in vital_effects.items():
+                current_value = current[vital]
+                modified_change = int(change * intensity)
+                new_value = max(0, min(100, current_value + modified_change))
+                new_vitals[vital] = new_value
+            
+            # Update vitals
+            await conn.execute("""
+                UPDATE PlayerVitals
+                SET hunger = $1, thirst = $2, fatigue = $3, last_update = CURRENT_TIMESTAMP
+                WHERE user_id = $4 AND conversation_id = $5 AND player_name = $6
+            """, 
+                new_vitals.get("hunger", current["hunger"]),
+                new_vitals.get("thirst", current["thirst"]),
+                new_vitals.get("fatigue", current["fatigue"]),
+                user_id, conversation_id, player_name
+            )
+            
+            return {
+                "success": True,
+                "vital_changes": {
+                    vital: new_vitals.get(vital, current[vital]) - current[vital]
+                    for vital in ["hunger", "thirst", "fatigue"]
+                },
+                "new_vitals": new_vitals
+            }
+            
+    except Exception as e:
+        logger.error(f"Error processing activity vitals: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Basic DB Helpers (unchanged)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def remove_expired_planned_events(user_id, conversation_id, current_year, current_month, current_day, current_phase):
@@ -139,7 +485,7 @@ async def remove_expired_planned_events(user_id, conversation_id, current_year, 
         logger.error(f"Unexpected error removing expired events: {e}", exc_info=True)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 1) Base Time Logic
+# 1) Base Time Logic (unchanged except for adding vitals update)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str]:
@@ -282,12 +628,18 @@ async def update_npc_schedules_for_time(user_id, conversation_id, day, time_of_d
 
 async def advance_time_and_update(user_id, conversation_id, increment=1):
     """
-    Advances time, updates NPC schedules, removes expired planned events, returns new time.
+    Advances time, updates NPC schedules, removes expired planned events, updates vitals.
     """
     (new_year, new_month, new_day, new_phase) = await advance_time(user_id, conversation_id, increment)
     await update_npc_schedules_for_time(user_id, conversation_id, new_day, new_phase)
     await remove_expired_planned_events(user_id, conversation_id, new_year, new_month, new_day, new_phase)
-    return (new_year, new_month, new_day, new_phase)
+    
+    # Update vitals based on time passage
+    vitals_result = await update_vitals_from_time(
+        user_id, conversation_id, "Chase", increment, new_phase
+    )
+    
+    return (new_year, new_month, new_day, new_phase), vitals_result
 
 def should_advance_time(activity_type):
     """
@@ -300,15 +652,15 @@ def should_advance_time(activity_type):
     return {"should_advance": False, "periods": 0}
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 2) Higher-level Function: advance_time_with_events
+# 2) Higher-level Function: advance_time_with_events (ENHANCED)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def advance_time_with_events(user_id: int, conversation_id: int, activity_type: str) -> Dict[str, Any]:
     """
     Advances time (if the activity is time-consuming), triggers special events, 
-    updates player stats, etc.
+    updates player stats and vitals.
     
-    Updated to use NPC-specific narrative progression.
+    Enhanced with comprehensive vitals management.
     """
     # Update imports to use new NPC creation system and NPC-specific progression
     from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
@@ -324,6 +676,7 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
         check_for_npc_revelation
     )
     from logic.social_links import check_for_relationship_crossroads, check_for_relationship_ritual
+    from logic.stats_logic import apply_stat_changes
 
     # Create NPCCreationHandler instance
     npc_handler = NPCCreationHandler()
@@ -333,17 +686,55 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
         _, _, _, current_time_of_day = await get_current_time(user_id, conversation_id)
 
         adv_info = should_advance_time(activity_type)
+        
+        # Process activity effects on vitals first (even if time doesn't advance)
+        vitals_result = await process_activity_vitals(
+            user_id, conversation_id, "Chase", activity_type
+        )
+        
         if not adv_info["should_advance"]:
+            # Apply stat effects from activity even without time advance
+            activity_data = OPTIONAL_ACTIVITIES.get(activity_type, {})
+            stat_effects = activity_data.get("stat_effects", {})
+            if stat_effects:
+                await apply_stat_changes(
+                    user_id, conversation_id, "Chase", stat_effects, 
+                    f"Activity: {activity_type}"
+                )
+            
             return {
                 "time_advanced": False,
                 "new_time": current_time_of_day,
-                "events": []
+                "events": [],
+                "vitals_updated": vitals_result
             }
 
         periods_to_advance = adv_info["periods"]
-        (new_year, new_month, new_day, new_time) = await advance_time_and_update(user_id, conversation_id, increment=periods_to_advance)
+        time_result = await advance_time_and_update(user_id, conversation_id, increment=periods_to_advance)
+        (new_year, new_month, new_day, new_time), time_vitals_result = time_result
 
         events = []
+        
+        # Check for vital crises
+        if time_vitals_result.get("crises"):
+            for crisis in time_vitals_result["crises"]:
+                events.append({
+                    "type": "vital_crisis",
+                    "crisis_type": crisis["type"],
+                    "severity": crisis["severity"],
+                    "message": crisis["message"]
+                })
+        
+        # Handle forced sleep from exhaustion
+        if time_vitals_result.get("forced_sleep"):
+            events.append({
+                "type": "forced_event",
+                "event": "sleep",
+                "reason": "exhaustion",
+                "message": "You collapse from exhaustion and fall into a deep sleep."
+            })
+            # Recursively call with sleep activity
+            return await advance_time_with_events(user_id, conversation_id, "sleep")
         
         # Use the new NPC system for daily activities and stage changes
         ctx = RunContextWrapper({
@@ -367,18 +758,32 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
                 "most_advanced": relationship_overview['most_advanced_npcs'][:1]  # Just the top one
             })
 
-        # Random checks for various events
-        if random.random() < SPECIAL_EVENT_CHANCES["personal_revelation"]:
+        # Random checks for various events (with vital state modifiers)
+        hunger = vitals_result.get("new_vitals", {}).get("hunger", 100)
+        thirst = vitals_result.get("new_vitals", {}).get("thirst", 100)
+        fatigue = vitals_result.get("new_vitals", {}).get("fatigue", 0)
+        
+        # Modify event chances based on vitals
+        event_chance_modifiers = {
+            "personal_revelation": 1.0 if fatigue < 50 else 0.5,
+            "narrative_moment": 1.0,
+            "relationship_crossroads": 1.0 if hunger > 40 and thirst > 40 else 0.7,
+            "dream_sequence": 1.5 if fatigue > 70 else 1.0,
+            "moment_of_clarity": 1.2 if hunger > 60 and thirst > 60 and fatigue < 40 else 0.8,
+        }
+        
+        # Check for special events with modified chances
+        if random.random() < SPECIAL_EVENT_CHANCES["personal_revelation"] * event_chance_modifiers.get("personal_revelation", 1.0):
             revelation = await check_for_personal_revelations(user_id, conversation_id)
             if revelation:
                 events.append(revelation)
 
-        if random.random() < SPECIAL_EVENT_CHANCES["narrative_moment"]:
+        if random.random() < SPECIAL_EVENT_CHANCES["narrative_moment"] * event_chance_modifiers.get("narrative_moment", 1.0):
             moment = await check_for_narrative_moments(user_id, conversation_id)
             if moment:
                 events.append(moment)
 
-        if random.random() < SPECIAL_EVENT_CHANCES["relationship_crossroads"]:
+        if random.random() < SPECIAL_EVENT_CHANCES["relationship_crossroads"] * event_chance_modifiers.get("relationship_crossroads", 1.0):
             crossroads = await check_for_relationship_crossroads(user_id, conversation_id)
             if crossroads:
                 events.append(crossroads)
@@ -388,12 +793,12 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
             if ritual:
                 events.append(ritual)
 
-        if activity_type == "sleep" and random.random() < SPECIAL_EVENT_CHANCES["dream_sequence"]:
+        if activity_type == "sleep" and random.random() < SPECIAL_EVENT_CHANCES["dream_sequence"] * event_chance_modifiers.get("dream_sequence", 1.0):
             dream = await add_dream_sequence(user_id, conversation_id)
             if dream:
                 events.append(dream)
 
-        if random.random() < SPECIAL_EVENT_CHANCES["moment_of_clarity"]:
+        if random.random() < SPECIAL_EVENT_CHANCES["moment_of_clarity"] * event_chance_modifiers.get("moment_of_clarity", 1.0):
             clarity = await add_moment_of_clarity(user_id, conversation_id)
             if clarity:
                 events.append(clarity)
@@ -440,23 +845,12 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
         # Stat effects from activity
         if activity_type in TIME_CONSUMING_ACTIVITIES:
             stat_changes = TIME_CONSUMING_ACTIVITIES[activity_type].get("stat_effects", {})
-            if stat_changes:
-                updates = []
-                values = []
-                param_idx = 1
-                for stat, delta in stat_changes.items():
-                    updates.append(f"{stat} = {stat} + ${param_idx}")
-                    values.append(delta)
-                    param_idx += 1
-                    
-                if updates:
-                    values.extend([user_id, conversation_id])
-                    async with get_db_connection_context() as conn:
-                        await conn.execute(f"""
-                            UPDATE PlayerStats
-                            SET {", ".join(updates)}
-                            WHERE user_id=${param_idx} AND conversation_id=${param_idx+1} AND player_name='Chase'
-                        """, *values)
+            if stat_changes and not stat_changes.get("varies"):
+                # Apply stat changes
+                await apply_stat_changes(
+                    user_id, conversation_id, "Chase", stat_changes,
+                    f"Activity: {activity_type}"
+                )
 
         return {
             "time_advanced": True,
@@ -464,21 +858,25 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
             "new_month": new_month,
             "new_day": new_day,
             "new_time": new_time,
-            "events": events
+            "events": events,
+            "vitals_result": {
+                "time_drain": time_vitals_result,
+                "activity_effects": vitals_result
+            }
         }
 
     except Exception as e:
-        logger.error(f"Error in advance_time_with_events: {e}")
+        logger.error(f"Error in advance_time_with_events: {e}", exc_info=True)
         return {"time_advanced": False, "error": str(e)}
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 3) Nightly Maintenance
+# 3) Nightly Maintenance (enhanced with vitals reset)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def nightly_maintenance(user_id: int, conversation_id: int):
     """
-    Called typically when day increments. We'll fade/summarize NPC memories.
+    Called typically when day increments. Fades NPC memories and performs vitals maintenance.
     """
     from logic.npc_agents.memory_manager import EnhancedMemoryManager
 
@@ -491,11 +889,21 @@ async def nightly_maintenance(user_id: int, conversation_id: int):
             """, user_id, conversation_id)
             
             npc_ids = [row["npc_id"] for row in rows]
+            
+            # Also do vital adjustments for sleep
+            await conn.execute("""
+                UPDATE PlayerVitals
+                SET fatigue = GREATEST(0, fatigue - 50),
+                    hunger = GREATEST(0, hunger - 5),
+                    thirst = GREATEST(0, thirst - 5)
+                WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+            """, user_id, conversation_id)
+            
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
-        logger.error(f"Database error fetching NPCs for nightly maintenance: {e}", exc_info=True)
+        logger.error(f"Database error in nightly maintenance: {e}", exc_info=True)
         return
     except Exception as e:
-        logger.error(f"Unexpected error fetching NPCs for nightly maintenance: {e}", exc_info=True)
+        logger.error(f"Unexpected error in nightly maintenance: {e}", exc_info=True)
         return
 
     for nid in npc_ids:
@@ -509,7 +917,7 @@ async def nightly_maintenance(user_id: int, conversation_id: int):
             logger.error(f"Error during memory maintenance for NPC {nid}: {e}", exc_info=True)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 4) Conflict Integration
+# 4) Conflict Integration (unchanged)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def process_conflict_time_advancement(user_id: int, conversation_id: int, activity_type: str) -> Dict[str, Any]:
@@ -753,37 +1161,67 @@ async def integrate_conflict_with_time_module(user_id: int, conversation_id: int
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 5) Classification Helper
+# 5) Classification Helper (enhanced with more activities)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 def classify_player_input(input_text: str) -> str:
     """
-    A naive classifier for the activity type based on user text.
+    An enhanced classifier for the activity type based on user text.
     """
     lower = input_text.lower()
-    if any(w in lower for w in ["sleep", "rest", "go to bed"]):
+    
+    # Sleep/rest activities
+    if any(w in lower for w in ["sleep", "rest", "go to bed", "lie down", "nap"]):
         return "sleep"
-    if any(w in lower for w in ["class", "lecture", "go to work", "work shift"]):
-        return "class_attendance" if "class" in lower or "lecture" in lower else "work_shift"
-    if any(w in lower for w in ["party", "event", "gathering", "hang out"]):
+    
+    # Work/education activities
+    if any(w in lower for w in ["class", "lecture", "study", "school", "learn"]):
+        return "class_attendance"
+    if any(w in lower for w in ["work", "job", "shift", "office"]):
+        return "work_shift"
+    
+    # Social activities
+    if any(w in lower for w in ["party", "event", "gathering", "hang out", "socialize"]):
         return "social_event"
-    if any(w in lower for w in ["train", "practice", "workout", "exercise"]):
-        return "training"
-    if any(w in lower for w in ["talk to", "speak with", "discuss with", "conversation"]):
+    if any(w in lower for w in ["talk to", "speak with", "discuss with", "conversation", "chat with"]):
         return "extended_conversation"
-    if any(w in lower for w in ["relax", "chill", "personal time", "by myself"]):
+    
+    # Physical activities
+    if any(w in lower for w in ["train", "practice", "workout", "exercise", "lift", "run"]):
+        return "training"
+    
+    # Consumption activities
+    if any(w in lower for w in ["eat", "meal", "lunch", "dinner", "breakfast", "food"]):
+        return "eating"
+    if any(w in lower for w in ["drink", "water", "thirsty", "beverage"]):
+        return "drinking"
+    
+    # Personal activities
+    if any(w in lower for w in ["relax", "chill", "personal time", "by myself", "alone"]):
         return "personal_time"
-    if any(w in lower for w in ["look at", "observe", "watch"]):
+    
+    # Quick activities
+    if any(w in lower for w in ["look at", "observe", "watch", "examine"]):
         return "observe"
-    if any(w in lower for w in ["quick chat", "say hi", "greet", "wave"]):
+    if any(w in lower for w in ["quick chat", "say hi", "greet", "wave", "hello"]):
         return "quick_chat"
-    if any(w in lower for w in ["check phone", "look at phone", "read messages"]):
+    if any(w in lower for w in ["check phone", "look at phone", "read messages", "texts"]):
         return "check_phone"
+    if any(w in lower for w in ["snack", "quick bite", "nibble"]):
+        return "quick_snack"
+    if any(w in lower for w in ["brief rest", "sit down", "catch breath"]):
+        return "rest"
+    
+    # Intense activities
+    if any(w in lower for w in ["intense", "extreme", "exhausting", "grueling"]):
+        return "intense_activity"
+    
+    # Default to quick chat
     return "quick_chat"
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 6) Agentic Merged: "TimeCycleAgent"
+# 6) Agentic Merged: "TimeCycleAgent" (with new tools)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 class TimeCycleContext:
@@ -794,17 +1232,75 @@ class TimeCycleContext:
         self.user_id = user_id
         self.conversation_id = conversation_id
 
-# Tools: We'll define function tools so the agent can call them via function calls.
+# Enhanced Tools with vitals support
 
 @function_tool
 async def tool_advance_time_with_events(ctx: RunContextWrapper[TimeCycleContext], activity_type: str) -> str:
     """
-    Advance time if needed, process special events, and return a JSON summary of results.
+    Advance time if needed, process special events, update vitals, and return a JSON summary of results.
     """
     user_id = ctx.context.user_id
     conv_id = ctx.context.conversation_id
     result = await advance_time_with_events(user_id, conv_id, activity_type)
     return json.dumps(result)
+
+@function_tool
+async def tool_check_vitals(ctx: RunContextWrapper[TimeCycleContext]) -> str:
+    """
+    Check current player vitals (hunger, thirst, fatigue).
+    """
+    user_id = ctx.context.user_id
+    conv_id = ctx.context.conversation_id
+    
+    try:
+        async with get_db_connection_context() as conn:
+            vitals = await conn.fetchrow("""
+                SELECT hunger, thirst, fatigue FROM PlayerVitals
+                WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
+            """, user_id, conv_id)
+            
+            if vitals:
+                result = {
+                    "hunger": vitals['hunger'],
+                    "thirst": vitals['thirst'],
+                    "fatigue": vitals['fatigue'],
+                    "status": {
+                        "hunger": _get_vital_status(vitals['hunger'], "hunger"),
+                        "thirst": _get_vital_status(vitals['thirst'], "thirst"),
+                        "fatigue": _get_vital_status(vitals['fatigue'], "fatigue")
+                    }
+                }
+            else:
+                result = {"error": "No vitals found"}
+            
+            return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+def _get_vital_status(value: int, vital_type: str) -> str:
+    """Helper to get vital status description."""
+    if vital_type in ["hunger", "thirst"]:
+        if value >= 80:
+            return "Good"
+        elif value >= 60:
+            return "Normal"
+        elif value >= 40:
+            return "Low"
+        elif value >= 20:
+            return "Very Low"
+        else:
+            return "Critical"
+    else:  # fatigue
+        if value <= 20:
+            return "Rested"
+        elif value <= 40:
+            return "Normal"
+        elif value <= 60:
+            return "Tired"
+        elif value <= 80:
+            return "Exhausted"
+        else:
+            return "Collapsing"
 
 @function_tool
 async def tool_nightly_maintenance(ctx: RunContextWrapper[TimeCycleContext]) -> str:
@@ -836,19 +1332,76 @@ async def tool_integrate_conflict_with_time_module(ctx: RunContextWrapper[TimeCy
     result = await integrate_conflict_with_time_module(user_id, conv_id, activity_type, description)
     return json.dumps(result)
 
-# Now define an Agent that uses these tools.
+@function_tool
+async def tool_consume_vital_resource(ctx: RunContextWrapper[TimeCycleContext], resource_type: str, amount: int) -> str:
+    """
+    Consume a vital resource (food/water) to restore hunger/thirst.
+    """
+    user_id = ctx.context.user_id
+    conv_id = ctx.context.conversation_id
+    
+    try:
+        async with get_db_connection_context() as conn:
+            current = await conn.fetchrow("""
+                SELECT hunger, thirst FROM PlayerVitals
+                WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
+            """, user_id, conv_id)
+            
+            if not current:
+                return json.dumps({"error": "No vitals found"})
+            
+            if resource_type == "food":
+                new_hunger = min(100, current['hunger'] + amount)
+                await conn.execute("""
+                    UPDATE PlayerVitals SET hunger = $1
+                    WHERE user_id = $2 AND conversation_id = $3 AND player_name = 'Chase'
+                """, new_hunger, user_id, conv_id)
+                result = {
+                    "consumed": "food",
+                    "amount": amount,
+                    "old_hunger": current['hunger'],
+                    "new_hunger": new_hunger
+                }
+            elif resource_type == "water":
+                new_thirst = min(100, current['thirst'] + amount)
+                await conn.execute("""
+                    UPDATE PlayerVitals SET thirst = $1
+                    WHERE user_id = $2 AND conversation_id = $3 AND player_name = 'Chase'
+                """, new_thirst, user_id, conv_id)
+                result = {
+                    "consumed": "water",
+                    "amount": amount,
+                    "old_thirst": current['thirst'],
+                    "new_thirst": new_thirst
+                }
+            else:
+                result = {"error": "Unknown resource type"}
+            
+            return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+# Enhanced Agent with vitals awareness
 
 AGENT_INSTRUCTIONS = """
-You are the TimeCycleAgent. You manage in-game time, daily maintenance, conflict integration, and special events.
-You have the following tools at your disposal:
-- tool_advance_time_with_events
-- tool_nightly_maintenance
-- tool_process_conflict_time_advancement
-- tool_integrate_conflict_with_time_module
+You are the TimeCycleAgent. You manage in-game time, vitals (hunger/thirst/fatigue), 
+daily maintenance, conflict integration, and special events.
 
-When the user provides an activity or command, you should figure out how to handle it 
-(e.g. classify the activity, call the relevant time advancing function, or do nightly maintenance, etc.).
-If the user wants to see the results of these operations, return them in a concise, helpful manner.
+You have the following tools at your disposal:
+- tool_advance_time_with_events: Advance time and process events/vitals
+- tool_check_vitals: Check current hunger/thirst/fatigue levels
+- tool_consume_vital_resource: Consume food/water to restore vitals
+- tool_nightly_maintenance: Run end-of-day maintenance
+- tool_process_conflict_time_advancement: Handle conflict time progression
+- tool_integrate_conflict_with_time_module: Full conflict-time integration
+
+When the user provides an activity or command:
+1. Classify the activity type
+2. Check if vitals are critically low (suggest eating/drinking/resting)
+3. Process the activity with appropriate time advancement
+4. Report vital changes and any special events
+
+Monitor for vital crises and forced events (like collapsing from exhaustion).
 """
 
 TimeCycleAgent = Agent[TimeCycleContext](
@@ -856,6 +1409,8 @@ TimeCycleAgent = Agent[TimeCycleContext](
     instructions=AGENT_INSTRUCTIONS,
     tools=[
         tool_advance_time_with_events,
+        tool_check_vitals,
+        tool_consume_vital_resource,
         tool_nightly_maintenance,
         tool_process_conflict_time_advancement,
         tool_integrate_conflict_with_time_module
@@ -880,7 +1435,7 @@ async def register_with_governance(user_id: int, conversation_id: int):
         agent_id="time_cycle",
         directive_type=DirectiveType.ACTION,
         directive_data={
-            "instruction": "Manage time advancement and associated events",
+            "instruction": "Manage time advancement, vitals, and associated events",
             "scope": "game"
         },
         priority=DirectivePriority.MEDIUM,
@@ -888,7 +1443,7 @@ async def register_with_governance(user_id: int, conversation_id: int):
     )
     logging.info("Time cycle agent registered with Nyx governance")
 
-# Add this to logic/time_cycle.py
+# Add the ActivityManager class (unchanged from before)
 
 class ActivityManager:
     """
@@ -903,17 +1458,22 @@ class ActivityManager:
         """Initialize the activity manager."""
         self.activity_types = list(TIME_CONSUMING_ACTIVITIES.keys()) + list(OPTIONAL_ACTIVITIES.keys())
         self.activity_classifiers = {
-            # Simple keyword mappings for activity detection
-            "sleep": ["sleep", "rest", "nap", "bed", "tired"],
-            "work_shift": ["work", "job", "shift", "office"],
-            "class_attendance": ["class", "lecture", "study", "school"],
-            "social_event": ["party", "gathering", "social", "event", "meet"],
-            "training": ["train", "practice", "exercise", "workout"],
-            "extended_conversation": ["talk", "discuss", "conversation", "chat"],
+            # Enhanced keyword mappings for activity detection
+            "sleep": ["sleep", "rest", "nap", "bed", "tired", "exhausted"],
+            "work_shift": ["work", "job", "shift", "office", "employment"],
+            "class_attendance": ["class", "lecture", "study", "school", "university"],
+            "social_event": ["party", "gathering", "social", "event", "meet", "celebration"],
+            "training": ["train", "practice", "exercise", "workout", "gym", "fitness"],
+            "extended_conversation": ["talk", "discuss", "conversation", "chat", "dialogue"],
             "personal_time": ["relax", "chill", "alone", "personal", "me time"],
-            "quick_chat": ["say hi", "greet", "hello", "hey"],
-            "observe": ["look", "watch", "observe", "see"],
-            "check_phone": ["phone", "message", "text", "call"]
+            "eating": ["eat", "meal", "food", "hungry", "lunch", "dinner", "breakfast"],
+            "drinking": ["drink", "water", "thirsty", "beverage", "hydrate"],
+            "quick_chat": ["say hi", "greet", "hello", "hey", "quick word"],
+            "observe": ["look", "watch", "observe", "see", "examine"],
+            "check_phone": ["phone", "message", "text", "call", "notification"],
+            "quick_snack": ["snack", "bite", "nibble", "munch"],
+            "rest": ["brief rest", "sit", "pause", "breather"],
+            "intense_activity": ["intense", "extreme", "exhausting", "grueling", "demanding"]
         }
         
         # Cache for recently processed activities
@@ -1014,6 +1574,11 @@ class ActivityManager:
                 return "class_attendance"
             elif "work" in location or "office" in location:
                 return "work_shift"
+            elif "kitchen" in location or "dining" in location:
+                if "eat" not in input_lower:
+                    return "drinking"  # Assume getting water
+            elif "gym" in location:
+                return "training"
             # Add more location-based rules as needed
         
         # Fall back to classification function from time_cycle.py
@@ -1032,27 +1597,35 @@ class ActivityManager:
         Returns:
             Dictionary with calculated effects
         """
-        effects = {}
+        effects = {"stat_effects": {}, "vital_effects": {}}
         
         # Get base effects from predefined activities
         if activity_type in TIME_CONSUMING_ACTIVITIES:
-            base_effects = TIME_CONSUMING_ACTIVITIES[activity_type].get("stat_effects", {})
-            effects.update(base_effects)
+            base_data = TIME_CONSUMING_ACTIVITIES[activity_type]
+            effects["stat_effects"] = base_data.get("stat_effects", {}).copy()
+            effects["vital_effects"] = base_data.get("vital_effects", {}).copy()
         elif activity_type in OPTIONAL_ACTIVITIES:
-            base_effects = OPTIONAL_ACTIVITIES[activity_type].get("stat_effects", {})
-            effects.update(base_effects)
+            base_data = OPTIONAL_ACTIVITIES[activity_type]
+            effects["stat_effects"] = base_data.get("stat_effects", {}).copy()
+            effects["vital_effects"] = base_data.get("vital_effects", {}).copy()
         
         # Adjust effects based on player input and context
         intensity = self._calculate_intensity(player_input, context)
         
         # Scale effects by intensity
-        for stat, value in effects.items():
-            effects[stat] = int(value * intensity)
+        for stat, value in effects["stat_effects"].items():
+            if stat != "varies":
+                effects["stat_effects"][stat] = int(value * intensity)
+        
+        for vital, value in effects["vital_effects"].items():
+            effects["vital_effects"][vital] = int(value * intensity)
         
         # Apply random variation (±20%)
-        for stat, value in effects.items():
-            variation = random.uniform(0.8, 1.2)
-            effects[stat] = int(value * variation)
+        for category in ["stat_effects", "vital_effects"]:
+            for key, value in effects[category].items():
+                if key != "varies":
+                    variation = random.uniform(0.8, 1.2)
+                    effects[category][key] = int(value * variation)
         
         return effects
     
@@ -1079,13 +1652,16 @@ class ActivityManager:
             "thoroughly": 0.2,
             "completely": 0.2,
             "aggressively": 0.3,
+            "desperately": 0.4,
+            "frantically": 0.3,
             
             # Intensity decreasers
             "lightly": -0.2,
             "casually": -0.2,
             "briefly": -0.3,
             "quickly": -0.3,
-            "halfheartedly": -0.4
+            "halfheartedly": -0.4,
+            "lazily": -0.3
         }
         
         # Apply modifiers based on keywords in input
@@ -1093,6 +1669,15 @@ class ActivityManager:
         for keyword, modifier in intensity_keywords.items():
             if keyword in input_lower:
                 intensity += modifier
+        
+        # Context-based modifiers
+        if context:
+            # Fatigue affects intensity
+            fatigue = context.get("fatigue", 0)
+            if fatigue > 80:
+                intensity *= 0.7  # Very tired = less intense
+            elif fatigue < 20:
+                intensity *= 1.1  # Well rested = more intense
         
         # Ensure intensity stays within reasonable bounds
         intensity = max(0.5, min(1.5, intensity))
