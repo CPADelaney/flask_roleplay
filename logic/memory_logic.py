@@ -755,13 +755,28 @@ async def propagate_significant_memory(user_id: int, conversation_id: int, sourc
     try:
         async with get_db_connection_context() as conn:
             # Find strong social links (adapt table/column names if needed)
+            from logic.dynamic_relationships import OptimizedRelationshipManager
+            
+            # Inside the function:
+            manager = OptimizedRelationshipManager(user_id, conversation_id)
+            
+            # Get relationships involving this entity
+            # Since the new system uses canonical_key ordering, we need to check both directions
             links = await conn.fetch("""
-                SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
+                SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, 
+                       dynamics, patterns, archetypes
                 FROM SocialLinks
-                WHERE user_id=$1 AND conversation_id=$2 AND link_level >= 50
-                AND ((entity1_type=$3 AND entity1_id::text=$4::text) OR (entity2_type=$3 AND entity2_id::text=$4::text))
-            """, user_id, conversation_id,
-                 source_entity_type, str(source_entity_id)) # Ensure IDs are compared correctly (casting might be needed if types differ)
+                WHERE user_id=$1 AND conversation_id=$2
+                AND ((entity1_type=$3 AND entity1_id=$4) OR (entity2_type=$3 AND entity2_id=$4))
+            """, user_id, conversation_id, source_entity_type, int(source_entity_id))
+            
+            # Process each link
+            for link in links:
+                # Parse dynamics JSON to check relationship strength
+                dynamics = json.loads(link['dynamics']) if isinstance(link['dynamics'], str) else link['dynamics']
+                
+                # Check if relationship is strong enough (e.g., trust > 50 or affection > 50)
+                if dynamics.get('trust', 0) >= 50 or dynamics.get('affection', 0) >= 50:
 
         if not links:
              # logger.debug(f"No strong links found for {source_entity_type} {source_entity_id} to propagate memory.")
