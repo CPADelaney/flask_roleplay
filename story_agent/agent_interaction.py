@@ -391,6 +391,37 @@ async def orchestrate_conflict_analysis_and_narrative(
             "execution_time": time.time() - start_time
         }
 
+async def process_relationship_events(user_id: int, conversation_id: int) -> List[Dict[str, Any]]:
+    """Process any pending relationship events."""
+    from logic.dynamic_relationships import drain_relationship_events_tool
+    
+    ctx = type('obj', (object,), {
+        'context': {
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        }
+    })
+    
+    result = await drain_relationship_events_tool(ctx, max_events=10)
+    events = result.get("events", [])
+    
+    # Process each event
+    processed_events = []
+    for event_data in events:
+        event = event_data["event"]
+        
+        # Generate narrative for the event
+        narrative = await generate_narrative_element(
+            event["type"],
+            event,
+            NarrativeCrafterContext(user_id, conversation_id)
+        )
+        
+        processed_events.append({
+            "event": event,
+            "narrative": narrative
+        })
+
 @track_performance("generate_story_beat")
 async def generate_comprehensive_story_beat(
     user_id: int,
