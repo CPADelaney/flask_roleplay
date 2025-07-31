@@ -185,8 +185,21 @@ class RelationshipConfig:
             if value is None:
                 continue
                 
-            # Type check
-            if expected_type and not isinstance(value, expected_type):
+            # Type check - accept both int and float for numeric types
+            if expected_type in (int, float):
+                if not isinstance(value, (int, float)):
+                    logger.warning(f"Config {path}={value} is not numeric, using default")
+                    continue
+                # Convert to expected type
+                if expected_type == float and isinstance(value, int):
+                    value = float(value)
+                    # Update the config with converted value
+                    parts = path.split('.')
+                    target = self._config
+                    for part in parts[:-1]:
+                        target = target[part]
+                    target[parts[-1]] = value
+            elif expected_type and not isinstance(value, expected_type):
                 logger.warning(f"Config {path}={value} is not {expected_type}, using default")
                 continue
             
