@@ -20,6 +20,13 @@ from agents.tracing import custom_span, function_span
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 
+# Import the new dynamic relationships system
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    RelationshipState,
+    RelationshipDimensions
+)
+
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------
@@ -96,6 +103,7 @@ class MemoryContext:
         self.npc_personality = npc_personality
         self.npc_intelligence = npc_intelligence
         self.memory_system = None
+        self.relationship_manager = None
         
         # Performance tracking
         self.performance = {
@@ -140,6 +148,15 @@ class MemoryContext:
                 self.conversation_id
             )
         return self.memory_system
+    
+    async def get_relationship_manager(self) -> OptimizedRelationshipManager:
+        """Lazy-load the relationship manager."""
+        if self.relationship_manager is None:
+            self.relationship_manager = OptimizedRelationshipManager(
+                self.user_id,
+                self.conversation_id
+            )
+        return self.relationship_manager
 
     async def retrieve_nyx_memories(self, query, limit=5):
         """Access Nyx's memories for NPC awareness"""
@@ -1188,36 +1205,35 @@ async def propagate_memory_impl(
 ) -> Dict[str, Any]:
     """
     Propagate an important memory to related NPCs as secondhand info, with distortions.
+    Now uses the new dynamic relationships system.
     """
     with function_span("propagate_memory"):
         result = {"propagated_to": 0}
         
         try:
-            # Get related NPCs - rewritten to use async connection
+            # Get relationship manager
+            rel_manager = await ctx.context.get_relationship_manager()
+            
+            # Get all NPCs
             async with get_db_connection_context() as conn:
                 rows = await conn.fetch(
                     """
-                    SELECT entity2_id, link_type, link_level
-                    FROM SocialLinks  # <- Change this from 'social_links' to 'SocialLinks'
-                    WHERE user_id=$1
-                      AND conversation_id=$2
-                      AND entity1_type='npc'
-                      AND entity1_id=$3
-                      AND entity2_type='npc'
+                    SELECT npc_id, npc_name
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                    AND npc_id != $3
                     """,
                     ctx.context.user_id, ctx.context.conversation_id, ctx.context.npc_id
                 )
-                related_npcs = [(row["entity2_id"], row["link_type"], row["link_level"]) for row in rows]
+                other_npcs = [(row["npc_id"], row["npc_name"]) for row in rows]
             
-            # Get this NPC name - rewritten to use async connection
+            # Get this NPC name
             async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(
                     """
                     SELECT npc_name
                     FROM NPCStats
-                    WHERE user_id=$1
-                      AND conversation_id=$2
-                      AND npc_id=$3
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
                     """,
                     ctx.context.user_id, ctx.context.conversation_id, ctx.context.npc_id
                 )
@@ -1232,56 +1248,113 @@ async def propagate_memory_impl(
             
             memory_system = await ctx.context.get_memory_system()
             
-            # For each related NPC, create a secondhand memory
-            for rid, link_type, link_level in related_npcs:
-                # Distort the memory text according to link_level
-                distortion_severity = 0.3
-                if link_level > 75:
-                    distortion_severity = 0.1
-                elif link_level > 50:
-                    distortion_severity = 0.2
-                elif link_level < 25:
-                    distortion_severity = 0.5
-                
-                distorted_text = distort_text(memory_text, severity=distortion_severity)
-                secondhand_text = f"I heard that {npc_name} {distorted_text}"
-                
-                secondhand_significance = max(1, significance - 2)
-                secondhand_intensity = max(0, emotional_intensity - 20)
-                
-                secondhand_tags = tags + ["secondhand", "rumor"]
-                
-                if has_femdom_context:
-                    # Relationship-based nuance
-                    if link_type == "submissive":
-                        if any(t in tags for t in ["dominance_dynamic", "control"]):
-                            secondhand_text = f"I heard that {npc_name} was extremely dominant when {distorted_text}"
-                            secondhand_tags.append("exaggerated")
-                    elif link_type == "dominant":
-                        if any(t in tags for t in ["dominance_dynamic", "control"]):
+            # For each other NPC, check relationship and propagate
+            for other_npc_id, other_npc_name in other_npcs:
+                # Get relationship state
+                try:
+                    rel_state = await rel_manager.get_relationship_state(
+                        entity1_type="npc",
+                        entity1_id=ctx.context.npc_id,
+                        entity2_type="npc", 
+                        entity2_id=other_npc_id
+                    )
+                    
+                    # Use relationship dimensions to determine propagation
+                    dims = rel_state.dimensions
+                    
+                    # Calculate propagation likelihood based on relationship
+                    # High trust and affection increase propagation chance
+                    # High frequency of interaction increases propagation
+                    propagation_score = (
+                        (dims.trust + 100) / 200 * 0.3 +  # Trust factor (0-0.3)
+                        (dims.affection + 100) / 200 * 0.2 +  # Affection factor (0-0.2)
+                        dims.frequency / 100 * 0.3 +  # Frequency factor (0-0.3)
+                        dims.intimacy / 100 * 0.2  # Intimacy factor (0-0.2)
+                    )
+                    
+                    # Adjust for significance
+                    if significance >= 7:
+                        propagation_score *= 1.5
+                    elif significance <= 3:
+                        propagation_score *= 0.5
+                    
+                    # Random check for propagation
+                    if random.random() > propagation_score:
+                        continue
+                    
+                    # Calculate distortion based on relationship quality
+                    # Better relationships = less distortion
+                    relationship_quality = (dims.trust + dims.respect + dims.affection) / 3
+                    if relationship_quality > 50:
+                        distortion_severity = 0.1
+                    elif relationship_quality > 0:
+                        distortion_severity = 0.3
+                    elif relationship_quality > -50:
+                        distortion_severity = 0.5
+                    else:
+                        distortion_severity = 0.7
+                    
+                    # Apply special distortion for femdom context
+                    if has_femdom_context:
+                        # If the recipient has high dominance influence, they might downplay it
+                        if dims.influence > 50:
+                            distortion_severity += 0.2
+                    
+                    distorted_text = distort_text(memory_text, severity=distortion_severity)
+                    secondhand_text = f"I heard that {npc_name} {distorted_text}"
+                    
+                    secondhand_significance = max(1, significance - 2)
+                    secondhand_intensity = max(0, emotional_intensity - 20)
+                    
+                    secondhand_tags = tags + ["secondhand", "rumor"]
+                    
+                    # Special handling for femdom memories in relationships
+                    if has_femdom_context:
+                        # High respect might make them more likely to believe dominance stories
+                        if dims.respect > 70 and any(t in tags for t in ["dominance_dynamic", "control"]):
+                            secondhand_text = f"I heard that {npc_name} was impressively dominant when {distorted_text}"
+                            secondhand_tags.append("impressed")
+                        # Low respect might make them dismissive
+                        elif dims.respect < -30 and any(t in tags for t in ["dominance_dynamic", "control"]):
                             secondhand_text = f"I heard that {npc_name} tried to act dominant by {distorted_text}"
-                            secondhand_tags.append("diminished")
-                
-                # Convert significance (1-10) to importance level
-                if secondhand_significance >= 7:
-                    importance = "high"
-                elif secondhand_significance <= 2:
-                    importance = "low"
-                else:
-                    importance = "medium"
-                
-                # Create secondhand memory using memory system
-                mem_result = await memory_system.remember(
-                    entity_type="npc",
-                    entity_id=rid,
-                    memory_text=secondhand_text,
-                    importance=importance,
-                    emotional=secondhand_intensity > 50,
-                    tags=secondhand_tags
-                )
-                
-                if "memory_id" in mem_result:
-                    result["propagated_to"] += 1
+                            secondhand_tags.append("dismissive")
+                    
+                    # Convert significance to importance
+                    if secondhand_significance >= 7:
+                        importance = "high"
+                    elif secondhand_significance <= 2:
+                        importance = "low"
+                    else:
+                        importance = "medium"
+                    
+                    # Create secondhand memory
+                    mem_result = await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=other_npc_id,
+                        memory_text=secondhand_text,
+                        importance=importance,
+                        emotional=secondhand_intensity > 50,
+                        tags=secondhand_tags
+                    )
+                    
+                    if "memory_id" in mem_result:
+                        result["propagated_to"] += 1
+                        
+                        # Update relationship based on memory propagation
+                        # Sharing memories increases frequency and can affect other dimensions
+                        interaction = {
+                            "type": "memory_shared",
+                            "context": "propagation"
+                        }
+                        await rel_manager.process_interaction(
+                            "npc", ctx.context.npc_id,
+                            "npc", other_npc_id,
+                            interaction
+                        )
+                        
+                except Exception as e:
+                    logger.error(f"Error propagating to NPC {other_npc_id}: {e}")
+                    continue
             
             logger.debug(f"Propagated memory to {result['propagated_to']} related NPCs")
             
