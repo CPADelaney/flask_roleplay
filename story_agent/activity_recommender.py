@@ -197,6 +197,24 @@ async def fetch_current_scenario_context(user_id: int, conversation_id: int) -> 
         }
 
 @function_tool
+async def fetch_npc_relationship_state(user_id: int, conversation_id: int, npc_id: int) -> Dict[str, Any]:
+    """Fetch relationship state between player and NPC."""
+    from logic.dynamic_relationships import OptimizedRelationshipManager
+    
+    manager = OptimizedRelationshipManager(user_id, conversation_id)
+    state = await manager.get_relationship_state(
+        "player", 0,
+        "npc", npc_id
+    )
+    
+    return {
+        "dimensions": state.dimensions.to_dict(),
+        "patterns": list(state.history.active_patterns),
+        "archetypes": list(state.active_archetypes),
+        "duration_days": state.get_duration_days()
+    }
+
+@function_tool
 async def fetch_relevant_memories(user_id: int, conversation_id: int, npc_id: int, limit: int = 5) -> List[Dict[str, Any]]:
     """
     Retrieves relevant memories for a given NPC from memory manager or fallback DB queries.
@@ -394,6 +412,17 @@ Once you have enough info, produce a final JSON object with the schema:
   ]
 }
 
+## RELATIONSHIP CONSIDERATIONS
+- Intensity should escalate as relationships develop further
+- Activities should align with relationship states
+- High trust enables intimate activities
+- Low respect limits certain interactions
+- Active patterns (push_pull, slow_burn) suggest specific activities
+- Archetypes (mentor_student, rivals) open unique options
+- Unresolved conflicts might block some activities
+
+For each NPC, also call fetch_npc_relationship_state to understand the relationship dynamics.
+
 ## LOGIC HINTS
 1) You can retrieve scenario context by calling `fetch_current_scenario_context(...)`.
 2) For each NPC, call `fetch_npc_personality_traits(...)` and optionally `fetch_relevant_memories(...)`.
@@ -412,11 +441,13 @@ activity_recommender_agent = Agent(
     name="ActivityRecommenderAgent",
     instructions=ACTIVITY_RECOMMENDER_SYSTEM_PROMPT,
     output_type=ActivityRecommendations,
+    model="gpt-4.1-nano",
     tools=[
         fetch_npc_personality_traits,
         fetch_current_scenario_context,
         fetch_relevant_memories,
-        fetch_available_activities
+        fetch_available_activities,
+        fetch_npc_relationship_state
     ],
     model_settings=ModelSettings(
         temperature=0.7,
