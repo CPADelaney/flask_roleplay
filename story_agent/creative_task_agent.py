@@ -71,6 +71,35 @@ class CreativeTask(BaseModel):
 # --------------------------------------------------------------------------
 
 @function_tool
+async def get_relationship_context(user_id: int, conversation_id: int, npc_id: int) -> Dict[str, Any]:
+    """Get relationship context for task generation."""
+    from logic.dynamic_relationships import OptimizedRelationshipManager
+    
+    manager = OptimizedRelationshipManager(user_id, conversation_id)
+    state = await manager.get_relationship_state("player", 0, "npc", npc_id)
+    
+    # Determine appropriate task intensity based on relationship
+    if "toxic_bond" in state.active_archetypes:
+        intensity_modifier = 1.5
+    elif "mentor_student" in state.active_archetypes:
+        intensity_modifier = 0.8
+    else:
+        intensity_modifier = 1.0
+    
+    # Check for relationship events
+    from logic.dynamic_relationships import poll_relationship_events_tool
+    ctx = type('obj', (object,), {'context': {'user_id': user_id, 'conversation_id': conversation_id}})
+    events = await poll_relationship_events_tool(ctx)
+    
+    return {
+        "relationship_quality": state.dimensions.trust + state.dimensions.affection,
+        "power_dynamic": state.dimensions.influence,
+        "intensity_modifier": intensity_modifier,
+        "active_patterns": list(state.history.active_patterns),
+        "pending_events": events.get("has_event", False)
+    }
+
+@function_tool
 async def get_npc_data(user_id: int, conversation_id: int, npc_id: int) -> Dict[str, Any]:
     """
     Retrieve core NPC data from the database (dominance, cruelty, closeness, etc.).
@@ -415,6 +444,7 @@ Your job:
        - get_npc_data
        - get_scenario_context
        - get_relevant_memories
+       - get_relationship_context
   2. You can also call build_femdom_task if you want a single function 
      that does everything in Python.
   3. Ultimately, produce the final answer as valid JSON that 
@@ -430,15 +460,18 @@ Your job:
          "npc_involvement": ...
          "task_type": ...
        }
+   4. Intensity should positively correlate with how much a relationship has progressed.
 
 Keep your responses in a strictly femdom context. 
 Ensure it remains in JSON format, with no extra commentary outside JSON.
 """,
+    model="gpt-4.1-nano"
     tools=[
         get_npc_data,
         get_scenario_context,
         get_relevant_memories,
-        build_femdom_task
+        build_femdom_task,
+        get_relationship_context
     ],
     output_type=CreativeTask  # Tells the model to produce a CreativeTask as final output
 )
