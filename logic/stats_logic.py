@@ -958,46 +958,49 @@ async def apply_activity_effects(user_id: int, conversation_id: int, activity_na
 # SOCIAL LINKS
 # ============================
 
-async def check_social_link_milestones(user_id: int, conversation_id: int, player_name: str = "Chase"):
-    """
-    Example function referencing social links. If you do user+conversation scoping,
-    you'd incorporate them here. 
-    Currently just uses a broad 'player is involved' approach.
-    """
-    from logic.social_links import add_link_event
+async def check_relationship_milestones(user_id: int, conversation_id: int, player_name: str = "Chase"):
+    """Check relationship milestones using the new system."""
+    from logic.dynamic_relationships import OptimizedRelationshipManager
+    
+    manager = OptimizedRelationshipManager(user_id, conversation_id)
     
     async with get_db_connection_context() as conn:
+        # Get all relationships for the player
         rows = await conn.fetch("""
             SELECT link_id, entity1_type, entity1_id,
-                   entity2_type, entity2_id,
-                   link_type, link_level
+                   entity2_type, entity2_id, canonical_key
             FROM SocialLinks
             WHERE (entity1_type='player' OR entity2_type='player')
             AND user_id=$1 AND conversation_id=$2
         """, user_id, conversation_id)
 
         for row in rows:
-            link_id = row['link_id']
-            link_type = row['link_type']
-            link_level = row['link_level']
+            # Get full relationship state
+            if row['entity1_type'] == 'player':
+                entity_type = row['entity2_type']
+                entity_id = row['entity2_id']
+            else:
+                entity_type = row['entity1_type']
+                entity_id = row['entity1_id']
             
-            # Example triggers
-            if link_type == "friends" and link_level >= 30:
+            state = await manager.get_relationship_state(
+                entity1_type='player',
+                entity1_id=1,
+                entity2_type=entity_type,
+                entity2_id=entity_id
+            )
+            
+            # Check milestones based on dimensions
+            if state.dimensions.trust >= 80 and state.dimensions.affection >= 70:
+                # High trust and affection milestone
                 await conn.execute("""
                     INSERT INTO PlayerInventory (player_name, item_name, quantity)
                     VALUES ($1, $2, 1)
                     ON CONFLICT (player_name, item_name) DO NOTHING
-                """, player_name, "Friendship Token")
-                await add_link_event(link_id, "RewardGiven: Friendship Token")
-
-            if link_type == "enslave" and link_level >= 40:
-                await conn.execute("""
-                    INSERT INTO PlayerInventory (player_name, item_name, quantity)
-                    VALUES ($1, $2, 1)
-                    ON CONFLICT (player_name, item_name) DO NOTHING
-                """, player_name, "Sweaty Socks")
-                await add_link_event(link_id, "RewardGiven: Sweaty Socks")
-
+                """, player_name, "Bond Token")
+                
+                # Log in relationship history
+                state.history.add_interaction("milestone", "high_trust_affection")
 # ============================
 # HUNGER & VITALS SYSTEM
 # ============================
