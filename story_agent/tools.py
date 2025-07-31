@@ -39,12 +39,12 @@ from logic.narrative_events import (
 )
 
 # Local application imports - Social links
-from logic.social_links import (
-    get_social_link_tool,
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
     get_relationship_summary_tool,
-    check_for_crossroads_tool,
-    check_for_ritual_tool,
-    apply_crossroads_choice_tool
+    process_relationship_interaction_tool,
+    poll_relationship_events_tool,
+    drain_relationship_events_tool
 )
 
 # Context system imports
@@ -520,7 +520,14 @@ class RelationshipCrossroads(BaseModel):
     choices: List[ChoiceOption] = Field(default_factory=list)
     triggered_at: Optional[str] = None
 
-    
+class RelationshipEvent(BaseModel):
+    """A relationship event from the new system"""
+    event_type: str
+    title: str
+    description: str
+    choices: List[Dict[str, Any]] = Field(default_factory=list)
+    state_key: str
+    timestamp: datetime
 
 class RelationshipRitual(BaseModel):
     """A repeatable ritual that strengthens/alters a relationship."""
@@ -2747,47 +2754,49 @@ async def generate_activity_suggestion(
 @track_performance("update_relationship_dimensions")
 async def update_relationship_dimensions(
     ctx: RunContextWrapper[ContextType],
-    link_id: int,
+    entity1_type: str,
+    entity1_id: int,
+    entity2_type: str,
+    entity2_id: int,
     dimension_changes: DimensionChanges,
+    interaction_type: str = "custom_update",
     reason: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Update specific dimensions of a relationship.
-
-    Args:
-        link_id: ID of the relationship link
-        dimension_changes: Dimension changes model
-        reason: Reason for the changes
-
-    Returns:
-        Result of the update
-    """
+    """Update relationship through an interaction."""
     context = ctx.context
-    user_id = context.user_id
-    conversation_id = context.conversation_id
-
+    
     try:
-        from logic.relationship_integration import RelationshipIntegration
-        integration = RelationshipIntegration(user_id, conversation_id)
+        # Map old dimension changes to interaction types
+        interaction = {
+            "type": interaction_type,
+            "context": reason or "manual_update",
+            "custom_impacts": dimension_changes.model_dump(exclude_none=True)
+        }
         
-        # Convert model to dict, excluding None values
-        changes_dict = dimension_changes.model_dump(exclude_none=True)
+        result = await process_relationship_interaction_tool(
+            ctx,
+            entity1_type=entity1_type,
+            entity1_id=entity1_id,
+            entity2_type=entity2_type,
+            entity2_id=entity2_id,
+            interaction_type=interaction_type,
+            context=reason or "manual_update",
+            check_for_event=True
+        )
         
-        result = await integration.update_dimensions(link_id, changes_dict, reason)
-
         if hasattr(context, 'add_narrative_memory'):
-            memory_content = f"Updated relationship dimensions for link {link_id}: {changes_dict}"
-            if reason: 
+            memory_content = f"Updated relationship between {entity1_type} and {entity2_type}: {dimension_changes.model_dump(exclude_none=True)}"
+            if reason:
                 memory_content += f" Reason: {reason}"
             await context.add_narrative_memory(
                 memory_content, "relationship_update", 0.5
             )
-
+            
         return result
     except Exception as e:
         logger.error(f"Error updating relationship dimensions: {str(e)}", exc_info=True)
-        return {"success": False, "error": str(e), "link_id": link_id}
-
+        return {"success": False, "error": str(e)}
+        
 # ===== RELATIONSHIP MILESTONE TOOLS =====
 
 @function_tool
@@ -3981,36 +3990,34 @@ async def check_relationship_events(
     conversation_id = context.conversation_id
 
     try:
-        crossroads = await check_for_crossroads_tool(user_id, conversation_id)
-        ritual = await check_for_ritual_tool(user_id, conversation_id)
-
-        if (crossroads or ritual) and hasattr(context, 'add_narrative_memory'):
-            event_type = "crossroads" if crossroads else "ritual"
-            npc_name = "Unknown"
-            if crossroads: 
-                npc_name = crossroads.get("npc_name", "Unknown")
-            elif ritual: 
-                npc_name = ritual.get("npc_name", "Unknown")
-            memory_content = f"Relationship {event_type} detected with {npc_name}"
-            await context.add_narrative_memory(
-                memory_content, 
-                f"relationship_{event_type}", 
-                0.8, 
-                tags=[event_type, "relationship", npc_name.lower().replace(" ", "_")]
-            )
-
+        # Poll for any pending relationship events
+        events = await drain_relationship_events_tool(ctx, max_events=5)
+        
+        has_events = events['count'] > 0
+        
+        if has_events and hasattr(context, 'add_narrative_memory'):
+            for event_data in events['events']:
+                event = event_data['event']
+                event_type = event.get('type', 'unknown')
+                memory_content = f"Relationship event triggered: {event_type}"
+                await context.add_narrative_memory(
+                    memory_content, 
+                    f"relationship_{event_type}", 
+                    0.8, 
+                    tags=[event_type, "relationship"]
+                )
+        
         return {
-            "crossroads": crossroads, 
-            "ritual": ritual, 
-            "has_events": crossroads is not None or ritual is not None
+            "events": events['events'],
+            "has_events": has_events,
+            "count": events['count']
         }
     except Exception as e:
         logger.error(f"Error checking relationship events: {str(e)}", exc_info=True)
         return {
             "success": False,
             "error": str(e), 
-            "crossroads": None, 
-            "ritual": None, 
+            "events": [],
             "has_events": False
         }
 
@@ -4053,126 +4060,224 @@ async def get_npc_stage(
         }
 
 @function_tool
-@track_performance("apply_crossroads_choice")
-async def apply_crossroads_choice(
+@track_performance("process_relationship_event_choice")
+async def process_relationship_event_choice(
     ctx: RunContextWrapper[ContextType],
-    link_id: int,
-    crossroads_name: str,
-    choice_index: int
+    state_key: str,  # The canonical key from the event
+    event_type: str,
+    choice_id: str,
+    event_data: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Apply a chosen effect from a triggered relationship crossroads.
-
+    Process a player's choice for a relationship event.
+    
     Args:
-        link_id: ID of the social link
-        crossroads_name: Name of the crossroads event
-        choice_index: Index of the chosen option
-
+        state_key: Canonical relationship key (e.g., "player_1_npc_5")
+        event_type: Type of event (e.g., "moment_of_truth")
+        choice_id: ID of the chosen option
+        event_data: Optional full event data if available
+        
     Returns:
-        Result of applying the choice
+        Result of processing the choice
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
-
+    
     try:
-        result = await apply_crossroads_choice_tool(
-            user_id, conversation_id, link_id, crossroads_name, choice_index
+        # Parse the state key to get entity information
+        parts = state_key.split('_')
+        if len(parts) != 4:
+            return {"success": False, "error": f"Invalid state key format: {state_key}"}
+        
+        entity1_type, entity1_id, entity2_type, entity2_id = parts[0], int(parts[1]), parts[2], int(parts[3])
+        
+        # Get the relationship manager
+        manager = OptimizedRelationshipManager(user_id, conversation_id)
+        
+        # Get current relationship state
+        state = await manager.get_relationship_state(
+            entity1_type, entity1_id, entity2_type, entity2_id
         )
-
+        
+        # If we don't have the full event data, we need to reconstruct the choice impacts
+        # based on the event type and choice ID
+        if not event_data:
+            # Get standard impacts for known event types
+            event_templates = {
+                "moment_of_truth": {
+                    "confront": {
+                        "unresolved_conflict": -30,
+                        "volatility": 20,
+                        "trust": 10
+                    },
+                    "avoid": {
+                        "unresolved_conflict": 15,
+                        "hidden_agendas": 10
+                    }
+                },
+                "emotional_whiplash": {
+                    "embrace": {
+                        "volatility": 10,
+                        "affection": 20  # or -20 depending on emotion type
+                    },
+                    "boundaries": {
+                        "volatility": -20,
+                        "frequency": -10
+                    }
+                },
+                "pattern_crisis": {
+                    "confront_pattern": {
+                        "intimacy": -10,
+                        "trust": 15,
+                        "volatility": 25
+                    },
+                    "play_along": {
+                        "intimacy": 5,
+                        "volatility": 10,
+                        "unresolved_conflict": 10
+                    }
+                },
+                "reconnection_opportunity": {
+                    "reach_out": {
+                        "frequency": 20,
+                        "intimacy": 10,
+                        "trust": 5
+                    },
+                    "let_go": {
+                        "frequency": -20,
+                        "intimacy": -15,
+                        "dependence": -10
+                    }
+                },
+                "archetype_crisis": {
+                    "break_free": {
+                        "dependence": -20,
+                        "unresolved_conflict": 30,
+                        "volatility": 40
+                    },
+                    "deeper_entanglement": {
+                        "dependence": 20,
+                        "trust": -10,
+                        "hidden_agendas": 15
+                    }
+                }
+            }
+            
+            # Get impacts for this event type and choice
+            impacts = event_templates.get(event_type, {}).get(choice_id, {})
+        else:
+            # Extract impacts from provided event data
+            impacts = {}
+            if "choices" in event_data:
+                for choice in event_data["choices"]:
+                    if choice.get("id") == choice_id:
+                        impacts = choice.get("potential_impacts", {})
+                        break
+        
+        if not impacts:
+            return {
+                "success": False,
+                "error": f"No impacts found for event type '{event_type}' and choice '{choice_id}'"
+            }
+        
+        # Apply the impacts to the relationship
+        old_dimensions = state.dimensions.to_dict()
+        
+        for dimension, change in impacts.items():
+            if hasattr(state.dimensions, dimension):
+                current_value = getattr(state.dimensions, dimension)
+                new_value = current_value + change
+                setattr(state.dimensions, dimension, new_value)
+                
+                # Update momentum for significant changes
+                if abs(change) > 5:
+                    state.momentum.update_velocity(dimension, change)
+        
+        # Ensure all values are within valid ranges
+        state.dimensions.clamp()
+        
+        # Update patterns and archetypes
+        state.history.active_patterns = RelationshipPatternDetector.detect_patterns(state.history)
+        state.active_archetypes = RelationshipArchetypes.check_archetypes(state)
+        
+        # Queue the update
+        await manager._queue_update(state)
+        await manager._flush_updates()
+        
+        # Create a memory of this choice
         if hasattr(context, 'add_narrative_memory'):
-            npc_name = "Unknown"
-            try:
-                async with get_db_connection_context() as conn:
-                    row = await conn.fetchrow(
-                        """SELECT entity2_id FROM SocialLinks 
-                        WHERE link_id = $1 AND entity2_type = 'npc'""", 
-                        link_id
-                    )
-                    if row: 
-                        npc_id = row['entity2_id']
-                        npc_row = await conn.fetchrow(
+            # Get NPC name if this is a player-NPC relationship
+            npc_name = "entity"
+            if entity2_type == "npc":
+                try:
+                    async with get_db_connection_context() as conn:
+                        npc_name = await conn.fetchval(
                             "SELECT npc_name FROM NPCStats WHERE npc_id = $1", 
-                            npc_id
-                        )
-                        npc_name = npc_row['npc_name'] if npc_row else npc_name
-            except Exception as db_error: 
-                logger.warning(f"Could not get NPC name for memory: {db_error}")
-
-            memory_content = (
-                f"Applied crossroads choice {choice_index} for '{crossroads_name}' "
-                f"with {npc_name}"
-            )
+                            entity2_id
+                        ) or f"NPC {entity2_id}"
+                except:
+                    pass
+            
+            memory_content = f"Made a choice in {event_type} with {npc_name}: {choice_id}"
             await context.add_narrative_memory(
                 memory_content, 
-                "crossroads_choice", 
-                0.8, 
-                tags=["crossroads", "relationship", npc_name.lower().replace(" ", "_")]
+                "relationship_choice", 
+                0.7, 
+                tags=["relationship", "choice", event_type, choice_id]
             )
-            if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                await context.narrative_manager.add_interaction(
-                    content=memory_content, 
-                    npc_name=npc_name, 
-                    importance=0.8, 
-                    tags=["crossroads", "relationship_choice"]
-                )
-
-        return result
-    except Exception as e:
-        logger.error(f"Error applying crossroads choice: {str(e)}", exc_info=True)
+        
+        # Check if this choice triggered any new patterns or archetypes
+        new_patterns = [p for p in state.history.active_patterns if p not in old_dimensions.get('patterns', [])]
+        new_archetypes = [a for a in state.active_archetypes if a not in old_dimensions.get('archetypes', [])]
+        
         return {
-            "link_id": link_id, 
-            "crossroads_name": crossroads_name, 
-            "choice_index": choice_index, 
-            "success": False, 
-            "error": str(e)
+            "success": True,
+            "state_key": state_key,
+            "event_type": event_type,
+            "choice_id": choice_id,
+            "impacts_applied": impacts,
+            "old_dimensions": old_dimensions,
+            "new_dimensions": state.dimensions.to_dict(),
+            "new_patterns": new_patterns,
+            "new_archetypes": new_archetypes,
+            "momentum_magnitude": state.momentum.get_magnitude()
         }
-
+        
+    except Exception as e:
+        logger.error(f"Error processing relationship event choice: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
+        
 @function_tool
 @track_performance("check_npc_relationship")
 async def check_npc_relationship(
     ctx: RunContextWrapper[ContextType], 
     npc_id: int
 ) -> Dict[str, Any]:
-    """
-    Get the relationship between the player and an NPC.
-
-    Args:
-        npc_id: ID of the NPC
-
-    Returns:
-        Relationship summary
-    """
+    """Get the relationship between the player and an NPC."""
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
     try:
+        # Use the new relationship summary tool
         relationship = await get_relationship_summary_tool(
-            user_id, conversation_id, "player", user_id, "npc", npc_id
+            ctx,
+            entity1_type="player",
+            entity1_id=user_id,  # Assuming player ID is user_id
+            entity2_type="npc",
+            entity2_id=npc_id
         )
+        
         if not relationship:
-            try:
-                from logic.social_links_agentic import create_social_link
-                link_id = await create_social_link(
-                    user_id, conversation_id, "player", user_id, "npc", npc_id
-                )
-                relationship = await get_relationship_summary_tool(
-                    user_id, conversation_id, "player", user_id, "npc", npc_id
-                )
-            except Exception as link_error:
-                logger.error(f"Error creating social link: {link_error}")
-                return {
-                    "success": False,
-                    "error": f"Failed to create relationship: {str(link_error)}", 
-                    "npc_id": npc_id
-                }
+            # Create new relationship if it doesn't exist
+            manager = OptimizedRelationshipManager(user_id, conversation_id)
+            state = await manager.get_relationship_state(
+                "player", user_id, "npc", npc_id
+            )
+            relationship = state.to_summary()
 
-        return relationship or {
-            "success": False,
-            "error": "Could not get or create relationship", 
-            "npc_id": npc_id
-        }
+        return relationship
     except Exception as e:
         logger.error(f"Error checking NPC relationship: {str(e)}", exc_info=True)
         return {"success": False, "error": str(e), "npc_id": npc_id}
@@ -4332,7 +4437,7 @@ activity_tools = [t for t in map(_ensure_tool, [
 # Relationship tools
 relationship_tools = [t for t in map(_ensure_tool, [
     check_relationship_events,
-    apply_crossroads_choice,
+    process_relationship_event_choice,  # New function
     check_npc_relationship,
     update_relationship_dimensions,
 ]) if t is not None]
