@@ -62,3 +62,35 @@ class StoryBalanceManager:
             )
             
         return adapted
+        
+    async def handle_player_deviation(self, ctx, deviation_type: str, beat: StoryBeat):
+        """Handle when player deviates from preset path"""
+        
+        if beat.can_skip:
+            # Mark as skipped, may trigger later
+            await self.queue_for_later_opportunity(beat)
+        else:
+            # Critical beat - find creative way to guide back
+            if deviation_type == "wrong_location":
+                # Create NPC motivation to bring player to location
+                await self.create_npc_guidance(ctx, beat.required_location)
+            elif deviation_type == "avoiding_npc":
+                # Have NPC seek out player
+                await self.create_npc_encounter(ctx, beat.required_npcs[0])
+                
+    async def blend_preset_with_dynamic(self, ctx, preset_content, dynamic_events):
+        """Seamlessly blend preset and dynamic content"""
+        
+        # Analyze current dynamic events
+        tone = await analyze_narrative_tone(dynamic_events)
+        
+        # Adjust preset content to match
+        adjusted_content = preset_content.copy()
+        if tone.get("tension_high"):
+            adjusted_content["intensity"] += 1
+            
+        # Incorporate recent dynamic elements
+        if "recent_conflicts" in dynamic_events:
+            adjusted_content["acknowledge_conflicts"] = True
+            
+        return adjusted_content
