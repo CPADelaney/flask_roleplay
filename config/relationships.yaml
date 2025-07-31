@@ -1,0 +1,12 @@
+# config/relationships.yaml
+thresholds:
+  significance: 10
+  momentum_trigger: 15
+  
+decay_rates:
+  frequency_daily: 0.05  # 5% per day
+  intimacy_daily: 0.02
+  
+velocity_factors:
+  scale: 0.01
+  max: 5.0
