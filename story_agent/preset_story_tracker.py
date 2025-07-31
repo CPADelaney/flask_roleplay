@@ -12,6 +12,8 @@ class PresetStoryTracker:
         self.completed_beats = []
         self.current_act = 1
         self.story_variables = {}
+        self.npc_mappings = {}  # Map preset NPC roles to actual NPC IDs
+        self.conflict_mappings = {}  # Map preset conflicts to actual conflict IDs
         
     async def initialize_preset_story(self, story: PresetStory):
         """Initialize tracking for a preset story"""
@@ -43,6 +45,44 @@ class PresetStoryTracker:
                 return beat
                 
         return None
+
+    async def map_preset_to_dynamic_entities(self, story: PresetStory):
+        """Map preset story entities to actual game entities"""
+        
+        # Map NPCs based on archetypes/roles
+        for preset_npc in story.required_npcs:
+            actual_npc = await self.find_or_create_matching_npc(preset_npc)
+            self.npc_mappings[preset_npc.id] = actual_npc.npc_id
+            
+        # Map locations
+        for preset_location in story.required_locations:
+            actual_location = await self.find_or_create_matching_location(preset_location)
+            
+    async def find_or_create_matching_npc(self, preset_npc):
+        """Find an NPC that matches preset requirements or create one"""
+        # First, try to find existing NPC with matching archetypes
+        npcs = await get_available_npcs(
+            self.ctx,
+            min_dominance=preset_npc.min_dominance,
+            gender_filter=preset_npc.gender,
+            min_stage=preset_npc.min_narrative_stage
+        )
+        
+        for npc in npcs:
+            if self.npc_matches_requirements(npc, preset_npc):
+                return npc
+                
+        # If no match, create NPC with required traits
+        return await self.create_npc_for_preset(preset_npc)
+        
+    async def translate_beat_to_context(self, beat: StoryBeat) -> Dict[str, Any]:
+        """Translate preset beat requirements to current game context"""
+        return {
+            "required_npcs": [self.npc_mappings.get(npc_id) for npc_id in beat.required_npcs],
+            "required_location": self.location_mappings.get(beat.location_id),
+            "conflict_context": self.conflict_mappings.get(beat.conflict_id),
+            "narrative_stage_requirements": beat.stage_requirements
+        }
         
     async def complete_story_beat(self, beat_id: str, outcomes: Dict[str, Any]):
         """Mark a story beat as completed and apply outcomes"""
