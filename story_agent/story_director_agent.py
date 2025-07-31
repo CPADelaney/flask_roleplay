@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime, timezone
+from logic.dynamic_relationships import OptimizedRelationshipManager
 from db.connection import get_db_connection_context
 
 from agents import Agent, function_tool, Runner, trace, handoff, ModelSettings, RunContextWrapper, FunctionTool
@@ -254,6 +255,8 @@ class StoryDirectorContext:
             logger.warning("ActivityAnalyzer not found.")
             self.activity_analyzer = None
 
+        relationship_manager: Optional[OptimizedRelationshipManager] = None
+
     async def initialize_context_components(self):
         """Initialize context components that require async calls."""
         # Initialize conflict manager using the proper async method
@@ -288,6 +291,14 @@ class StoryDirectorContext:
         self.context_manager = get_context_manager()
         self.context_manager.subscribe_to_changes("/narrative_stage", self.handle_narrative_stage_change)
         self.context_manager.subscribe_to_changes("/conflicts", self.handle_conflict_change)
+
+        # Initialize relationship manager
+        if self.relationship_manager is None:
+            self.relationship_manager = OptimizedRelationshipManager(
+                self.user_id, 
+                self.conversation_id
+            )
+            logger.info(f"Relationship manager initialized for user {self.user_id}")
     
         # Initialize directive handler
         if self.directive_handler is None:
@@ -874,6 +885,74 @@ class StoryDirectorContext:
 # ----- Tool Functions (Updated with Strict Schemas) -----
 
 @function_tool
+async def process_relationship_interaction(
+    ctx: RunContextWrapper[StoryDirectorContext],
+    entity1_type: str,
+    entity1_id: int,
+    entity2_type: str, 
+    entity2_id: int,
+    interaction_type: str,
+    context: str = "casual"
+) -> Dict[str, Any]:
+    """Process a relationship-affecting interaction between entities."""
+    context_obj = ctx.context
+    
+    if not context_obj.relationship_manager:
+        await context_obj.initialize_context_components()
+    
+    from logic.dynamic_relationships import process_relationship_interaction_tool
+    
+    # Process the interaction
+    result = await process_relationship_interaction_tool(
+        ctx,
+        entity1_type,
+        entity1_id,
+        entity2_type,
+        entity2_id,
+        interaction_type,
+        context
+    )
+    
+    # Check for triggered events
+    from logic.dynamic_relationships import poll_relationship_events_tool
+    event_result = await poll_relationship_events_tool(ctx)
+    
+    if event_result["has_event"]:
+        # Store event for narrative processing
+        await context_obj.add_narrative_memory(
+            f"Relationship event triggered: {event_result['event']['type']}",
+            "relationship_event",
+            0.8
+        )
+        result["triggered_event"] = event_result["event"]
+    
+    return result
+
+@function_tool
+async def get_relationship_state(
+    ctx: RunContextWrapper[StoryDirectorContext],
+    entity1_type: str,
+    entity1_id: int,
+    entity2_type: str,
+    entity2_id: int
+) -> Dict[str, Any]:
+    """Get the current state of a relationship."""
+    context_obj = ctx.context
+    
+    if not context_obj.relationship_manager:
+        await context_obj.initialize_context_components()
+    
+    from logic.dynamic_relationships import get_relationship_summary_tool
+    
+    return await get_relationship_summary_tool(
+        ctx,
+        entity1_type,
+        entity1_id,
+        entity2_type,
+        entity2_id
+    )
+
+@function_tool
 async def check_preset_story_progression(
     ctx: RunContextWrapper[StoryDirectorContext]
 ) -> Dict[str, Any]:
@@ -1137,7 +1216,7 @@ def create_story_director_agent():
     """Create the Story Director Agent with all required tools"""
 
     agent_instructions = """
-        You are the Story Director, managing both dynamic narrative and preset story beats.
+        You are the Story Director, managing dynamic narrative, preset story beats, and complex character relationships.
         
         When a preset story is active:
         1. Check for triggered story beats using check_preset_story_progression
@@ -1187,6 +1266,25 @@ def create_story_director_agent():
         - Contrasts between NPC stages create dramatic tension
         - Coordinate NPCs at similar stages for group dynamics
         - Use stage differences to create doubt and confusion
+
+        RELATIONSHIP MANAGEMENT:
+        - Track multi-dimensional relationships between player and NPCs
+        - Monitor relationship patterns (push-pull, slow burn, explosive chemistry, etc.)
+        - Trigger relationship events when appropriate thresholds are met
+        - Consider relationship archetypes when crafting narrative moments
+        - Use relationship context to inform NPC behaviors and reactions
+        
+        When processing interactions:
+        1. Use process_relationship_interaction to update relationship states
+        2. Check get_relationship_state to inform narrative decisions
+        3. Monitor for relationship events that should influence the story
+        4. Consider relationship momentum when determining story direction
+        
+        Relationship dimensions include:
+        - Trust, Respect, Affection, Fascination (emotional)
+        - Influence (power dynamics)
+        - Dependence, Intimacy, Frequency, Volatility (mutual metrics)
+        - Unresolved Conflict, Hidden Agendas (tensions)
     
         Always maintain the central theme: a gradual shift in power dynamics where the player character slowly loses autonomy while believing they maintain control. 
         Different NPCs should embody different aspects of this control, creating a web of manipulation.
@@ -1225,6 +1323,8 @@ def create_story_director_agent():
         resolve_conflict_path,
         progress_npc_narrative,
         generate_conflict_beat,
+        get_relationship_state,
+        process_relationship_interaction,
     ]
     
     # Extend with the tool lists instead of appending them
