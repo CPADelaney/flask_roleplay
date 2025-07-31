@@ -6,13 +6,19 @@ import random
 from datetime import datetime
 from db.connection import get_db_connection_context
 
+# Import new dynamic relationships system
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    process_relationship_interaction_tool,
+    get_relationship_summary_tool,
+    update_relationship_context_tool
+)
 
 logger = logging.getLogger(__name__)
 
 class PresetNPCHandler:
     """Handles creation of rich, preset NPCs with full feature parity"""
     
-    @staticmethod
     @staticmethod
     async def create_detailed_npc(ctx, npc_data: Dict[str, Any], story_context: Dict[str, Any]) -> int:
         """Create a detailed NPC from preset data with ALL features"""
@@ -28,6 +34,7 @@ class PresetNPCHandler:
         # Initialize systems
         lore_system = await LoreSystem.get_instance(user_id, conversation_id)
         npc_handler = NPCCreationHandler()
+        relationship_manager = OptimizedRelationshipManager(user_id, conversation_id)
         
         # Step 1: Check if NPC already exists using canonical function
         logger.info(f"Checking if preset NPC {npc_data['name']} already exists")
@@ -96,9 +103,9 @@ class PresetNPCHandler:
                     ctx, user_id, conversation_id, npc_id, npc_data
                 )
         
-        # Step 5: Setup relationships (additive)
-        await PresetNPCHandler._setup_complete_relationships(
-            ctx, user_id, conversation_id, npc_id, npc_data
+        # Step 5: Setup relationships using new system
+        await PresetNPCHandler._setup_complete_relationships_new(
+            ctx, user_id, conversation_id, npc_id, npc_data, relationship_manager
         )
         
         # Step 6: Initialize special mechanics (additive)
@@ -560,6 +567,7 @@ class PresetNPCHandler:
         
         from npcs.new_npc_creation import NPCCreationHandler
         from db.connection import get_db_connection_context
+        from memory.wrapper import MemorySystem
         
         handler = NPCCreationHandler()
         
@@ -786,15 +794,17 @@ class PresetNPCHandler:
             )
     
     @staticmethod
-    async def _setup_complete_relationships(
+    async def _setup_complete_relationships_new(
         ctx, user_id: int, conversation_id: int,
-        npc_id: int, npc_data: Dict[str, Any]
+        npc_id: int, npc_data: Dict[str, Any],
+        relationship_manager: OptimizedRelationshipManager
     ):
-        """Setup relationships with all features including shared memories"""
+        """Setup relationships using the new dynamic relationships system"""
         
         from npcs.new_npc_creation import NPCCreationHandler
         from lore.core import canon
         from db.connection import get_db_connection_context
+        from agents import RunContextWrapper
         
         handler = NPCCreationHandler()
         
@@ -814,20 +824,77 @@ class PresetNPCHandler:
                     target_type = rel.get("target_type", "player")
                     target_id = rel.get("target_id", user_id if target_type == "player" else 0)
                     
-                    # Create the relationship
-                    await canon.find_or_create_social_link(
-                        canon_ctx, conn,
-                        user_id=user_id,
-                        conversation_id=conversation_id,
+                    # Get or create relationship state using new system
+                    state = await relationship_manager.get_relationship_state(
                         entity1_type="npc",
                         entity1_id=npc_id,
                         entity2_type=target_type,
-                        entity2_id=target_id,
-                        link_type=rel.get("type", "neutral"),
-                        link_level=rel.get("strength", 50)
+                        entity2_id=target_id
                     )
                     
-                    # Add to NPC's relationship list
+                    # Set initial dimensions based on relationship type
+                    rel_type = rel.get("type", "neutral")
+                    initial_strength = rel.get("strength", 50)
+                    
+                    # Map old relationship types to new dimensions
+                    if rel_type == "ally":
+                        state.dimensions.trust = initial_strength
+                        state.dimensions.respect = initial_strength
+                        state.dimensions.affection = initial_strength * 0.8
+                    elif rel_type == "enemy":
+                        state.dimensions.trust = -initial_strength
+                        state.dimensions.respect = initial_strength * 0.5  # Respect can exist even with enemies
+                        state.dimensions.affection = -initial_strength
+                    elif rel_type == "lover":
+                        state.dimensions.trust = initial_strength * 0.9
+                        state.dimensions.affection = initial_strength
+                        state.dimensions.intimacy = initial_strength * 0.8
+                        state.dimensions.fascination = initial_strength * 0.7
+                    elif rel_type == "mentor":
+                        state.dimensions.trust = initial_strength * 0.8
+                        state.dimensions.respect = initial_strength
+                        state.dimensions.influence = -30  # Mentor has influence over student
+                    elif rel_type == "rival":
+                        state.dimensions.respect = initial_strength * 0.7
+                        state.dimensions.affection = 0
+                        state.dimensions.volatility = initial_strength * 0.6
+                    elif rel_type == "victim":
+                        state.dimensions.trust = -initial_strength * 0.5
+                        state.dimensions.respect = -initial_strength * 0.3
+                        state.dimensions.influence = initial_strength * 0.7  # NPC has influence over victim
+                        state.dimensions.unresolved_conflict = initial_strength * 0.8
+                    
+                    # Apply additional relationship-specific modifiers from preset data
+                    if "dimensions" in rel:
+                        for dim, value in rel["dimensions"].items():
+                            if hasattr(state.dimensions, dim):
+                                setattr(state.dimensions, dim, value)
+                    
+                    # Clamp all values
+                    state.dimensions.clamp()
+                    
+                    # Queue update to save the relationship
+                    await relationship_manager._queue_update(state)
+                    
+                    # If there are specific contexts defined
+                    if "contexts" in rel:
+                        ctx_wrapper = RunContextWrapper(context={
+                            'user_id': user_id,
+                            'conversation_id': conversation_id
+                        })
+                        
+                        for context_name, deltas in rel["contexts"].items():
+                            await update_relationship_context_tool(
+                                ctx=ctx_wrapper,
+                                entity1_type="npc",
+                                entity1_id=npc_id,
+                                entity2_type=target_type,
+                                entity2_id=target_id,
+                                situation=context_name,
+                                dimension_deltas=deltas
+                            )
+                    
+                    # Add to NPC's relationship list for compatibility
                     rel_query = """
                         SELECT relationships FROM NPCStats
                         WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
@@ -842,7 +909,7 @@ class PresetNPCHandler:
                             current_relationships = []
                     
                     current_relationships.append({
-                        "relationship_label": rel.get("type", "neutral"),
+                        "relationship_label": rel_type,
                         "entity_type": target_type,
                         "entity_id": target_id
                     })
@@ -850,7 +917,7 @@ class PresetNPCHandler:
                     await canon.update_entity_canonically(
                         canon_ctx, conn, "NPCStats", npc_id,
                         {"relationships": json.dumps(current_relationships)},
-                        f"Adding preset relationship: {rel.get('type', 'neutral')}"
+                        f"Adding preset relationship: {rel_type}"
                     )
         else:
             # Use the standard random relationship assignment
@@ -862,6 +929,7 @@ class PresetNPCHandler:
         
         # Add relationship-specific memories if provided
         if "relationship_memories" in npc_data:
+            from memory.wrapper import MemorySystem
             memory_system = await MemorySystem.get_instance(user_id, conversation_id)
             for memory in npc_data["relationship_memories"]:
                 await memory_system.remember(
@@ -872,6 +940,9 @@ class PresetNPCHandler:
                     emotional=True,
                     tags=["relationship", "preset_memory"]
                 )
+        
+        # Flush any pending relationship updates
+        await relationship_manager._flush_updates()
     
     @staticmethod
     async def _initialize_special_mechanics(
@@ -884,6 +955,21 @@ class PresetNPCHandler:
             return
         
         from db.connection import get_db_connection_context
+        
+        # Create the table if it doesn't exist
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS npc_special_mechanics (
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    npc_id INTEGER NOT NULL,
+                    mechanic_type VARCHAR(100) NOT NULL,
+                    mechanic_data JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, conversation_id, npc_id, mechanic_type)
+                )
+            """)
         
         async with get_db_connection_context() as conn:
             for mechanic_type, mechanic_data in npc_data["special_mechanics"].items():
