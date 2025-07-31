@@ -37,6 +37,13 @@ from context.context_performance import PerformanceMonitor, track_performance
 from db.connection import get_db_connection_context
 from story_templates.preset_manager import PresetStoryManager
 
+# Import the new dynamic relationships system
+from logic.dynamic_relationships import (
+    RelationshipState,
+    RelationshipDimensions,
+    OptimizedRelationshipManager
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -976,39 +983,53 @@ async def update_context_with_universal_updates(
                         updated_context["npcs"][npc_id]["memory"] = []
                     updated_context["npcs"][npc_id]["memory"].extend(npc_update["memory"])
 
-        # Relationship updates
-        if "social_links" in universal_updates:
+        # Relationship updates - REFACTORED FOR DYNAMIC RELATIONSHIPS
+        if "relationship_updates" in universal_updates:
             if "relationships" not in updated_context:
                 updated_context["relationships"] = {}
-        
-            from logic.dynamic_relationships import RelationshipState
             
-            for link in universal_updates["social_links"]:
-                e1_type = link.get("entity1_type")
-                e1_id = link.get("entity1_id")
-                e2_type = link.get("entity2_type")
-                e2_id = link.get("entity2_id")
-        
+            # Initialize relationship manager if needed
+            manager = OptimizedRelationshipManager(int(user_id), int(conversation_id))
+            
+            for rel_update in universal_updates["relationship_updates"]:
+                e1_type = rel_update.get("entity1_type")
+                e1_id = rel_update.get("entity1_id")
+                e2_type = rel_update.get("entity2_type")
+                e2_id = rel_update.get("entity2_id")
+                
                 if not all([e1_type, e1_id, e2_type, e2_id]):
                     continue
-        
-                # Use canonical key from the new system
-                state = RelationshipState(
-                    entity1_type=e1_type,
-                    entity1_id=e1_id,
-                    entity2_type=e2_type,
-                    entity2_id=e2_id
-                )
-                link_key = state.canonical_key
                 
-                # Store the new format with dimensions, patterns, archetypes
-                updated_context["relationships"][link_key] = {
-                    "dimensions": link.get("dynamics", {}),  # New multi-dimensional system
-                    "patterns": link.get("patterns", []),
-                    "archetypes": link.get("archetypes", []),
-                    "momentum": link.get("momentum", {}),
-                    "version": link.get("version", 0)
+                # Get relationship state
+                state = await manager.get_relationship_state(
+                    e1_type, e1_id, e2_type, e2_id
+                )
+                
+                # Apply dimension updates if provided
+                if "dimension_changes" in rel_update:
+                    for dim, change in rel_update["dimension_changes"].items():
+                        if hasattr(state.dimensions, dim):
+                            current = getattr(state.dimensions, dim)
+                            setattr(state.dimensions, dim, current + change)
+                    state.dimensions.clamp()
+                
+                # Apply interaction if provided
+                if "interaction" in rel_update:
+                    await manager.process_interaction(
+                        e1_type, e1_id, e2_type, e2_id,
+                        rel_update["interaction"]
+                    )
+                
+                # Store in context using canonical key
+                updated_context["relationships"][state.canonical_key] = {
+                    "dimensions": state.dimensions.to_dict(),
+                    "patterns": list(state.history.active_patterns),
+                    "archetypes": list(state.active_archetypes),
+                    "momentum": state.momentum.get_magnitude(),
+                    "version": state.version,
+                    "link_id": state.link_id
                 }
+        
         # Quest updates
         if "quest_updates" in universal_updates:
             if "quests" not in updated_context:
