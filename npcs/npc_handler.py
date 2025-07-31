@@ -2,7 +2,7 @@
 
 """
 NPC interaction handler for managing interactions between NPCs and players.
-Refactored to use centralized ChatGPT integration with async OpenAI client.
+Refactored to use the new dynamic relationships system.
 """
 
 import logging
@@ -21,6 +21,15 @@ from npcs.npc_learning_adaptation import NPCLearningAdaptation, NPCLearningManag
 
 # Import centralized LLM functions
 from logic.chatgpt_integration import get_chatgpt_response, get_async_openai_client, TEMPERATURE_SETTINGS
+
+# Import new dynamic relationships system
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    process_relationship_interaction_tool,
+    get_relationship_summary_tool,
+    poll_relationship_events_tool,
+    event_generator
+)
 
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
@@ -70,6 +79,8 @@ class NPCInteractionOutput(BaseModel):
     response: str
     stat_changes: Dict[str, int] = Field(default_factory=dict)
     memory_created: bool = False
+    relationship_event: Optional[Dict[str, Any]] = None
+    relationship_changes: Dict[str, float] = Field(default_factory=dict)
 
 class NPCHandler:
     """Handles NPC interactions with players and other NPCs"""
@@ -87,6 +98,9 @@ class NPCHandler:
         
         # Initialize the learning manager for handling multiple NPCs
         self.learning_manager = NPCLearningManager(user_id, conversation_id)
+        
+        # Initialize relationship manager
+        self.relationship_manager = OptimizedRelationshipManager(user_id, conversation_id)
 
     async def handle_interaction(
         self,
@@ -113,7 +127,7 @@ class NPCHandler:
         # Get NPC memories
         memories = await self.get_npc_memory(npc_id)
         
-        # Get player relationship
+        # Get player relationship using new system
         relationship = await self.get_relationship_details("npc", npc_id, "player", 0)
         
         # Build the response using centralized ChatGPT with function calling
@@ -161,6 +175,45 @@ class NPCHandler:
                 "stat_changes": {},
                 "memory_created": False
             }
+        
+        # Process the interaction with the new relationship system
+        interaction_mapping = {
+            "friendly": "helpful_action",
+            "hostile": "criticism_harsh",
+            "intimate": "vulnerability_shared",
+            "suspicious": "boundary_violated",
+            "supportive": "support_provided"
+        }
+        
+        # Determine interaction type for relationship system
+        rel_interaction_type = interaction_mapping.get(interaction_type, "helpful_action")
+        
+        # Use context from RunContextWrapper
+        from agents import RunContextWrapper
+        ctx = RunContextWrapper(context={
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id
+        })
+        
+        # Process the relationship interaction
+        rel_result = await process_relationship_interaction_tool(
+            ctx=ctx,
+            entity1_type="npc",
+            entity1_id=npc_id,
+            entity2_type="player",
+            entity2_id=0,
+            interaction_type=rel_interaction_type,
+            context="conversation",
+            check_for_event=True
+        )
+        
+        # Add relationship changes to response
+        if rel_result.get("dimensions_diff"):
+            response_data["relationship_changes"] = rel_result["dimensions_diff"]
+        
+        # Check for relationship event
+        if rel_result.get("event"):
+            response_data["relationship_event"] = rel_result["event"]
         
         # Store the interaction in memory if it's significant
         if response_data["memory_created"] or len(player_input) > 50:
@@ -214,9 +267,11 @@ Personality Traits: {', '.join(npc_details.get('personality_traits', []))}
 Current Location: {npc_details.get('current_location', 'unknown')}
 
 Relationship with Player:
-- Type: {relationship.get('link_type', 'neutral')}
-- Level: {relationship.get('link_level', 0)}
-- Stage: {relationship.get('relationship_stage', 'strangers')}
+- Trust: {relationship.get('trust', 0)}
+- Respect: {relationship.get('respect', 0)}
+- Affection: {relationship.get('affection', 0)}
+- Patterns: {', '.join(relationship.get('patterns', []))}
+- Archetypes: {', '.join(relationship.get('archetypes', []))}
 
 Recent Memories:
 """
@@ -275,7 +330,7 @@ The response should maintain a balance between mundane interaction and subtle po
         npc1 = await self.get_npc_details(npc1_id)
         npc2 = await self.get_npc_details(npc2_id)
         
-        # Get their relationship
+        # Get their relationship using new system
         relationship = await self.get_relationship_details("npc", npc1_id, "npc", npc2_id)
         
         # Get async OpenAI client
@@ -296,8 +351,10 @@ NPC 2: {npc2['npc_name']}
 - Personality: {', '.join(npc2.get('personality_traits', []))}
 
 Their Relationship:
-- Type: {relationship.get('link_type', 'neutral')}
-- Level: {relationship.get('link_level', 0)}
+- Trust: {relationship.get('trust', 0)}
+- Respect: {relationship.get('respect', 0)}
+- Affection: {relationship.get('affection', 0)}
+- Patterns: {', '.join(relationship.get('patterns', []))}
 
 Generate a brief, natural interaction between them that reflects their personalities and relationship.
 The interaction should be 2-4 exchanges (back and forth).
@@ -324,12 +381,32 @@ Include subtle power dynamics if appropriate based on their dominance levels."""
             
             interaction_text = response.choices[0].message.content
             
+            # Process the NPC-NPC interaction with the relationship system
+            from agents import RunContextWrapper
+            ctx = RunContextWrapper(context={
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            })
+            
+            # Process as a shared interaction
+            rel_result = await process_relationship_interaction_tool(
+                ctx=ctx,
+                entity1_type="npc",
+                entity1_id=npc1_id,
+                entity2_type="npc",
+                entity2_id=npc2_id,
+                interaction_type="helpful_action",  # Default positive interaction
+                context="casual",
+                check_for_event=False
+            )
+            
             return {
                 "npc1_id": npc1_id,
                 "npc1_name": npc1['npc_name'],
                 "npc2_id": npc2_id,
                 "npc2_name": npc2['npc_name'],
                 "interaction": interaction_text,
+                "relationship_changes": rel_result.get("dimensions_diff", {}),
                 "success": True
             }
             
@@ -443,6 +520,7 @@ Include subtle psychological elements if appropriate."""
             async with get_db_connection_context() as conn:
                 # Create context for canon
                 from agents import RunContextWrapper
+                from lore.core import canon
                 
                 ctx = RunContextWrapper(context={
                     'user_id': self.user_id,
@@ -735,7 +813,7 @@ Include subtle psychological elements if appropriate."""
         entity2_id: int
     ) -> Dict[str, Any]:
         """
-        Get relationship details between two entities.
+        Get relationship details between two entities using new system.
         
         Args:
             entity1_type: Type of the first entity (e.g., "npc", "player")
@@ -746,93 +824,41 @@ Include subtle psychological elements if appropriate."""
         Returns:
             Dictionary with relationship details
         """
-        async with get_db_connection_context() as conn:
-            # Try both orientations of the relationship
-            for e1t, e1i, e2t, e2i in [(entity1_type, entity1_id, entity2_type, entity2_id),
-                                       (entity2_type, entity2_id, entity1_type, entity1_id)]:
-                row = await conn.fetchrow("""
-                    SELECT link_id, link_type, link_level, link_history, dynamics, 
-                           group_interaction, relationship_stage, experienced_crossroads,
-                           experienced_rituals
-                    FROM SocialLinks
-                    WHERE user_id=$1 AND conversation_id=$2
-                      AND entity1_type=$3 AND entity1_id=$4
-                      AND entity2_type=$5 AND entity2_id=$6
-                    LIMIT 1
-                """, self.user_id, self.conversation_id, e1t, e1i, e2t, e2i)
-                
-                if row:
-                    # Process JSON fields
-                    link_history = row["link_history"]
-                    if link_history:
-                        try:
-                            if isinstance(link_history, str):
-                                link_history = json.loads(link_history)
-                        except (json.JSONDecodeError, TypeError):
-                            link_history = []
-                    else:
-                        link_history = []
-                    
-                    dynamics = row["dynamics"]
-                    if dynamics:
-                        try:
-                            if isinstance(dynamics, str):
-                                dynamics = json.loads(dynamics)
-                        except (json.JSONDecodeError, TypeError):
-                            dynamics = {}
-                    else:
-                        dynamics = {}
-                    
-                    experienced_crossroads = row["experienced_crossroads"]
-                    if experienced_crossroads:
-                        try:
-                            if isinstance(experienced_crossroads, str):
-                                experienced_crossroads = json.loads(experienced_crossroads)
-                        except (json.JSONDecodeError, TypeError):
-                            experienced_crossroads = {}
-                    else:
-                        experienced_crossroads = {}
-                    
-                    experienced_rituals = row["experienced_rituals"]
-                    if experienced_rituals:
-                        try:
-                            if isinstance(experienced_rituals, str):
-                                experienced_rituals = json.loads(experienced_rituals)
-                        except (json.JSONDecodeError, TypeError):
-                            experienced_rituals = {}
-                    else:
-                        experienced_rituals = {}
-                    
-                    return {
-                        "link_id": row["link_id"],
-                        "entity1_type": e1t,
-                        "entity1_id": e1i,
-                        "entity2_type": e2t,
-                        "entity2_id": e2i,
-                        "link_type": row["link_type"],
-                        "link_level": row["link_level"],
-                        "link_history": link_history,
-                        "dynamics": dynamics,
-                        "group_interaction": row["group_interaction"],
-                        "relationship_stage": row["relationship_stage"],
-                        "experienced_crossroads": experienced_crossroads,
-                        "experienced_rituals": experienced_rituals
-                    }
-            
-            # No relationship found
-            return {
-                "entity1_type": entity1_type,
-                "entity1_id": entity1_id,
-                "entity2_type": entity2_type,
-                "entity2_id": entity2_id,
-                "link_type": "none",
-                "link_level": 0,
-                "link_history": [],
-                "dynamics": {},
-                "relationship_stage": "strangers",
-                "experienced_crossroads": {},
-                "experienced_rituals": {}
-            }
+        from agents import RunContextWrapper
+        
+        ctx = RunContextWrapper(context={
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id
+        })
+        
+        # Get relationship summary using new tool
+        relationship = await get_relationship_summary_tool(
+            ctx=ctx,
+            entity1_type=entity1_type,
+            entity1_id=entity1_id,
+            entity2_type=entity2_type,
+            entity2_id=entity2_id
+        )
+        
+        # Convert to the format expected by the rest of the code
+        dimensions = relationship.get('dimensions', {})
+        
+        return {
+            "entity1_type": entity1_type,
+            "entity1_id": entity1_id,
+            "entity2_type": entity2_type,
+            "entity2_id": entity2_id,
+            "trust": dimensions.get('trust', 0),
+            "respect": dimensions.get('respect', 0),
+            "affection": dimensions.get('affection', 0),
+            "intimacy": dimensions.get('intimacy', 0),
+            "influence": dimensions.get('influence', 0),
+            "volatility": dimensions.get('volatility', 0),
+            "patterns": relationship.get('patterns', []),
+            "archetypes": relationship.get('archetypes', []),
+            "momentum_magnitude": relationship.get('momentum_magnitude', 0),
+            "duration_days": relationship.get('duration_days', 0)
+        }
 
     async def get_nearby_npcs(self, location: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -1049,15 +1075,13 @@ Include subtle psychological elements if appropriate."""
                                 interaction_text
                             )
                             
-                            # Update relationship using canon system
-                            await self._update_npc_relationship_canonical(ctx, conn, npc1["npc_id"], npc2["npc_id"])
-                            
                             results.append({
                                 "type": "interaction",
                                 "npc1": npc1["npc_name"],
                                 "npc2": npc2["npc_name"],
                                 "location": location,
-                                "interaction": interaction_text
+                                "interaction": interaction_text,
+                                "relationship_changes": interaction_result.get('relationship_changes', {})
                             })
             
             return {
@@ -1072,65 +1096,6 @@ Include subtle psychological elements if appropriate."""
         except Exception as e:
             logger.error(f"Error processing daily activities: {e}")
             return {"error": str(e), "results": []}
-
-    async def _update_npc_relationship_canonical(self, ctx, conn, npc1_id: int, npc2_id: int) -> None:
-        """
-        Update the relationship between two NPCs using the canon system.
-        
-        Args:
-            ctx: Context with governance info
-            conn: Database connection
-            npc1_id: ID of the first NPC
-            npc2_id: ID of the second NPC
-        """
-        from lore.core import canon
-        
-        # Check if relationship exists
-        row = await conn.fetchrow("""
-            SELECT link_id, link_level
-            FROM SocialLinks
-            WHERE user_id=$1 AND conversation_id=$2
-              AND ((entity1_type='npc' AND entity1_id=$3 AND entity2_type='npc' AND entity2_id=$4)
-               OR  (entity1_type='npc' AND entity1_id=$4 AND entity2_type='npc' AND entity2_id=$3))
-            LIMIT 1
-        """, self.user_id, self.conversation_id, npc1_id, npc2_id)
-        
-        if row:
-            # Update existing relationship
-            link_id = row["link_id"]
-            current_level = row["link_level"]
-            
-            # Small random change to relationship
-            change = random.randint(-1, 2)
-            new_level = max(0, min(100, current_level + change))
-            
-            if new_level != current_level:
-                await canon.update_entity_with_governance(
-                    ctx, conn, "SocialLinks", link_id,
-                    {"link_level": new_level},
-                    f"Daily interaction between NPCs adjusting relationship level",
-                    significance=2
-                )
-        else:
-            # Create new relationship through canon
-            link_id = await canon.find_or_create_social_link(
-                ctx, conn,
-                user_id=self.user_id,
-                conversation_id=self.conversation_id,
-                entity1_type="npc",
-                entity1_id=npc1_id,
-                entity2_type="npc",
-                entity2_id=npc2_id,
-                link_type="neutral",
-                link_level=50
-            )
-            
-            await canon.log_canonical_event(
-                ctx, conn,
-                f"New relationship established between NPC {npc1_id} and NPC {npc2_id}",
-                tags=["relationship", "npc_relationship", "creation"],
-                significance=4
-            )
 
     async def _record_interaction_for_learning(
         self, 
@@ -1368,3 +1333,28 @@ Include subtle psychological elements if appropriate."""
                 "success": False,
                 "error": str(e)
             }
+    
+    async def check_relationship_events(self) -> List[Dict[str, Any]]:
+        """
+        Check for any pending relationship events
+        
+        Returns:
+            List of pending events
+        """
+        from agents import RunContextWrapper
+        
+        ctx = RunContextWrapper(context={
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id
+        })
+        
+        # Poll for events
+        events = []
+        for _ in range(10):  # Check up to 10 events
+            event_result = await poll_relationship_events_tool(ctx=ctx, timeout=0.01)
+            if event_result.get("has_event"):
+                events.append(event_result["event"])
+            else:
+                break
+        
+        return events
