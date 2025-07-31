@@ -9,6 +9,7 @@ from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from lore.core.lore_system import LoreSystem
 from agents import RunContextWrapper
+from logic.dynamic_relationships import OptimizedRelationshipManager
 
 logger = logging.getLogger(__name__)
 
@@ -79,33 +80,48 @@ async def get_npc_narrative_stage(user_id: int, conversation_id: int, npc_id: in
                     if stage.name == stage_name:
                         return stage
             
-            # If no record exists, check the relationship stats
-            rel_row = await conn.fetchrow("""
-                SELECT link_level, link_type
-                FROM SocialLinks
-                WHERE user_id = $1 AND conversation_id = $2
-                AND entity1_type = 'npc' AND entity1_id = $3
-                AND entity2_type = 'player'
-            """, user_id, conversation_id, npc_id)
+            # If no record exists, check the relationship using the new system
+            manager = OptimizedRelationshipManager(user_id, conversation_id)
             
-            if rel_row:
-                # Calculate stage based on relationship level
-                link_level = rel_row['link_level'] or 0
-                
-                # Simple mapping based on link level
-                if link_level < 20:
-                    return NPC_NARRATIVE_STAGES[0]  # Innocent Beginning
-                elif link_level < 40:
-                    return NPC_NARRATIVE_STAGES[1]  # First Doubts
-                elif link_level < 60:
-                    return NPC_NARRATIVE_STAGES[2]  # Creeping Realization
-                elif link_level < 80:
-                    return NPC_NARRATIVE_STAGES[3]  # Veil Thinning
-                else:
-                    return NPC_NARRATIVE_STAGES[4]  # Full Revelation
+            # Get relationship state between NPC and player
+            state = await manager.get_relationship_state(
+                'npc', npc_id, 'player', user_id
+            )
             
-            # Default to first stage
-            return NPC_NARRATIVE_STAGES[0]
+            # Map the new dimensions to narrative progression
+            # Calculate an equivalent "progression level" based on multiple dimensions
+            
+            # Influence dimension maps to control/manipulation
+            control_factor = max(0, state.dimensions.influence) / 100.0  # 0-1
+            
+            # Dependence maps directly
+            dependency_factor = state.dimensions.dependence / 100.0  # 0-1
+            
+            # Trust and intimacy combined indicate how deep the relationship is
+            depth_factor = (state.dimensions.trust + state.dimensions.intimacy) / 200.0  # 0-1
+            
+            # Hidden tensions and unresolved conflict indicate realization potential
+            realization_factor = (state.dimensions.unresolved_conflict + state.dimensions.hidden_agendas) / 200.0  # 0-1
+            
+            # Calculate a composite progression score (0-100)
+            progression_score = (
+                control_factor * 30 +      # 30% weight on control
+                dependency_factor * 30 +   # 30% weight on dependency
+                depth_factor * 20 +        # 20% weight on relationship depth
+                realization_factor * 20    # 20% weight on hidden tensions
+            ) * 100
+            
+            # Determine stage based on progression score
+            if progression_score < 20:
+                return NPC_NARRATIVE_STAGES[0]  # Innocent Beginning
+            elif progression_score < 40:
+                return NPC_NARRATIVE_STAGES[1]  # First Doubts
+            elif progression_score < 60:
+                return NPC_NARRATIVE_STAGES[2]  # Creeping Realization
+            elif progression_score < 80:
+                return NPC_NARRATIVE_STAGES[3]  # Veil Thinning
+            else:
+                return NPC_NARRATIVE_STAGES[4]  # Full Revelation
             
     except Exception as e:
         logger.error(f"Error getting NPC narrative stage: {e}")
@@ -151,6 +167,34 @@ async def progress_npc_narrative_stage(
             new_corruption = max(0, min(100, (current['corruption'] or 0) + corruption_change))
             new_dependency = max(0, min(100, (current['dependency'] or 0) + dependency_change))
             new_realization = max(0, min(100, (current['realization_level'] or 0) + realization_change))
+            
+            # Also update the relationship dimensions using the new system
+            manager = OptimizedRelationshipManager(user_id, conversation_id)
+            
+            # Get current relationship state
+            state = await manager.get_relationship_state(
+                'npc', npc_id, 'player', user_id
+            )
+            
+            # Map narrative progression to relationship dimensions
+            if corruption_change != 0:
+                # Corruption increases influence and hidden agendas
+                state.dimensions.influence += corruption_change * 0.5
+                state.dimensions.hidden_agendas += corruption_change * 0.3
+                
+            if dependency_change != 0:
+                # Dependency directly maps
+                state.dimensions.dependence += dependency_change
+                
+            if realization_change != 0:
+                # Realization increases unresolved conflict and decreases trust
+                state.dimensions.unresolved_conflict += realization_change * 0.5
+                state.dimensions.trust -= realization_change * 0.3
+            
+            # Clamp values and queue update
+            state.dimensions.clamp()
+            await manager._queue_update(state)
+            await manager._flush_updates()
             
             # Determine new stage
             old_stage = current['narrative_stage']
@@ -212,6 +256,16 @@ async def progress_npc_narrative_stage(
                     importance="high",
                     tags=["narrative_progression", f"npc_{npc_id}", new_stage.lower().replace(" ", "_")]
                 )
+                
+                # Process a special interaction to mark the stage change
+                interaction_result = await manager.process_interaction(
+                    'npc', npc_id, 'player', user_id,
+                    {
+                        'type': 'narrative_progression',
+                        'context': f'stage_change_to_{new_stage.lower().replace(" ", "_")}',
+                        'description': f'Relationship progressed to {new_stage}'
+                    }
+                )
             
             return {
                 'success': True,
@@ -263,6 +317,14 @@ async def check_for_npc_revelation(user_id: int, conversation_id: int, npc_id: i
             if not npc_data:
                 return None
             
+            # Get relationship state for additional context
+            manager = OptimizedRelationshipManager(user_id, conversation_id)
+            state = await manager.get_relationship_state('npc', npc_id, 'player', user_id)
+            
+            # Use relationship dimensions to influence revelation content
+            influence_level = state.dimensions.influence
+            hidden_tension = state.dimensions.unresolved_conflict
+            
             # Generate revelation based on stage
             revelation_templates = {
                 "First Doubts": [
@@ -287,6 +349,12 @@ async def check_for_npc_revelation(user_id: int, conversation_id: int, npc_id: i
                 ]
             }
             
+            # Add influence-based modifiers to the revelation
+            if influence_level > 70 and stage.name == "Creeping Realization":
+                revelation_templates["Creeping Realization"].append(
+                    f"I can feel {npc_data['npc_name']}'s influence even when she's not here. Her voice echoes in my thoughts."
+                )
+            
             templates = revelation_templates.get(stage.name, [])
             if not templates:
                 return None
@@ -307,7 +375,13 @@ async def check_for_npc_revelation(user_id: int, conversation_id: int, npc_id: i
                 'npc_name': npc_data['npc_name'],
                 'stage': stage.name,
                 'revelation_text': revelation_text,
-                'journal_id': journal_id
+                'journal_id': journal_id,
+                'relationship_dimensions': {
+                    'influence': state.dimensions.influence,
+                    'dependence': state.dimensions.dependence,
+                    'unresolved_conflict': state.dimensions.unresolved_conflict,
+                    'hidden_agendas': state.dimensions.hidden_agendas
+                }
             }
             
     except Exception as e:
