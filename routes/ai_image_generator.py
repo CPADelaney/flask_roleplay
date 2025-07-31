@@ -18,6 +18,13 @@ from dotenv import load_dotenv
 from lore.core.lore_system import LoreSystem
 from lore.core import canon
 
+# Import the new dynamic relationships system
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    RelationshipState,
+    RelationshipDimensions
+)
+
 # Load environment variables
 load_dotenv()
 
@@ -42,7 +49,7 @@ logger = logging.getLogger(__name__)
 # ======================================================
 async def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_name="Chase"):
     """
-    Fetch detailed NPCStats, NPCVisualAttributes, PlayerStats, SocialLinks, and PlayerJournal.
+    Fetch detailed NPCStats, NPCVisualAttributes, PlayerStats, Dynamic Relationships, and PlayerJournal.
     Safely handles empty npc_names to avoid an 'IN ()' syntax error and omits `visual_seed`
     if it's not actually a column in the NPCStats table.
     """
@@ -59,6 +66,9 @@ async def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, play
             "mental_resilience": 50
         }
         return {}, default_player_stats, {}, []
+
+    # Initialize relationship manager for dynamic relationships
+    rel_manager = OptimizedRelationshipManager(user_id, conversation_id)
 
     async with get_db_connection_context() as conn:
         # 2. Fetch NPC data
@@ -127,19 +137,23 @@ async def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, play
                 visual_evol_rows = await cursor.fetchall()
                 previous_images = [img[0] for img in visual_evol_rows if img[0]]
 
-                # 5. Fetch Social Links for this NPC
+                # 5. Fetch Dynamic Relationship for this NPC with player
+                # Get player ID (assuming player_id = 1 or fetch from PlayerStats)
                 await cursor.execute("""
-                    SELECT link_type, link_level, dynamics
-                    FROM SocialLinks
-                    WHERE user_id=%s 
-                      AND conversation_id=%s 
-                      AND (
-                           (entity1_type='npc' AND entity1_id=%s AND entity2_type='player') 
-                        OR (entity2_type='npc' AND entity2_id=%s AND entity1_type='player')
-                      )
+                    SELECT id FROM PlayerStats 
+                    WHERE user_id=%s AND conversation_id=%s AND player_name=%s
                     LIMIT 1
-                """, (user_id, conversation_id, npc_id, npc_id))
-                social_link = await cursor.fetchone()
+                """, (user_id, conversation_id, player_name))
+                player_row = await cursor.fetchone()
+                player_id = player_row[0] if player_row else 1
+
+                # Get relationship state using the new system
+                rel_state = await rel_manager.get_relationship_state(
+                    entity1_type="player",
+                    entity1_id=player_id,
+                    entity2_type="npc",
+                    entity2_id=npc_id
+                )
 
                 # 6. Build the NPC dictionary
                 detailed_npcs[npc_name] = {
@@ -155,10 +169,12 @@ async def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, play
                     "dislikes": json.loads(row[10] or "[]"),
                     "current_location": row[11],
                     "previous_images": previous_images,
-                    "social_link": {
-                        "link_type": social_link[0] if social_link else None,
-                        "link_level": social_link[1] if social_link else 0,
-                        "dynamics": json.loads(social_link[2] or "{}") if social_link else {}
+                    "relationship": {
+                        "dimensions": rel_state.dimensions.to_dict(),
+                        "patterns": list(rel_state.history.active_patterns),
+                        "archetypes": list(rel_state.active_archetypes),
+                        "momentum": rel_state.momentum.get_magnitude(),
+                        "duration_days": rel_state.get_duration_days()
                     }
                 }
 
@@ -251,7 +267,7 @@ async def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, play
 # 2️⃣ PROCESS GPT RESPONSE & MERGE WITH NPCStats
 # ======================================================
 async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
-    """Extract scene data from GPT, enriched with NPCStats, PlayerStats, SocialLinks, and PlayerJournal."""
+    """Extract scene data from GPT, enriched with NPCStats, PlayerStats, Dynamic Relationships, and PlayerJournal."""
     if not gpt_response or "scene_data" not in gpt_response:
         return None
 
@@ -293,7 +309,7 @@ async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
             "accessories": npc.get("accessories", []),
             "previous_images": npc.get("previous_images", []),
             "last_generated_image": npc.get("last_generated_image"),
-            "social_link": npc.get("social_link", {})
+            "relationship": npc.get("relationship", {})
         })
 
     return {
@@ -310,10 +326,10 @@ async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
 
 
 # ======================================================
-# 3️⃣ UPDATE VISUAL ATTRIBUTES VIA gpt-4.1-nano
+# 3️⃣ UPDATE VISUAL ATTRIBUTES VIA gpt-4o-mini
 # ======================================================
 async def update_npc_visual_attributes(user_id, conversation_id, npc_id, prompt_data, image_path=None):
-    """Use gpt-4.1-nano to extract and update visual attributes from the image prompt."""
+    """Use gpt-4o-mini to extract and update visual attributes from the image prompt."""
     
     # Create context
     class ImageContext:
@@ -347,7 +363,7 @@ async def update_npc_visual_attributes(user_id, conversation_id, npc_id, prompt_
             "accessories": json.loads(current_attrs[9] or "[]") if current_attrs else []
         }
 
-        # gpt-4.1-nano extraction
+        # gpt-4o-mini extraction
         gpt_prompt = f"""
 Given this image generation prompt from a femdom visual novel:
 '{prompt_data}'
@@ -367,13 +383,14 @@ Extract detailed visual attributes for an NPC:
 Return a JSON object with these keys, using 'unknown' if not specified."""
         client = get_openai_client()
         response = client.chat.completions.create(
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             messages=[{"role": "system", "content": gpt_prompt}],
             temperature=0.5,
             response_format={"type": "json_object"}
         )
 
         lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+        new_attrs = safe_json_loads(response.choices[0].message.content)
 
         # Update visual attributes through LoreSystem
         if current_attrs:
@@ -442,14 +459,14 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
 
 
 # ======================================================
-# 4️⃣ GENERATE IMAGE-OPTIMIZED PROMPT VIA gpt-4.1-nano
+# 4️⃣ GENERATE IMAGE-OPTIMIZED PROMPT VIA gpt-4o-mini
 # ======================================================
 def generate_image_prompt(scene_data):
-    """Use gpt-4.1-nano to summarize NPCStats, scene context, SocialLinks, and PlayerJournal into an image-optimized prompt."""
+    """Use gpt-4o-mini to summarize NPCStats, scene context, Dynamic Relationships, and PlayerJournal into an image-optimized prompt."""
     if not scene_data:
         return None
 
-    # NPC details with visual attributes and SocialLinks
+    # NPC details with visual attributes and Dynamic Relationships
     npc_details = []
     for npc in scene_data["npcs"]:
         visual_attrs = [
@@ -459,7 +476,29 @@ def generate_image_prompt(scene_data):
             f"Body: {npc.get('body_type', 'unknown')}",
             f"Outfit: {npc.get('default_outfit', 'unknown')}"
         ]
-        social_link = npc["social_link"]
+        relationship = npc["relationship"]
+        dims = relationship.get("dimensions", {})
+        
+        # Format relationship info
+        rel_summary = []
+        if dims.get("trust", 0) > 70:
+            rel_summary.append("deeply trusted")
+        elif dims.get("trust", 0) < -30:
+            rel_summary.append("distrusted")
+        
+        if dims.get("affection", 0) > 70:
+            rel_summary.append("beloved")
+        elif dims.get("affection", 0) < -30:
+            rel_summary.append("despised")
+        
+        if dims.get("influence", 0) > 50:
+            rel_summary.append("dominant over player")
+        elif dims.get("influence", 0) < -50:
+            rel_summary.append("submissive to player")
+        
+        patterns = relationship.get("patterns", [])
+        archetypes = relationship.get("archetypes", [])
+        
         npc_details.append(
             f"Name: {npc['name']}\n"
             f"Physical Description: {npc['physical_description']}\n"
@@ -473,9 +512,11 @@ def generate_image_prompt(scene_data):
             f"Traits: {', '.join(npc['personality_traits'])}\n"
             f"Seed: {npc['visual_seed']}\n"
             f"Location: {npc['current_location']}\n"
-            f"Social Link: Type: {social_link['link_type'] or 'none'}, "
-            f"Level: {social_link['link_level']}, "
-            f"Dynamics: {json.dumps(social_link['dynamics'])}\n"
+            f"Relationship: {', '.join(rel_summary) or 'neutral'}\n"
+            f"Patterns: {', '.join(patterns) or 'none'}\n"
+            f"Archetypes: {', '.join(archetypes) or 'none'}\n"
+            f"Trust: {dims.get('trust', 0)}, Affection: {dims.get('affection', 0)}, "
+            f"Influence: {dims.get('influence', 0)}, Intimacy: {dims.get('intimacy', 0)}\n"
             f"Previous Images: {', '.join(npc['previous_images'][:2]) or 'None'}\n"
             f"User Rating: {scene_data['user_preferences'].get(npc['name'], {}).get('avg_rating', 'N/A')}"
         )
@@ -512,17 +553,25 @@ Create a concise (max 150 words), anime-style CG prompt:
 2. Highlight traits from physical_description/visual_attributes (e.g., 'raven-black curls', 'Hyper-Silk gown').
 3. Reflect actions (e.g., 'pegging with an 8-inch black dildo') and mood.
 4. Scale eroticism with Lust/addictions (tier {min(4, scene_data['player_stats']['lust'] // 20)} if Lust > 60).
-5. Use high Dominance/Intensity for commanding poses; SocialLinks for group dynamics (e.g., alliances = close poses).
+5. Use high Dominance/Intensity for commanding poses; Relationship dynamics for positioning:
+   - High trust/affection = intimate positioning, close contact
+   - High influence = NPC in dominant position over player
+   - Negative affection = distant or confrontational poses
+   - "Toxic_bond" archetype = intense but unstable positioning
 6. Favor high-rated traits ({json.dumps(scene_data['user_preferences'])}).
 7. Incorporate setting and journal hints (e.g., past scenes).
 8. Vivid, sensual for NSFW; soft, atmospheric otherwise.
 9. Ensure the player is featured (generic, nondescript, faceless brown-haired male, like how VNs tend to do it)
+10. Consider relationship patterns: 
+    - "push_pull" = mixed signals in positioning
+    - "explosive_chemistry" = intense physical closeness
+    - "growing_distance" = physical separation in scene
 
 Return JSON with 'image_prompt' and 'negative_prompt' (e.g., 'low quality, blurry')."""
     
     client = get_openai_client()
     response = client.chat.completions.create(
-        model="gpt-4.1-nano",
+        model="gpt-4o-mini",
         messages=[{"role": "system", "content": prompt}],
         temperature=0.7,
         response_format={"type": "json_object"}
@@ -815,7 +864,7 @@ async def generate_gpt_image():
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
-    data = request.get_json()
+    data = await request.get_json()
     gpt_response = data.get("gpt_response")
     conversation_id = data.get("conversation_id")
     if not gpt_response or not conversation_id:
