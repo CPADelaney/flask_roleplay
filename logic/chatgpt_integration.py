@@ -482,7 +482,7 @@ class OpenAIClientManager:
             'timeout': int(os.getenv("OPENAI_TIMEOUT", "600")),
             'max_retries': int(os.getenv("OPENAI_MAX_RETRIES", "2")),
             'default_model': os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-nano"),
-            'default_responses_model': os.getenv("OPENAI_RESPONSES_MODEL", "gpt-4o-mini")
+            'default_responses_model': os.getenv("OPENAI_RESPONSES_MODEL", "gpt-4.1-nano")
         }
         
         if not config['api_key']:
