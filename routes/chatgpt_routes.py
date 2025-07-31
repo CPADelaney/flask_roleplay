@@ -649,9 +649,25 @@ async def process_state_updates(user_id, conversation_id, state_updates):
 
         # Handle social links
         if 'social_links' in state_updates:
+            from logic.dynamic_relationships import OptimizedRelationshipManager
+            
+            manager = OptimizedRelationshipManager(user_id, conversation_id)
+            
             for link in state_updates['social_links']:
-                # Process social link updates
-                pass  # Implement based on your social links system
+                # Map to new relationship interaction
+                if link.get('new_event'):
+                    # Process as interaction
+                    await manager.process_interaction(
+                        entity1_type=link.get('entity1_type', 'player'),
+                        entity1_id=link.get('entity1_id', 1),
+                        entity2_type=link.get('entity2_type', 'npc'),
+                        entity2_id=link.get('entity2_id'),
+                        interaction={
+                            'type': 'social_interaction',
+                            'description': link['new_event'],
+                            'context': link.get('group_context', 'casual')
+                        }
+                    )
 
         # Handle perk unlocks
         if 'perk_unlocks' in state_updates:
