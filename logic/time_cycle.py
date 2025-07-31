@@ -1654,6 +1654,20 @@ def _get_vital_status(value: int, vital_type: str) -> str:
         else:
             return "Collapsing"
 
+async def apply_daily_relationship_drift(user_id: int, conversation_id: int):
+    """Apply daily drift to all relationships."""
+    from logic.dynamic_relationships import apply_daily_drift_tool
+    
+    ctx = type('obj', (object,), {
+        'context': {
+            'user_id': user_id, 
+            'conversation_id': conversation_id
+        }
+    })
+    
+    result = await apply_daily_drift_tool(ctx)
+    logger.info(f"Applied daily relationship drift: {result}")
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Nightly Maintenance
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1689,6 +1703,13 @@ async def nightly_maintenance(user_id: int, conversation_id: int):
     except Exception as e:
         logger.error(f"Unexpected error in nightly maintenance: {e}", exc_info=True)
         return
+
+    try:
+        # Apply relationship drift
+        await apply_daily_relationship_drift(user_id, conversation_id)
+        logger.info(f"Relationship drift applied during nightly maintenance for user {user_id}")
+    except Exception as e:
+        logger.error(f"Error applying relationship drift during maintenance: {e}")
 
     for nid in npc_ids:
         try:
