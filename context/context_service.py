@@ -1131,6 +1131,27 @@ async def get_comprehensive_context(
             source_version=source_version
         )
     
+    # Add relationship overview
+    from logic.dynamic_relationships import OptimizedRelationshipManager
+    
+    rel_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+    
+    # Get key relationships
+    key_relationships = []
+    for npc in context_data.get("npcs", [])[:5]:  # Top 5 NPCs
+        state = await rel_manager.get_relationship_state(
+            "player", 0,
+            "npc", npc["npc_id"]
+        )
+        
+        key_relationships.append({
+            "npc_id": npc["npc_id"],
+            "npc_name": npc["npc_name"],
+            "relationship_summary": state.to_summary()
+        })
+    
+    context_data["key_relationships"] = key_relationships
+    
     return context
 
 
