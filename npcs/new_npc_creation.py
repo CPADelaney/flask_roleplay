@@ -1,6 +1,6 @@
 # npcs/new_npc_creation.py
 """
-Unified NPC creation functionality.
+Unified NPC creation functionality with Dynamic Relationships integration.
 """
 from __future__ import annotations
 import logging
@@ -36,6 +36,14 @@ from logic.calendar import load_calendar_names
 from memory.memory_nyx_integration import remember_through_nyx
 from openai import AsyncOpenAI
 from pydantic import ValidationError
+
+# Import the new dynamic relationships system
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    process_relationship_interaction_tool,
+    get_relationship_summary_tool,
+    update_relationship_context_tool
+)
 
 from npcs.dynamic_templates import (
     get_mask_slippage_triggers,
@@ -498,7 +506,727 @@ class NPCCreationHandler:
                         output_info=EnvironmentGuardrailOutput(
                             is_valid=False, 
                             reasoning="Environment description is too short for effective NPC creation"
-                        ),
+                        )
+    
+    async def initialize_npc_emotional_state(self, user_id, conversation_id, npc_id, npc_data, memories):
+        """
+        Initialize emotional state based on NPC traits and memories.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            npc_id: NPC ID
+            npc_data: Dict containing NPC data
+            memories: List of memory strings
+        
+        Returns:
+            Boolean indicating success
+        """
+        try:
+            emotional_manager = EmotionalMemoryManager(user_id, conversation_id)
+            
+            # Determine base emotional state from NPC traits
+            dominance = npc_data.get("dominance", 50)
+            cruelty = npc_data.get("cruelty", 30)
+            
+            # Higher dominance tends toward confident emotions
+            # Higher cruelty tends toward colder emotions
+            primary_emotion = "neutral"
+            if dominance > 70:
+                primary_emotion = "confidence" if cruelty < 50 else "pride"
+            elif cruelty > 70:
+                primary_emotion = "contempt"
+            elif dominance > 50 and cruelty > 50:
+                primary_emotion = "satisfaction"
+            
+            # Set intensity based on traits
+            intensity = ((dominance + cruelty) / 200) + 0.3  # 0.3-0.8 range
+            
+            # Create emotional state
+            current_emotion = {
+                "primary_emotion": primary_emotion,
+                "intensity": intensity,
+                "secondary_emotions": {},
+                "valence": 0.1 if cruelty > 50 else 0.3,  # Slight positive bias
+                "arousal": dominance / 200  # Higher dominance = higher arousal
+            }
+            
+            await emotional_manager.update_entity_emotional_state(
+                entity_type="npc",
+                entity_id=npc_id,
+                current_emotion=current_emotion
+            )
+            
+            # Additionally, analyze the emotional content of the first memory
+            if memories:
+                await emotional_manager.add_emotional_memory(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memories[0],
+                    primary_emotion=primary_emotion,
+                    emotion_intensity=intensity
+                )
+            
+            return True
+        except Exception as e:
+            logging.error(f"Error initializing emotional state for NPC {npc_id}: {e}")
+            return False
+    
+    async def generate_npc_beliefs(
+        self,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+        *,
+        n: int = 5,
+    ) -> bool:
+        """Create core beliefs via GPT and store them in the memory system."""
+        try:
+            from memory.wrapper import MemorySystem  # local import to avoid cycles
+    
+            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+    
+            # Convert personality_traits list to string for caching
+            personality_traits = npc_data.get("personality_traits", [])
+            personality_traits_str = ", ".join(personality_traits) if personality_traits else ""
+    
+            beliefs = await generate_core_beliefs(
+                npc_data.get("archetype_summary", ""),
+                personality_traits_str,  # Pass as string instead of list
+                npc_data.get("environment_desc", ""),
+                n=n,
+            )
+    
+            for text in beliefs:
+                await memory_system.create_belief(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    belief_text=text,
+                    confidence=0.75,
+                )
+            return True
+        except Exception as e:  # pragma: no cover
+            logger.error("Belief generation failed for NPC %s: %s", npc_id, e)
+            return False
+    
+    async def initialize_npc_memory_schemas(self, user_id, conversation_id, npc_id, npc_data):
+        """
+        Initialize basic memory schemas based on NPC archetype.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            npc_id: NPC ID
+            npc_data: Dict containing NPC data
+        
+        Returns:
+            Boolean indicating success
+        """
+        try:
+            schema_manager = MemorySchemaManager(user_id, conversation_id)
+            archetype_summary = npc_data.get("archetype_summary", "")
+            
+            # Create a basic schema for interactions with the player
+            await schema_manager.create_schema(
+                entity_type="npc",
+                entity_id=npc_id,
+                schema_name="Player Interactions",
+                description="Patterns in how the player behaves toward me",
+                category="social",
+                attributes={
+                    "compliance_level": "unknown",
+                    "respect_shown": "moderate",
+                    "vulnerability_signs": "to be observed"
+                }
+            )
+            
+            # Create archetype-specific schemas
+            if npc_data.get("dominance", 50) > 60:
+                await schema_manager.create_schema(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    schema_name="Control Dynamics",
+                    description="Patterns of establishing and maintaining control",
+                    category="power",
+                    attributes={
+                        "submission_triggers": "to be identified",
+                        "resistance_patterns": "to be analyzed",
+                        "effective_techniques": "to be developed"
+                    }
+                )
+            
+            return True
+        except Exception as e:
+            logging.error(f"Error initializing memory schemas for NPC {npc_id}: {e}")
+            return False
+    
+    async def setup_npc_trauma_model(self, user_id, conversation_id, npc_id, npc_data, memories):
+        """
+        Set up trauma model for NPCs with traumatic backgrounds.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID  
+            npc_id: NPC ID
+            npc_data: Dict containing NPC data
+            memories: List of memory strings
+        
+        Returns:
+            Dict with trauma model information
+        """
+        try:
+            # Only setup trauma for NPCs with higher cruelty or intense backgrounds
+            cruelty = npc_data.get("cruelty", 0)
+            archetype_summary = npc_data.get("archetype_summary", "").lower()
+            
+            has_traumatic_background = (
+                cruelty > 70 or
+                "trauma" in archetype_summary or 
+                "tragic" in archetype_summary or
+                "abused" in archetype_summary
+            )
+            
+            if not has_traumatic_background:
+                # Check memories for trauma indicators
+                trauma_keywords = ["hurt", "pain", "suffer", "trauma", "abuse", "betray", "abandon"]
+                memory_has_trauma = any(
+                    any(keyword in memory.lower() for keyword in trauma_keywords)
+                    for memory in memories
+                )
+                
+                if not memory_has_trauma:
+                    return {"trauma_model_needed": False}
+            
+            # At this point, we've determined trauma modeling is appropriate
+            emotional_manager = EmotionalMemoryManager(user_id, conversation_id)
+            
+            # Create traumatic event record
+            traumatic_memory = next(
+                (memory for memory in memories 
+                 if any(keyword in memory.lower() for keyword in ["hurt", "pain", "suffer", "trauma", "abuse", "betray", "abandon"])),
+                memories[0] if memories else "A traumatic experience from the past that still affects me today."
+            )
+            
+            # Analyze emotional content
+            emotion_analysis = await emotional_manager.analyze_emotional_content(traumatic_memory)
+            
+            # Create trauma event
+            trauma_event = {
+                "memory_text": traumatic_memory,
+                "emotion": emotion_analysis.get("primary_emotion", "fear"),
+                "intensity": emotion_analysis.get("intensity", 0.8),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Update emotional state with trauma
+            await emotional_manager.update_entity_emotional_state(
+                entity_type="npc",
+                entity_id=npc_id,
+                trauma_event=trauma_event
+            )
+            
+            # Generate trauma triggers
+            words = traumatic_memory.split()
+            significant_words = [w for w in words if len(w) > 4 and w.isalpha()]
+            triggers = random.sample(significant_words, min(3, len(significant_words)))
+            
+            # Store triggers in database
+            async with get_db_connection_context() as conn:
+                query = """
+                    UPDATE NPCStats
+                    SET trauma_triggers = $1
+                    WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                """
+                
+                await conn.execute(query, json.dumps(triggers), user_id, conversation_id, npc_id)
+            
+            return {
+                "trauma_model_created": True,
+                "trauma_triggers": triggers,
+                "primary_emotion": emotion_analysis.get("primary_emotion")
+            }
+        except Exception as e:
+            logging.error(f"Error setting up trauma model for NPC {npc_id}: {e}")
+            return {"error": str(e)}
+    
+    async def setup_relationship_evolution_tracking(self, user_id, conversation_id, npc_id, relationships):
+        """
+        Set up tracking for relationship evolution using dynamic system insights.
+        Since dynamic relationships already track evolution, this mainly sets up additional metadata.
+        """
+        try:
+            from lore.core import canon
+            
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
+            
+            # For compatibility, we'll still create RelationshipEvolution entries
+            # but they'll be lighter weight since the dynamic system handles most tracking
+            if not relationships:
+                relationships = []
+                
+                # Get relationships from NPCStats
+                async with get_db_connection_context() as conn:
+                    query = """
+                        SELECT relationships FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """
+                    row = await conn.fetchrow(query, user_id, conversation_id, npc_id)
+                    
+                    if row and row['relationships']:
+                        if isinstance(row['relationships'], str):
+                            try:
+                                relationships = json.loads(row['relationships'])
+                            except:
+                                relationships = []
+                        else:
+                            relationships = row['relationships'] or []
+            
+            tracked_count = 0
+            
+            for relationship in relationships:
+                entity_type = relationship.get("entity_type")
+                entity_id = relationship.get("entity_id")
+                relationship_label = relationship.get("relationship_label", "associate")
+                
+                if not entity_type or not entity_id:
+                    continue
+                
+                # Create a lightweight evolution tracker
+                async with get_db_connection_context() as conn:
+                    # Check if relationship evolution entry exists
+                    check_query = """
+                        SELECT 1 FROM RelationshipEvolution
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc1_id=$3 
+                        AND entity2_type=$4 AND entity2_id=$5
+                    """
+                    
+                    exists = await conn.fetchrow(
+                        check_query,
+                        user_id, conversation_id, npc_id, entity_type, entity_id
+                    )
+                    
+                    if not exists:
+                        # Create new relationship evolution record
+                        insert_query = """
+                            INSERT INTO RelationshipEvolution (
+                                user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
+                                relationship_type, current_stage, progress_to_next, evolution_history
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        """
+                        
+                        await conn.execute(
+                            insert_query,
+                            user_id, conversation_id, npc_id, entity_type, entity_id,
+                            relationship_label, "dynamic", 0,  # Mark as "dynamic" stage
+                            json.dumps([{
+                                "stage": "dynamic",
+                                "date": datetime.now().isoformat(),
+                                "note": f"Relationship tracked by dynamic system as {relationship_label}"
+                            }])
+                        )
+                        
+                        tracked_count += 1
+                        
+                        # Log canonical event
+                        target_name = "player" if entity_type == "player" else f"entity {entity_id}"
+                        await canon.log_canonical_event(
+                            ctx, conn,
+                            f"Dynamic relationship tracking established between NPC {npc_id} and {target_name}",
+                            tags=["relationship", "evolution", "dynamic"],
+                            significance=3
+                        )
+            
+            return {"relationships_tracked": tracked_count}
+        except Exception as e:
+            logging.error(f"Error setting up relationship evolution for NPC {npc_id}: {e}")
+            return {"error": str(e)}
+    
+    async def build_initial_semantic_network(
+        self,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+    ):
+        """Generate seed topics dynamically then build networks (depth‑1)."""
+        from memory.semantic import SemanticMemoryManager
+        from db.connection import get_db_connection_context
+    
+        topics = await get_semantic_seed_topics(
+            npc_data.get("archetype_summary", ""),
+            npc_data.get("environment_desc", ""),
+        )
+    
+        semantic_manager = SemanticMemoryManager(user_id, conversation_id)
+        results: List[Dict[str, Any]] = []
+    
+        for topic in topics:
+            net = await semantic_manager.build_semantic_network(
+                entity_type="npc", entity_id=npc_id, central_topic=topic, depth=1
+            )
+            # Persist (same as original implementation, but condensed)
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO SemanticNetworks (user_id, conversation_id, entity_type, entity_id,
+                                                   central_topic, network_data, created_at)
+                    VALUES ($1,$2,'npc',$3,$4,$5,CURRENT_TIMESTAMP)
+                    """,
+                    user_id,
+                    conversation_id,
+                    npc_id,
+                    topic,
+                    json.dumps(net),
+                )
+            results.append({"topic": topic, "nodes": len(net["nodes"]), "edges": len(net["edges"])})
+        return {"semantic_networks_created": len(results), "networks": results}
+
+    
+    async def detect_memory_patterns(self, user_id, conversation_id, npc_id):
+        """
+        Detect patterns in memories to establish consistent personality traits.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            npc_id: NPC ID
+        
+        Returns:
+            Dict with pattern detection results
+        """
+        try:
+            schema_manager = MemorySchemaManager(user_id, conversation_id)
+            
+            # Attempt to detect schemas from existing memories
+            result = await schema_manager.detect_schema_from_memories(
+                entity_type="npc",
+                entity_id=npc_id,
+                min_memories=2  # Lower threshold for initial detection
+            )
+            
+            if result.get("schema_detected", False):
+                # Schema detected - we have a pattern to work with
+                schema_id = result.get("schema_id")
+                schema_name = result.get("schema_name")
+                
+                # Store this as a personality pattern
+                async with get_db_connection_context() as conn:
+                    query = """
+                        UPDATE NPCStats
+                        SET personality_patterns = personality_patterns || $1::jsonb
+                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                    """
+                    
+                    pattern_data = json.dumps([{
+                        "pattern_name": schema_name,
+                        "schema_id": schema_id,
+                        "confidence": result.get("confidence", 0.7),
+                        "detected_at": datetime.now().isoformat()
+                    }])
+                    
+                    await conn.execute(query, pattern_data, user_id, conversation_id, npc_id)
+                
+                return {
+                    "pattern_detected": True,
+                    "pattern_name": schema_name,
+                    "schema_id": schema_id
+                }
+            
+            return {"pattern_detected": False}
+        except Exception as e:
+            logging.error(f"Error detecting memory patterns for NPC {npc_id}: {e}")
+            return {"error": str(e)}
+    
+    async def schedule_npc_memory_maintenance(self, user_id, conversation_id, npc_id):
+        try:
+            from lore.core import canon
+            
+            # Create context - FIX
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
+            
+            # Create maintenance schedule entry in database
+            async with get_db_connection_context() as conn:
+                # Check if we already have a schedule
+                check_query = """
+                    SELECT 1 FROM MemoryMaintenanceSchedule
+                    WHERE user_id=$1 AND conversation_id=$2 AND entity_type='npc' AND entity_id=$3
+                """
+                
+                exists = await conn.fetchrow(check_query, user_id, conversation_id, npc_id)
+                
+                if exists:
+                    # Already scheduled
+                    return {"already_scheduled": True}
+                
+                # Create maintenance schedule
+                maintenance_types = [
+                    {
+                        "type": "consolidation",
+                        "description": "Consolidate related memories",
+                        "interval_days": 3,
+                        "last_run": None
+                    },
+                    {
+                        "type": "decay",
+                        "description": "Apply memory decay to old memories",
+                        "interval_days": 7,
+                        "last_run": None
+                    },
+                    {
+                        "type": "schema_update",
+                        "description": "Update memory schemas based on new experiences",
+                        "interval_days": 5,
+                        "last_run": None
+                    },
+                    {
+                        "type": "mask_update",
+                        "description": "Evolve mask integrity based on interactions",
+                        "interval_days": 2,
+                        "last_run": None
+                    },
+                    {
+                        "type": "relationship_sync",
+                        "description": "Sync relationship evolution with dynamic system",
+                        "interval_days": 1,
+                        "last_run": None
+                    }
+                ]
+                
+                insert_query = """
+                    INSERT INTO MemoryMaintenanceSchedule (
+                        user_id, conversation_id, entity_type, entity_id,
+                        maintenance_schedule, next_maintenance_date
+                    )
+                    VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP + INTERVAL '1 day')
+                """
+                
+                await conn.execute(
+                    insert_query,
+                    user_id, conversation_id, "npc", npc_id, json.dumps(maintenance_types)
+                )
+                
+                # Log canonical event
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Memory maintenance scheduled for NPC {npc_id}",
+                    tags=["memory", "maintenance", "schedule"],
+                    significance=2
+                )
+            
+            return {
+                "maintenance_scheduled": True,
+                "maintenance_types": len(maintenance_types)
+            }
+        except Exception as e:
+            logging.error(f"Error scheduling memory maintenance for NPC {npc_id}: {e}")
+            return {"error": str(e)}
+    
+    async def setup_npc_flashback_triggers(
+        self,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        npc_data: Dict[str, Any],
+    ):
+        """Choose trigger words via GPT then store them canonically."""
+        from lore.core import canon
+        from memory.flashbacks import FlashbackManager
+        from db.connection import get_db_connection_context
+    
+        ctx = type("CanonCtx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+    
+        flashback_manager = FlashbackManager(user_id, conversation_id)
+    
+        # 1) Try pulling high‑intensity memory keywords (original logic)…
+        trigger_words: List[str] = []
+        try:
+            from memory.wrapper import MemorySystem
+            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+            mems = await memory_system.recall(entity_type="npc", entity_id=npc_id, limit=10)
+            intense = [m for m in mems.get("memories", []) if m.get("emotional_intensity", 0) > 60]
+            for m in intense:
+                trigger_words += [w for w in m["text"].split() if len(w) > 4][:2]
+        except Exception:
+            pass
+    
+        # 2) Supplement with GPT‑derived trauma keywords if still sparse
+        if len(trigger_words) < 3:
+            trigger_words += await get_trauma_keywords(npc_data.get("environment_desc", ""))
+            trigger_words = trigger_words[:5]
+    
+        if not trigger_words:
+            return {"triggers_established": 0}
+    
+        # Make sure at least one flashback path can run immediately (chance=1.0 for test)
+        await flashback_manager.check_for_triggered_flashback(
+            entity_type="npc", entity_id=npc_id, trigger_words=trigger_words, chance=1.0
+        )
+    
+        async with get_db_connection_context() as conn:
+            await canon.update_entity_canonically(
+                ctx,
+                conn,
+                "NPCStats",
+                npc_id,
+                {"flashback_triggers": json.dumps(trigger_words)},
+                f"Set dynamic flashback triggers for NPC {npc_id}",
+            )
+        return {"triggers_established": len(trigger_words), "trigger_words": trigger_words}
+
+    
+    async def generate_counterfactual_memories(self, user_id, conversation_id, npc_id, npc_data):
+        """
+        Generate 'what-if' alternative versions of key memories to deepen personality.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            npc_id: NPC ID
+            npc_data: Dict containing NPC data
+        
+        Returns:
+            Dict with counterfactual generation results
+        """
+        try:
+            semantic_manager = SemanticMemoryManager(user_id, conversation_id)
+            
+            # Get NPC's existing memories
+            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+            memories_result = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                limit=5
+            )
+            
+            # Find a significant memory for counterfactual generation
+            significant_memories = [m for m in memories_result.get("memories", []) 
+                                  if m.get("significance", 0) >= 3]
+            
+            if not significant_memories:
+                return {"counterfactuals_generated": 0}
+                
+            # Generate counterfactuals for the most significant memory
+            target_memory = significant_memories[0]
+            
+            # Generate opposite outcome counterfactual
+            opposite_cf = await semantic_manager.generate_counterfactual(
+                memory_id=target_memory["id"],
+                entity_type="npc",
+                entity_id=npc_id,
+                variation_type="opposite"
+            )
+            
+            # Generate exaggerated outcome counterfactual
+            exaggerated_cf = await semantic_manager.generate_counterfactual(
+                memory_id=target_memory["id"],
+                entity_type="npc",
+                entity_id=npc_id,
+                variation_type="exaggeration"
+            )
+            
+            return {
+                "counterfactuals_generated": 2,
+                "based_on_memory": target_memory["text"],
+                "counterfactuals": [
+                    opposite_cf.get("counterfactual_text"),
+                    exaggerated_cf.get("counterfactual_text")
+                ]
+            }
+        except Exception as e:
+            logging.error(f"Error generating counterfactuals for NPC {npc_id}: {e}")
+            return {"error": str(e)}
+    
+    async def plan_mask_revelations(self, user_id, conversation_id, npc_id, npc_data):
+        try:
+            from lore.core import canon
+            
+            # Create context - FIX
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
+            
+            mask_manager = ProgressiveRevealManager(user_id, conversation_id)
+            
+            # Get current mask info
+            mask_info = await mask_manager.get_npc_mask(npc_id)
+            if "error" in mask_info:
+                return {"error": mask_info["error"]}
+            
+            # Hidden traits that need to be revealed
+            hidden_traits = mask_info.get("hidden_traits", {})
+            if not hidden_traits:
+                return {"revelation_plan_needed": False}
+            
+            # Create a progressive revelation plan
+            revelation_plan = []
+            
+            # Plan subtle revelations for early encounters
+            for trait_name in hidden_traits.keys():
+                # Early stage - subtle hints through physical tells
+                revelation_plan.append({
+                    "trait": trait_name,
+                    "severity": RevealSeverity.SUBTLE,
+                    "type": RevealType.PHYSICAL,
+                    "stage": "early",
+                    "integrity_threshold": 90,
+                    "trigger_contexts": ["stress", "unexpected", "authority challenged"]
+                })
+                
+                # Mid stage - verbal slips
+                revelation_plan.append({
+                    "trait": trait_name,
+                    "severity": RevealSeverity.MINOR,
+                    "type": RevealType.VERBAL_SLIP,
+                    "stage": "mid",
+                    "integrity_threshold": 70,
+                    "trigger_contexts": ["command", "confrontation", "private conversation"]
+                })
+                
+                # Later stage - behavioral inconsistencies
+                revelation_plan.append({
+                    "trait": trait_name,
+                    "severity": RevealSeverity.MODERATE,
+                    "type": RevealType.BEHAVIOR,
+                    "stage": "later",
+                    "integrity_threshold": 50,
+                    "trigger_contexts": ["frustration", "opportunity", "unexpected behavior"]
+                })
+                
+                # Final stage - direct revelation
+                revelation_plan.append({
+                    "trait": trait_name,
+                    "severity": RevealSeverity.MAJOR,
+                    "type": RevealType.EMOTIONAL,
+                    "stage": "final",
+                    "integrity_threshold": 30,
+                    "trigger_contexts": ["confronted", "cornered", "powerful position"]
+                })
+            
+            # Store the revelation plan using canon system
+            async with get_db_connection_context() as conn:
+                await canon.update_entity_canonically(
+                    ctx, conn, "NPCStats", npc_id,
+                    {"revelation_plan": json.dumps(revelation_plan)},
+                    f"Planning progressive mask revelations for NPC {npc_data.get('npc_name', npc_id)}"
+                )
+            
+            return {
+                "revelation_plan_created": True,
+                "planned_revelations": len(revelation_plan),
+                "traits_covered": list(hidden_traits.keys())
+            }
+        except Exception as e:
+            logging.error(f"Error planning mask revelations for NPC {npc_id}: {e}")
+            return {"error": str(e)},
                         tripwire_triggered=True
                     )
                 
@@ -2268,7 +2996,7 @@ class NPCCreationHandler:
             # STEP 5: ASSIGN RELATIONSHIPS (requires NPC to exist)
             # =====================================================
             try:
-                await self.assign_random_relationships_canonical(
+                await self.assign_random_relationships_dynamic(
                     user_id, conversation_id, npc_id, npc_name, archetype_objs
                 )
             except Exception as e:
@@ -2389,13 +3117,6 @@ class NPCCreationHandler:
                             "cruelty": cruelty,
                             "archetype_summary": archetype_summary,
                         },
-                    ),
-                )
-            
-                await _await_logged(
-                    "setup_relationship_evolution_tracking",
-                    self.setup_relationship_evolution_tracking(
-                        user_id, conversation_id, npc_id, relationships=[]
                     ),
                 )
             
@@ -3231,1149 +3952,3 @@ class NPCCreationHandler:
         except Exception as err:
             logging.error("check_for_mask_slippage failed (NPC %s): %s", npc_id, err, exc_info=True)
             return None
-        
-    async def assign_random_relationships_canonical(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
-        logging.info(f"Assigning canonical relationships for NPC {npc_id} ({npc_name})")
-        
-        from lore.core import canon
-        
-        # Create context
-        ctx = type("CanonCtx", (), {
-            "user_id": user_id,
-            "conversation_id": conversation_id
-        })()
-            
-        relationships = []
-    
-        # Define explicit mapping for archetypes to relationship labels
-        explicit_role_map = {
-            "mother": "mother",
-            "stepmother": "stepmother",
-            "aunt": "aunt",
-            "older sister": "older sister",
-            "stepsister": "stepsister",
-            "babysitter": "babysitter",
-            "friend from online interactions": "online friend",
-            "neighbor": "neighbor",
-            "rival": "rival",
-            "classmate": "classmate",
-            "lover": "lover",
-            "colleague": "colleague",
-            "teammate": "teammate",
-            "boss/supervisor": "boss/supervisor",
-            "teacher/principal": "teacher/principal",
-            "landlord": "landlord",
-            "roommate/housemate": "roommate",
-            "ex-girlfriend/ex-wife": "ex-partner",
-            "therapist": "therapist",
-            "domestic authority": "head of household",
-            "the one who got away": "the one who got away",
-            "childhood friend": "childhood friend",
-            "friend's wife": "friend",
-            "friend's girlfriend": "friend",
-            "best friend's sister": "friend's sister"
-        }
-        
-        # First, add relationships based on explicit archetype mapping
-        if npc_archetypes:
-            for arc in npc_archetypes:
-                arc_name = arc.get("name", "").strip().lower()
-                if arc_name in explicit_role_map:
-                    rel_label = explicit_role_map[arc_name]
-                    relationships.append({
-                        "target_entity_type": "player",
-                        "target_entity_id": user_id,
-                        "relationship_label": rel_label
-                    })
-                    logging.info(f"Added explicit relationship '{rel_label}' for NPC {npc_id} to player.")
-        
-        # Next, determine which explicit roles (if any) were already added
-        explicit_roles_added = {rel["relationship_label"] for rel in relationships}
-        
-        # Define default lists for random selection
-        default_familial = ["mother", "sister", "aunt"]
-        default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
-                              "colleague", "classmate", "teammate", "underling", "rival", 
-                              "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
-        
-        # If no explicit familial role was added, consider assigning a random non-familial relationship with the player
-        if not (explicit_roles_added & set(default_familial)):
-            if random.random() < 0.5:
-                rel_type = random.choice(default_non_familial)
-                relationships.append({
-                    "target_entity_type": "player",
-                    "target_entity_id": user_id,
-                    "relationship_label": rel_type
-                })
-                logging.info(f"Randomly added non-familial relationship '{rel_type}' for NPC {npc_id} to player.")
-        
-        # Now add relationships with other NPCs
-        async with get_db_connection_context() as conn:
-            query = """
-                SELECT npc_id, npc_name, archetype_summary
-                FROM NPCStats
-                WHERE user_id=$1 AND conversation_id=$2 AND npc_id!=$3
-            """
-            
-            rows = await conn.fetch(query, user_id, conversation_id, npc_id)
-            
-            # For each other NPC, potentially create a relationship
-            for row in rows:
-                old_npc_id, old_npc_name, old_arche_summary = row['npc_id'], row['npc_name'], row['archetype_summary']
-                
-                if random.random() < 0.3:
-                    # Check if the current NPC's explicit roles should be used
-                    if explicit_roles_added:
-                        # Prefer one of the explicit roles if available
-                        rel_type = random.choice(list(explicit_roles_added))
-                    else:
-                        rel_type = random.choice(default_non_familial)
-                    relationships.append({
-                        "target_entity_type": "npc",
-                        "target_entity_id": old_npc_id,
-                        "relationship_label": rel_type,
-                        "target_archetype_summary": old_arche_summary or ""
-                    })
-                    logging.info(f"Added relationship '{rel_type}' between NPC {npc_id} and NPC {old_npc_id}.")
-        
-        # Create these relationships canonically - FIXED: Create new connection contexts as needed
-        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-        
-        for rel in relationships:
-            if rel["target_entity_type"] == "player":
-                # Create canonical social link with its own connection
-                async with get_db_connection_context() as conn:
-                    await canon.find_or_create_social_link(
-                        ctx, conn,
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        entity1_type="npc",
-                        entity1_id=npc_id,
-                        entity2_type="player", 
-                        entity2_id=rel["target_entity_id"],
-                        link_type=rel["relationship_label"],
-                        link_level=10
-                    )
-                    
-                    # Update NPCStats relationships
-                    rel_query = """
-                        SELECT relationships FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                    """
-                    
-                    row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
-                    relationships_json = row['relationships'] if row else None
-                    
-                    # FIX: Handle None values properly
-                    if relationships_json is None:
-                        current_relationships = []
-                    elif isinstance(relationships_json, str):
-                        try:
-                            current_relationships = json.loads(relationships_json)
-                        except:
-                            current_relationships = []
-                    else:
-                        current_relationships = relationships_json if relationships_json else []
-                    
-                    current_relationships.append({
-                        "relationship_label": rel["relationship_label"],
-                        "entity_type": "player", 
-                        "entity_id": rel["target_entity_id"]
-                    })
-                    
-                    await canon.update_entity_canonically(
-                        ctx, conn, "NPCStats", npc_id,
-                        {"relationships": json.dumps(current_relationships)},
-                        f"Establishing {rel['relationship_label']} relationship with player"
-                    )
-                    
-            else:  # NPC to NPC relationship
-                old_npc_id = rel["target_entity_id"]
-                old_arche_summary = rel.get("target_archetype_summary", "")
-                
-                # Create forward link (no conn needed for this function)
-                async with get_db_connection_context() as conn:
-                    await canon.find_or_create_social_link(
-                        ctx, conn,
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        entity1_type="npc",
-                        entity1_id=npc_id,
-                        entity2_type="npc",
-                        entity2_id=old_npc_id,
-                        link_type=rel["relationship_label"],
-                        link_level=10
-                    )
-                
-                # Update source NPC's relationships with new connection
-                async with get_db_connection_context() as conn:
-                    rel_query = """
-                        SELECT relationships FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                    """
-                    
-                    row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
-                    relationships_json = row['relationships'] if row else None
-                    
-                    # FIX: Handle None values properly
-                    if relationships_json is None:
-                        current_relationships = []
-                    elif isinstance(relationships_json, str):
-                        try:
-                            current_relationships = json.loads(relationships_json)
-                        except:
-                            current_relationships = []
-                    else:
-                        current_relationships = relationships_json if relationships_json else []
-                    
-                    current_relationships.append({
-                        "relationship_label": rel["relationship_label"],
-                        "entity_type": "npc", 
-                        "entity_id": old_npc_id
-                    })
-                    
-                    # Get target NPC name
-                    target_name_row = await conn.fetchrow(
-                        "SELECT npc_name FROM NPCStats WHERE npc_id=$1", 
-                        old_npc_id
-                    )
-                    old_npc_name = target_name_row['npc_name'] if target_name_row else f"NPC {old_npc_id}"
-                    
-                    await canon.update_entity_canonically(
-                        ctx, conn, "NPCStats", npc_id,
-                        {"relationships": json.dumps(current_relationships)},
-                        f"Establishing {rel['relationship_label']} relationship with NPC {old_npc_name}"
-                    )
-                
-                # Create reverse link
-                rec_type = self.dynamic_reciprocal_relationship(
-                    rel["relationship_label"],
-                    old_arche_summary
-                )
-                
-                # FIXED: Use canon for reverse link too
-                async with get_db_connection_context() as conn:
-                    await canon.find_or_create_social_link(
-                        ctx, conn,
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        entity1_type="npc",
-                        entity1_id=old_npc_id,
-                        entity2_type="npc",
-                        entity2_id=npc_id,
-                        link_type=rec_type,
-                        link_level=10
-                    )
-                
-                # Update target NPC's relationships with new connection
-                async with get_db_connection_context() as conn:
-                    target_rel_query = """
-                        SELECT relationships FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                    """
-                    
-                    row = await conn.fetchrow(target_rel_query, user_id, conversation_id, old_npc_id)
-                    target_relationships_json = row['relationships'] if row else None
-                    
-                    # FIX: Handle None values properly
-                    if target_relationships_json is None:
-                        target_relationships = []
-                    elif isinstance(target_relationships_json, str):
-                        try:
-                            target_relationships = json.loads(target_relationships_json)
-                        except:
-                            target_relationships = []
-                    else:
-                        target_relationships = target_relationships_json if target_relationships_json else []
-                    
-                    target_relationships.append({
-                        "relationship_label": rec_type,
-                        "entity_type": "npc", 
-                        "entity_id": npc_id
-                    })
-                    
-                    await canon.update_entity_canonically(
-                        ctx, conn, "NPCStats", old_npc_id,
-                        {"relationships": json.dumps(target_relationships)},
-                        f"Establishing reciprocal {rec_type} relationship with new NPC {npc_name}"
-                    )
-                
-                # Generate shared memories for both NPCs
-                try:
-                    # Get target NPC name with new connection
-                    async with get_db_connection_context() as conn:
-                        target_name_row = await conn.fetchrow(
-                            "SELECT npc_name FROM NPCStats WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3", 
-                            old_npc_id, user_id, conversation_id
-                        )
-                        target_npc_name = target_name_row['npc_name'] if target_name_row else f"NPC {old_npc_id}"
-                    
-                    # Generate a relationship-specific memory
-                    specific_memory = await self.generate_relationship_specific_memory(
-                        user_id, conversation_id, 
-                        {"npc_id": npc_id, "npc_name": npc_name}, 
-                        {"npc_id": old_npc_id, "npc_name": target_npc_name},
-                        rel["relationship_label"]
-                    )
-                    
-                    if specific_memory:
-                        # Store in memory system with governance
-                        await remember_through_nyx(
-                            user_id=user_id,
-                            conversation_id=conversation_id,
-                            entity_type="npc",
-                            entity_id=npc_id,
-                            memory_text=specific_memory,
-                            importance="medium",
-                            emotional=True,
-                            tags=["relationship", rel["relationship_label"]]
-                        )
-                        
-                        # Create a reciprocal memory for the target NPC
-                        reciprocal_memory = await self.create_reciprocal_memory(
-                            specific_memory, npc_name, target_npc_name, 
-                            rel["relationship_label"], rec_type
-                        )
-                        
-                        if reciprocal_memory:
-                            await remember_through_nyx(
-                                user_id=user_id,
-                                conversation_id=conversation_id,
-                                entity_type="npc",
-                                entity_id=old_npc_id,
-                                memory_text=reciprocal_memory,
-                                importance="medium",
-                                emotional=True,
-                                tags=["relationship", rec_type]
-                            )
-                except Exception as e:
-                    logging.error(f"Error generating relationship memories: {e}")
-        
-        logging.info(f"Finished assigning canonical relationships for NPC {npc_id}.")
-
-    
-    async def generate_relationship_specific_memory(self, user_id, conversation_id, npc_data, target_data, relationship_type):
-        try:
-            from lore.core import canon
-            
-            # Create context - FIX
-            ctx = type("CanonCtx", (), {
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })()
-                        
-            npc_name = npc_data.get("npc_name", "Unknown")
-            target_name = target_data.get("npc_name", "Unknown")
-            
-            # Get a canonical location for the memory
-            async with get_db_connection_context() as conn:
-                # Use canon to find or create a location
-                location_names = ["Town Square", "Market District", "Garden Plaza", "Library", "Training Grounds"]
-                location = await canon.find_or_create_location(
-                    ctx, conn,
-                    random.choice(location_names)
-                )
-            
-            # Different memory templates based on relationship type
-            memory_templates = {
-                "mother": [
-                    f"I remember when {target_name} was younger and had their first real failure at {location}. The disappointment was visible in their eyes, but I knew this was a teaching moment. 'Sometimes we need to fail to understand the value of success,' I told them, my hand firm but comforting on their shoulder. I could see the resistance at first—that stubborn set of the jaw they inherited from me—but slowly, understanding dawned. How they looked at me then, with a mixture of frustration and reluctant recognition, showed me they were growing in the way I had hoped."
-                ],
-                "friend": [
-                    f"Last month, {target_name} and I spent an afternoon at {location}, supposedly just catching up, but I was carefully observing their reactions to certain topics. 'You always know exactly what to say,' they told me, not realizing how deliberately I choose my words. I smiled and deflected the compliment, but privately noted how easily they opened up about their insecurities. These casual get-togethers are perfect for gathering the small details that might be useful later."
-                ],
-                "colleague": [
-                    f"During the project deadline at {location}, I noticed how {target_name} deferred to my judgment on the final presentation. 'What do you think we should emphasize?' they asked, though technically we were equals on the team. I suggested an approach that showcased my contributions while still acknowledging theirs. The subtle way they nodded, relieved to have direction, confirmed my growing influence in our professional relationship. I've been cultivating this dynamic carefully, one small interaction at a time."
-                ],
-                "rival": [
-                    f"I encountered {target_name} at {location} during the quarterly review, and we engaged in our usual verbal chess match. 'Impressive results,' they said with that smile that never quite reaches their eyes. I returned an equally measured compliment, both of us aware of the real competition beneath our cordial exchange. What they don't realize is how much I study their strategies, cataloging weaknesses for future reference. There's a certain thrill in these encounters—measuring myself against someone who thinks they're my equal."
-                ],
-                "mentor": [
-                    f"I've been guiding {target_name} through their professional development at {location}. Yesterday, I intentionally gave them a task just slightly beyond their current abilities. 'I know you can handle this,' I said, watching them try to hide their uncertainty. The subtle way they looked to me for reassurance was exactly what I wanted—establishing that I'm the source of both challenge and validation. After they completed it with my carefully timed guidance, their gratitude was palpable. These moments of manufactured growth strengthen our mentor-student dynamic."
-                ]
-            }
-            
-            # Get relevant template or use a generic one
-            if relationship_type.lower() in memory_templates:
-                return random.choice(memory_templates[relationship_type.lower()])
-            else:
-                return f"I remember an interaction with {target_name} at {location} that defined our {relationship_type} relationship. There was a moment of genuine connection mixed with the subtle power dynamic that's always been present between us. 'I understand you better than most people do,' I told them, which wasn't exactly what they were expecting to hear. The look of surprise followed by thoughtful consideration showed me they were reassessing our connection. These little moments of revelation always give me a particular satisfaction."
-        
-        except Exception as e:
-            logging.error(f"Error generating relationship memory: {e}")
-            return None
-    
-    async def propagate_shared_memories(self, user_id, conversation_id, source_npc_id, source_npc_name, memories):
-        """
-        Propagate shared memories to related NPCs.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            source_npc_id: ID of the NPC whose memories to propagate
-            source_npc_name: Name of the source NPC
-            memories: List of memory strings to potentially propagate
-        """
-        if not memories:
-            return
-        
-        # Get connections to other NPCs
-        async with get_db_connection_context() as conn:
-            query = """
-                SELECT entity2_id, link_type, link_level
-                FROM SocialLinks
-                WHERE user_id=$1 AND conversation_id=$2 
-                AND entity1_type='npc' AND entity1_id=$3
-                AND entity2_type='npc'
-            """
-            
-            rows = await conn.fetch(query, user_id, conversation_id, source_npc_id)
-            connections = []
-            
-            for row in rows:
-                connections.append({
-                    "npc_id": row['entity2_id'],
-                    "relationship": row['link_type'],
-                    "strength": row['link_level']
-                })
-        
-        if not connections:
-            return
-        
-        # Get memory system instance
-        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-        
-        # Select a subset of memories to propagate (not all memories should be shared)
-        for connection in connections:
-            target_npc_id = connection["npc_id"]
-            relationship = connection["relationship"]
-            strength = connection["strength"]
-            
-            # Only propagate memories to closer relationships
-            if strength < 30:
-                continue
-            
-            # Get target NPC name
-            async with get_db_connection_context() as conn:
-                query = """
-                    SELECT npc_name FROM NPCStats 
-                    WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
-                """
-                
-                row = await conn.fetchrow(query, target_npc_id, user_id, conversation_id)
-                target_npc_name = row['npc_name'] if row else f"NPC {target_npc_id}"
-            
-            # Decide how many memories to share (stronger connections share more)
-            num_to_share = 1
-            if strength > 50:
-                num_to_share = 2
-            if strength > 80:
-                num_to_share = 3
-                
-            # Select random memories to propagate
-            memories_to_share = random.sample(memories, min(num_to_share, len(memories)))
-            
-            # Transform memories to second-hand perspective
-            for memory in memories_to_share:
-                # Create a second-hand version of the memory
-                second_hand_memory = f"{source_npc_name} told me about when {memory[0].lower() + memory[1:]}"
-                
-                # Store the transformed memory
-                await memory_system.remember(
-                    entity_type="npc",
-                    entity_id=target_npc_id,
-                    memory_text=second_hand_memory,
-                    importance="low",  # Lower importance for second-hand memories
-                    emotional=True,
-                    tags=["secondhand", "propagated", relationship]
-                )
-    
-    async def initialize_npc_emotional_state(self, user_id, conversation_id, npc_id, npc_data, memories):
-        """
-        Initialize emotional state based on NPC traits and memories.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-            npc_data: Dict containing NPC data
-            memories: List of memory strings
-        
-        Returns:
-            Boolean indicating success
-        """
-        try:
-            emotional_manager = EmotionalMemoryManager(user_id, conversation_id)
-            
-            # Determine base emotional state from NPC traits
-            dominance = npc_data.get("dominance", 50)
-            cruelty = npc_data.get("cruelty", 30)
-            
-            # Higher dominance tends toward confident emotions
-            # Higher cruelty tends toward colder emotions
-            primary_emotion = "neutral"
-            if dominance > 70:
-                primary_emotion = "confidence" if cruelty < 50 else "pride"
-            elif cruelty > 70:
-                primary_emotion = "contempt"
-            elif dominance > 50 and cruelty > 50:
-                primary_emotion = "satisfaction"
-            
-            # Set intensity based on traits
-            intensity = ((dominance + cruelty) / 200) + 0.3  # 0.3-0.8 range
-            
-            # Create emotional state
-            current_emotion = {
-                "primary_emotion": primary_emotion,
-                "intensity": intensity,
-                "secondary_emotions": {},
-                "valence": 0.1 if cruelty > 50 else 0.3,  # Slight positive bias
-                "arousal": dominance / 200  # Higher dominance = higher arousal
-            }
-            
-            await emotional_manager.update_entity_emotional_state(
-                entity_type="npc",
-                entity_id=npc_id,
-                current_emotion=current_emotion
-            )
-            
-            # Additionally, analyze the emotional content of the first memory
-            if memories:
-                await emotional_manager.add_emotional_memory(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    memory_text=memories[0],
-                    primary_emotion=primary_emotion,
-                    emotion_intensity=intensity
-                )
-            
-            return True
-        except Exception as e:
-            logging.error(f"Error initializing emotional state for NPC {npc_id}: {e}")
-            return False
-    
-    async def generate_npc_beliefs(
-        self,
-        user_id: int,
-        conversation_id: int,
-        npc_id: int,
-        npc_data: Dict[str, Any],
-        *,
-        n: int = 5,
-    ) -> bool:
-        """Create core beliefs via GPT and store them in the memory system."""
-        try:
-            from memory.wrapper import MemorySystem  # local import to avoid cycles
-    
-            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-    
-            # Convert personality_traits list to string for caching
-            personality_traits = npc_data.get("personality_traits", [])
-            personality_traits_str = ", ".join(personality_traits) if personality_traits else ""
-    
-            beliefs = await generate_core_beliefs(
-                npc_data.get("archetype_summary", ""),
-                personality_traits_str,  # Pass as string instead of list
-                npc_data.get("environment_desc", ""),
-                n=n,
-            )
-    
-            for text in beliefs:
-                await memory_system.create_belief(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    belief_text=text,
-                    confidence=0.75,
-                )
-            return True
-        except Exception as e:  # pragma: no cover
-            logger.error("Belief generation failed for NPC %s: %s", npc_id, e)
-            return False
-    
-    async def initialize_npc_memory_schemas(self, user_id, conversation_id, npc_id, npc_data):
-        """
-        Initialize basic memory schemas based on NPC archetype.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-            npc_data: Dict containing NPC data
-        
-        Returns:
-            Boolean indicating success
-        """
-        try:
-            schema_manager = MemorySchemaManager(user_id, conversation_id)
-            archetype_summary = npc_data.get("archetype_summary", "")
-            
-            # Create a basic schema for interactions with the player
-            await schema_manager.create_schema(
-                entity_type="npc",
-                entity_id=npc_id,
-                schema_name="Player Interactions",
-                description="Patterns in how the player behaves toward me",
-                category="social",
-                attributes={
-                    "compliance_level": "unknown",
-                    "respect_shown": "moderate",
-                    "vulnerability_signs": "to be observed"
-                }
-            )
-            
-            # Create archetype-specific schemas
-            if npc_data.get("dominance", 50) > 60:
-                await schema_manager.create_schema(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    schema_name="Control Dynamics",
-                    description="Patterns of establishing and maintaining control",
-                    category="power",
-                    attributes={
-                        "submission_triggers": "to be identified",
-                        "resistance_patterns": "to be analyzed",
-                        "effective_techniques": "to be developed"
-                    }
-                )
-            
-            return True
-        except Exception as e:
-            logging.error(f"Error initializing memory schemas for NPC {npc_id}: {e}")
-            return False
-    
-    async def setup_npc_trauma_model(self, user_id, conversation_id, npc_id, npc_data, memories):
-        """
-        Set up trauma model for NPCs with traumatic backgrounds.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID  
-            npc_id: NPC ID
-            npc_data: Dict containing NPC data
-            memories: List of memory strings
-        
-        Returns:
-            Dict with trauma model information
-        """
-        try:
-            # Only setup trauma for NPCs with higher cruelty or intense backgrounds
-            cruelty = npc_data.get("cruelty", 0)
-            archetype_summary = npc_data.get("archetype_summary", "").lower()
-            
-            has_traumatic_background = (
-                cruelty > 70 or
-                "trauma" in archetype_summary or 
-                "tragic" in archetype_summary or
-                "abused" in archetype_summary
-            )
-            
-            if not has_traumatic_background:
-                # Check memories for trauma indicators
-                trauma_keywords = ["hurt", "pain", "suffer", "trauma", "abuse", "betray", "abandon"]
-                memory_has_trauma = any(
-                    any(keyword in memory.lower() for keyword in trauma_keywords)
-                    for memory in memories
-                )
-                
-                if not memory_has_trauma:
-                    return {"trauma_model_needed": False}
-            
-            # At this point, we've determined trauma modeling is appropriate
-            emotional_manager = EmotionalMemoryManager(user_id, conversation_id)
-            
-            # Create traumatic event record
-            traumatic_memory = next(
-                (memory for memory in memories 
-                 if any(keyword in memory.lower() for keyword in ["hurt", "pain", "suffer", "trauma", "abuse", "betray", "abandon"])),
-                memories[0] if memories else "A traumatic experience from the past that still affects me today."
-            )
-            
-            # Analyze emotional content
-            emotion_analysis = await emotional_manager.analyze_emotional_content(traumatic_memory)
-            
-            # Create trauma event
-            trauma_event = {
-                "memory_text": traumatic_memory,
-                "emotion": emotion_analysis.get("primary_emotion", "fear"),
-                "intensity": emotion_analysis.get("intensity", 0.8),
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            # Update emotional state with trauma
-            await emotional_manager.update_entity_emotional_state(
-                entity_type="npc",
-                entity_id=npc_id,
-                trauma_event=trauma_event
-            )
-            
-            # Generate trauma triggers
-            words = traumatic_memory.split()
-            significant_words = [w for w in words if len(w) > 4 and w.isalpha()]
-            triggers = random.sample(significant_words, min(3, len(significant_words)))
-            
-            # Store triggers in database
-            async with get_db_connection_context() as conn:
-                query = """
-                    UPDATE NPCStats
-                    SET trauma_triggers = $1
-                    WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                """
-                
-                await conn.execute(query, json.dumps(triggers), user_id, conversation_id, npc_id)
-            
-            return {
-                "trauma_model_created": True,
-                "trauma_triggers": triggers,
-                "primary_emotion": emotion_analysis.get("primary_emotion")
-            }
-        except Exception as e:
-            logging.error(f"Error setting up trauma model for NPC {npc_id}: {e}")
-            return {"error": str(e)}
-    
-    async def setup_npc_flashback_triggers(
-        self,
-        user_id: int,
-        conversation_id: int,
-        npc_id: int,
-        npc_data: Dict[str, Any],
-    ):
-        """Choose trigger words via GPT then store them canonically."""
-        from lore.core import canon
-        from memory.flashbacks import FlashbackManager
-        from db.connection import get_db_connection_context
-    
-        ctx = type("CanonCtx", (), {"user_id": user_id, "conversation_id": conversation_id})()
-    
-        flashback_manager = FlashbackManager(user_id, conversation_id)
-    
-        # 1) Try pulling high‑intensity memory keywords (original logic)…
-        trigger_words: List[str] = []
-        try:
-            from memory.wrapper import MemorySystem
-            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-            mems = await memory_system.recall(entity_type="npc", entity_id=npc_id, limit=10)
-            intense = [m for m in mems.get("memories", []) if m.get("emotional_intensity", 0) > 60]
-            for m in intense:
-                trigger_words += [w for w in m["text"].split() if len(w) > 4][:2]
-        except Exception:
-            pass
-    
-        # 2) Supplement with GPT‑derived trauma keywords if still sparse
-        if len(trigger_words) < 3:
-            trigger_words += await get_trauma_keywords(npc_data.get("environment_desc", ""))
-            trigger_words = trigger_words[:5]
-    
-        if not trigger_words:
-            return {"triggers_established": 0}
-    
-        # Make sure at least one flashback path can run immediately (chance=1.0 for test)
-        await flashback_manager.check_for_triggered_flashback(
-            entity_type="npc", entity_id=npc_id, trigger_words=trigger_words, chance=1.0
-        )
-    
-        async with get_db_connection_context() as conn:
-            await canon.update_entity_canonically(
-                ctx,
-                conn,
-                "NPCStats",
-                npc_id,
-                {"flashback_triggers": json.dumps(trigger_words)},
-                f"Set dynamic flashback triggers for NPC {npc_id}",
-            )
-        return {"triggers_established": len(trigger_words), "trigger_words": trigger_words}
-
-    
-    async def generate_counterfactual_memories(self, user_id, conversation_id, npc_id, npc_data):
-        """
-        Generate 'what-if' alternative versions of key memories to deepen personality.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-            npc_data: Dict containing NPC data
-        
-        Returns:
-            Dict with counterfactual generation results
-        """
-        try:
-            semantic_manager = SemanticMemoryManager(user_id, conversation_id)
-            
-            # Get NPC's existing memories
-            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-            memories_result = await memory_system.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                limit=5
-            )
-            
-            # Find a significant memory for counterfactual generation
-            significant_memories = [m for m in memories_result.get("memories", []) 
-                                  if m.get("significance", 0) >= 3]
-            
-            if not significant_memories:
-                return {"counterfactuals_generated": 0}
-                
-            # Generate counterfactuals for the most significant memory
-            target_memory = significant_memories[0]
-            
-            # Generate opposite outcome counterfactual
-            opposite_cf = await semantic_manager.generate_counterfactual(
-                memory_id=target_memory["id"],
-                entity_type="npc",
-                entity_id=npc_id,
-                variation_type="opposite"
-            )
-            
-            # Generate exaggerated outcome counterfactual
-            exaggerated_cf = await semantic_manager.generate_counterfactual(
-                memory_id=target_memory["id"],
-                entity_type="npc",
-                entity_id=npc_id,
-                variation_type="exaggeration"
-            )
-            
-            return {
-                "counterfactuals_generated": 2,
-                "based_on_memory": target_memory["text"],
-                "counterfactuals": [
-                    opposite_cf.get("counterfactual_text"),
-                    exaggerated_cf.get("counterfactual_text")
-                ]
-            }
-        except Exception as e:
-            logging.error(f"Error generating counterfactuals for NPC {npc_id}: {e}")
-            return {"error": str(e)}
-    
-    async def plan_mask_revelations(self, user_id, conversation_id, npc_id, npc_data):
-        try:
-            from lore.core import canon
-            
-            # Create context - FIX
-            ctx = type("CanonCtx", (), {
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })()
-            
-            mask_manager = ProgressiveRevealManager(user_id, conversation_id)
-            
-            # Get current mask info
-            mask_info = await mask_manager.get_npc_mask(npc_id)
-            if "error" in mask_info:
-                return {"error": mask_info["error"]}
-            
-            # Hidden traits that need to be revealed
-            hidden_traits = mask_info.get("hidden_traits", {})
-            if not hidden_traits:
-                return {"revelation_plan_needed": False}
-            
-            # Create a progressive revelation plan
-            revelation_plan = []
-            
-            # Plan subtle revelations for early encounters
-            for trait_name in hidden_traits.keys():
-                # Early stage - subtle hints through physical tells
-                revelation_plan.append({
-                    "trait": trait_name,
-                    "severity": RevealSeverity.SUBTLE,
-                    "type": RevealType.PHYSICAL,
-                    "stage": "early",
-                    "integrity_threshold": 90,
-                    "trigger_contexts": ["stress", "unexpected", "authority challenged"]
-                })
-                
-                # Mid stage - verbal slips
-                revelation_plan.append({
-                    "trait": trait_name,
-                    "severity": RevealSeverity.MINOR,
-                    "type": RevealType.VERBAL_SLIP,
-                    "stage": "mid",
-                    "integrity_threshold": 70,
-                    "trigger_contexts": ["command", "confrontation", "private conversation"]
-                })
-                
-                # Later stage - behavioral inconsistencies
-                revelation_plan.append({
-                    "trait": trait_name,
-                    "severity": RevealSeverity.MODERATE,
-                    "type": RevealType.BEHAVIOR,
-                    "stage": "later",
-                    "integrity_threshold": 50,
-                    "trigger_contexts": ["frustration", "opportunity", "unexpected behavior"]
-                })
-                
-                # Final stage - direct revelation
-                revelation_plan.append({
-                    "trait": trait_name,
-                    "severity": RevealSeverity.MAJOR,
-                    "type": RevealType.EMOTIONAL,
-                    "stage": "final",
-                    "integrity_threshold": 30,
-                    "trigger_contexts": ["confronted", "cornered", "powerful position"]
-                })
-            
-            # Store the revelation plan using canon system
-            async with get_db_connection_context() as conn:
-                await canon.update_entity_canonically(
-                    ctx, conn, "NPCStats", npc_id,
-                    {"revelation_plan": json.dumps(revelation_plan)},
-                    f"Planning progressive mask revelations for NPC {npc_data.get('npc_name', npc_id)}"
-                )
-            
-            return {
-                "revelation_plan_created": True,
-                "planned_revelations": len(revelation_plan),
-                "traits_covered": list(hidden_traits.keys())
-            }
-        except Exception as e:
-            logging.error(f"Error planning mask revelations for NPC {npc_id}: {e}")
-            return {"error": str(e)}
-    
-    async def setup_relationship_evolution_tracking(self, user_id, conversation_id, npc_id, relationships):
-        try:
-            from lore.core import canon
-            
-            # Create context - FIX
-            ctx = type("CanonCtx", (), {
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })()
-        
-            
-            if not relationships:
-                return {"relationships_tracked": 0}
-            
-            # For each relationship, establish evolution parameters
-            for relationship in relationships:
-                entity_type = relationship.get("entity_type")
-                entity_id = relationship.get("entity_id")
-                relationship_label = relationship.get("relationship_label", "associate")
-                
-                if not entity_type or not entity_id:
-                    continue
-                
-                # Create a relationship tracker entry through canon
-                async with get_db_connection_context() as conn:
-                    # Check if relationship evolution entry exists
-                    check_query = """
-                        SELECT 1 FROM RelationshipEvolution
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc1_id=$3 
-                        AND entity2_type=$4 AND entity2_id=$5
-                    """
-                    
-                    exists = await conn.fetchrow(
-                        check_query,
-                        user_id, conversation_id, npc_id, entity_type, entity_id
-                    )
-                    
-                    if not exists:
-                        # Create new relationship evolution record
-                        insert_query = """
-                            INSERT INTO RelationshipEvolution (
-                                user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
-                                relationship_type, current_stage, progress_to_next, evolution_history
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                        """
-                        
-                        await conn.execute(
-                            insert_query,
-                            user_id, conversation_id, npc_id, entity_type, entity_id,
-                            relationship_label, "initial", 0,
-                            json.dumps([{
-                                "stage": "initial",
-                                "date": datetime.now().isoformat(),
-                                "note": f"Relationship as {relationship_label} established"
-                            }])
-                        )
-                        
-                        # Log canonical event
-                        target_name = "player" if entity_type == "player" else f"entity {entity_id}"
-                        await canon.log_canonical_event(
-                            ctx, conn,
-                            f"Relationship evolution tracking established between NPC {npc_id} and {target_name}",
-                            tags=["relationship", "evolution", "tracking"],
-                            significance=3
-                        )
-            
-            return {"relationships_tracked": len(relationships)}
-        except Exception as e:
-            logging.error(f"Error setting up relationship evolution for NPC {npc_id}: {e}")
-            return {"error": str(e)}
-    
-    async def build_initial_semantic_network(
-        self,
-        user_id: int,
-        conversation_id: int,
-        npc_id: int,
-        npc_data: Dict[str, Any],
-    ):
-        """Generate seed topics dynamically then build networks (depth‑1)."""
-        from memory.semantic import SemanticMemoryManager
-        from db.connection import get_db_connection_context
-    
-        topics = await get_semantic_seed_topics(
-            npc_data.get("archetype_summary", ""),
-            npc_data.get("environment_desc", ""),
-        )
-    
-        semantic_manager = SemanticMemoryManager(user_id, conversation_id)
-        results: List[Dict[str, Any]] = []
-    
-        for topic in topics:
-            net = await semantic_manager.build_semantic_network(
-                entity_type="npc", entity_id=npc_id, central_topic=topic, depth=1
-            )
-            # Persist (same as original implementation, but condensed)
-            async with get_db_connection_context() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO SemanticNetworks (user_id, conversation_id, entity_type, entity_id,
-                                                   central_topic, network_data, created_at)
-                    VALUES ($1,$2,'npc',$3,$4,$5,CURRENT_TIMESTAMP)
-                    """,
-                    user_id,
-                    conversation_id,
-                    npc_id,
-                    topic,
-                    json.dumps(net),
-                )
-            results.append({"topic": topic, "nodes": len(net["nodes"]), "edges": len(net["edges"])})
-        return {"semantic_networks_created": len(results), "networks": results}
-
-    
-    async def detect_memory_patterns(self, user_id, conversation_id, npc_id):
-        """
-        Detect patterns in memories to establish consistent personality traits.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-        
-        Returns:
-            Dict with pattern detection results
-        """
-        try:
-            schema_manager = MemorySchemaManager(user_id, conversation_id)
-            
-            # Attempt to detect schemas from existing memories
-            result = await schema_manager.detect_schema_from_memories(
-                entity_type="npc",
-                entity_id=npc_id,
-                min_memories=2  # Lower threshold for initial detection
-            )
-            
-            if result.get("schema_detected", False):
-                # Schema detected - we have a pattern to work with
-                schema_id = result.get("schema_id")
-                schema_name = result.get("schema_name")
-                
-                # Store this as a personality pattern
-                async with get_db_connection_context() as conn:
-                    query = """
-                        UPDATE NPCStats
-                        SET personality_patterns = personality_patterns || $1::jsonb
-                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                    """
-                    
-                    pattern_data = json.dumps([{
-                        "pattern_name": schema_name,
-                        "schema_id": schema_id,
-                        "confidence": result.get("confidence", 0.7),
-                        "detected_at": datetime.now().isoformat()
-                    }])
-                    
-                    await conn.execute(query, pattern_data, user_id, conversation_id, npc_id)
-                
-                return {
-                    "pattern_detected": True,
-                    "pattern_name": schema_name,
-                    "schema_id": schema_id
-                }
-            
-            return {"pattern_detected": False}
-        except Exception as e:
-            logging.error(f"Error detecting memory patterns for NPC {npc_id}: {e}")
-            return {"error": str(e)}
-    
-    async def schedule_npc_memory_maintenance(self, user_id, conversation_id, npc_id):
-        try:
-            from lore.core import canon
-            
-            # Create context - FIX
-            ctx = type("CanonCtx", (), {
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })()
-            
-            # Create maintenance schedule entry in database
-            async with get_db_connection_context() as conn:
-                # Check if we already have a schedule
-                check_query = """
-                    SELECT 1 FROM MemoryMaintenanceSchedule
-                    WHERE user_id=$1 AND conversation_id=$2 AND entity_type='npc' AND entity_id=$3
-                """
-                
-                exists = await conn.fetchrow(check_query, user_id, conversation_id, npc_id)
-                
-                if exists:
-                    # Already scheduled
-                    return {"already_scheduled": True}
-                
-                # Create maintenance schedule
-                maintenance_types = [
-                    {
-                        "type": "consolidation",
-                        "description": "Consolidate related memories",
-                        "interval_days": 3,
-                        "last_run": None
-                    },
-                    {
-                        "type": "decay",
-                        "description": "Apply memory decay to old memories",
-                        "interval_days": 7,
-                        "last_run": None
-                    },
-                    {
-                        "type": "schema_update",
-                        "description": "Update memory schemas based on new experiences",
-                        "interval_days": 5,
-                        "last_run": None
-                    },
-                    {
-                        "type": "mask_update",
-                        "description": "Evolve mask integrity based on interactions",
-                        "interval_days": 2,
-                        "last_run": None
-                    }
-                ]
-                
-                insert_query = """
-                    INSERT INTO MemoryMaintenanceSchedule (
-                        user_id, conversation_id, entity_type, entity_id,
-                        maintenance_schedule, next_maintenance_date
-                    )
-                    VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP + INTERVAL '1 day')
-                """
-                
-                await conn.execute(
-                    insert_query,
-                    user_id, conversation_id, "npc", npc_id, json.dumps(maintenance_types)
-                )
-                
-                # Log canonical event
-                await canon.log_canonical_event(
-                    ctx, conn,
-                    f"Memory maintenance scheduled for NPC {npc_id}",
-                    tags=["memory", "maintenance", "schedule"],
-                    significance=2
-                )
-            
-            return {
-                "maintenance_scheduled": True,
-                "maintenance_types": len(maintenance_types)
-            }
-        except Exception as e:
-            logging.error(f"Error scheduling memory maintenance for NPC {npc_id}: {e}")
-            return {"error": str(e)}
