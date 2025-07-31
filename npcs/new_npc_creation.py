@@ -506,7 +506,9 @@ class NPCCreationHandler:
                         output_info=EnvironmentGuardrailOutput(
                             is_valid=False, 
                             reasoning="Environment description is too short for effective NPC creation"
-                        )
+                        ),
+                        tripwire_triggered=True  # Add missing comma and parameter
+                    )
                 # Check for required elements
                 required_elements = ["setting", "environment", "world", "location"]
                 if not any(element in input_str.lower() for element in required_elements):
