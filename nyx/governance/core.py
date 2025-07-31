@@ -58,7 +58,6 @@ from utils.caching import CACHE_TTL
 from db.connection import get_db_connection_context
 
 # Import LLM access from chatgpt_integration
-from logic.chatgpt_integration import get_async_openai_client
 
 # Try to import Assistant type for type hints
 try:
@@ -981,6 +980,7 @@ class NyxUnifiedGovernor(
 
     async def _get_openai_client(self):
         """Get or create the OpenAI client using chatgpt_integration."""
+        from logic.chatgpt_integration import get_async_openai_client
         if self._openai_client is None:
             self._openai_client = get_async_openai_client()
         return self._openai_client
