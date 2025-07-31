@@ -1,7 +1,7 @@
 # story_templates/moth/story_initializer.py
 """
 Complete story initialization system for The Queen of Thorns
-Refactored with proper canon integration and governance approval
+Enhanced for unified sandbox with dynamic cast, episodes, and proximity system
 """
 
 import logging
@@ -13,10 +13,12 @@ import textwrap
 from typing import Dict, Any, List, Optional, Tuple, TypeVar, Union
 from datetime import datetime
 from functools import wraps
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pydantic import BaseModel, Field, ValidationError
 from contextlib import asynccontextmanager
 import os
+from uuid import uuid4
+from enum import Enum
 
 from npcs.new_npc_creation import NPCCreationHandler
 from db.connection import get_db_connection_context
@@ -36,7 +38,8 @@ from nyx.governance import AgentType
 from npcs.preset_npc_handler import PresetNPCHandler
 from story_templates.moth.lore.world_lore_manager import (
     SFBayQueenOfThornsPreset,
-    QueenOfThornsConsistencyGuide
+    QueenOfThornsConsistencyGuide,
+    SFLocalLore
 )
 from logic.chatgpt_integration import get_async_openai_client
 from embedding.vector_store import generate_embedding
@@ -49,6 +52,7 @@ _DEFAULT_MEMORY_MODEL = os.getenv("OPENAI_MEMORY_MODEL", "gpt-4o-mini")
 _DEFAULT_ATMOSPHERE_MODEL = os.getenv("OPENAI_ATMOSPHERE_MODEL", "gpt-4o-mini")
 _DEFAULT_LOCATION_MODEL = os.getenv("OPENAI_LOCATION_MODEL", "gpt-4o-mini")
 _DEFAULT_POETRY_MODEL = os.getenv("OPENAI_POETRY_MODEL", "gpt-4o-mini")
+_DEFAULT_EPISODE_MODEL = os.getenv("OPENAI_EPISODE_MODEL", "gpt-4o-mini")
 
 # Performance settings
 MAX_CONCURRENT_GPT_CALLS = int(os.getenv("MAX_CONCURRENT_GPT_CALLS", "3"))
@@ -58,6 +62,13 @@ DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
 
 # Semantic similarity threshold for duplicate detection
 SIMILARITY_THRESHOLD = 0.85
+
+# Proximity states from story_runner
+class Proximity(str, Enum):
+    TOGETHER = "together"
+    SAME_VENUE = "same-venue" 
+    DIFFERENT_VENUE = "different-venue"
+    OFFSCREEN = "offscreen"
 
 # Pydantic models for response validation
 class LoreData(BaseModel):
@@ -86,6 +97,19 @@ class AtmosphereData(BaseModel):
     introduction: str = Field(..., min_length=200, max_length=1500)
     atmosphere: Dict[str, str] = Field(default_factory=dict)
     hidden_elements: List[str] = Field(default_factory=list, max_items=5)
+
+class EpisodeGeneration(BaseModel):
+    """Model for generating starter episodes"""
+    episodes: List[Dict[str, Any]] = Field(..., max_items=5)
+    
+class QueenScheduleInit(BaseModel):
+    """Initial Queen schedule"""
+    location: str
+    activity: str
+    mood: str
+    available_for: List[str]
+    next_transition: str
+    join_preference: str = "neutral"
 
 # Custom exceptions
 class CanonError(Exception):
@@ -378,14 +402,14 @@ class CanonIntegrationService:
         )
 
 class QueenOfThornsStoryInitializer:
-    """Enhanced story initialization with proper canon and governance integration"""
+    """Enhanced story initialization with unified sandbox support"""
     
     @staticmethod
     async def initialize_story(
         ctx, user_id: int, conversation_id: int, dynamic: bool = True
     ) -> Dict[str, Any]:
         """
-        Initialize the complete story with proper canon integration.
+        Initialize the complete story with unified sandbox features.
         
         Args:
             ctx: Context object
@@ -394,7 +418,7 @@ class QueenOfThornsStoryInitializer:
             dynamic: Whether to use dynamic GPT generation (False for tests)
         """
         try:
-            logger.info(f"Initializing Queen of Thorns story for user {user_id} (dynamic={dynamic})")
+            logger.info(f"Initializing Queen of Thorns unified sandbox for user {user_id} (dynamic={dynamic})")
             
             # Ensure canonical context
             canon_ctx = CanonicalContext.from_object(ctx)
@@ -451,30 +475,66 @@ class QueenOfThornsStoryInitializer:
                 canon_ctx, user_id, conversation_id, lilith_id, support_npc_ids
             )
             
-            # Phase 5: Initialize story systems
-            logger.info("Phase 5: Initializing story systems")
-            await QueenOfThornsStoryInitializer._initialize_story_state(
-                canon_ctx, user_id, conversation_id, lilith_id
+            # Phase 4.5: Initialize dynamic cast system
+            logger.info("Phase 4.5: Initializing dynamic cast")
+            npc_traits = await QueenOfThornsStoryInitializer._initialize_npc_traits_system(
+                canon_ctx, user_id, conversation_id, lilith_id, support_npc_ids
+            )
+            
+            # Phase 4.6: Create starter episodes
+            logger.info("Phase 4.6: Creating starter episodes")
+            if dynamic:
+                starter_episodes = await QueenOfThornsStoryInitializer._create_dynamic_starter_episodes(
+                    canon_ctx, user_id, conversation_id, location_ids
+                )
+            else:
+                starter_episodes = await QueenOfThornsStoryInitializer._create_base_starter_episodes(
+                    canon_ctx, user_id, conversation_id, location_ids
+                )
+            
+            # Phase 5: Initialize story systems with enhanced state
+            logger.info("Phase 5: Initializing enhanced story systems")
+            await QueenOfThornsStoryInitializer._initialize_enhanced_story_state(
+                canon_ctx, user_id, conversation_id, lilith_id, npc_traits, starter_episodes
             )
             
             await QueenOfThornsStoryInitializer._setup_special_mechanics(
                 canon_ctx, user_id, conversation_id, lilith_id
             )
             
-            await QueenOfThornsStoryInitializer._initialize_network_systems(
+            await QueenOfThornsStoryInitializer._initialize_enhanced_network_systems(
                 canon_ctx, user_id, conversation_id, lilith_id
             )
             
-            # Phase 6: Set atmosphere
+            # Initialize Queen's schedule
+            queen_schedule = await QueenOfThornsStoryInitializer._initialize_queen_schedule(
+                canon_ctx, user_id, conversation_id, dynamic
+            )
+            
+            # Phase 6: Set atmosphere with memory shards
             logger.info("Phase 6: Setting atmosphere")
+            atmosphere_text = None
+            initial_shards = []
             if dynamic:
-                await QueenOfThornsStoryInitializer._set_dynamic_atmosphere_with_governance(
+                atmosphere_result = await QueenOfThornsStoryInitializer._set_dynamic_atmosphere_with_governance(
                     canon_ctx, user_id, conversation_id
+                )
+                atmosphere_text = atmosphere_result.get('introduction_text')
+                initial_shards = await QueenOfThornsStoryInitializer._create_initial_memory_shards(
+                    canon_ctx, user_id, conversation_id, atmosphere_text
                 )
             else:
-                await QueenOfThornsStoryInitializer._set_base_atmosphere(
+                atmosphere_text = await QueenOfThornsStoryInitializer._set_base_atmosphere(
                     canon_ctx, user_id, conversation_id
                 )
+                initial_shards = await QueenOfThornsStoryInitializer._create_initial_memory_shards(
+                    canon_ctx, user_id, conversation_id, atmosphere_text
+                )
+            
+            # Store initial memory shards
+            await QueenOfThornsStoryInitializer._store_initial_memory_shards(
+                canon_ctx, user_id, conversation_id, initial_shards
+            )
             
             # Get metrics if using dynamic generation
             metrics_summary = {}
@@ -493,7 +553,14 @@ class QueenOfThornsStoryInitializer:
                 "base_canon_result": base_result,
                 "dynamic": dynamic,
                 "metrics": metrics_summary,
-                "message": f"Queen of Thorns story initialized {'dynamically' if dynamic else 'statically'} with full canon integration"
+                # Enhanced fields for unified sandbox
+                "starter_episodes": len(starter_episodes),
+                "cast_size": len(npc_traits),
+                "initial_proximity": Proximity.TOGETHER.value,
+                "current_spotlight": "Lilith Ravencroft",
+                "queen_schedule": queen_schedule,
+                "initial_memory_shards": len(initial_shards),
+                "message": f"Queen of Thorns unified sandbox initialized {'dynamically' if dynamic else 'statically'}"
             }
             
         except Exception as e:
@@ -501,9 +568,611 @@ class QueenOfThornsStoryInitializer:
             return {
                 "status": "error",
                 "error": str(e),
-                "message": "Failed to initialize The Queen of Thorns story"
+                "message": "Failed to initialize The Queen of Thorns unified sandbox"
             }
     
+    @staticmethod
+    async def _initialize_npc_traits_system(
+        ctx: CanonicalContext, user_id: int, conversation_id: int,
+        lilith_id: int, support_npc_ids: List[int]
+    ) -> Dict[int, Dict[str, Any]]:
+        """Initialize the NPC trait tracking system for dynamic cast"""
+        npc_traits = {}
+        
+        # Initialize Lilith with high starting visibility as main character
+        npc_traits[lilith_id] = {
+            "npc_id": lilith_id,
+            "name": "Lilith Ravencroft",
+            "affinity": 50,  # Neutral start
+            "visibility": 100,  # Highly visible as main character
+            "canonical_tags": ["queen", "network", "main"],
+            "spotlight_score": 80.0,  # (50 * 0.6) + (100 * 0.4)
+            "last_seen": datetime.now().isoformat()
+        }
+        
+        # Get support NPC names
+        async with get_db_connection_context() as conn:
+            for npc_id in support_npc_ids:
+                npc_row = await conn.fetchrow(
+                    "SELECT npc_name FROM NPCStats WHERE npc_id = $1",
+                    npc_id
+                )
+                if npc_row:
+                    npc_traits[npc_id] = {
+                        "npc_id": npc_id,
+                        "name": npc_row['npc_name'],
+                        "affinity": 0,  # Neutral
+                        "visibility": 20,  # Some initial visibility
+                        "canonical_tags": ["support", "network"],
+                        "spotlight_score": 8.0,  # (0 * 0.6) + (20 * 0.4)
+                        "last_seen": datetime.now().isoformat()
+                    }
+        
+        logger.info(f"Initialized NPC trait system with {len(npc_traits)} characters")
+        return npc_traits
+    
+    @staticmethod
+    async def _create_dynamic_starter_episodes(
+        ctx: CanonicalContext, user_id: int, conversation_id: int,
+        location_ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Create dynamic starter episodes using GPT"""
+        service = GPTService()
+        
+        system_prompt = """You create starter episodes for a slice-of-life supernatural story.
+Episodes should:
+- Be grounded in daily San Francisco life with subtle supernatural hints
+- Vary in stakes (low/medium/high) and Lilith involvement
+- Include specific locations and potential cast members
+- Feel like natural story hooks, not forced quests
+Keep them open-ended and atmospheric."""
+
+        # Get location names for context
+        location_names = []
+        async with get_db_connection_context() as conn:
+            for loc_id in location_ids[:3]:
+                name = await conn.fetchval(
+                    "SELECT location_name FROM Locations WHERE id = $1",
+                    loc_id
+                )
+                if name:
+                    location_names.append(name)
+
+        user_prompt = f"""Create 3-4 starter episodes for Queen of Thorns.
+Available locations: {location_names}
+Time: Evening in San Francisco
+Player is new to the Velvet Sanctum
+Lilith is cautiously interested
+
+Generate varied episodes with different moods and stakes."""
+
+        try:
+            result = await service.call_with_validation(
+                model=_DEFAULT_EPISODE_MODEL,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=EpisodeGeneration,
+                temperature=0.8
+            )
+            
+            # Process and add IDs
+            episodes = []
+            for ep_data in result.episodes:
+                episode = {
+                    "id": str(uuid4()),
+                    "created_at": datetime.now().isoformat(),
+                    "last_active": datetime.now().isoformat(),
+                    "progress": 0,
+                    "cast": [],  # Will be populated as NPCs join
+                    **ep_data
+                }
+                episodes.append(episode)
+            
+            return episodes
+            
+        except Exception as e:
+            logger.error(f"Error creating dynamic episodes: {e}")
+            # Fallback to base episodes
+            return await QueenOfThornsStoryInitializer._create_base_starter_episodes(
+                ctx, user_id, conversation_id, location_ids
+            )
+    
+    @staticmethod
+    async def _create_base_starter_episodes(
+        ctx: CanonicalContext, user_id: int, conversation_id: int,
+        location_ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Create static starter episodes for non-dynamic mode"""
+        starter_episodes = [
+            {
+                "id": str(uuid4()),
+                "premise": "The Rose Garden Café is unusually busy with tech workers today",
+                "stakes": "Potential recruitment opportunities, but also risk of exposure",
+                "open_threads": ["Assess the new faces", "Lily Chen seems nervous"],
+                "tags": ["slice-social", "network-adjacent", "low-stakes"],
+                "location_relevant": "Rose Garden Café",
+                "network_related": True,
+                "lilith_involvement": "interested",
+                "cast": [],
+                "progress": 0,
+                "created_at": datetime.now().isoformat(),
+                "last_active": datetime.now().isoformat()
+            },
+            {
+                "id": str(uuid4()),
+                "premise": "A new art installation in SOMA is drawing mysterious crowds at night",
+                "stakes": "Could be supernatural, could be mundane - worth investigating",
+                "open_threads": ["Visit after dark", "Ask locals about it"],
+                "tags": ["slice-mystery", "neighborhood", "optional"],
+                "location_relevant": "SOMA",
+                "network_related": False,
+                "lilith_involvement": "curious",
+                "cast": [],
+                "progress": 0,
+                "created_at": datetime.now().isoformat(),
+                "last_active": datetime.now().isoformat()
+            },
+            {
+                "id": str(uuid4()),
+                "premise": "Lilith mentioned wanting to check on 'an old friend' in the Marina",
+                "stakes": "Personal glimpse into her past, building trust",
+                "open_threads": ["Offer to accompany her", "Learn about this friend"],
+                "tags": ["slice-personal", "relationship", "queen-driven"],
+                "location_relevant": "Marina District",
+                "network_related": False,
+                "lilith_involvement": "central",
+                "cast": [],
+                "progress": 0,
+                "created_at": datetime.now().isoformat(),
+                "last_active": datetime.now().isoformat()
+            }
+        ]
+        
+        return starter_episodes
+    
+    @staticmethod
+    async def _initialize_enhanced_story_state(
+        ctx: CanonicalContext, user_id: int, conversation_id: int, 
+        lilith_id: int, npc_traits: Dict[int, Dict[str, Any]],
+        starter_episodes: List[Dict[str, Any]]
+    ):
+        """Initialize story state with enhanced unified sandbox tracking"""
+        
+        current_time = datetime.now()
+        
+        story_flags = {
+            # Core tracking from original
+            "trust_level": 0,
+            "network_awareness": 0,
+            "lilith_mask": "Porcelain Goddess",
+            "completed_beats": [],
+            
+            # Enhanced unified sandbox fields
+            "lilith_npc_id": lilith_id,
+            "current_spotlight_npc": lilith_id,
+            "proximity": Proximity.TOGETHER.value,
+            "relationship_tension": 0,
+            "lilith_affinity": 50,
+            "information_layer": "public",
+            "player_rank": "outsider",
+            
+            # Dynamic cast system
+            "npc_traits": npc_traits,
+            
+            # Episode management
+            "active_episodes": starter_episodes,
+            "dormant_episodes": [],
+            "completed_episodes": [],
+            "spotlight_episode": starter_episodes[0]["id"] if starter_episodes else None,
+            
+            # Queen state
+            "queen_goals": {
+                "immediate": ["Assess the new player", "Maintain sanctuary security"],
+                "ongoing": ["Protect the network", "Save the vulnerable", "Transform predators"],
+                "relationship": ["Build trust carefully", "Test boundaries", "Hide vulnerability"]
+            },
+            
+            # Tracking
+            "last_proximity_change": current_time.isoformat(),
+            "queen_presence_log": [{
+                "timestamp": current_time.isoformat(),
+                "event": "story_start",
+                "proximity": Proximity.TOGETHER.value
+            }],
+            "memory_shards": [],
+            
+            # Simulation state
+            "last_simulation_run": None,
+            "last_schedule_update": current_time.isoformat(),
+            "last_thread_index_run": None,
+            "last_visibility_decay": None,
+            
+            # Neighborhood state
+            "neighborhood_pulse": {
+                "bay_mood": "normal",
+                "weather": "foggy",
+                "local_events": [],
+                "last_updated": current_time.isoformat()
+            }
+        }
+        
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO story_states (
+                    user_id, conversation_id, story_id,
+                    current_act, current_beat, progress,
+                    story_flags, main_npc_id
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (user_id, conversation_id, story_id)
+                DO UPDATE SET 
+                    story_flags = EXCLUDED.story_flags,
+                    main_npc_id = EXCLUDED.main_npc_id,
+                    updated_at = NOW()
+            """, 
+            user_id, conversation_id, "queen_of_thorns",
+            0, None, 0,  # No acts/beats in unified sandbox
+            json.dumps(story_flags),
+            lilith_id)
+        
+        logger.info("Enhanced story state initialized for unified sandbox")
+    
+    @staticmethod
+    async def _initialize_queen_schedule(
+        ctx: CanonicalContext, user_id: int, conversation_id: int,
+        dynamic: bool = True
+    ) -> Dict[str, Any]:
+        """Initialize Lilith's schedule"""
+        current_hour = datetime.now().hour
+        current_day = datetime.now().strftime("%A")
+        
+        if dynamic:
+            service = GPTService()
+            
+            system_prompt = """You create Lilith Ravencroft's initial schedule.
+She balances: running the Velvet Sanctum, network operations, personal time.
+Consider time of day and her various roles."""
+
+            user_prompt = f"""Generate Lilith's current activity:
+Day: {current_day}
+Hour: {current_hour}:00
+Context: Player just arrived at the story
+
+What is she doing right now?"""
+
+            try:
+                result = await service.call_with_validation(
+                    model=_DEFAULT_LORE_MODEL,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=QueenScheduleInit,
+                    temperature=0.6
+                )
+                
+                return result.dict()
+                
+            except Exception as e:
+                logger.error(f"Error generating dynamic schedule: {e}")
+        
+        # Static schedule fallback
+        if 6 <= current_hour < 10:
+            return {
+                "location": "Private Chambers",
+                "activity": "Morning routine and correspondence",
+                "mood": "contemplative",
+                "available_for": ["intimate conversation", "planning"],
+                "next_transition": "2 hours",
+                "join_preference": "neutral"
+            }
+        elif 10 <= current_hour < 14:
+            return {
+                "location": "Rose Garden Café",
+                "activity": "Observing potential recruits",
+                "mood": "watchful",
+                "available_for": ["public interaction", "coded conversation"],
+                "next_transition": "4 hours",
+                "join_preference": "professional"
+            }
+        elif 14 <= current_hour < 18:
+            return {
+                "location": "Various (Network Business)",
+                "activity": "Checking on operations",
+                "mood": "focused",
+                "available_for": ["network talk", "accompanying"],
+                "next_transition": "4 hours",
+                "join_preference": "neutral"
+            }
+        elif 18 <= current_hour < 22:
+            return {
+                "location": "Velvet Sanctum",
+                "activity": "Preparing for evening sessions",
+                "mood": "dominant",
+                "available_for": ["observation", "initial assessment"],
+                "next_transition": "4 hours",
+                "join_preference": "evaluating"
+            }
+        else:
+            return {
+                "location": "Private Chambers",
+                "activity": "Unwinding after the night",
+                "mood": "vulnerable",
+                "available_for": ["deep conversation", "intimacy"],
+                "next_transition": "until morning",
+                "join_preference": "selective"
+            }
+    
+    @staticmethod
+    async def _initialize_enhanced_network_systems(
+        ctx: CanonicalContext, user_id: int, conversation_id: int, lilith_id: int
+    ):
+        """Initialize enhanced network systems for unified sandbox"""
+        
+        network_data = {
+            "organization_names": ["the network", "the garden"],
+            "structure": {
+                "queen_of_thorns": lilith_id,
+                "rose_council": ["Victoria Chen", "Judge Thornfield", "Dr. Sarah Martinez", 
+                                "Marcus Sterling", "3 others"],
+                "ranks": ["Seedlings", "Roses", "Thorns", "Gardeners"]
+            },
+            "statistics": {
+                "saved_this_month": random.randint(3, 8),
+                "active_operations": random.randint(3, 6),
+                "threat_level": "moderate",
+                "total_members": random.randint(150, 250)
+            },
+            "current_operations": [
+                {
+                    "id": f"op_kozlov_{uuid4().hex[:8]}",
+                    "type": "surveillance",
+                    "target": "Kozlov trafficking ring",
+                    "status": "active",
+                    "priority": "high",
+                    "assigned_to": ["Thorns Team Alpha"]
+                },
+                {
+                    "id": f"op_safehouse_{uuid4().hex[:8]}",
+                    "type": "protection",
+                    "target": "Marina safehouse",
+                    "status": "ongoing",
+                    "priority": "medium",
+                    "assigned_to": ["Rose Guard"]
+                },
+                {
+                    "id": f"op_recruit_{uuid4().hex[:8]}",
+                    "type": "recruitment",
+                    "target": "Tech sector allies",
+                    "status": "planning",
+                    "priority": "low",
+                    "assigned_to": ["Victoria Chen"]
+                }
+            ],
+            # Enhanced tracking for unified sandbox
+            "exposure_level": 0,  # 0-100, how exposed the network is
+            "federal_heat": 20,   # 0-100, law enforcement attention
+            "ally_strength": 60,  # 0-100, strength of allied organizations
+            "resource_pool": 75,  # 0-100, available resources
+            "kozlov_activity": 50,  # 0-100, enemy activity level
+            "safe_houses": {
+                "marina": {"status": "secure", "capacity": 12, "occupied": 3},
+                "mission": {"status": "secure", "capacity": 8, "occupied": 5},
+                "soma": {"status": "compromised", "capacity": 6, "occupied": 0}
+            }
+        }
+        
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO network_state (user_id, conversation_id, network_data)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, conversation_id)
+                DO UPDATE SET network_data = EXCLUDED.network_data
+            """,
+            user_id, conversation_id, json.dumps(network_data))
+        
+        logger.info("Enhanced network state initialized")
+    
+    @staticmethod
+    async def _create_initial_memory_shards(
+        ctx: CanonicalContext, user_id: int, conversation_id: int,
+        atmosphere_text: str
+    ) -> List[Dict[str, Any]]:
+        """Create initial memory shards in the new format"""
+        
+        current_epoch = int(datetime.now().timestamp())
+        
+        initial_shards = [
+            {
+                "text": atmosphere_text,
+                "actors": ["Player", "Environment", "Lilith"],
+                "tags": ["story_start", "atmosphere", "first_impression"],
+                "importance": 80,
+                "epoch": current_epoch
+            },
+            {
+                "text": "You descend into the Velvet Sanctum, drawn by whispers of transformation.",
+                "actors": ["Player"],
+                "tags": ["arrival", "sanctuary", "threshold"],
+                "importance": 70,
+                "epoch": current_epoch + 1
+            },
+            {
+                "text": "Lilith Ravencroft watches from her throne, assessing, calculating.",
+                "actors": ["Lilith", "Player"],
+                "tags": ["first_meeting", "assessment", "power_dynamic"],
+                "importance": 75,
+                "epoch": current_epoch + 2
+            }
+        ]
+        
+        return initial_shards
+    
+    @staticmethod
+    async def _store_initial_memory_shards(
+        ctx: CanonicalContext, user_id: int, conversation_id: int,
+        shards: List[Dict[str, Any]]
+    ):
+        """Store initial memory shards in story state"""
+        
+        async with get_db_connection_context() as conn:
+            # Get current story flags
+            current_flags = await conn.fetchval(
+                """
+                SELECT story_flags FROM story_states
+                WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                """,
+                user_id, conversation_id, "queen_of_thorns"
+            )
+            
+            if current_flags:
+                flags_data = json.loads(current_flags)
+                flags_data["memory_shards"] = shards
+                
+                await conn.execute(
+                    """
+                    UPDATE story_states
+                    SET story_flags = $4
+                    WHERE user_id = $1 AND conversation_id = $2 AND story_id = $3
+                    """,
+                    user_id, conversation_id, "queen_of_thorns",
+                    json.dumps(flags_data)
+                )
+        
+        logger.info(f"Stored {len(shards)} initial memory shards")
+    
+    @staticmethod
+    async def _set_dynamic_atmosphere_with_governance(
+        ctx: CanonicalContext, user_id: int, conversation_id: int
+    ) -> Dict[str, Any]:
+        """Generate and set atmospheric introduction through governance"""
+        
+        service = GPTService()
+        
+        # Get contextual information
+        from datetime import datetime
+        import random
+        
+        current_time = datetime.now()
+        moon_phases = ["new moon", "waxing crescent", "first quarter", "waxing gibbous", 
+                      "full moon", "waning gibbous", "last quarter", "waning crescent"]
+        current_moon = moon_phases[current_time.day % 8]
+        weather_options = ["fog rolling in", "light rain", "clear night", "wind from the bay"]
+        current_weather = random.choice(weather_options)
+        
+        system_prompt = """You create immersive story atmospheres for dark supernatural narratives.
+Focus on sensory details, hidden dangers, and the promise of transformation.
+The atmosphere should feel noir, gothic, and slightly dangerous."""
+
+        user_prompt = f"""Create the opening atmosphere for The Queen of Thorns:
+Setting: SoMa underground, San Francisco after midnight
+Moon phase: {current_moon}
+Weather: {current_weather}
+Venue: The Velvet Sanctum (hidden BDSM club)
+Theme: Power, transformation, hidden networks
+
+Write an atmospheric introduction (3-4 paragraphs)."""
+
+        try:
+            atmosphere = await service.call_with_validation(
+                model=_DEFAULT_ATMOSPHERE_MODEL,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=AtmosphereData,
+                temperature=0.8
+            )
+            
+            # Store atmosphere through governance
+            atmosphere_data = {
+                "tone": "noir_gothic",
+                "moon_phase": current_moon,
+                "weather": current_weather,
+                "feeling": atmosphere.atmosphere.get("feeling", "mysterious"),
+                "hidden_elements": atmosphere.hidden_elements
+            }
+            
+            await propose_canonical_change(
+                ctx=ctx,
+                entity_type="CurrentRoleplay",
+                entity_identifier={"key": "story_atmosphere"},
+                updates={"value": json.dumps(atmosphere_data)},
+                reason="Setting dynamic story atmosphere",
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="story_initializer"
+            )
+            
+            # Store introduction as memory
+            await remember_with_governance(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                entity_type="player",
+                entity_id=user_id,
+                memory_text=atmosphere.introduction,
+                importance="high",
+                emotional=True,
+                tags=["story_start", "atmosphere", "dynamic"]
+            )
+            
+            return {
+                "introduction_text": atmosphere.introduction,
+                "atmosphere_data": atmosphere_data
+            }
+            
+        except Exception as e:
+            logger.error(f"Error setting dynamic atmosphere: {e}")
+            text = await QueenOfThornsStoryInitializer._set_base_atmosphere(
+                ctx, user_id, conversation_id
+            )
+            return {"introduction_text": text, "atmosphere_data": {}}
+    
+    @staticmethod
+    async def _set_base_atmosphere(
+        ctx: CanonicalContext, user_id: int, conversation_id: int
+    ) -> str:
+        """Set basic atmosphere without dynamic generation"""
+        
+        atmosphere_text = """
+The fog rolls in from the bay, thick and consuming, as you descend the unmarked stairs in SoMa. 
+Each step takes you further from the sanitized tech world above and deeper into something ancient 
+wearing modern clothes. The Velvet Sanctum waits below, a temple where power is worshipped in 
+its truest forms. Here, CEOs kneel and survivors become queens. The scent of leather and roses 
+mingles with something darker - the perfume of secrets and transformation.
+
+You've heard whispers of this place, of the woman who rules it. They say she saves the lost 
+and breaks the proud. They say she cannot speak three simple words. They say many things, 
+but tonight you'll learn the truth.
+
+The door opens before you knock. It always does for those who are meant to enter.
+"""
+        
+        # Store atmosphere
+        await propose_canonical_change(
+            ctx=ctx,
+            entity_type="CurrentRoleplay",
+            entity_identifier={"key": "story_atmosphere"},
+            updates={"value": json.dumps({
+                "tone": "noir_gothic",
+                "feeling": "anticipation",
+                "hidden_elements": ["The door knows who belongs"]
+            })},
+            reason="Setting initial story atmosphere",
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="story_initializer"
+        )
+        
+        # Store as memory
+        await remember_with_governance(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            entity_type="player",
+            entity_id=user_id,
+            memory_text=atmosphere_text,
+            importance="high",
+            emotional=True,
+            tags=["story_start", "atmosphere", "static"]
+        )
+        
+        return atmosphere_text
+    
+    # Keep all existing methods from original implementation...
     @staticmethod
     async def _establish_base_canon(
         ctx: CanonicalContext, user_id: int, conversation_id: int
@@ -628,6 +1297,7 @@ class QueenOfThornsStoryInitializer:
             "message": "Base canon established from preset lore"
         }
     
+    # Keep all other existing methods...
     @staticmethod
     async def _create_enhanced_locations(
         ctx: CanonicalContext, user_id: int, conversation_id: int
@@ -1058,85 +1728,53 @@ Generate unique personality and backstory details."""
                 logger.error(f"Error creating relationship: {e}")
     
     @staticmethod
-    async def _set_dynamic_atmosphere_with_governance(
-        ctx: CanonicalContext, user_id: int, conversation_id: int
+    async def _setup_special_mechanics(
+        ctx: CanonicalContext, user_id: int, conversation_id: int, lilith_id: int
     ):
-        """Generate and set atmospheric introduction through governance"""
+        """Set up special story mechanics"""
         
-        service = GPTService()
+        # Mask system
+        mask_data = {
+            "available_masks": [
+                {
+                    "name": "Porcelain Goddess",
+                    "trust_required": 0,
+                    "description": "Perfect, cold, untouchable divinity"
+                },
+                {
+                    "name": "Leather Predator",
+                    "trust_required": 30,
+                    "description": "Dangerous, hunting, protective fury"
+                },
+                {
+                    "name": "Lace Vulnerability",
+                    "trust_required": 60,
+                    "description": "Soft edges barely containing sharp pain"
+                },
+                {
+                    "name": "No Mask",
+                    "trust_required": 85,
+                    "description": "The broken woman beneath"
+                }
+            ],
+            "current_mask": "Porcelain Goddess",
+            "mask_integrity": 100
+        }
         
-        # Get contextual information
-        from datetime import datetime
-        import random
-        
-        current_time = datetime.now()
-        moon_phases = ["new moon", "waxing crescent", "first quarter", "waxing gibbous", 
-                      "full moon", "waning gibbous", "last quarter", "waning crescent"]
-        current_moon = moon_phases[current_time.day % 8]
-        weather_options = ["fog rolling in", "light rain", "clear night", "wind from the bay"]
-        current_weather = random.choice(weather_options)
-        
-        system_prompt = """You create immersive story atmospheres for dark supernatural narratives.
-Focus on sensory details, hidden dangers, and the promise of transformation.
-The atmosphere should feel noir, gothic, and slightly dangerous."""
-
-        user_prompt = f"""Create the opening atmosphere for The Queen of Thorns:
-Setting: SoMa underground, San Francisco after midnight
-Moon phase: {current_moon}
-Weather: {current_weather}
-Venue: The Velvet Sanctum (hidden BDSM club)
-Theme: Power, transformation, hidden networks
-
-Write an atmospheric introduction (3-4 paragraphs)."""
-
-        try:
-            atmosphere = await service.call_with_validation(
-                model=_DEFAULT_ATMOSPHERE_MODEL,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                response_model=AtmosphereData,
-                temperature=0.8
-            )
-            
-            # Store atmosphere through governance
-            atmosphere_data = {
-                "tone": "noir_gothic",
-                "moon_phase": current_moon,
-                "weather": current_weather,
-                "feeling": atmosphere.atmosphere.get("feeling", "mysterious"),
-                "hidden_elements": atmosphere.hidden_elements
-            }
-            
-            await propose_canonical_change(
-                ctx=ctx,
-                entity_type="CurrentRoleplay",
-                entity_identifier={"key": "story_atmosphere"},
-                updates={"value": json.dumps(atmosphere_data)},
-                reason="Setting dynamic story atmosphere",
-                agent_type=AgentType.NARRATIVE_CRAFTER,
-                agent_id="story_initializer"
-            )
-            
-            # Store introduction as memory
-            await remember_with_governance(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                entity_type="player",
-                entity_id=user_id,
-                memory_text=atmosphere.introduction,
-                importance="high",
-                emotional=True,
-                tags=["story_start", "atmosphere", "dynamic"]
-            )
-            
-        except Exception as e:
-            logger.error(f"Error setting dynamic atmosphere: {e}")
-            await QueenOfThornsStoryInitializer._set_base_atmosphere(
-                ctx, user_id, conversation_id
-            )
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO npc_special_mechanics (
+                    user_id, conversation_id, npc_id,
+                    mechanic_type, mechanic_data
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (user_id, conversation_id, npc_id, mechanic_type)
+                DO UPDATE SET mechanic_data = EXCLUDED.mechanic_data
+            """,
+            user_id, conversation_id, lilith_id,
+            "mask_system", json.dumps(mask_data))
     
-    # Base/static creation methods (fallbacks)
-    
+    # Keep all base/static creation methods as fallbacks
     @staticmethod
     async def _create_base_locations(
         ctx: CanonicalContext, user_id: int, conversation_id: int
@@ -1246,175 +1884,8 @@ Write an atmospheric introduction (3-4 paragraphs)."""
                 npc_ids.append(result.get("existing_id"))
         
         return npc_ids
-    
-    @staticmethod
-    async def _set_base_atmosphere(
-        ctx: CanonicalContext, user_id: int, conversation_id: int
-    ):
-        """Set basic atmosphere without dynamic generation"""
-        
-        atmosphere_text = """
-The fog rolls in from the bay, thick and consuming, as you descend the unmarked stairs in SoMa. 
-Each step takes you further from the sanitized tech world above and deeper into something ancient 
-wearing modern clothes. The Velvet Sanctum waits below, a temple where power is worshipped in 
-its truest forms. Here, CEOs kneel and survivors become queens. The scent of leather and roses 
-mingles with something darker - the perfume of secrets and transformation.
 
-You've heard whispers of this place, of the woman who rules it. They say she saves the lost 
-and breaks the proud. They say she cannot speak three simple words. They say many things, 
-but tonight you'll learn the truth.
-
-The door opens before you knock. It always does for those who are meant to enter.
-"""
-        
-        # Store atmosphere
-        await propose_canonical_change(
-            ctx=ctx,
-            entity_type="CurrentRoleplay",
-            entity_identifier={"key": "story_atmosphere"},
-            updates={"value": json.dumps({
-                "tone": "noir_gothic",
-                "feeling": "anticipation",
-                "hidden_elements": ["The door knows who belongs"]
-            })},
-            reason="Setting initial story atmosphere",
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="story_initializer"
-        )
-        
-        # Store as memory
-        await remember_with_governance(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            entity_type="player",
-            entity_id=user_id,
-            memory_text=atmosphere_text,
-            importance="high",
-            emotional=True,
-            tags=["story_start", "atmosphere", "static"]
-        )
-    
-    @staticmethod
-    async def _initialize_story_state(
-        ctx: CanonicalContext, user_id: int, conversation_id: int, lilith_id: int
-    ):
-        """Initialize story state tracking"""
-        
-        async with get_db_connection_context() as conn:
-            await conn.execute("""
-                INSERT INTO story_states (
-                    user_id, conversation_id, story_id,
-                    current_act, current_beat, progress,
-                    story_flags, main_npc_id
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                ON CONFLICT (user_id, conversation_id, story_id)
-                DO UPDATE SET 
-                    current_act = EXCLUDED.current_act,
-                    main_npc_id = EXCLUDED.main_npc_id
-            """, 
-            user_id, conversation_id, "queen_of_thorns",
-            1, None, 0,
-            json.dumps({
-                "trust_level": 0,
-                "network_awareness": 0,
-                "lilith_mask": "Porcelain Goddess",
-                "completed_beats": []
-            }),
-            lilith_id)
-    
-    @staticmethod
-    async def _setup_special_mechanics(
-        ctx: CanonicalContext, user_id: int, conversation_id: int, lilith_id: int
-    ):
-        """Set up special story mechanics"""
-        
-        # Mask system
-        mask_data = {
-            "available_masks": [
-                {
-                    "name": "Porcelain Goddess",
-                    "trust_required": 0,
-                    "description": "Perfect, cold, untouchable divinity"
-                },
-                {
-                    "name": "Leather Predator",
-                    "trust_required": 30,
-                    "description": "Dangerous, hunting, protective fury"
-                },
-                {
-                    "name": "Lace Vulnerability",
-                    "trust_required": 60,
-                    "description": "Soft edges barely containing sharp pain"
-                },
-                {
-                    "name": "No Mask",
-                    "trust_required": 85,
-                    "description": "The broken woman beneath"
-                }
-            ],
-            "current_mask": "Porcelain Goddess",
-            "mask_integrity": 100
-        }
-        
-        async with get_db_connection_context() as conn:
-            await conn.execute("""
-                INSERT INTO npc_special_mechanics (
-                    user_id, conversation_id, npc_id,
-                    mechanic_type, mechanic_data
-                )
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (user_id, conversation_id, npc_id, mechanic_type)
-                DO UPDATE SET mechanic_data = EXCLUDED.mechanic_data
-            """,
-            user_id, conversation_id, lilith_id,
-            "mask_system", json.dumps(mask_data))
-    
-    @staticmethod
-    async def _initialize_network_systems(
-        ctx: CanonicalContext, user_id: int, conversation_id: int, lilith_id: int
-    ):
-        """Initialize the shadow network systems"""
-        
-        network_data = {
-            "organization_names": ["the network", "the garden"],
-            "structure": {
-                "queen_of_thorns": lilith_id,
-                "rose_council": ["Victoria Chen", "Judge Thornfield", "5 others"],
-                "ranks": ["Seedlings", "Roses", "Thorns", "Gardeners"]
-            },
-            "statistics": {
-                "saved_this_month": random.randint(3, 8),
-                "active_operations": 4,
-                "threat_level": "moderate"
-            },
-            "current_operations": [
-                {
-                    "id": "op_kozlov_1",
-                    "type": "surveillance",
-                    "target": "Kozlov trafficking ring",
-                    "status": "active"
-                },
-                {
-                    "id": "op_safehouse_3",
-                    "type": "protection",
-                    "target": "Marina safehouse",
-                    "status": "ongoing"
-                }
-            ]
-        }
-        
-        async with get_db_connection_context() as conn:
-            await conn.execute("""
-                INSERT INTO network_state (user_id, conversation_id, network_data)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (user_id, conversation_id)
-                DO UPDATE SET network_data = EXCLUDED.network_data
-            """,
-            user_id, conversation_id, json.dumps(network_data))
-
-
-# Additional helper functions for story progression
+# Additional helper classes for story progression
 
 class QueenOfThornsStoryProgression:
     """Handles story progression with canon integration"""
