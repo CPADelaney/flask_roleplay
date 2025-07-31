@@ -13,6 +13,7 @@ from typing import Dict, List, Any, Optional
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 from npcs.npc_agent_system import NPCAgentSystem  # Your existing NPC system
 from db.connection import get_db_connection_context
+from logic.dynamic_relationships import OptimizedRelationshipManager
 
 from agents import Agent, function_tool, Runner, ModelSettings, trace
 
@@ -88,7 +89,7 @@ class NPCSystemBridge:
     
     async def get_relationship_links(self, npc_id: int) -> List[Dict[str, Any]]:
         """
-        Get relationship links between an NPC and the player.
+        Get relationship links between an NPC and the player using the new dynamic relationships system.
         
         Args:
             npc_id: NPC ID
@@ -98,33 +99,101 @@ class NPCSystemBridge:
         """
         links = []
         try:
-            async with get_db_connection_context() as conn:
-                rows = await conn.fetch("""
-                    SELECT link_id, link_type, link_level
-                    FROM SocialLinks
-                    WHERE user_id=$1 AND conversation_id=$2
-                    AND ((entity1_type='player' AND entity1_id=$3 AND entity2_type='npc' AND entity2_id=$4)
-                    OR (entity1_type='npc' AND entity1_id=$4 AND entity2_type='player' AND entity2_id=$3))
-                """, 
-                    self.user_id, self.conversation_id,
-                    self.user_id, npc_id
-                )
-                
-                for row in rows:
-                    links.append({
-                        "link_id": row['link_id'],
-                        "link_type": row['link_type'],
-                        "link_level": row['link_level']
-                    })
-                
-                return links
-                
+            # Use the new relationship manager
+            manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+            
+            # Get the relationship state between the NPC and player
+            state = await manager.get_relationship_state(
+                'npc', npc_id, 'player', self.user_id
+            )
+            
+            # Get a summary of the relationship
+            summary = state.to_summary()
+            
+            # Convert to the expected format
+            # Map the new multi-dimensional system to the old link format for compatibility
+            
+            # Calculate an overall "link level" from dimensions
+            # This is a weighted average of positive dimensions
+            positive_dimensions = {
+                'trust': state.dimensions.trust,
+                'respect': state.dimensions.respect,
+                'affection': state.dimensions.affection,
+                'intimacy': state.dimensions.intimacy,
+                'fascination': state.dimensions.fascination
+            }
+            
+            # Calculate weighted average (0-100 scale)
+            total_positive = sum(max(0, v) for v in positive_dimensions.values())
+            avg_positive = total_positive / len(positive_dimensions) if positive_dimensions else 0
+            
+            # Determine link type based on dominant dimensions
+            link_type = self._determine_link_type(state.dimensions)
+            
+            # Create link data in the expected format
+            link_data = {
+                "link_id": state.link_id,
+                "link_type": link_type,
+                "link_level": int(avg_positive),  # Convert to int for compatibility
+                # Additional data from the new system
+                "dimensions": summary['dimensions'],
+                "patterns": summary.get('patterns', []),
+                "archetypes": summary.get('archetypes', []),
+                "momentum": summary.get('momentum_magnitude', 0),
+                "duration_days": summary.get('duration_days', 0)
+            }
+            
+            links.append(link_data)
+            
+            return links
+            
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logging.error(f"DB Error getting relationship links: {db_err}", exc_info=True)
             return []
         except Exception as e:
             logging.error(f"Error getting relationship links: {e}", exc_info=True)
             return []
+    
+    def _determine_link_type(self, dimensions) -> str:
+        """
+        Determine the link type based on relationship dimensions.
+        
+        Args:
+            dimensions: RelationshipDimensions object
+            
+        Returns:
+            String representing the link type
+        """
+        # Analyze dimensions to determine the dominant relationship type
+        
+        # Check for hostile relationships
+        if dimensions.trust < -30 or dimensions.respect < -30:
+            return "hostile"
+        
+        # Check for dominant/submissive dynamics
+        if dimensions.influence > 50:
+            return "dominant"
+        elif dimensions.influence < -50:
+            return "submissive"
+        
+        # Check for romantic relationships
+        if dimensions.affection > 60 and dimensions.intimacy > 50:
+            return "romantic"
+        
+        # Check for friendly relationships
+        if dimensions.affection > 30 and dimensions.trust > 30:
+            return "friendly"
+        
+        # Check for professional relationships
+        if dimensions.respect > 50 and dimensions.trust > 30:
+            return "professional"
+        
+        # Check for dependent relationships
+        if dimensions.dependence > 60:
+            return "dependent"
+        
+        # Default to neutral
+        return "neutral"
     
     async def create_new_npc(self, environment_desc: str, day_names: List[str] = None) -> int:
         """
