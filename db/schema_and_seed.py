@@ -3438,6 +3438,86 @@ async def create_all_tables():
                 ON NyxMemories USING hnsw (embedding vector_cosine_ops)
                 WHERE embedding IS NOT NULL;
                 ''',
+
+                # ======================================
+                # PLAYER STAT VISIBILITY UPDATES
+                # ======================================
+                '''
+                ALTER TABLE PlayerStats
+                ADD COLUMN IF NOT EXISTS hp INTEGER DEFAULT 100,
+                ADD COLUMN IF NOT EXISTS max_hp INTEGER DEFAULT 100,
+                ADD COLUMN IF NOT EXISTS strength INTEGER DEFAULT 10,
+                ADD COLUMN IF NOT EXISTS endurance INTEGER DEFAULT 10,
+                ADD COLUMN IF NOT EXISTS agility INTEGER DEFAULT 10,
+                ADD COLUMN IF NOT EXISTS empathy INTEGER DEFAULT 10,
+                ADD COLUMN IF NOT EXISTS intelligence INTEGER DEFAULT 10,
+                ADD COLUMN IF NOT EXISTS stat_visibility JSONB DEFAULT '{}';
+                ''',
+                '''
+                UPDATE PlayerStats 
+                SET stat_visibility = jsonb_build_object(
+                    'corruption', false,
+                    'confidence', false,
+                    'willpower', false,
+                    'obedience', false,
+                    'dependency', false,
+                    'lust', false,
+                    'mental_resilience', false,
+                    'physical_endurance', false,
+                    'hp', true,
+                    'strength', true,
+                    'endurance', true,
+                    'agility', true,
+                    'empathy', true,
+                    'intelligence', true
+                )
+                WHERE stat_visibility = '{}' OR stat_visibility IS NULL;
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS StatMetadata (
+                    stat_name VARCHAR(50) PRIMARY KEY,
+                    display_name VARCHAR(100),
+                    description TEXT,
+                    is_visible BOOLEAN DEFAULT true,
+                    category VARCHAR(50),
+                    min_value INTEGER DEFAULT 0,
+                    max_value INTEGER DEFAULT 100,
+                    default_value INTEGER DEFAULT 10,
+                    display_order INTEGER DEFAULT 0
+                );
+                ''',
+                '''
+                INSERT INTO StatMetadata (stat_name, display_name, description, is_visible, category, min_value, max_value, default_value, display_order) VALUES
+                ('hp', 'HP', 'Current health points', true, 'visible', 0, 100, 100, 1),
+                ('max_hp', 'Max HP', 'Maximum health points', true, 'visible', 1, 999, 100, 2),
+                ('strength', 'Strength', 'Physical power for attacks and carrying capacity', true, 'visible', 1, 100, 10, 3),
+                ('endurance', 'Endurance', 'Stamina, pain tolerance, and defense. Higher values require more food', true, 'visible', 1, 100, 10, 4),
+                ('agility', 'Agility', 'Speed, reflexes, and dexterity', true, 'visible', 1, 100, 10, 5),
+                ('empathy', 'Empathy', 'Social intuition - reading people and situations', true, 'visible', 1, 100, 10, 6),
+                ('intelligence', 'Intelligence', 'Learning ability and problem solving', true, 'visible', 1, 100, 10, 7),
+                ('corruption', 'Corruption', 'Hidden measure of moral degradation', false, 'hidden', 0, 100, 10, 101),
+                ('confidence', 'Confidence', 'Hidden self-assurance level', false, 'hidden', 0, 100, 60, 102),
+                ('willpower', 'Willpower', 'Hidden resistance to control', false, 'hidden', 0, 100, 50, 103),
+                ('obedience', 'Obedience', 'Hidden compliance level', false, 'hidden', 0, 100, 20, 104),
+                ('dependency', 'Dependency', 'Hidden reliance on others', false, 'hidden', 0, 100, 10, 105),
+                ('lust', 'Lust', 'Hidden arousal and desire', false, 'hidden', 0, 100, 15, 106),
+                ('mental_resilience', 'Mental Resilience', 'Hidden psychological endurance', false, 'hidden', 0, 100, 55, 107),
+                ('physical_endurance', 'Physical Endurance (Old)', 'Legacy stat - migrated to Endurance', false, 'hidden', 0, 100, 40, 108)
+                ON CONFLICT (stat_name) DO UPDATE SET
+                    display_name = EXCLUDED.display_name,
+                    description = EXCLUDED.description,
+                    is_visible = EXCLUDED.is_visible,
+                    category = EXCLUDED.category,
+                    min_value = EXCLUDED.min_value,
+                    max_value = EXCLUDED.max_value,
+                    default_value = EXCLUDED.default_value,
+                    display_order = EXCLUDED.display_order;
+                ''',
+                '''
+                ALTER TABLE PlayerVitals
+                ADD COLUMN IF NOT EXISTS thirst INTEGER DEFAULT 100,
+                ADD COLUMN IF NOT EXISTS fatigue INTEGER DEFAULT 0;
+                ''',
                 
                 # ======================================
                 # VERIFY AND LOG VECTOR DIMENSIONS
