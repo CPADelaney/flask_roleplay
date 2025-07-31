@@ -1,6 +1,7 @@
 # logic/conflict_system/dynamic_stakeholder_agents.py
 """
 Dynamic Stakeholder Agent System for autonomous conflict participation
+Refactored to use the new dynamic_relationships system
 """
 
 import logging
@@ -13,8 +14,12 @@ from datetime import datetime
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 from lore.core import canon
-from logic.relationship_integration import RelationshipIntegration
-from npcs.npc_relationship import NPCRelationshipManager
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    RelationshipDimensions,
+    process_relationship_interaction_tool,
+    get_relationship_summary_tool
+)
 from logic.conflict_system.conflict_agents import (
     ConflictContext,
     initialize_conflict_assistants,
@@ -29,7 +34,7 @@ class StakeholderAutonomySystem:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.relationship_integration = RelationshipIntegration(user_id, conversation_id)
+        self.relationship_manager = OptimizedRelationshipManager(user_id, conversation_id)
         self.context = ConflictContext(user_id, conversation_id)
         self._assistants = None  # Lazy initialization
     
@@ -113,7 +118,7 @@ class StakeholderAutonomySystem:
                                           all_stakeholders: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Determine what action a stakeholder will take"""
         
-        # Get stakeholder's relationships
+        # Get stakeholder's relationships using new system
         relationships = await self._get_stakeholder_relationships(
             stakeholder['npc_id'], all_stakeholders
         )
@@ -176,19 +181,27 @@ class StakeholderAutonomySystem:
     
     async def _get_stakeholder_relationships(self, npc_id: int,
                                            all_stakeholders: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Get a stakeholder's relationships with other stakeholders"""
+        """Get a stakeholder's relationships with other stakeholders using new system"""
         relationships = {}
         
         for other in all_stakeholders:
             if other['npc_id'] != npc_id:
-                # Get relationship details
-                rel_manager = NPCRelationshipManager(npc_id, self.user_id, self.conversation_id)
-                relationship = await rel_manager.get_relationship_details('npc', other['npc_id'])
+                # Get relationship state using new system
+                state = await self.relationship_manager.get_relationship_state(
+                    'npc', npc_id, 'npc', other['npc_id']
+                )
+                
+                # Get summary for decision making
+                summary = state.to_summary()
                 
                 relationships[other['npc_id']] = {
                     'name': other['npc_name'],
-                    'link_level': relationship.get('link_level', 0),
-                    'dynamics': relationship.get('dynamics', {}),
+                    'trust': summary['dimensions'].get('trust', 0),
+                    'respect': summary['dimensions'].get('respect', 0),
+                    'affection': summary['dimensions'].get('affection', 0),
+                    'influence': summary['dimensions'].get('influence', 0),
+                    'patterns': summary.get('patterns', []),
+                    'archetypes': summary.get('archetypes', []),
                     'public_stance': other['public_motivation'],
                     'involvement': other['involvement_level']
                 }
@@ -203,7 +216,7 @@ class StakeholderAutonomySystem:
         
         # Negotiation options
         for npc_id, rel in relationships.items():
-            if rel['link_level'] > -50:  # Not sworn enemies
+            if rel['trust'] > -50:  # Not completely distrustful
                 actions.append({
                     'type': 'negotiate',
                     'target': npc_id,
@@ -213,7 +226,8 @@ class StakeholderAutonomySystem:
         
         # Alliance options
         for npc_id, rel in relationships.items():
-            if rel['link_level'] > 25 and rel['involvement'] > 3:
+            # Use trust and respect from new system
+            if rel['trust'] > 25 and rel['respect'] > 40 and rel['involvement'] > 3:
                 actions.append({
                     'type': 'form_alliance',
                     'target': npc_id,
@@ -225,12 +239,24 @@ class StakeholderAutonomySystem:
         if stakeholder.get('alliances'):
             for ally_id in json.loads(stakeholder['alliances']):
                 if ally_id in relationships:
-                    actions.append({
-                        'type': 'betray',
-                        'target': ally_id,
-                        'target_name': relationships[ally_id]['name'],
-                        'impact': 'high'
-                    })
+                    # Check for toxic patterns that might encourage betrayal
+                    rel = relationships[ally_id]
+                    if 'toxic_bond' in rel.get('archetypes', []) or 'push_pull' in rel.get('patterns', []):
+                        actions.append({
+                            'type': 'betray',
+                            'target': ally_id,
+                            'target_name': rel['name'],
+                            'impact': 'high',
+                            'pattern_driven': True
+                        })
+                    else:
+                        actions.append({
+                            'type': 'betray',
+                            'target': ally_id,
+                            'target_name': rel['name'],
+                            'impact': 'high',
+                            'pattern_driven': False
+                        })
         
         # Secret revelation
         if stakeholder['unrevealed_secrets']:
@@ -259,11 +285,14 @@ class StakeholderAutonomySystem:
     
     def _calculate_negotiation_chance(self, stakeholder: Dict[str, Any],
                                     relationship: Dict[str, Any]) -> float:
-        """Calculate chance of successful negotiation"""
+        """Calculate chance of successful negotiation using new relationship data"""
         base_chance = 0.5
         
-        # Relationship modifier
-        base_chance += relationship['link_level'] / 200.0
+        # Trust is now -100 to 100 in new system
+        base_chance += relationship['trust'] / 200.0
+        
+        # Respect modifier
+        base_chance += relationship['respect'] / 300.0
         
         # Dominance differential
         if stakeholder['dominance'] > 70:
@@ -273,12 +302,22 @@ class StakeholderAutonomySystem:
         if stakeholder['involvement_level'] > relationship['involvement']:
             base_chance += 0.1
             
+        # Pattern modifiers
+        if 'slow_burn' in relationship.get('patterns', []):
+            base_chance += 0.1  # Building trust helps
+        if 'frenemies' in relationship.get('patterns', []):
+            base_chance -= 0.1  # Complicated dynamic
+            
         return min(max(base_chance, 0.1), 0.9)
     
     def _calculate_alliance_benefit(self, stakeholder: Dict[str, Any],
                                   relationship: Dict[str, Any]) -> str:
         """Calculate mutual benefit of alliance"""
         combined_involvement = stakeholder['involvement_level'] + relationship['involvement']
+        
+        # Check for synergistic archetypes
+        if 'battle_partners' in relationship.get('archetypes', []):
+            return "very high"
         
         if combined_involvement > 15:
             return "high"
@@ -407,22 +446,56 @@ class StakeholderAutonomySystem:
                     WHERE conflict_id = $2 AND npc_id = $3
                 """, json.dumps([stakeholder['npc_id']]), conflict_id, target_id)
                 
+                # Process positive relationship interaction
+                ctx = RunContextWrapper({
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })
+                
+                interaction_result = await process_relationship_interaction_tool(
+                    ctx,
+                    entity1_type='npc',
+                    entity1_id=stakeholder['npc_id'],
+                    entity2_type='npc',
+                    entity2_id=target_id,
+                    interaction_type='shared_success',
+                    context='negotiation'
+                )
+                
                 return {
                     'success': True,
                     'target_id': target_id,
                     'target_name': target['npc_name'],
                     'agreement': result_data.get('agreement', 'Mutual support'),
+                    'relationship_impact': interaction_result.get('impacts', {}),
                     'consequences': [{
                         'type': 'alliance_formed',
                         'parties': [stakeholder['npc_id'], target_id]
                     }]
                 }
             else:
+                # Process negative interaction
+                ctx = RunContextWrapper({
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })
+                
+                interaction_result = await process_relationship_interaction_tool(
+                    ctx,
+                    entity1_type='npc',
+                    entity1_id=stakeholder['npc_id'],
+                    entity2_type='npc',
+                    entity2_id=target_id,
+                    interaction_type='conflict_resolved',  # Failed negotiation creates tension
+                    context='failed_negotiation'
+                )
+                
                 return {
                     'success': False,
                     'target_id': target_id,
                     'target_name': target['npc_name'],
                     'reason': result_data.get('reason', 'Terms unacceptable'),
+                    'relationship_impact': interaction_result.get('impacts', {}),
                     'consequences': [{
                         'type': 'negotiation_failed',
                         'parties': [stakeholder['npc_id'], target_id]
@@ -530,6 +603,23 @@ class StakeholderAutonomySystem:
                     WHERE conflict_id = $1
                 """, conflict_id)
                 
+                # If secret is about someone, impact that relationship
+                if secret.get('target_npc_id'):
+                    ctx = RunContextWrapper({
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    })
+                    
+                    interaction_result = await process_relationship_interaction_tool(
+                        ctx,
+                        entity1_type='npc',
+                        entity1_id=stakeholder['npc_id'],
+                        entity2_type='npc',
+                        entity2_id=secret['target_npc_id'],
+                        interaction_type='deception_discovered',
+                        context='secret_revealed'
+                    )
+                
                 return {
                     'success': True,
                     'secret_type': secret['secret_type'],
@@ -551,7 +641,7 @@ class StakeholderAutonomySystem:
     async def _execute_betrayal(self, action: Dict[str, Any],
                               stakeholder: Dict[str, Any],
                               conflict_id: int) -> Dict[str, Any]:
-        """Execute a betrayal"""
+        """Execute a betrayal using new relationship system"""
         
         target_id = action['target']
         
@@ -593,18 +683,15 @@ class StakeholderAutonomySystem:
             'betrayal', 80, f"Betrayed by {stakeholder['npc_name']}"
             )
             
-            # Update social link if it exists
-            await canon.find_or_create_social_link(
-                ctx, conn,
-                user_id=self.user_id,
-                conversation_id=self.conversation_id,
+            # Process betrayal interaction with new system
+            interaction_result = await process_relationship_interaction_tool(
+                ctx,
                 entity1_type='npc',
                 entity1_id=stakeholder['npc_id'],
-                entity2_type='npc', 
+                entity2_type='npc',
                 entity2_id=target_id,
-                link_type='hostile',
-                link_level=-80,
-                dynamics={'betrayal': True, 'trust': -100}
+                interaction_type='betrayal',
+                context='conflict_betrayal'
             )
             
             # Increase conflict tension
@@ -626,6 +713,8 @@ class StakeholderAutonomySystem:
                 'success': True,
                 'target_id': target_id,
                 'betrayal_type': action['details'].get('method', 'sudden'),
+                'relationship_impact': interaction_result.get('impacts', {}),
+                'new_patterns': interaction_result.get('new_patterns', []),
                 'consequences': [{
                     'type': 'betrayal',
                     'betrayer': stakeholder['npc_id'],
@@ -697,6 +786,31 @@ class StakeholderAutonomySystem:
                 WHERE conflict_id = $1
             """, conflict_id)
             
+            # Process supportive interactions with key stakeholders
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            
+            # Get other high-involvement stakeholders
+            other_stakeholders = await conn.fetch("""
+                SELECT npc_id FROM ConflictStakeholders
+                WHERE conflict_id = $1 AND npc_id != $2 
+                AND involvement_level > 5
+                LIMIT 2
+            """, conflict_id, stakeholder['npc_id'])
+            
+            for other in other_stakeholders:
+                await process_relationship_interaction_tool(
+                    ctx,
+                    entity1_type='npc',
+                    entity1_id=stakeholder['npc_id'],
+                    entity2_type='npc',
+                    entity2_id=other['npc_id'],
+                    interaction_type='support_provided',
+                    context='peacemaking'
+                )
+            
             return {
                 'success': True,
                 'method': action['details'].get('method', 'peace offering'),
@@ -719,11 +833,22 @@ class StakeholderAutonomySystem:
                     betrayed_id = consequence['betrayed']
                     betrayed = next(s for s in all_stakeholders if s['npc_id'] == betrayed_id)
                     
-                    # Betrayed party always reacts
+                    # Get current relationship state to inform reaction
+                    state = await self.relationship_manager.get_relationship_state(
+                        'npc', betrayed_id, 'npc', action_result['stakeholder_id']
+                    )
+                    
+                    # High volatility or toxic patterns lead to explosive reactions
+                    if state.dimensions.volatility > 70 or 'toxic_bond' in state.active_archetypes:
+                        reaction_type = 'explosive_retaliation'
+                    else:
+                        reaction_type = 'calculated_revenge'
+                    
                     reaction = {
                         'stakeholder_id': betrayed_id,
                         'stakeholder_name': betrayed['npc_name'],
                         'action_type': 'retaliation',
+                        'reaction_type': reaction_type,
                         'trigger': 'betrayal',
                         'target': action_result['stakeholder_id'],
                         'success': True,
