@@ -458,6 +458,194 @@ async def handle_player_stats(player_name):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+async def get_player_visible_stats(user_id: int, conversation_id: int, player_name: str = "Chase") -> Dict[str, Any]:
+    """
+    Get only the visible stats for a player.
+    """
+    async with get_db_connection_context() as conn:
+        # Get stat values
+        row = await conn.fetchrow("""
+            SELECT hp, max_hp, strength, endurance, agility, empathy, intelligence
+            FROM PlayerStats
+            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+        """, user_id, conversation_id, player_name)
+        
+        if not row:
+            return {}
+        
+        # Get hunger from vitals
+        vitals_row = await conn.fetchrow("""
+            SELECT hunger FROM PlayerVitals
+            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+        """, user_id, conversation_id, player_name)
+        
+        stats = dict(row)
+        if vitals_row:
+            stats['hunger'] = vitals_row['hunger']
+        else:
+            stats['hunger'] = 100  # Default to full
+            
+        return stats
+
+async def get_player_hidden_stats(user_id: int, conversation_id: int, player_name: str = "Chase") -> Dict[str, Any]:
+    """
+    Get the hidden background stats (for game logic use only).
+    """
+    async with get_db_connection_context() as conn:
+        row = await conn.fetchrow("""
+            SELECT corruption, confidence, willpower, obedience, 
+                   dependency, lust, mental_resilience
+            FROM PlayerStats
+            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+        """, user_id, conversation_id, player_name)
+        
+        if not row:
+            return {}
+            
+        return dict(row)
+
+async def get_all_player_stats(user_id: int, conversation_id: int, player_name: str = "Chase") -> Dict[str, Any]:
+    """
+    Get all stats (visible and hidden) with metadata about visibility.
+    """
+    async with get_db_connection_context() as conn:
+        row = await conn.fetchrow("""
+            SELECT * FROM PlayerStats
+            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+        """, user_id, conversation_id, player_name)
+        
+        if not row:
+            return {}
+        
+        # Get stat metadata
+        metadata_rows = await conn.fetch("""
+            SELECT stat_name, is_visible, display_name, description
+            FROM StatMetadata
+            ORDER BY display_order
+        """)
+        
+        stats = {
+            "visible": {},
+            "hidden": {},
+            "metadata": {}
+        }
+        
+        for meta_row in metadata_rows:
+            stat_name = meta_row['stat_name']
+            if stat_name in row:
+                stat_data = {
+                    "value": row[stat_name],
+                    "display_name": meta_row['display_name'],
+                    "description": meta_row['description']
+                }
+                
+                if meta_row['is_visible']:
+                    stats["visible"][stat_name] = stat_data
+                else:
+                    stats["hidden"][stat_name] = stat_data
+                    
+                stats["metadata"][stat_name] = {
+                    "is_visible": meta_row['is_visible'],
+                    "display_name": meta_row['display_name']
+                }
+        
+        return stats
+
+async def update_hunger_based_on_endurance(user_id: int, conversation_id: int, player_name: str = "Chase", hours_passed: int = 1):
+    """
+    Update hunger based on endurance level. Higher endurance = faster hunger drain.
+    """
+    async with get_db_connection_context() as conn:
+        # Get current endurance
+        endurance = await conn.fetchval("""
+            SELECT endurance FROM PlayerStats
+            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+        """, user_id, conversation_id, player_name)
+        
+        if endurance is None:
+            return
+        
+        # Calculate hunger drain - higher endurance = more drain
+        base_drain = 2  # Base hunger loss per hour
+        endurance_modifier = endurance / 50  # At 50 endurance, 2x drain
+        hunger_drain = int(base_drain * endurance_modifier * hours_passed)
+        
+        # Update hunger
+        await conn.execute("""
+            INSERT INTO PlayerVitals (user_id, conversation_id, player_name, hunger)
+            VALUES ($1, $2, $3, 100)
+            ON CONFLICT (user_id, conversation_id, player_name)
+            DO UPDATE SET 
+                hunger = GREATEST(0, PlayerVitals.hunger - $4),
+                last_update = CURRENT_TIMESTAMP
+        """, user_id, conversation_id, player_name, hunger_drain)
+        
+        # Check for hunger effects
+        new_hunger = await conn.fetchval("""
+            SELECT hunger FROM PlayerVitals
+            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+        """, user_id, conversation_id, player_name)
+        
+        # Apply hunger penalties if needed
+        if new_hunger < 20:
+            # Severe hunger - apply stat penalties
+            await apply_hunger_penalties(user_id, conversation_id, player_name, "severe")
+        elif new_hunger < 50:
+            # Moderate hunger
+            await apply_hunger_penalties(user_id, conversation_id, player_name, "moderate")
+
+async def apply_hunger_penalties(user_id: int, conversation_id: int, player_name: str, severity: str):
+    """
+    Apply temporary stat penalties based on hunger level.
+    """
+    penalties = {
+        "moderate": {"strength": -2, "agility": -1, "empathy": -1},
+        "severe": {"strength": -5, "agility": -3, "empathy": -2, "intelligence": -1}
+    }
+    
+    if severity not in penalties:
+        return
+        
+    # Placeholder. Apply penalties (these would be temporary modifiers, not permanent changes)
+    # You might want to track these separately in a StatusEffects table
+    pass
+
+# Stat conversion functions for game mechanics
+def calculate_damage(strength: int, weapon_bonus: int = 0) -> int:
+    """Calculate damage based on strength."""
+    base_damage = strength // 2
+    return base_damage + weapon_bonus + random.randint(-2, 2)
+
+def calculate_defense(endurance: int, armor_bonus: int = 0) -> int:
+    """Calculate defense/damage reduction based on endurance."""
+    base_defense = endurance // 3
+    return base_defense + armor_bonus
+
+def calculate_initiative(agility: int) -> int:
+    """Calculate initiative/turn order based on agility."""
+    return agility + random.randint(1, 20)
+
+def calculate_social_insight(empathy: int, target_deception: int = 0) -> bool:
+    """Determine if character notices social cues."""
+    insight_roll = empathy + random.randint(1, 20)
+    deception_dc = 10 + target_deception
+    return insight_roll >= deception_dc
+
+# Update the player stats route to only show visible stats
+@stats_bp.route('/player/<player_name>/visible', methods=['GET'])
+async def get_visible_stats(player_name):
+    """Get only visible stats for display to player."""
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+    
+    conversation_id = request.args.get("conversation_id")
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id"}), 400
+    
+    stats = await get_player_visible_stats(user_id, conversation_id, player_name)
+    return jsonify(stats), 200
+
 
 ############################
 # 5. NPC Stats Route (Needs user_id/conversation_id Scoping)
@@ -933,3 +1121,4 @@ async def apply_activity_effects(user_id, conversation_id, activity_name, intens
         scaled_effects, 
         f"Activity: {activity_name} (intensity: {intensity})"
     )
+
