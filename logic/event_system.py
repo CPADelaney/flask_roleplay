@@ -546,22 +546,34 @@ class EventSystem:
         try:
             event_data = event["data"]
             
-            # Process relationship event
-            result = await self.lore_system.update_social_link(
-                self.user_id,
-                self.conversation_id,
-                event_data.get("entity_type"),
-                event_data.get("entity_id"),
-                event_data.get("link_level"),
-                event_data.get("link_type"),
-                event_data.get("dimensions")
-            )
+            # Use the new relationship system
+            manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
             
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error handling relationship event: {e}")
-            return {"error": str(e)}
+            # Process interaction or update
+            if event_data.get("interaction_type"):
+                result = await manager.process_interaction(
+                    entity1_type="player",
+                    entity1_id=1,  # Assuming player ID is 1
+                    entity2_type=event_data.get("entity_type"),
+                    entity2_id=event_data.get("entity_id"),
+                    interaction={"type": event_data.get("interaction_type")}
+                )
+            else:
+                # Direct relationship update
+                state = await manager.get_relationship_state(
+                    entity1_type="player",
+                    entity1_id=1,
+                    entity2_type=event_data.get("entity_type"),
+                    entity2_id=event_data.get("entity_id")
+                )
+                # Apply dimension changes
+                if event_data.get("dimensions"):
+                    for dim, value in event_data["dimensions"].items():
+                        if hasattr(state.dimensions, dim):
+                            setattr(state.dimensions, dim, value)
+                    state.dimensions.clamp()
+                    await manager._queue_update(state)
+                result = {"success": True, "state": state.to_summary()}
             
     async def _handle_time_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """Handle a time-related event."""
