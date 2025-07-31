@@ -44,15 +44,22 @@ from story_templates.moth.lore.world_lore_manager import (
 from logic.chatgpt_integration import get_async_openai_client
 from embedding.vector_store import generate_embedding
 
+# Import the new dynamic relationships system
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    RelationshipState,
+    RelationshipDimensions
+)
+
 logger = logging.getLogger(__name__)
 
 # Environment variable overrides with sensible defaults
-_DEFAULT_LORE_MODEL = os.getenv("OPENAI_LORE_MODEL", "gpt-4o-mini")
-_DEFAULT_MEMORY_MODEL = os.getenv("OPENAI_MEMORY_MODEL", "gpt-4o-mini")
-_DEFAULT_ATMOSPHERE_MODEL = os.getenv("OPENAI_ATMOSPHERE_MODEL", "gpt-4o-mini")
-_DEFAULT_LOCATION_MODEL = os.getenv("OPENAI_LOCATION_MODEL", "gpt-4o-mini")
-_DEFAULT_POETRY_MODEL = os.getenv("OPENAI_POETRY_MODEL", "gpt-4o-mini")
-_DEFAULT_EPISODE_MODEL = os.getenv("OPENAI_EPISODE_MODEL", "gpt-4o-mini")
+_DEFAULT_LORE_MODEL = os.getenv("OPENAI_LORE_MODEL", "gpt-4.1-nano")
+_DEFAULT_MEMORY_MODEL = os.getenv("OPENAI_MEMORY_MODEL", "gpt-4.1-nano")
+_DEFAULT_ATMOSPHERE_MODEL = os.getenv("OPENAI_ATMOSPHERE_MODEL", "gpt-4.1-nano")
+_DEFAULT_LOCATION_MODEL = os.getenv("OPENAI_LOCATION_MODEL", "gpt-4.1-nano")
+_DEFAULT_POETRY_MODEL = os.getenv("OPENAI_POETRY_MODEL", "gpt-4.1-nano")
+_DEFAULT_EPISODE_MODEL = os.getenv("OPENAI_EPISODE_MODEL", "gpt-4.1-nano")
 
 # Performance settings
 MAX_CONCURRENT_GPT_CALLS = int(os.getenv("MAX_CONCURRENT_GPT_CALLS", "3"))
@@ -469,9 +476,9 @@ class QueenOfThornsStoryInitializer:
                     canon_ctx, user_id, conversation_id
                 )
             
-            # Phase 4: Establish relationships
+            # Phase 4: Establish relationships using new dynamic system
             logger.info("Phase 4: Establishing relationships")
-            await QueenOfThornsStoryInitializer._setup_canonical_relationships(
+            await QueenOfThornsStoryInitializer._setup_dynamic_relationships(
                 canon_ctx, user_id, conversation_id, lilith_id, support_npc_ids
             )
             
@@ -1646,11 +1653,14 @@ Generate unique personality and backstory details."""
         return npc_ids
     
     @staticmethod
-    async def _setup_canonical_relationships(
+    async def _setup_dynamic_relationships(
         ctx: CanonicalContext, user_id: int, conversation_id: int,
         lilith_id: int, support_npc_ids: List[int]
     ):
-        """Establish relationships through the canon system"""
+        """Establish relationships using the new dynamic relationships system"""
+        
+        # Initialize relationship manager
+        rel_manager = OptimizedRelationshipManager(user_id, conversation_id)
         
         # Get NPC names for relationship creation
         npc_names = {}
@@ -1663,69 +1673,158 @@ Generate unique personality and backstory details."""
                 if row:
                     npc_names[npc_id] = row['npc_name']
         
-        # Define relationships
-        relationships = []
+        # Define relationships with multi-dimensional attributes
         npc_id_map = {name: npc_id for npc_id, name in npc_names.items()}
         
+        # Player relationships with Lilith and others
+        # First get player ID
+        async with get_db_connection_context() as conn:
+            player_row = await conn.fetchrow(
+                "SELECT id FROM PlayerStats WHERE user_id = $1 AND conversation_id = $2 LIMIT 1",
+                user_id, conversation_id
+            )
+            player_id = player_row['id'] if player_row else 1
+        
+        # Lilith <-> Player initial relationship
+        lilith_player_state = await rel_manager.get_relationship_state(
+            entity1_type="player",
+            entity1_id=player_id,
+            entity2_type="npc",
+            entity2_id=lilith_id
+        )
+        
+        # Set initial dimensions for Lilith-Player relationship
+        lilith_player_state.dimensions.trust = 20  # Low initial trust
+        lilith_player_state.dimensions.fascination = 60  # High fascination
+        lilith_player_state.dimensions.influence = 80  # Lilith has high influence
+        lilith_player_state.dimensions.respect = 40  # Some respect
+        lilith_player_state.dimensions.intimacy = 5  # Very low intimacy
+        lilith_player_state.dimensions.volatility = 50  # Moderate volatility
+        lilith_player_state.dimensions.unresolved_conflict = 30  # Some tension
+        
+        # Process initial interactions to establish relationship
+        await rel_manager.process_interaction(
+            "player", player_id, "npc", lilith_id,
+            {"type": "vulnerability_shared", "context": "first_meeting"}
+        )
+        
+        # Marcus Sterling relationship with Lilith
         if "Marcus Sterling" in npc_id_map:
-            relationships.append({
-                "source": lilith_id,
-                "target": npc_id_map["Marcus Sterling"],
-                "type": "owns",
-                "strength": 95,
-                "description": "Complete ownership and transformation"
-            })
-        
-        if "Sarah Chen" in npc_id_map:
-            relationships.append({
-                "source": lilith_id,
-                "target": npc_id_map["Sarah Chen"],
-                "type": "protects",
-                "strength": 85,
-                "description": "Saved her, now protects and guides"
-            })
-        
-        if "Victoria Chen" in npc_id_map:
-            relationships.append({
-                "source": lilith_id,
-                "target": npc_id_map["Victoria Chen"],
-                "type": "commands",
-                "strength": 75,
-                "description": "Rose Council member under Queen's authority"
-            })
-        
-        # Create relationships through canon
-        for rel in relationships:
-            try:
-                await canon.find_or_create_social_link(
-                    ctx, conn,
+            marcus_lilith_state = await rel_manager.get_relationship_state(
+                entity1_type="npc",
+                entity1_id=lilith_id,
+                entity2_type="npc",
+                entity2_id=npc_id_map["Marcus Sterling"]
+            )
+            
+            # Complete ownership dynamic
+            marcus_lilith_state.dimensions.trust = 95
+            marcus_lilith_state.dimensions.respect = 100
+            marcus_lilith_state.dimensions.affection = 70
+            marcus_lilith_state.dimensions.dependence = 90  # Marcus is highly dependent
+            marcus_lilith_state.dimensions.influence = -95  # Lilith has total influence
+            marcus_lilith_state.dimensions.intimacy = 85
+            marcus_lilith_state.dimensions.frequency = 80  # Regular contact
+            
+            # Process interactions to solidify relationship
+            await rel_manager.process_interaction(
+                "npc", lilith_id, "npc", npc_id_map["Marcus Sterling"],
+                {"type": "support_provided", "context": "transformation"}
+            )
+            
+            # Add shared memory
+            memory_text = f"{npc_names[lilith_id]} transformed {npc_names[npc_id_map['Marcus Sterling']]} from predator to protector"
+            
+            for npc_id in [lilith_id, npc_id_map["Marcus Sterling"]]:
+                await remember_with_governance(
                     user_id=user_id,
                     conversation_id=conversation_id,
-                    entity1_type="npc",
-                    entity1_id=rel["source"],
-                    entity2_type="npc",
-                    entity2_id=rel["target"],
-                    link_type=rel["type"],
-                    link_level=rel["strength"]
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    importance="high",
+                    emotional=True,
+                    tags=["relationship", "transformation", "ownership"]
                 )
-                
-                # Add shared memory through governance
-                memory_text = f"{npc_names[rel['source']]} and {npc_names[rel['target']]}: {rel['description']}"
-                
-                for npc_id in [rel["source"], rel["target"]]:
-                    await remember_with_governance(
-                        user_id=user_id,
-                        conversation_id=conversation_id,
-                        entity_type="npc",
-                        entity_id=npc_id,
-                        memory_text=memory_text,
-                        importance="medium",
-                        emotional=True,
-                        tags=["relationship", "shared_memory"]
-                    )
-                    
-            except Exception as e:
-                logger.error(f"Error creating relationship: {e}")
+        
+        # Sarah Chen relationship with Lilith
+        if "Sarah Chen" in npc_id_map:
+            sarah_lilith_state = await rel_manager.get_relationship_state(
+                entity1_type="npc",
+                entity1_id=lilith_id,
+                entity2_type="npc",
+                entity2_id=npc_id_map["Sarah Chen"]
+            )
+            
+            # Protective, nurturing relationship
+            sarah_lilith_state.dimensions.trust = 85
+            sarah_lilith_state.dimensions.respect = 90
+            sarah_lilith_state.dimensions.affection = 75
+            sarah_lilith_state.dimensions.dependence = 60
+            sarah_lilith_state.dimensions.influence = -60  # Lilith protective influence
+            sarah_lilith_state.dimensions.intimacy = 70
+            sarah_lilith_state.dimensions.frequency = 60
+            
+            await rel_manager.process_interaction(
+                "npc", lilith_id, "npc", npc_id_map["Sarah Chen"],
+                {"type": "helpful_action", "context": "rescue"}
+            )
+            
+            memory_text = f"{npc_names[lilith_id]} saved {npc_names[npc_id_map['Sarah Chen']]} and gave her purpose helping others"
+            
+            for npc_id in [lilith_id, npc_id_map["Sarah Chen"]]:
+                await remember_with_governance(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    importance="high",
+                    emotional=True,
+                    tags=["relationship", "rescue", "protection"]
+                )
+        
+        # Victoria Chen relationship with Lilith
+        if "Victoria Chen" in npc_id_map:
+            victoria_lilith_state = await rel_manager.get_relationship_state(
+                entity1_type="npc",
+                entity1_id=lilith_id,
+                entity2_type="npc",
+                entity2_id=npc_id_map["Victoria Chen"]
+            )
+            
+            # Professional alliance with respect
+            victoria_lilith_state.dimensions.trust = 75
+            victoria_lilith_state.dimensions.respect = 85
+            victoria_lilith_state.dimensions.affection = 50
+            victoria_lilith_state.dimensions.dependence = 30
+            victoria_lilith_state.dimensions.influence = -40  # Lilith has command authority
+            victoria_lilith_state.dimensions.intimacy = 40
+            victoria_lilith_state.dimensions.frequency = 70  # Regular council meetings
+            
+            await rel_manager.process_interaction(
+                "npc", lilith_id, "npc", npc_id_map["Victoria Chen"],
+                {"type": "shared_success", "context": "network_operations"}
+            )
+            
+            memory_text = f"{npc_names[npc_id_map['Victoria Chen']]} serves on the Rose Council under {npc_names[lilith_id]}'s leadership"
+            
+            for npc_id in [lilith_id, npc_id_map["Victoria Chen"]]:
+                await remember_with_governance(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    importance="medium",
+                    emotional=False,
+                    tags=["relationship", "hierarchy", "council"]
+                )
+        
+        # Flush any pending updates
+        await rel_manager._flush_updates()
+        
+        logger.info("Dynamic relationships established with multi-dimensional tracking")
     
     @staticmethod
     async def _setup_special_mechanics(
