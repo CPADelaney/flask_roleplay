@@ -812,70 +812,76 @@ async def process_social_links_canonical(
     social_links: List[Dict[str, Any]],
     conn: asyncpg.Connection
 ) -> int:
-    """Process social link updates using canon."""
+    """Process relationship updates using the new dynamic system."""
+    from logic.dynamic_relationships import OptimizedRelationshipManager
+    
     count = 0
-    canon_ctx = RunContextWrapper(context={
-        'user_id': user_id,
-        'conversation_id': conversation_id
-    })
+    manager = OptimizedRelationshipManager(user_id, conversation_id)
     
     for link in social_links:
-        # Use canon to find or create social link
-        link_data = {
-            'user_id': user_id,
-            'conversation_id': conversation_id,
-            'entity1_type': link['entity1_type'],
-            'entity1_id': link['entity1_id'],
-            'entity2_type': link['entity2_type'],
-            'entity2_id': link['entity2_id'],
-            'link_type': link.get('link_type'),
-            'link_level': link.get('level_change', 0),
-            'link_history': [],
-            'dynamics': {},
-            'experienced_crossroads': [],
-            'experienced_rituals': []
-        }
+        # Convert old social link format to new interaction format
+        interaction_type = None
         
-        # Add new event if provided
-        if "new_event" in link and link["new_event"]:
-            link_data['link_history'] = [{
-                "event": link["new_event"],
-                "timestamp": datetime.now().isoformat()
-            }]
-        
-        # Create or update link
-        link_id = await canon.find_or_create_social_link(canon_ctx, conn, **link_data)
-        
-        # If link already existed and we have updates, use LoreSystem
-        if link_id and ("level_change" in link or "new_event" in link):
-            updates = {}
-            
-            if "level_change" in link:
-                # Get current level
-                current_level = await conn.fetchval("""
-                    SELECT link_level FROM SocialLinks WHERE link_id = $1
-                """, link_id)
-                
-                updates['link_level'] = (current_level or 0) + link['level_change']
-            
-            if updates:
-                result = await ctx.lore_system.propose_and_enact_change(
-                    ctx=ctx,
-                    entity_type="SocialLinks",
-                    entity_identifier={"link_id": link_id},
-                    updates=updates,
-                    reason=f"Social link update: {link.get('new_event', 'Relationship change')}"
-                )
-                
-                if result.get("status") in ["committed", "conflict_generated"]:
-                    count += 1
+        # Map link events to interaction types
+        if link.get('new_event'):
+            event_text = link['new_event'].lower()
+            if 'help' in event_text or 'support' in event_text:
+                interaction_type = 'helpful_action'
+            elif 'betray' in event_text:
+                interaction_type = 'betrayal'
+            elif 'praise' in event_text or 'compliment' in event_text:
+                interaction_type = 'genuine_compliment'
             else:
+                interaction_type = 'social_interaction'
+        
+        # Process the interaction
+        if interaction_type:
+            result = await manager.process_interaction(
+                entity1_type=link['entity1_type'],
+                entity1_id=link['entity1_id'],
+                entity2_type=link['entity2_type'],
+                entity2_id=link['entity2_id'],
+                interaction={
+                    'type': interaction_type,
+                    'context': link.get('group_context', 'casual'),
+                    'description': link.get('new_event', '')
+                }
+            )
+            
+            if result.get('success'):
                 count += 1
-        elif link_id:
+        
+        # Handle direct level changes
+        elif link.get('level_change'):
+            # Map old level change to dimension changes
+            level_change = link['level_change']
+            dimension_changes = {
+                'affection': level_change * 0.5,
+                'trust': level_change * 0.3,
+                'closeness': level_change * 0.2
+            }
+            
+            # Get current state
+            state = await manager.get_relationship_state(
+                entity1_type=link['entity1_type'],
+                entity1_id=link['entity1_id'],
+                entity2_type=link['entity2_type'],
+                entity2_id=link['entity2_id']
+            )
+            
+            # Apply changes
+            for dim, change in dimension_changes.items():
+                current = getattr(state.dimensions, dim)
+                setattr(state.dimensions, dim, current + change)
+            
+            state.dimensions.clamp()
+            await manager._queue_update(state)
             count += 1
     
+    # Flush all updates
+    await manager._flush_updates()
+    
     return count
-
 async def process_roleplay_updates_canonical(
     ctx: UniversalUpdaterContext,
     user_id: int,
