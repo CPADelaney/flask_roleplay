@@ -774,6 +774,101 @@ class StoryDirectorContext:
             logger.error(f"Error getting relevant memories: {e}", exc_info=True)
             return []
 
+    async def check_and_apply_preset_beats(
+        ctx: RunContextWrapper[StoryDirectorContext],
+        player_action: str,
+        current_state: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Check if preset beats should trigger and blend with dynamic content"""
+        context = ctx.context
+        
+        if not context.preset_story_tracker:
+            return None
+            
+        # Check triggers with flexibility
+        triggered_beat = await context.preset_story_tracker.check_beat_triggers(current_state)
+        
+        if not triggered_beat:
+            return None
+            
+        # Use balance manager to decide enforcement
+        balance_manager = StoryBalanceManager(flexibility_level=0.7)
+        should_enforce, reason = await balance_manager.should_enforce_preset(
+            triggered_beat,
+            context.recent_player_actions,
+            current_state
+        )
+        
+        if not should_enforce:
+            # Store as "missed beat" for potential later callback
+            await context.preset_story_tracker.mark_beat_as_skipped(triggered_beat.id)
+            return None
+            
+        # Adapt preset content to current context
+        adapted_content = await balance_manager.adapt_preset_content(
+            triggered_beat.content,
+            current_state
+        )
+        
+        # Trigger through existing systems
+        return await apply_preset_beat_through_systems(ctx, adapted_content)
+    
+    async def apply_preset_beat_through_systems(
+        ctx: RunContextWrapper[StoryDirectorContext],
+        adapted_beat: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Apply preset beat using existing backend systems"""
+        context = ctx.context
+        results = {}
+        
+        # 1. Generate conflicts if needed
+        if adapted_beat.get("trigger_conflict"):
+            conflict_params = adapted_beat["conflict_params"]
+            # Use existing conflict generation
+            conflict_result = await generate_conflict(
+                ctx,
+                conflict_type=conflict_params.get("type"),
+                reason=f"Queen of Thorns: {adapted_beat.get('beat_name')}"
+            )
+            results["conflict"] = conflict_result
+            
+        # 2. Progress NPC relationships
+        if adapted_beat.get("npc_progressions"):
+            for npc_prog in adapted_beat["npc_progressions"]:
+                npc_id = context.preset_story_tracker.npc_mappings[npc_prog["preset_npc_id"]]
+                await progress_npc_narrative(
+                    ctx,
+                    npc_id,
+                    corruption_change=npc_prog.get("corruption_change", 0),
+                    dependency_change=npc_prog.get("dependency_change", 0),
+                    realization_change=npc_prog.get("realization_change", 0),
+                    reason=f"Queen of Thorns progression"
+                )
+                
+        # 3. Trigger narrative events
+        if adapted_beat.get("narrative_event"):
+            event_type = adapted_beat["narrative_event"]["type"]
+            if event_type == "revelation":
+                npc_id = context.preset_story_tracker.npc_mappings[adapted_beat["narrative_event"]["npc_id"]]
+                await generate_dynamic_personal_revelation(
+                    ctx,
+                    npc_id,
+                    adapted_beat["narrative_event"]["revelation_type"]
+                )
+                
+        # 4. Create memories
+        await store_narrative_memory(
+            ctx,
+            StoreMemoryParams(
+                content=f"Queen of Thorns: {adapted_beat.get('description', 'Story progression')}",
+                memory_type="preset_story_beat",
+                importance=0.8,
+                tags=["queen_of_thorns", "preset_story", adapted_beat.get("beat_id", "unknown")]
+            )
+        )
+        
+        return results
+
 
 # ----- Tool Functions (Updated with Strict Schemas) -----
 
