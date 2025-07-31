@@ -16,10 +16,10 @@ import logging
 import random
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union, Any
 
+from logic.stats_logic import calculate_social_insight, get_all_player_stats
 from logic.relationship_integration import RelationshipIntegration
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, Tuple
 
 import asyncpg
 
@@ -478,6 +478,779 @@ def get_dynamic_description(dynamic_name: str, level: int) -> str:
                 matched_level = dyn["levels"][-1]
             return f"{matched_level['name']}: {matched_level['description']}"
     return "Unknown dynamic"
+
+async def get_relationship_depth_multiplier(
+    conn: asyncpg.Connection,
+    user_id: int,
+    conversation_id: int,
+    npc_id: int
+) -> float:
+    """
+    Calculate relationship depth multiplier based on empathy and link level.
+    Higher empathy + stronger relationship = better understanding.
+    """
+    # Get player empathy
+    player_stats = await conn.fetchrow("""
+        SELECT empathy, intelligence FROM PlayerStats
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+    """, user_id, conversation_id)
+    
+    empathy = player_stats['empathy'] if player_stats else 10
+    intelligence = player_stats['intelligence'] if player_stats else 10
+    
+    # Get relationship link
+    link = await conn.fetchrow("""
+        SELECT link_level, dynamics FROM SocialLinks
+        WHERE user_id=$1 AND conversation_id=$2
+        AND ((entity1_type='player' AND entity2_type='npc' AND entity2_id=$3)
+          OR (entity1_type='npc' AND entity1_id=$3 AND entity2_type='player'))
+    """, user_id, conversation_id, npc_id)
+    
+    if not link:
+        return 1.0
+    
+    link_level = link['link_level'] or 0
+    dynamics = link['dynamics'] if isinstance(link['dynamics'], dict) else json.loads(link['dynamics'] or '{}')
+    
+    # Base multiplier from empathy (0.5 to 2.0)
+    empathy_mult = 0.5 + (empathy / 100) * 1.5
+    
+    # Link level bonus (0 to 1.0)
+    link_bonus = min(link_level / 100, 1.0)
+    
+    # Intelligence helps understand complex relationships
+    int_bonus = intelligence / 200  # 0 to 0.5
+    
+    # Special bonuses for specific dynamics
+    trust_bonus = dynamics.get('trust', 0) / 200  # 0 to 0.5
+    intimacy_bonus = dynamics.get('intimacy', 0) / 200  # 0 to 0.5
+    
+    total_multiplier = empathy_mult + link_bonus + int_bonus + trust_bonus + intimacy_bonus
+    
+    return min(total_multiplier, 3.0)  # Cap at 3x
+
+async def check_relationship_insights(
+    ctx,
+    conn: asyncpg.Connection,
+    npc_id: int,
+    situation: str = "general"
+) -> Dict[str, Any]:
+    """
+    Use empathy and relationship depth to gain insights about an NPC.
+    Different situations require different stat thresholds.
+    """
+    # Get player stats
+    player_stats = await conn.fetchrow("""
+        SELECT empathy, intelligence, confidence, mental_resilience
+        FROM PlayerStats
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+    """, ctx.user_id, ctx.conversation_id)
+    
+    if not player_stats:
+        return {"insights": [], "success": False}
+    
+    empathy = player_stats['empathy']
+    intelligence = player_stats['intelligence']
+    
+    # Get NPC data
+    npc_data = await conn.fetchrow("""
+        SELECT npc_name, dominance, cruelty, trust, respect, 
+               personality_traits, current_mood, hidden_agenda
+        FROM NPCStats
+        WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+    """, npc_id, ctx.user_id, ctx.conversation_id)
+    
+    if not npc_data:
+        return {"insights": [], "success": False}
+    
+    # Get relationship multiplier
+    depth_mult = await get_relationship_depth_multiplier(conn, ctx.user_id, ctx.conversation_id, npc_id)
+    
+    # Calculate insight power
+    base_insight = empathy + (intelligence // 2)
+    total_insight = int(base_insight * depth_mult)
+    
+    insights = []
+    hidden_info = {}
+    
+    # Different thresholds for different insights
+    insight_thresholds = {
+        "surface_mood": 20,
+        "true_feelings": 40,
+        "hidden_motives": 60,
+        "deepest_secrets": 80,
+        "manipulation_detection": 50,
+        "weakness_detection": 70,
+        "prediction": 90
+    }
+    
+    # Surface mood (easy)
+    if total_insight >= insight_thresholds["surface_mood"]:
+        mood = npc_data.get('current_mood', 'neutral')
+        insights.append({
+            "type": "mood",
+            "text": f"{npc_data['npc_name']} seems {mood}",
+            "confidence": min(100, total_insight)
+        })
+    
+    # True feelings (moderate)
+    if total_insight >= insight_thresholds["true_feelings"]:
+        true_feeling = _determine_true_feeling(npc_data, situation)
+        insights.append({
+            "type": "true_feeling",
+            "text": f"Beneath the surface, {npc_data['npc_name']} feels {true_feeling}",
+            "confidence": min(100, total_insight - 20)
+        })
+        hidden_info["true_feeling"] = true_feeling
+    
+    # Hidden motives (hard)
+    if total_insight >= insight_thresholds["hidden_motives"]:
+        if npc_data.get('hidden_agenda'):
+            insights.append({
+                "type": "hidden_motive",
+                "text": f"{npc_data['npc_name']} has ulterior motives related to {npc_data['hidden_agenda']}",
+                "confidence": min(100, total_insight - 40)
+            })
+            hidden_info["hidden_agenda"] = npc_data['hidden_agenda']
+    
+    # Manipulation detection
+    if total_insight >= insight_thresholds["manipulation_detection"]:
+        manipulation_level = _calculate_manipulation_level(npc_data)
+        if manipulation_level > 50:
+            insights.append({
+                "type": "manipulation",
+                "text": f"{npc_data['npc_name']} is trying to manipulate you",
+                "severity": manipulation_level,
+                "confidence": min(100, total_insight - 30)
+            })
+    
+    # Weakness detection (very hard)
+    if total_insight >= insight_thresholds["weakness_detection"]:
+        weakness = _find_npc_weakness(npc_data)
+        if weakness:
+            insights.append({
+                "type": "weakness",
+                "text": f"{npc_data['npc_name']}'s weakness: {weakness}",
+                "confidence": min(100, total_insight - 50),
+                "exploitable": True
+            })
+            hidden_info["weakness"] = weakness
+    
+    # Prediction (extremely hard)
+    if total_insight >= insight_thresholds["prediction"]:
+        prediction = _predict_npc_action(npc_data, situation)
+        insights.append({
+            "type": "prediction",
+            "text": f"{npc_data['npc_name']} is likely to {prediction}",
+            "confidence": min(100, total_insight - 70)
+        })
+    
+    # Store insights in the relationship for future reference
+    if insights:
+        await _store_relationship_insights(ctx, conn, npc_id, insights, hidden_info)
+    
+    return {
+        "insights": insights,
+        "success": len(insights) > 0,
+        "total_insight_power": total_insight,
+        "depth_multiplier": depth_mult,
+        "hidden_info": hidden_info
+    }
+
+async def perform_social_interaction(
+    ctx,
+    conn: asyncpg.Connection,
+    npc_id: int,
+    interaction_type: str,
+    use_stat: str = "empathy"
+) -> Dict[str, Any]:
+    """
+    Perform a stat-based social interaction with an NPC.
+    Different interactions use different primary stats.
+    """
+    # Get player stats
+    player_stats = await conn.fetchrow("""
+        SELECT empathy, intelligence, confidence, strength, agility,
+               corruption, obedience, willpower, mental_resilience
+        FROM PlayerStats
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+    """, ctx.user_id, ctx.conversation_id)
+    
+    # Get NPC stats
+    npc_stats = await conn.fetchrow("""
+        SELECT npc_name, dominance, cruelty, trust, respect, intensity,
+               personality_traits, current_location
+        FROM NPCStats
+        WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+    """, npc_id, ctx.user_id, ctx.conversation_id)
+    
+    # Get vitals for energy/fatigue effects
+    vitals = await conn.fetchrow("""
+        SELECT energy, hunger, fatigue FROM PlayerVitals
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+    """, ctx.user_id, ctx.conversation_id)
+    
+    # Define interaction types and their stat requirements
+    interaction_configs = {
+        "persuade": {
+            "primary_stat": "empathy",
+            "secondary_stat": "intelligence",
+            "opposed_by": "dominance",
+            "success_effects": {"trust": 5, "respect": 3},
+            "failure_effects": {"trust": -2, "player_confidence": -2}
+        },
+        "intimidate": {
+            "primary_stat": "strength",
+            "secondary_stat": "confidence",
+            "opposed_by": "dominance",
+            "success_effects": {"dominance": -5, "fear": 10},
+            "failure_effects": {"dominance": 5, "player_confidence": -5}
+        },
+        "seduce": {
+            "primary_stat": "empathy",
+            "secondary_stat": "confidence",
+            "opposed_by": "willpower",
+            "success_effects": {"intimacy": 10, "trust": 5},
+            "failure_effects": {"respect": -5, "player_lust": 5}
+        },
+        "deceive": {
+            "primary_stat": "intelligence",
+            "secondary_stat": "agility",
+            "opposed_by": "trust",
+            "success_effects": {"manipulation": 10},
+            "failure_effects": {"trust": -10, "respect": -5}
+        },
+        "empathize": {
+            "primary_stat": "empathy",
+            "secondary_stat": "mental_resilience",
+            "opposed_by": "cruelty",
+            "success_effects": {"trust": 8, "intimacy": 5},
+            "failure_effects": {"player_mental_resilience": -3}
+        },
+        "challenge": {
+            "primary_stat": "confidence",
+            "secondary_stat": "willpower",
+            "opposed_by": "dominance",
+            "success_effects": {"respect": 10, "dominance": -3},
+            "failure_effects": {"obedience": 5, "player_willpower": -3}
+        }
+    }
+    
+    config = interaction_configs.get(interaction_type, interaction_configs["persuade"])
+    
+    # Calculate success chance
+    primary_value = player_stats[config["primary_stat"]]
+    secondary_value = player_stats[config["secondary_stat"]]
+    
+    # Fatigue penalty
+    fatigue_penalty = (vitals['fatigue'] if vitals else 0) // 4
+    
+    # Relationship bonus
+    depth_mult = await get_relationship_depth_multiplier(conn, ctx.user_id, ctx.conversation_id, npc_id)
+    relationship_bonus = int((depth_mult - 1) * 20)
+    
+    # Calculate roll
+    player_power = primary_value + (secondary_value // 2) + relationship_bonus - fatigue_penalty
+    npc_resistance = npc_stats[config["opposed_by"]]
+    
+    # Special modifiers based on circumstances
+    if interaction_type == "intimidate" and player_stats["strength"] < npc_stats["dominance"]:
+        player_power -= 20  # Hard to intimidate someone stronger
+    
+    if interaction_type == "seduce" and player_stats["corruption"] > 70:
+        player_power += 15  # Corrupted characters are more seductive
+    
+    success_chance = 50 + (player_power - npc_resistance)
+    roll = random.randint(1, 100)
+    success = roll <= success_chance
+    
+    # Apply effects
+    changes = {"player_stats": {}, "npc_stats": {}, "dynamics": {}}
+    
+    if success:
+        # Apply success effects
+        for key, value in config["success_effects"].items():
+            if key.startswith("player_"):
+                stat_name = key.replace("player_", "")
+                changes["player_stats"][stat_name] = value
+            elif key in ["trust", "respect", "dominance", "cruelty", "intensity"]:
+                changes["npc_stats"][key] = value
+            else:
+                # Dynamic changes (intimacy, fear, manipulation, etc)
+                changes["dynamics"][key] = value
+        
+        # Bonus effects for critical success
+        if roll <= success_chance - 50:
+            changes["player_stats"]["confidence"] = 3
+            changes["dynamics"]["breakthrough"] = True
+    else:
+        # Apply failure effects
+        for key, value in config["failure_effects"].items():
+            if key.startswith("player_"):
+                stat_name = key.replace("player_", "")
+                changes["player_stats"][stat_name] = value
+            elif key in ["trust", "respect", "dominance", "cruelty", "intensity"]:
+                changes["npc_stats"][key] = value
+            else:
+                changes["dynamics"][key] = value
+        
+        # Critical failure
+        if roll >= success_chance + 50:
+            changes["player_stats"]["confidence"] = -5
+            changes["dynamics"]["humiliation"] = True
+    
+    # Apply the changes
+    await _apply_interaction_changes(ctx, conn, npc_id, changes)
+    
+    # Create interaction memory
+    memory_text = f"{interaction_type.capitalize()} attempt with {npc_stats['npc_name']}: "
+    memory_text += "Success" if success else "Failure"
+    
+    await add_link_event(ctx, await _get_link_id(conn, ctx, npc_id), memory_text)
+    
+    return {
+        "success": success,
+        "roll": roll,
+        "chance": success_chance,
+        "changes": changes,
+        "critical": abs(roll - success_chance) > 50,
+        "player_power": player_power,
+        "npc_resistance": npc_resistance
+    }
+
+async def check_for_stat_based_crossroads(
+    ctx,
+    conn: asyncpg.Connection
+) -> Optional[Dict[str, Any]]:
+    """
+    Enhanced crossroads check that considers player stats for additional options.
+    """
+    # Get standard crossroads first
+    standard_crossroads = await check_for_relationship_crossroads(ctx, conn)
+    
+    if not standard_crossroads:
+        return None
+    
+    # Get player stats
+    player_stats = await conn.fetchrow("""
+        SELECT empathy, intelligence, confidence, willpower, corruption, obedience
+        FROM PlayerStats
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+    """, ctx.user_id, ctx.conversation_id)
+    
+    if not player_stats:
+        return standard_crossroads
+    
+    # Add stat-gated choices
+    additional_choices = []
+    
+    # High empathy option
+    if player_stats['empathy'] > 60:
+        additional_choices.append({
+            "text": "[Empathy] Understand their deeper needs",
+            "requirements": {"empathy": 60},
+            "effects": {
+                "trust": 15,
+                "intimacy": 10,
+                "player_empathy": 2,
+                "player_corruption": 3
+            },
+            "outcome": "Your deep understanding of {npc_name} creates an intimate moment of connection."
+        })
+    
+    # High intelligence option
+    if player_stats['intelligence'] > 60:
+        additional_choices.append({
+            "text": "[Intelligence] Analyze their behavioral patterns",
+            "requirements": {"intelligence": 60},
+            "effects": {
+                "manipulation": 10,
+                "control": 5,
+                "player_intelligence": 1,
+                "player_mental_resilience": -2
+            },
+            "outcome": "You see through {npc_name}'s facade, understanding how to influence them."
+        })
+    
+    # High confidence + low corruption option
+    if player_stats['confidence'] > 70 and player_stats['corruption'] < 30:
+        additional_choices.append({
+            "text": "[Confident] Assert your independence",
+            "requirements": {"confidence": 70, "corruption_max": 30},
+            "effects": {
+                "respect": 20,
+                "dominance": -15,
+                "player_confidence": 5,
+                "player_willpower": 5
+            },
+            "outcome": "Your unwavering confidence forces {npc_name} to respect your boundaries."
+        })
+    
+    # High corruption + obedience option
+    if player_stats['corruption'] > 70 and player_stats['obedience'] > 60:
+        additional_choices.append({
+            "text": "[Corrupted] Embrace your role completely",
+            "requirements": {"corruption": 70, "obedience": 60},
+            "effects": {
+                "submission": 20,
+                "dependency": 15,
+                "player_corruption": 10,
+                "player_obedience": 10,
+                "player_willpower": -10
+            },
+            "outcome": "You surrender completely to {npc_name}'s will, finding dark pleasure in submission."
+        })
+    
+    # Add the additional choices
+    if additional_choices:
+        standard_crossroads["choices"].extend(additional_choices)
+        standard_crossroads["has_stat_options"] = True
+    
+    return standard_crossroads
+
+async def process_relationship_activity(
+    ctx,
+    conn: asyncpg.Connection,
+    npc_id: int,
+    activity_type: str,
+    duration: int = 1  # Time periods
+) -> Dict[str, Any]:
+    """
+    Process activities done with NPCs that affect both stats and relationships.
+    """
+    activity_configs = {
+        "intimate_conversation": {
+            "stat_requirements": {"empathy": 30},
+            "stat_effects": {"empathy": 1, "mental_resilience": 1},
+            "vital_effects": {"thirst": -10},
+            "relationship_effects": {"trust": 5, "intimacy": 5},
+            "dynamics": {"emotional_connection": 5}
+        },
+        "training_together": {
+            "stat_requirements": {"endurance": 20},
+            "stat_effects": {"strength": 1, "endurance": 1},
+            "vital_effects": {"fatigue": 15, "thirst": -20},
+            "relationship_effects": {"respect": 5},
+            "dynamics": {"shared_growth": 5}
+        },
+        "intellectual_debate": {
+            "stat_requirements": {"intelligence": 40},
+            "stat_effects": {"intelligence": 1},
+            "vital_effects": {"fatigue": 5},
+            "relationship_effects": {"respect": 8},
+            "dynamics": {"intellectual_rivalry": 5}
+        },
+        "submission_training": {
+            "stat_requirements": {"obedience": 50},
+            "stat_effects": {"obedience": 3, "corruption": 2, "willpower": -2},
+            "vital_effects": {"fatigue": 10},
+            "relationship_effects": {"dominance": 5},
+            "dynamics": {"control": 10, "submission": 10}
+        },
+        "service_tasks": {
+            "stat_requirements": {"obedience": 30},
+            "stat_effects": {"obedience": 2, "dependency": 1},
+            "vital_effects": {"fatigue": 20, "hunger": -10},
+            "relationship_effects": {"trust": 3},
+            "dynamics": {"servitude": 5}
+        },
+        "resistance_training": {
+            "stat_requirements": {"willpower": 40, "confidence": 40},
+            "stat_effects": {"willpower": 2, "confidence": 2, "obedience": -3},
+            "vital_effects": {"fatigue": 15},
+            "relationship_effects": {"dominance": -5, "respect": 10},
+            "dynamics": {"rebellion": 10}
+        }
+    }
+    
+    config = activity_configs.get(activity_type)
+    if not config:
+        return {"error": "Unknown activity type"}
+    
+    # Check stat requirements
+    player_stats = await conn.fetchrow("""
+        SELECT * FROM PlayerStats
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+    """, ctx.user_id, ctx.conversation_id)
+    
+    for stat, required in config["stat_requirements"].items():
+        if player_stats[stat] < required:
+            return {
+                "error": f"Insufficient {stat}",
+                "required": required,
+                "current": player_stats[stat]
+            }
+    
+    # Apply effects
+    changes = {
+        "stat_changes": {},
+        "vital_changes": {},
+        "relationship_changes": {},
+        "dynamic_changes": {}
+    }
+    
+    # Scale effects by duration
+    for stat, change in config["stat_effects"].items():
+        changes["stat_changes"][stat] = change * duration
+    
+    for vital, change in config["vital_effects"].items():
+        changes["vital_changes"][vital] = change * duration
+    
+    # Relationship effects scale differently
+    for rel, change in config["relationship_effects"].items():
+        changes["relationship_changes"][rel] = change * (1 + duration * 0.5)
+    
+    for dyn, change in config["dynamics"].items():
+        changes["dynamic_changes"][dyn] = change * duration
+    
+    # Apply all changes
+    await _apply_activity_changes(ctx, conn, npc_id, changes)
+    
+    # Create activity memory
+    await add_link_event(
+        ctx, 
+        await _get_link_id(conn, ctx, npc_id),
+        f"Engaged in {activity_type.replace('_', ' ')} for {duration} periods"
+    )
+    
+    return {
+        "success": True,
+        "activity": activity_type,
+        "duration": duration,
+        "changes": changes
+    }
+
+# ========== HELPER FUNCTIONS ==========
+
+def _determine_true_feeling(npc_data: Dict, situation: str) -> str:
+    """Determine NPC's true feelings based on their stats and situation."""
+    dominance = npc_data.get('dominance', 50)
+    trust = npc_data.get('trust', 0)
+    respect = npc_data.get('respect', 0)
+    
+    if trust > 70:
+        return "genuine affection"
+    elif respect > 70 and dominance > 70:
+        return "possessive desire"
+    elif trust < -50:
+        return "deep suspicion"
+    elif dominance > 80 and respect < 20:
+        return "contemptuous amusement"
+    else:
+        return "calculated interest"
+
+def _calculate_manipulation_level(npc_data: Dict) -> int:
+    """Calculate how manipulative an NPC is being."""
+    dominance = npc_data.get('dominance', 50)
+    cruelty = npc_data.get('cruelty', 50)
+    trust = npc_data.get('trust', 0)
+    
+    # High dominance + cruelty + low trust = manipulation
+    manipulation = dominance + cruelty - trust
+    return max(0, min(100, manipulation // 2))
+
+def _find_npc_weakness(npc_data: Dict) -> Optional[str]:
+    """Find potential weaknesses in an NPC."""
+    traits = npc_data.get('personality_traits', [])
+    if isinstance(traits, str):
+        traits = json.loads(traits)
+    
+    # Check for exploitable traits
+    weakness_map = {
+        "arrogant": "flattery and ego-stroking",
+        "lonely": "emotional vulnerability",
+        "ambitious": "promises of power",
+        "hedonistic": "sensual temptations",
+        "paranoid": "playing on their fears",
+        "perfectionist": "highlighting their failures"
+    }
+    
+    for trait in traits:
+        for weakness_trait, exploit in weakness_map.items():
+            if weakness_trait in trait.lower():
+                return exploit
+    
+    # Check stats for weaknesses
+    if npc_data.get('trust', 0) > 80:
+        return "excessive trust can be exploited"
+    elif npc_data.get('cruelty', 50) < 20:
+        return "compassion can be manipulated"
+    
+    return None
+
+def _predict_npc_action(npc_data: Dict, situation: str) -> str:
+    """Predict likely NPC behavior."""
+    dominance = npc_data.get('dominance', 50)
+    cruelty = npc_data.get('cruelty', 50)
+    
+    if situation == "confrontation":
+        if dominance > 70:
+            return "escalate and assert control"
+        else:
+            return "deflect or negotiate"
+    elif situation == "vulnerability":
+        if cruelty > 70:
+            return "exploit your weakness"
+        else:
+            return "show unexpected kindness"
+    else:
+        return "maintain current dynamic"
+
+async def _store_relationship_insights(
+    ctx, conn: asyncpg.Connection, npc_id: int, 
+    insights: List[Dict], hidden_info: Dict
+):
+    """Store discovered insights in the relationship data."""
+    link_id = await _get_link_id(conn, ctx, npc_id)
+    if not link_id:
+        return
+    
+    # Get current context
+    current_context = await conn.fetchval(
+        "SELECT context FROM SocialLinks WHERE link_id=$1",
+        link_id
+    )
+    
+    context = current_context if isinstance(current_context, dict) else {}
+    
+    # Add insights
+    if "insights_discovered" not in context:
+        context["insights_discovered"] = []
+    
+    for insight in insights:
+        context["insights_discovered"].append({
+            "type": insight["type"],
+            "text": insight["text"],
+            "discovered_at": datetime.now().isoformat()
+        })
+    
+    # Store hidden info
+    context["hidden_info"] = hidden_info
+    
+    # Update using LoreSystem
+    lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
+    await lore_system.propose_and_enact_change(
+        ctx=ctx,
+        entity_type="SocialLinks",
+        entity_identifier={"link_id": link_id},
+        updates={"context": json.dumps(context)},
+        reason="Stored relationship insights"
+    )
+
+async def _get_link_id(conn: asyncpg.Connection, ctx, npc_id: int) -> Optional[int]:
+    """Get the link_id for a player-NPC relationship."""
+    result = await conn.fetchval("""
+        SELECT link_id FROM SocialLinks
+        WHERE user_id=$1 AND conversation_id=$2
+        AND ((entity1_type='player' AND entity2_type='npc' AND entity2_id=$3)
+          OR (entity1_type='npc' AND entity1_id=$3 AND entity2_type='player'))
+    """, ctx.user_id, ctx.conversation_id, npc_id)
+    return result
+
+async def _apply_interaction_changes(
+    ctx, conn: asyncpg.Connection, npc_id: int, changes: Dict
+):
+    """Apply all changes from a social interaction."""
+    # Apply player stat changes
+    if changes["player_stats"]:
+        from logic.stats_logic import apply_stat_changes
+        await apply_stat_changes(
+            ctx.user_id, ctx.conversation_id, "Chase",
+            changes["player_stats"], "Social interaction"
+        )
+    
+    # Apply NPC stat changes
+    if changes["npc_stats"]:
+        updates = []
+        values = []
+        param_idx = 1
+        
+        for stat, change in changes["npc_stats"].items():
+            updates.append(f"{stat} = LEAST(100, GREATEST(-100, {stat} + ${param_idx}))")
+            values.append(change)
+            param_idx += 1
+        
+        values.extend([ctx.user_id, ctx.conversation_id, npc_id])
+        
+        await conn.execute(f"""
+            UPDATE NPCStats
+            SET {", ".join(updates)}
+            WHERE user_id=${param_idx} AND conversation_id=${param_idx+1} AND npc_id=${param_idx+2}
+        """, *values)
+    
+    # Apply dynamic changes
+    if changes["dynamics"]:
+        link_id = await _get_link_id(conn, ctx, npc_id)
+        if link_id:
+            # Get current dynamics
+            current = await conn.fetchrow(
+                "SELECT dynamics FROM SocialLinks WHERE link_id=$1",
+                link_id
+            )
+            
+            dynamics = current['dynamics'] if isinstance(current['dynamics'], dict) else json.loads(current['dynamics'] or '{}')
+            
+            # Apply changes
+            for key, change in changes["dynamics"].items():
+                if key == "breakthrough" or key == "humiliation":
+                    # Special flags
+                    dynamics[key] = True
+                else:
+                    current_val = dynamics.get(key, 0)
+                    dynamics[key] = max(0, min(100, current_val + change))
+            
+            # Update
+            lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
+            await lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="SocialLinks",
+                entity_identifier={"link_id": link_id},
+                updates={"dynamics": json.dumps(dynamics)},
+                reason="Social interaction effects"
+            )
+
+async def _apply_activity_changes(
+    ctx, conn: asyncpg.Connection, npc_id: int, changes: Dict
+):
+    """Apply changes from relationship activities."""
+    # Apply stat changes
+    if changes["stat_changes"]:
+        from logic.stats_logic import apply_stat_changes
+        await apply_stat_changes(
+            ctx.user_id, ctx.conversation_id, "Chase",
+            changes["stat_changes"], "Relationship activity"
+        )
+    
+    # Apply vital changes
+    if changes["vital_changes"]:
+        for vital, change in changes["vital_changes"].items():
+            current = await conn.fetchval(f"""
+                SELECT {vital} FROM PlayerVitals
+                WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+            """, ctx.user_id, ctx.conversation_id)
+            
+            if current is not None:
+                new_value = max(0, min(100, current + change))
+                await conn.execute(f"""
+                    UPDATE PlayerVitals
+                    SET {vital} = $1
+                    WHERE user_id=$2 AND conversation_id=$3 AND player_name='Chase'
+                """, new_value, ctx.user_id, ctx.conversation_id)
+    
+    # Apply relationship changes (to NPCStats)
+    if changes["relationship_changes"]:
+        await _apply_interaction_changes(
+            ctx, conn, npc_id, 
+            {"player_stats": {}, "npc_stats": changes["relationship_changes"], "dynamics": {}}
+        )
+    
+    # Apply dynamic changes
+    if changes["dynamic_changes"]:
+        await _apply_interaction_changes(
+            ctx, conn, npc_id,
+            {"player_stats": {}, "npc_stats": {}, "dynamics": changes["dynamic_changes"]}
+        )
+
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1610,6 +2383,38 @@ class MultiNPCInteractionManager:
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 @function_tool
+async def get_relationship_insights_tool(
+    ctx: RunContextWrapper,
+    npc_id: int,
+    situation: str = "general"
+) -> dict:
+    """Get insights about an NPC based on empathy and relationship depth."""
+    async with get_db_connection_context() as conn:
+        return await check_relationship_insights(ctx, conn, npc_id, situation)
+
+@function_tool
+async def perform_social_interaction_tool(
+    ctx: RunContextWrapper,
+    npc_id: int,
+    interaction_type: str
+) -> dict:
+    """Perform a stat-based social interaction."""
+    async with get_db_connection_context() as conn:
+        return await perform_social_interaction(ctx, conn, npc_id, interaction_type)
+
+@function_tool
+async def process_relationship_activity_tool(
+    ctx: RunContextWrapper,
+    npc_id: int,
+    activity_type: str,
+    duration: int = 1
+) -> dict:
+    """Process a relationship activity that affects stats and bonds."""
+    async with get_db_connection_context() as conn:
+        return await process_relationship_activity(ctx, conn, npc_id, activity_type, duration)
+
+
+@function_tool
 async def get_social_link_tool(
     ctx: RunContextWrapper,
     entity1_type: str,
@@ -1897,8 +2702,12 @@ SocialLinksAgent = Agent(
         " - apply_crossroads_choice_tool(...)\n"
         " - check_for_ritual_tool(...)\n"
         " - get_relationship_summary_tool(...)\n"
-        " - update_relationships_from_conflict(...)\n\n"
-        "Use these tools to retrieve or update relationship data, trigger or apply crossroads, or check for rituals. "
+        " - update_relationships_from_conflict(...)\n"
+        " - get_relationship_insights_tool(...) - NEW: Use empathy to understand NPCs\n"
+        " - perform_social_interaction_tool(...) - NEW: Stat-based social actions\n"
+        " - process_relationship_activity_tool(...) - NEW: Activities with NPCs\n\n"
+        "Use these tools to retrieve or update relationship data, trigger or apply crossroads, "
+        "check for rituals, and perform stat-based social interactions. "
         "Return helpful final text or JSON summarizing your result."
     ),
     model = "gpt-4.1-nano",
@@ -1913,6 +2722,9 @@ SocialLinksAgent = Agent(
         check_for_ritual_tool,
         get_relationship_summary_tool,
         update_relationships_from_conflict,
-        update_relationship_context
+        update_relationship_context,
+        get_relationship_insights_tool,
+        perform_social_interaction_tool,
+        process_relationship_activity_tool
     ],
 )
