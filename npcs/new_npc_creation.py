@@ -1433,9 +1433,7 @@ class NPCCreationHandler:
             }
         except Exception as e:
             logging.error(f"Error planning mask revelations for NPC {npc_id}: {e}")
-            return {"error": str(e)},
-                        tripwire_triggered=True
-                    )
+            return {"error": str(e)}
                 
     def _get_memory_generation_agent(self) -> Agent:
         if self._memory_agent is None:
@@ -1946,6 +1944,322 @@ class NPCCreationHandler:
         except Exception as e:
             logging.error(f"Error getting day names: {e}")
             return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    
+    async def assign_random_relationships_dynamic(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
+        """
+        Assign relationships using the dynamic relationship system.
+        This creates multi-dimensional relationships with proper initial states.
+        """
+        logging.info(f"Assigning dynamic relationships for NPC {npc_id} ({npc_name})")
+        
+        from logic.dynamic_relationships import OptimizedRelationshipManager
+        from lore.core import canon
+        
+        # Create context
+        ctx = type("DynamicCtx", (), {
+            "user_id": user_id,
+            "conversation_id": conversation_id
+        })()
+        
+        # Initialize relationship manager
+        rel_manager = OptimizedRelationshipManager(user_id, conversation_id)
+        
+        relationships_created = []
+        
+        # Define explicit mapping for archetypes to relationship labels
+        explicit_role_map = {
+            "mother": "mother",
+            "stepmother": "stepmother",
+            "aunt": "aunt",
+            "older sister": "older sister",
+            "stepsister": "stepsister",
+            "babysitter": "babysitter",
+            "friend from online interactions": "online friend",
+            "neighbor": "neighbor",
+            "rival": "rival",
+            "classmate": "classmate",
+            "lover": "lover",
+            "colleague": "colleague",
+            "teammate": "teammate",
+            "boss/supervisor": "boss/supervisor",
+            "teacher/principal": "teacher/principal",
+            "landlord": "landlord",
+            "roommate/housemate": "roommate",
+            "ex-girlfriend/ex-wife": "ex-partner",
+            "therapist": "therapist",
+            "domestic authority": "head of household",
+            "the one who got away": "the one who got away",
+            "childhood friend": "childhood friend",
+            "friend's wife": "friend",
+            "friend's girlfriend": "friend",
+            "best friend's sister": "friend's sister"
+        }
+        
+        # Define initial dimensions for different relationship types
+        relationship_initial_dimensions = {
+            "mother": {"trust": 70, "respect": 50, "affection": 80, "influence": -60, "dependence": 40},
+            "sister": {"trust": 60, "respect": 40, "affection": 70, "influence": -20, "frequency": 60},
+            "aunt": {"trust": 50, "respect": 45, "affection": 60, "influence": -40, "frequency": 30},
+            "friend": {"trust": 50, "respect": 50, "affection": 60, "frequency": 50},
+            "best friend": {"trust": 70, "respect": 60, "affection": 75, "intimacy": 60, "frequency": 70},
+            "rival": {"trust": 20, "respect": 60, "affection": -20, "volatility": 60, "unresolved_conflict": 40},
+            "enemy": {"trust": -30, "respect": -20, "affection": -50, "volatility": 70, "unresolved_conflict": 60},
+            "lover": {"trust": 60, "affection": 80, "intimacy": 70, "frequency": 60, "fascination": 70},
+            "colleague": {"trust": 30, "respect": 40, "frequency": 40},
+            "boss": {"trust": 20, "respect": 60, "influence": -50, "frequency": 30},
+            "roommate": {"trust": 40, "respect": 30, "frequency": 80, "dependence": 30},
+            "mentor": {"trust": 60, "respect": 80, "influence": -70, "fascination": 50},
+            "ex-partner": {"trust": 10, "affection": 30, "unresolved_conflict": 70, "volatility": 80, "intimacy": 20}
+        }
+        
+        # First, add relationships based on explicit archetype mapping
+        explicit_roles_added = set()
+        if npc_archetypes:
+            for arc in npc_archetypes:
+                arc_name = arc.get("name", "").strip().lower()
+                if arc_name in explicit_role_map:
+                    rel_label = explicit_role_map[arc_name]
+                    
+                    # Create dynamic relationship with player
+                    state = await rel_manager.get_relationship_state(
+                        "npc", npc_id, "player", user_id
+                    )
+                    
+                    # Set initial dimensions based on relationship type
+                    initial_dims = relationship_initial_dimensions.get(
+                        rel_label.split("/")[0], # Handle compound labels like "boss/supervisor"
+                        {"trust": 30, "respect": 30, "frequency": 20}
+                    )
+                    
+                    for dim, value in initial_dims.items():
+                        if hasattr(state.dimensions, dim):
+                            setattr(state.dimensions, dim, value)
+                    
+                    state.dimensions.clamp()
+                    
+                    # Process initial interaction to establish relationship
+                    await rel_manager.process_interaction(
+                        "npc", npc_id, "player", user_id,
+                        {
+                            "type": "helpful_action",
+                            "context": "relationship_established",
+                            "metadata": {"relationship_type": rel_label}
+                        }
+                    )
+                    
+                    relationships_created.append({
+                        "target_entity_type": "player",
+                        "target_entity_id": user_id,
+                        "relationship_label": rel_label,
+                        "dimensions": state.dimensions.to_dict()
+                    })
+                    
+                    explicit_roles_added.add(rel_label)
+                    logging.info(f"Added dynamic relationship '{rel_label}' for NPC {npc_id} to player.")
+        
+        # Default lists for random selection
+        default_familial = ["mother", "sister", "aunt"]
+        default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
+                              "colleague", "classmate", "teammate", "underling", "rival", 
+                              "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
+        
+        # If no explicit familial role was added, consider adding a random non-familial relationship
+        if not (explicit_roles_added & set(default_familial)):
+            if random.random() < 0.5:
+                rel_type = random.choice(default_non_familial)
+                
+                # Create dynamic relationship
+                state = await rel_manager.get_relationship_state(
+                    "npc", npc_id, "player", user_id
+                )
+                
+                initial_dims = relationship_initial_dimensions.get(
+                    rel_type, {"trust": 30, "respect": 30, "frequency": 20}
+                )
+                
+                for dim, value in initial_dims.items():
+                    if hasattr(state.dimensions, dim):
+                        setattr(state.dimensions, dim, value)
+                
+                state.dimensions.clamp()
+                
+                await rel_manager.process_interaction(
+                    "npc", npc_id, "player", user_id,
+                    {
+                        "type": "helpful_action",
+                        "context": "relationship_established",
+                        "metadata": {"relationship_type": rel_type}
+                    }
+                )
+                
+                relationships_created.append({
+                    "target_entity_type": "player",
+                    "target_entity_id": user_id,
+                    "relationship_label": rel_type,
+                    "dimensions": state.dimensions.to_dict()
+                })
+                
+                logging.info(f"Randomly added dynamic relationship '{rel_type}' for NPC {npc_id} to player.")
+        
+        # Now add relationships with other NPCs
+        async with get_db_connection_context() as conn:
+            query = """
+                SELECT npc_id, npc_name, archetype_summary, dominance, cruelty
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id!=$3
+            """
+            
+            rows = await conn.fetch(query, user_id, conversation_id, npc_id)
+            
+            # For each other NPC, potentially create a relationship
+            for row in rows:
+                old_npc_id = row['npc_id']
+                old_npc_name = row['npc_name']
+                old_dominance = row['dominance'] or 50
+                old_cruelty = row['cruelty'] or 30
+                
+                if random.random() < 0.3:
+                    # Choose relationship type based on both NPCs' traits
+                    if explicit_roles_added:
+                        rel_type = random.choice(list(explicit_roles_added))
+                    else:
+                        # Intelligent relationship selection based on stats
+                        if old_dominance > 70 and npc_archetypes and any("subordinate" in a.get("name", "").lower() for a in npc_archetypes):
+                            rel_type = "boss"
+                        elif old_dominance < 30 and npc_archetypes and any("dominant" in a.get("name", "").lower() for a in npc_archetypes):
+                            rel_type = "underling"
+                        elif abs(old_dominance - 50) < 20 and abs(old_cruelty - 30) < 20:
+                            rel_type = random.choice(["friend", "colleague", "neighbor"])
+                        else:
+                            rel_type = random.choice(default_non_familial)
+                    
+                    # Create dynamic relationship
+                    state = await rel_manager.get_relationship_state(
+                        "npc", npc_id, "npc", old_npc_id
+                    )
+                    
+                    initial_dims = relationship_initial_dimensions.get(
+                        rel_type, {"trust": 30, "respect": 30, "frequency": 20}
+                    )
+                    
+                    # Adjust based on relative dominance
+                    if old_dominance > 60:
+                        initial_dims["influence"] = initial_dims.get("influence", 0) - 20
+                    
+                    for dim, value in initial_dims.items():
+                        if hasattr(state.dimensions, dim):
+                            setattr(state.dimensions, dim, value)
+                    
+                    state.dimensions.clamp()
+                    
+                    # Process initial interaction
+                    await rel_manager.process_interaction(
+                        "npc", npc_id, "npc", old_npc_id,
+                        {
+                            "type": "helpful_action",
+                            "context": "relationship_established",
+                            "metadata": {"relationship_type": rel_type}
+                        }
+                    )
+                    
+                    relationships_created.append({
+                        "target_entity_type": "npc",
+                        "target_entity_id": old_npc_id,
+                        "relationship_label": rel_type,
+                        "dimensions": state.dimensions.to_dict()
+                    })
+                    
+                    logging.info(f"Added dynamic relationship '{rel_type}' between NPC {npc_id} and NPC {old_npc_id}.")
+                    
+                    # Generate shared memories
+                    try:
+                        # Generate a relationship-specific memory
+                        specific_memory = await self.generate_relationship_specific_memory(
+                            user_id, conversation_id, 
+                            {"npc_id": npc_id, "npc_name": npc_name}, 
+                            {"npc_id": old_npc_id, "npc_name": old_npc_name},
+                            rel_type
+                        )
+                        
+                        if specific_memory:
+                            # Store in memory system with governance
+                            await remember_through_nyx(
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                entity_type="npc",
+                                entity_id=npc_id,
+                                memory_text=specific_memory,
+                                importance="medium",
+                                emotional=True,
+                                tags=["relationship", rel_type, "dynamic"]
+                            )
+                            
+                            # Create a reciprocal memory for the target NPC
+                            reciprocal_memory = await self.create_reciprocal_memory(
+                                specific_memory, npc_name, old_npc_name, 
+                                rel_type, self.dynamic_reciprocal_relationship(rel_type)
+                            )
+                            
+                            if reciprocal_memory:
+                                await remember_through_nyx(
+                                    user_id=user_id,
+                                    conversation_id=conversation_id,
+                                    entity_type="npc",
+                                    entity_id=old_npc_id,
+                                    memory_text=reciprocal_memory,
+                                    importance="medium",
+                                    emotional=True,
+                                    tags=["relationship", rel_type, "dynamic"]
+                                )
+                    except Exception as e:
+                        logging.error(f"Error generating relationship memories: {e}")
+        
+        # Store relationships in NPCStats for compatibility
+        async with get_db_connection_context() as conn:
+            # Get current relationships
+            current_row = await conn.fetchrow("""
+                SELECT relationships FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+            """, user_id, conversation_id, npc_id)
+            
+            current_relationships = []
+            if current_row and current_row['relationships']:
+                if isinstance(current_row['relationships'], str):
+                    try:
+                        current_relationships = json.loads(current_row['relationships'])
+                    except:
+                        current_relationships = []
+                else:
+                    current_relationships = current_row['relationships'] or []
+            
+            # Add new relationships (simplified format for compatibility)
+            for rel in relationships_created:
+                current_relationships.append({
+                    "relationship_label": rel["relationship_label"],
+                    "entity_type": rel["target_entity_type"],
+                    "entity_id": rel["target_entity_id"]
+                })
+            
+            # Update through canon
+            await canon.update_entity_canonically(
+                ctx, conn, "NPCStats", npc_id,
+                {"relationships": json.dumps(current_relationships)},
+                f"Storing dynamic relationships for NPC {npc_name}"
+            )
+        
+        # Setup relationship evolution tracking (works with dynamic system)
+        await self.setup_relationship_evolution_tracking(
+            user_id, conversation_id, npc_id, 
+            [{"entity_type": r["target_entity_type"], 
+              "entity_id": r["target_entity_id"],
+              "relationship_label": r["relationship_label"]} 
+             for r in relationships_created]
+        )
+        
+        # Flush any pending updates
+        await rel_manager._flush_updates()
+        
+        logging.info(f"Finished assigning {len(relationships_created)} dynamic relationships for NPC {npc_id}.")
     
     async def get_npc_details(self, ctx: RunContextWrapper, npc_id=None, npc_name=None) -> Dict[str, Any]:
         """
@@ -2474,6 +2788,461 @@ class NPCCreationHandler:
                 respect=30,
                 intensity=55,
             )
+
+    async def assign_random_relationships_canonical(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
+        logging.info(f"Assigning canonical relationships for NPC {npc_id} ({npc_name})")
+        
+        from lore.core import canon
+        
+        # Create context
+        ctx = type("CanonCtx", (), {
+            "user_id": user_id,
+            "conversation_id": conversation_id
+        })()
+            
+        relationships = []
+    
+        # Define explicit mapping for archetypes to relationship labels
+        explicit_role_map = {
+            "mother": "mother",
+            "stepmother": "stepmother",
+            "aunt": "aunt",
+            "older sister": "older sister",
+            "stepsister": "stepsister",
+            "babysitter": "babysitter",
+            "friend from online interactions": "online friend",
+            "neighbor": "neighbor",
+            "rival": "rival",
+            "classmate": "classmate",
+            "lover": "lover",
+            "colleague": "colleague",
+            "teammate": "teammate",
+            "boss/supervisor": "boss/supervisor",
+            "teacher/principal": "teacher/principal",
+            "landlord": "landlord",
+            "roommate/housemate": "roommate",
+            "ex-girlfriend/ex-wife": "ex-partner",
+            "therapist": "therapist",
+            "domestic authority": "head of household",
+            "the one who got away": "the one who got away",
+            "childhood friend": "childhood friend",
+            "friend's wife": "friend",
+            "friend's girlfriend": "friend",
+            "best friend's sister": "friend's sister"
+        }
+        
+        # First, add relationships based on explicit archetype mapping
+        if npc_archetypes:
+            for arc in npc_archetypes:
+                arc_name = arc.get("name", "").strip().lower()
+                if arc_name in explicit_role_map:
+                    rel_label = explicit_role_map[arc_name]
+                    relationships.append({
+                        "target_entity_type": "player",
+                        "target_entity_id": user_id,
+                        "relationship_label": rel_label
+                    })
+                    logging.info(f"Added explicit relationship '{rel_label}' for NPC {npc_id} to player.")
+        
+        # Next, determine which explicit roles (if any) were already added
+        explicit_roles_added = {rel["relationship_label"] for rel in relationships}
+        
+        # Define default lists for random selection
+        default_familial = ["mother", "sister", "aunt"]
+        default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
+                              "colleague", "classmate", "teammate", "underling", "rival", 
+                              "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
+        
+        # If no explicit familial role was added, consider assigning a random non-familial relationship with the player
+        if not (explicit_roles_added & set(default_familial)):
+            if random.random() < 0.5:
+                rel_type = random.choice(default_non_familial)
+                relationships.append({
+                    "target_entity_type": "player",
+                    "target_entity_id": user_id,
+                    "relationship_label": rel_type
+                })
+                logging.info(f"Randomly added non-familial relationship '{rel_type}' for NPC {npc_id} to player.")
+        
+        # Now add relationships with other NPCs
+        async with get_db_connection_context() as conn:
+            query = """
+                SELECT npc_id, npc_name, archetype_summary
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id!=$3
+            """
+            
+            rows = await conn.fetch(query, user_id, conversation_id, npc_id)
+            
+            # For each other NPC, potentially create a relationship
+            for row in rows:
+                old_npc_id, old_npc_name, old_arche_summary = row['npc_id'], row['npc_name'], row['archetype_summary']
+                
+                if random.random() < 0.3:
+                    # Check if the current NPC's explicit roles should be used
+                    if explicit_roles_added:
+                        # Prefer one of the explicit roles if available
+                        rel_type = random.choice(list(explicit_roles_added))
+                    else:
+                        rel_type = random.choice(default_non_familial)
+                    relationships.append({
+                        "target_entity_type": "npc",
+                        "target_entity_id": old_npc_id,
+                        "relationship_label": rel_type,
+                        "target_archetype_summary": old_arche_summary or ""
+                    })
+                    logging.info(f"Added relationship '{rel_type}' between NPC {npc_id} and NPC {old_npc_id}.")
+        
+        # Create these relationships canonically - FIXED: Create new connection contexts as needed
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        
+        for rel in relationships:
+            if rel["target_entity_type"] == "player":
+                # Create canonical social link with its own connection
+                async with get_db_connection_context() as conn:
+                    await canon.find_or_create_social_link(
+                        ctx, conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity1_type="npc",
+                        entity1_id=npc_id,
+                        entity2_type="player", 
+                        entity2_id=rel["target_entity_id"],
+                        link_type=rel["relationship_label"],
+                        link_level=10
+                    )
+                    
+                    # Update NPCStats relationships
+                    rel_query = """
+                        SELECT relationships FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """
+                    
+                    row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
+                    relationships_json = row['relationships'] if row else None
+                    
+                    # FIX: Handle None values properly
+                    if relationships_json is None:
+                        current_relationships = []
+                    elif isinstance(relationships_json, str):
+                        try:
+                            current_relationships = json.loads(relationships_json)
+                        except:
+                            current_relationships = []
+                    else:
+                        current_relationships = relationships_json if relationships_json else []
+                    
+                    current_relationships.append({
+                        "relationship_label": rel["relationship_label"],
+                        "entity_type": "player", 
+                        "entity_id": rel["target_entity_id"]
+                    })
+                    
+                    await canon.update_entity_canonically(
+                        ctx, conn, "NPCStats", npc_id,
+                        {"relationships": json.dumps(current_relationships)},
+                        f"Establishing {rel['relationship_label']} relationship with player"
+                    )
+                    
+            else:  # NPC to NPC relationship
+                old_npc_id = rel["target_entity_id"]
+                old_arche_summary = rel.get("target_archetype_summary", "")
+                
+                # Create forward link (no conn needed for this function)
+                async with get_db_connection_context() as conn:
+                    await canon.find_or_create_social_link(
+                        ctx, conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity1_type="npc",
+                        entity1_id=npc_id,
+                        entity2_type="npc",
+                        entity2_id=old_npc_id,
+                        link_type=rel["relationship_label"],
+                        link_level=10
+                    )
+                
+                # Update source NPC's relationships with new connection
+                async with get_db_connection_context() as conn:
+                    rel_query = """
+                        SELECT relationships FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """
+                    
+                    row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
+                    relationships_json = row['relationships'] if row else None
+                    
+                    # FIX: Handle None values properly
+                    if relationships_json is None:
+                        current_relationships = []
+                    elif isinstance(relationships_json, str):
+                        try:
+                            current_relationships = json.loads(relationships_json)
+                        except:
+                            current_relationships = []
+                    else:
+                        current_relationships = relationships_json if relationships_json else []
+                    
+                    current_relationships.append({
+                        "relationship_label": rel["relationship_label"],
+                        "entity_type": "npc", 
+                        "entity_id": old_npc_id
+                    })
+                    
+                    # Get target NPC name
+                    target_name_row = await conn.fetchrow(
+                        "SELECT npc_name FROM NPCStats WHERE npc_id=$1", 
+                        old_npc_id
+                    )
+                    old_npc_name = target_name_row['npc_name'] if target_name_row else f"NPC {old_npc_id}"
+                    
+                    await canon.update_entity_canonically(
+                        ctx, conn, "NPCStats", npc_id,
+                        {"relationships": json.dumps(current_relationships)},
+                        f"Establishing {rel['relationship_label']} relationship with NPC {old_npc_name}"
+                    )
+                
+                # Create reverse link
+                rec_type = self.dynamic_reciprocal_relationship(
+                    rel["relationship_label"],
+                    old_arche_summary
+                )
+                
+                # FIXED: Use canon for reverse link too
+                async with get_db_connection_context() as conn:
+                    await canon.find_or_create_social_link(
+                        ctx, conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity1_type="npc",
+                        entity1_id=old_npc_id,
+                        entity2_type="npc",
+                        entity2_id=npc_id,
+                        link_type=rec_type,
+                        link_level=10
+                    )
+                
+                # Update target NPC's relationships with new connection
+                async with get_db_connection_context() as conn:
+                    target_rel_query = """
+                        SELECT relationships FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """
+                    
+                    row = await conn.fetchrow(target_rel_query, user_id, conversation_id, old_npc_id)
+                    target_relationships_json = row['relationships'] if row else None
+                    
+                    # FIX: Handle None values properly
+                    if target_relationships_json is None:
+                        target_relationships = []
+                    elif isinstance(target_relationships_json, str):
+                        try:
+                            target_relationships = json.loads(target_relationships_json)
+                        except:
+                            target_relationships = []
+                    else:
+                        target_relationships = target_relationships_json if target_relationships_json else []
+                    
+                    target_relationships.append({
+                        "relationship_label": rec_type,
+                        "entity_type": "npc", 
+                        "entity_id": npc_id
+                    })
+                    
+                    await canon.update_entity_canonically(
+                        ctx, conn, "NPCStats", old_npc_id,
+                        {"relationships": json.dumps(target_relationships)},
+                        f"Establishing reciprocal {rec_type} relationship with new NPC {npc_name}"
+                    )
+                
+                # Generate shared memories for both NPCs
+                try:
+                    # Get target NPC name with new connection
+                    async with get_db_connection_context() as conn:
+                        target_name_row = await conn.fetchrow(
+                            "SELECT npc_name FROM NPCStats WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3", 
+                            old_npc_id, user_id, conversation_id
+                        )
+                        target_npc_name = target_name_row['npc_name'] if target_name_row else f"NPC {old_npc_id}"
+                    
+                    # Generate a relationship-specific memory
+                    specific_memory = await self.generate_relationship_specific_memory(
+                        user_id, conversation_id, 
+                        {"npc_id": npc_id, "npc_name": npc_name}, 
+                        {"npc_id": old_npc_id, "npc_name": target_npc_name},
+                        rel["relationship_label"]
+                    )
+                    
+                    if specific_memory:
+                        # Store in memory system with governance
+                        await remember_through_nyx(
+                            user_id=user_id,
+                            conversation_id=conversation_id,
+                            entity_type="npc",
+                            entity_id=npc_id,
+                            memory_text=specific_memory,
+                            importance="medium",
+                            emotional=True,
+                            tags=["relationship", rel["relationship_label"]]
+                        )
+                        
+                        # Create a reciprocal memory for the target NPC
+                        reciprocal_memory = await self.create_reciprocal_memory(
+                            specific_memory, npc_name, target_npc_name, 
+                            rel["relationship_label"], rec_type
+                        )
+                        
+                        if reciprocal_memory:
+                            await remember_through_nyx(
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                entity_type="npc",
+                                entity_id=old_npc_id,
+                                memory_text=reciprocal_memory,
+                                importance="medium",
+                                emotional=True,
+                                tags=["relationship", rec_type]
+                            )
+                except Exception as e:
+                    logging.error(f"Error generating relationship memories: {e}")
+        
+        logging.info(f"Finished assigning canonical relationships for NPC {npc_id}.")
+
+    async def generate_relationship_specific_memory(self, user_id, conversation_id, npc_data, target_data, relationship_type):
+        try:
+            from lore.core import canon
+            
+            # Create context - FIX
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
+                        
+            npc_name = npc_data.get("npc_name", "Unknown")
+            target_name = target_data.get("npc_name", "Unknown")
+            
+            # Get a canonical location for the memory
+            async with get_db_connection_context() as conn:
+                # Use canon to find or create a location
+                location_names = ["Town Square", "Market District", "Garden Plaza", "Library", "Training Grounds"]
+                location = await canon.find_or_create_location(
+                    ctx, conn,
+                    random.choice(location_names)
+                )
+            
+            # Different memory templates based on relationship type
+            memory_templates = {
+                "mother": [
+                    f"I remember when {target_name} was younger and had their first real failure at {location}. The disappointment was visible in their eyes, but I knew this was a teaching moment. 'Sometimes we need to fail to understand the value of success,' I told them, my hand firm but comforting on their shoulder. I could see the resistance at first—that stubborn set of the jaw they inherited from me—but slowly, understanding dawned. How they looked at me then, with a mixture of frustration and reluctant recognition, showed me they were growing in the way I had hoped."
+                ],
+                "friend": [
+                    f"Last month, {target_name} and I spent an afternoon at {location}, supposedly just catching up, but I was carefully observing their reactions to certain topics. 'You always know exactly what to say,' they told me, not realizing how deliberately I choose my words. I smiled and deflected the compliment, but privately noted how easily they opened up about their insecurities. These casual get-togethers are perfect for gathering the small details that might be useful later."
+                ],
+                "colleague": [
+                    f"During the project deadline at {location}, I noticed how {target_name} deferred to my judgment on the final presentation. 'What do you think we should emphasize?' they asked, though technically we were equals on the team. I suggested an approach that showcased my contributions while still acknowledging theirs. The subtle way they nodded, relieved to have direction, confirmed my growing influence in our professional relationship. I've been cultivating this dynamic carefully, one small interaction at a time."
+                ],
+                "rival": [
+                    f"I encountered {target_name} at {location} during the quarterly review, and we engaged in our usual verbal chess match. 'Impressive results,' they said with that smile that never quite reaches their eyes. I returned an equally measured compliment, both of us aware of the real competition beneath our cordial exchange. What they don't realize is how much I study their strategies, cataloging weaknesses for future reference. There's a certain thrill in these encounters—measuring myself against someone who thinks they're my equal."
+                ],
+                "mentor": [
+                    f"I've been guiding {target_name} through their professional development at {location}. Yesterday, I intentionally gave them a task just slightly beyond their current abilities. 'I know you can handle this,' I said, watching them try to hide their uncertainty. The subtle way they looked to me for reassurance was exactly what I wanted—establishing that I'm the source of both challenge and validation. After they completed it with my carefully timed guidance, their gratitude was palpable. These moments of manufactured growth strengthen our mentor-student dynamic."
+                ]
+            }
+            
+            # Get relevant template or use a generic one
+            if relationship_type.lower() in memory_templates:
+                return random.choice(memory_templates[relationship_type.lower()])
+            else:
+                return f"I remember an interaction with {target_name} at {location} that defined our {relationship_type} relationship. There was a moment of genuine connection mixed with the subtle power dynamic that's always been present between us. 'I understand you better than most people do,' I told them, which wasn't exactly what they were expecting to hear. The look of surprise followed by thoughtful consideration showed me they were reassessing our connection. These little moments of revelation always give me a particular satisfaction."
+        
+        except Exception as e:
+            logging.error(f"Error generating relationship memory: {e}")
+            return None
+    
+    async def propagate_shared_memories(self, user_id, conversation_id, source_npc_id, source_npc_name, memories):
+        """
+        Propagate shared memories to related NPCs.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            source_npc_id: ID of the NPC whose memories to propagate
+            source_npc_name: Name of the source NPC
+            memories: List of memory strings to potentially propagate
+        """
+        if not memories:
+            return
+        
+        # Get connections to other NPCs
+        async with get_db_connection_context() as conn:
+            query = """
+                SELECT entity2_id, link_type, link_level
+                FROM SocialLinks
+                WHERE user_id=$1 AND conversation_id=$2 
+                AND entity1_type='npc' AND entity1_id=$3
+                AND entity2_type='npc'
+            """
+            
+            rows = await conn.fetch(query, user_id, conversation_id, source_npc_id)
+            connections = []
+            
+            for row in rows:
+                connections.append({
+                    "npc_id": row['entity2_id'],
+                    "relationship": row['link_type'],
+                    "strength": row['link_level']
+                })
+        
+        if not connections:
+            return
+        
+        # Get memory system instance
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        
+        # Select a subset of memories to propagate (not all memories should be shared)
+        for connection in connections:
+            target_npc_id = connection["npc_id"]
+            relationship = connection["relationship"]
+            strength = connection["strength"]
+            
+            # Only propagate memories to closer relationships
+            if strength < 30:
+                continue
+            
+            # Get target NPC name
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT npc_name FROM NPCStats 
+                    WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+                """
+                
+                row = await conn.fetchrow(query, target_npc_id, user_id, conversation_id)
+                target_npc_name = row['npc_name'] if row else f"NPC {target_npc_id}"
+            
+            # Decide how many memories to share (stronger connections share more)
+            num_to_share = 1
+            if strength > 50:
+                num_to_share = 2
+            if strength > 80:
+                num_to_share = 3
+                
+            # Select random memories to propagate
+            memories_to_share = random.sample(memories, min(num_to_share, len(memories)))
+            
+            # Transform memories to second-hand perspective
+            for memory in memories_to_share:
+                # Create a second-hand version of the memory
+                second_hand_memory = f"{source_npc_name} told me about when {memory[0].lower() + memory[1:]}"
+                
+                # Store the transformed memory
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=target_npc_id,
+                    memory_text=second_hand_memory,
+                    importance="low",  # Lower importance for second-hand memories
+                    emotional=True,
+                    tags=["secondhand", "propagated", relationship]
+                )
 
     
     async def synthesize_archetypes(
