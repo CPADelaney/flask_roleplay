@@ -34,6 +34,9 @@ from db.connection import get_db_connection_context
 import asyncpg
 from lore.core import canon
 
+# Add Pydantic imports
+from pydantic import BaseModel, Field
+
 logger = logging.getLogger(__name__)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -61,6 +64,40 @@ class ActivityType(str, Enum):
     REST = "rest"
 
 ALL_ACTIVITY_TYPES = [activity.value for activity in ActivityType]
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Pydantic Models for LLM Tool Outputs
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+class IntentClassification(BaseModel):
+    """Result of classifying player intent"""
+    activity_type: str = Field(..., description="Activity type from ActivityType enum")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
+
+class IntensityScore(BaseModel):
+    """Result of scoring activity intensity"""
+    intensity: float = Field(..., ge=0.5, le=1.5, description="Intensity multiplier")
+    mood: str = Field(..., description="Detected mood")
+    risk: str = Field(..., description="Risk level")
+
+class EventRecommendation(BaseModel):
+    """A single event recommendation"""
+    event: str = Field(..., description="Event type")
+    score: float = Field(..., ge=0.0, le=1.0, description="Event score")
+    npc_id: Optional[str] = Field(None, description="NPC ID if relevant")
+
+class PhaseRecapResult(BaseModel):
+    """Phase recap and suggestions"""
+    recap: str = Field(..., description="Phase summary")
+    suggestions: List[str] = Field(..., description="Suggested next actions")
+
+class CombinedAnalysis(BaseModel):
+    """Combined intent and intensity analysis"""
+    activity_type: str = Field(..., description="Activity type")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
+    intensity: float = Field(..., ge=0.5, le=1.5, description="Intensity multiplier")
+    mood: str = Field(..., description="Detected mood")
+    risk: str = Field(..., description="Risk level")
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Constants (unchanged from original)
@@ -205,15 +242,15 @@ VITAL_THRESHOLDS = {
 
 # 1. PlayerIntentAgent - Replaces keyword-based classification
 @function_tool
-def classify_intent(sentence: str, location: str = "unknown") -> Dict[str, Any]:
+def classify_intent(sentence: str, location: str = "unknown") -> IntentClassification:
     """
     Classify player intent with confidence score.
     
     Returns:
-        {"activity_type": str (from ActivityType enum), "confidence": float (0.0-1.0)}
+        IntentClassification with activity_type and confidence
     """
     # Schema is enforced by return type annotation
-    return {"activity_type": "quick_chat", "confidence": 0.9}
+    return IntentClassification(activity_type="quick_chat", confidence=0.9)
 
 PlayerIntentAgent = Agent(
     name="PlayerIntentAgent",
@@ -241,14 +278,14 @@ PlayerIntentAgent = Agent(
 
 # 2. IntensityScorer - Calculates nuanced intensity
 @function_tool
-def score_intensity(sentence: str, vitals: Dict[str, int], context_tags: List[str]) -> Dict[str, Any]:
+def score_intensity(sentence: str, vitals: Dict[str, int], context_tags: List[str]) -> IntensityScore:
     """Score the intensity of an activity based on language, vitals, and context."""
     # This would be called by the IntensityScorer agent
-    return {
-        "intensity": 0.8,
-        "mood": "playful",
-        "risk": "low"
-    }
+    return IntensityScore(
+        intensity=0.8,
+        mood="playful",
+        risk="low"
+    )
 
 IntensityScorer = Agent(
     name="IntensityScorer",
@@ -272,11 +309,11 @@ def recommend_events(
     vitals: Dict[str, int],
     plot_flags: List[str],
     relationship_stages: Dict[str, str]
-) -> List[Dict[str, Any]]:
+) -> List[EventRecommendation]:
     """Recommend narrative events based on game state. Returns array of event recommendations."""
     return [
-        {"event": "dream_sequence", "score": 0.78},
-        {"event": "npc_revelation", "npc_id": "nyx", "score": 0.63}
+        EventRecommendation(event="dream_sequence", score=0.78),
+        EventRecommendation(event="npc_revelation", npc_id="nyx", score=0.63)
     ]
 
 NarrativeDirectorAgent = Agent(
@@ -330,16 +367,16 @@ def generate_phase_recap(
     current_goals: List[str],
     npc_standings: Dict[str, Any],
     vitals: Dict[str, int]
-) -> Dict[str, Any]:
+) -> PhaseRecapResult:
     """Generate a recap and suggestions for the next phase."""
-    return {
-        "recap": "Morning was eventful - you attended classes and had a tense encounter with Nyx.",
-        "suggestions": [
+    return PhaseRecapResult(
+        recap="Morning was eventful - you attended classes and had a tense encounter with Nyx.",
+        suggestions=[
             "Grab lunch before your hunger affects performance",
             "Check in with Madison about yesterday's incident",
             "Study for tomorrow's exam with Olivia"
         ]
-    }
+    )
 
 PhaseRecapAgent = Agent(
     name="PhaseRecapAgent",
@@ -365,26 +402,20 @@ def analyze_player_action(
     sentence: str, 
     location: str = "unknown",
     vitals: Dict[str, int] = None
-) -> Dict[str, Any]:
+) -> CombinedAnalysis:
     """
     Combined tool that classifies intent AND calculates intensity in one call.
     
     Returns:
-        {
-            "activity_type": str,
-            "confidence": float,
-            "intensity": float,
-            "mood": str,
-            "risk": str
-        }
+        CombinedAnalysis with all analysis data
     """
-    return {
-        "activity_type": "quick_chat",
-        "confidence": 0.9,
-        "intensity": 1.0,
-        "mood": "neutral",
-        "risk": "low"
-    }
+    return CombinedAnalysis(
+        activity_type="quick_chat",
+        confidence=0.9,
+        intensity=1.0,
+        mood="neutral",
+        risk="low"
+    )
 
 CombinedAnalyzer = Agent(
     name="CombinedAnalyzer",
@@ -446,18 +477,28 @@ async def analyze_action_combined(
         )
         
         if result.output:
+            # Extract from Pydantic model
+            output_data = result.output
+            activity_type = output_data.activity_type
+            
             # Validate and normalize activity type
-            activity_type = result.output.get("activity_type")
             if activity_type:
                 # Case-insensitive validation
                 activity_type_lower = activity_type.lower()
                 if activity_type_lower in [a.lower() for a in ALL_ACTIVITY_TYPES]:
                     # Normalize to exact enum value
-                    result.output["activity_type"] = next(
+                    activity_type = next(
                         (a for a in ALL_ACTIVITY_TYPES if a.lower() == activity_type_lower), 
                         activity_type
                     )
-            return result.output
+            
+            return {
+                "activity_type": activity_type,
+                "confidence": output_data.confidence,
+                "intensity": output_data.intensity,
+                "mood": output_data.mood,
+                "risk": output_data.risk
+            }
             
     except Exception as e:
         logger.warning(f"Combined analysis failed: {e}")
@@ -557,8 +598,9 @@ async def classify_activity_with_llm(
         )
         
         if result.output:
-            activity_type = result.output.get("activity_type")
-            confidence = result.output.get("confidence", 0.0)
+            # Extract from Pydantic model
+            activity_type = result.output.activity_type
+            confidence = result.output.confidence
             
             # Validate activity type (case-insensitive)
             if activity_type and activity_type.lower() in [a.lower() for a in ALL_ACTIVITY_TYPES] and confidence >= 0.5:
@@ -614,7 +656,12 @@ async def calculate_intensity_with_llm(
         )
         
         if result.output:
-            return result.output
+            # Extract from Pydantic model
+            return {
+                "intensity": result.output.intensity,
+                "mood": result.output.mood,
+                "risk": result.output.risk
+            }
             
     except Exception as e:
         logger.warning(f"LLM intensity scoring failed: {e}")
@@ -699,8 +746,17 @@ async def select_events_with_director(
         )
         
         if result.output:
-            # Filter events by score threshold
-            events = [e for e in result.output if e.get("score", 0) > 0.6]
+            # Extract from list of Pydantic models
+            events = []
+            for event_rec in result.output:
+                if event_rec.score > 0.6:
+                    event_dict = {
+                        "event": event_rec.event,
+                        "score": event_rec.score
+                    }
+                    if event_rec.npc_id:
+                        event_dict["npc_id"] = event_rec.npc_id
+                    events.append(event_dict)
             return events[:3]  # Limit to top 3 events
             
     except Exception as e:
@@ -775,6 +831,7 @@ async def narrate_vital_crisis(
     
     # Fall back to generic message
     return crisis.get("message", "You're experiencing a vital crisis!")
+
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Main Enhanced advance_time_with_events Function
@@ -1096,7 +1153,11 @@ async def generate_phase_recap_with_agent(
         )
         
         if result.output:
-            return result.output
+            # Extract from Pydantic model
+            return {
+                "recap": result.output.recap,
+                "suggestions": result.output.suggestions
+            }
             
     except Exception as e:
         logger.warning(f"Phase recap generation failed: {e}")
