@@ -904,6 +904,59 @@ async def get_entity_name(
     else:
         return f"Unknown Entity {entity_id}"
 
+async def detect_deception(user_id: int, conversation_id: int, player_name: str, 
+                          npc_id: int, deception_type: str) -> Dict[str, Any]:
+    """
+    Use empathy to detect NPC deception or hidden emotions.
+    """
+    async with get_db_connection_context() as conn:
+        # Get player empathy
+        empathy = await conn.fetchval("""
+            SELECT empathy FROM PlayerStats
+            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+        """, user_id, conversation_id, player_name)
+        
+        # Get NPC stats for difficulty
+        npc_stats = await conn.fetchrow("""
+            SELECT npc_name, dominance, cruelty FROM NPCStats
+            WHERE npc_id = $1
+        """, npc_id)
+        
+        if not empathy or not npc_stats:
+            return {"success": False, "error": "Missing data"}
+        
+        # Higher dominance = better at hiding intentions
+        deception_skill = npc_stats['dominance'] // 10
+        
+        # Make insight check
+        success = calculate_social_insight(empathy, deception_skill)
+        
+        insight = None
+        if success:
+            insights_map = {
+                "lying": f"{npc_stats['npc_name']} is not being truthful",
+                "hidden_anger": f"{npc_stats['npc_name']} is suppressing anger",
+                "false_kindness": f"{npc_stats['npc_name']}'s friendliness seems forced",
+                "nervousness": f"{npc_stats['npc_name']} is more nervous than they appear",
+                "hidden_motive": f"{npc_stats['npc_name']} has ulterior motives"
+            }
+            insight = insights_map.get(deception_type, "Something seems off")
+            
+            # Trigger hidden stat changes for successful insight
+            await conn.execute("""
+                UPDATE PlayerStats
+                SET confidence = LEAST(100, confidence + 1),
+                    mental_resilience = LEAST(100, mental_resilience + 1)
+                WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+            """, user_id, conversation_id, player_name)
+        
+        return {
+            "success": success,
+            "insight": insight,
+            "empathy_used": empathy,
+            "difficulty": deception_skill * 10
+        }
+
 
 
 async def get_relationship_summary(
