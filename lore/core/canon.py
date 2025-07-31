@@ -1701,67 +1701,59 @@ async def update_current_roleplay(ctx, conn, key: str, value: str) -> None:
     
 async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
     """
-    Find or create a social link between two entities.
+    Legacy wrapper - creates relationship using new system.
+    Returns link_id for compatibility.
     """
+    from logic.dynamic_relationships import OptimizedRelationshipManager
+    
     # Ensure we have a proper context
     ctx = ensure_canonical_context(ctx)
     
-    # Now we can use ctx.user_id and ctx.conversation_id directly
     user_id = kwargs.get('user_id', ctx.user_id)
     conversation_id = kwargs.get('conversation_id', ctx.conversation_id)
     
-    if not user_id or not conversation_id:
-        raise ValueError("user_id and conversation_id are required")
+    # Create manager
+    manager = OptimizedRelationshipManager(user_id, conversation_id)
     
-    entity1_type = kwargs['entity1_type']
-    entity1_id = kwargs['entity1_id']
-    entity2_type = kwargs['entity2_type']
-    entity2_id = kwargs['entity2_id']
-    
-    # Check if link already exists
-    existing = await conn.fetchrow("""
-        SELECT link_id FROM SocialLinks
-        WHERE user_id = $1 AND conversation_id = $2
-        AND entity1_type = $3 AND entity1_id = $4
-        AND entity2_type = $5 AND entity2_id = $6
-    """, user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
-    
-    if existing:
-        return existing['link_id']
-    
-    # Create new link
-    link_id = await conn.fetchval("""
-        INSERT INTO SocialLinks (
-            user_id, conversation_id,
-            entity1_type, entity1_id, entity2_type, entity2_id,
-            link_type, link_level, link_history, dynamics,
-            experienced_crossroads, experienced_rituals
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb)
-        ON CONFLICT (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
-        DO UPDATE SET link_id = EXCLUDED.link_id
-        RETURNING link_id
-    """,
-        user_id, conversation_id,
-        entity1_type, entity1_id, entity2_type, entity2_id,
-        kwargs.get('link_type', 'neutral'),
-        kwargs.get('link_level', 0),
-        json.dumps(kwargs.get('link_history', [])),
-        json.dumps(kwargs.get('dynamics', {})),
-        json.dumps(kwargs.get('experienced_crossroads', [])),
-        json.dumps(kwargs.get('experienced_rituals', []))
+    # Get or create relationship state
+    state = await manager.get_relationship_state(
+        entity1_type=kwargs['entity1_type'],
+        entity1_id=kwargs['entity1_id'],
+        entity2_type=kwargs['entity2_type'],
+        entity2_id=kwargs['entity2_id']
     )
     
-    # Log canonical event
-    await log_canonical_event(
-        ctx, conn,
-        f"Social link created between {entity1_type} {entity1_id} and {entity2_type} {entity2_id}",
-        tags=['social_link', 'creation'],
-        significance=5
-    )
+    # Apply any initial values from kwargs
+    if kwargs.get('link_type'):
+        # Map old link types to dimension changes
+        link_type_mappings = {
+            'friendly': {'affection': 30, 'trust': 20},
+            'hostile': {'affection': -30, 'trust': -20, 'respect': -10},
+            'romantic': {'affection': 50, 'fascination': 40},
+            'mentor': {'respect': 40, 'influence': -30},
+            'rival': {'respect': 30, 'affection': -20, 'volatility': 30}
+        }
+        
+        if kwargs['link_type'] in link_type_mappings:
+            for dim, value in link_type_mappings[kwargs['link_type']].items():
+                if hasattr(state.dimensions, dim):
+                    setattr(state.dimensions, dim, value)
     
-    return link_id
-
+    if kwargs.get('link_level'):
+        # Distribute link level across dimensions
+        level = kwargs['link_level']
+        state.dimensions.affection = level * 0.4
+        state.dimensions.trust = level * 0.3
+        state.dimensions.closeness = level * 0.3
+    
+    # Clamp and save
+    state.dimensions.clamp()
+    await manager._queue_update(state)
+    await manager._flush_updates()
+    
+    # Return link_id
+    return state.link_id or 0
+    
 async def find_or_create_npc_group(ctx, conn, group_data: Dict[str, Any]) -> int:
     """
     Find or create an NPC group.
