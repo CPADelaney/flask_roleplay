@@ -27,7 +27,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from enum import Enum
 
-from agents import Agent, Runner, function_tool, enum_tool
+from agents import Agent, Runner, function_tool
 from agents.run_context import RunContextWrapper
 
 from db.connection import get_db_connection_context
