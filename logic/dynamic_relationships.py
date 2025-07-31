@@ -17,6 +17,7 @@ from typing import Dict, Any, List, Optional, Tuple, Set, Union
 from dataclasses import dataclass, field, asdict
 from collections import deque
 from pathlib import Path
+from pydantic import BaseModel, Field
 
 import asyncpg
 
@@ -37,6 +38,24 @@ from agents import (
 )
 
 logger = logging.getLogger(__name__)
+
+class DimensionDeltas(BaseModel):
+    """Model for dimension deltas in relationship context updates"""
+    trust: Optional[float] = Field(None, ge=-100, le=100)
+    respect: Optional[float] = Field(None, ge=-100, le=100)
+    affection: Optional[float] = Field(None, ge=-100, le=100)
+    fascination: Optional[float] = Field(None, ge=-100, le=100)
+    influence: Optional[float] = Field(None, ge=-100, le=100)
+    dependence: Optional[float] = Field(None, ge=0, le=100)
+    intimacy: Optional[float] = Field(None, ge=0, le=100)
+    frequency: Optional[float] = Field(None, ge=0, le=100)
+    volatility: Optional[float] = Field(None, ge=0, le=100)
+    unresolved_conflict: Optional[float] = Field(None, ge=0, le=100)
+    hidden_agendas: Optional[float] = Field(None, ge=0, le=100)
+    
+    def to_dict(self) -> Dict[str, float]:
+        """Convert to dictionary, excluding None values"""
+        return {k: v for k, v in self.dict().items() if v is not None}
 
 # ========================================================================
 # CONFIGURATION SYSTEM (ENHANCED VALIDATION)
@@ -1502,7 +1521,7 @@ async def update_relationship_context_tool(
     entity2_type: str,
     entity2_id: int,
     situation: str,
-    dimension_deltas: Dict[str, float]
+    dimension_deltas: DimensionDeltas
 ) -> dict:
     """Update context-specific relationship modifiers"""
     manager = OptimizedRelationshipManager(ctx.user_id, ctx.conversation_id)
@@ -1511,8 +1530,9 @@ async def update_relationship_context_tool(
         entity1_type, entity1_id, entity2_type, entity2_id
     )
     
-    # Update context deltas
-    for dimension, delta in dimension_deltas.items():
+    # Convert to dict and update context deltas
+    deltas_dict = dimension_deltas.to_dict()
+    for dimension, delta in deltas_dict.items():
         state.contexts.set_context_delta(situation, dimension, delta)
     
     # Queue for update
@@ -1521,7 +1541,7 @@ async def update_relationship_context_tool(
     return {
         "success": True,
         "situation": situation,
-        "deltas_applied": dimension_deltas
+        "deltas_applied": deltas_dict
     }
 
 # ========================================================================
