@@ -90,6 +90,45 @@ class SimpleContext:
         self.user_id = user_id
         self.conversation_id = conversation_id
 
+class EventImpacts(BaseModel):
+    """Potential impacts from a relationship event choice"""
+    trust: Optional[float] = Field(None, ge=-100, le=100)
+    respect: Optional[float] = Field(None, ge=-100, le=100)
+    affection: Optional[float] = Field(None, ge=-100, le=100)
+    fascination: Optional[float] = Field(None, ge=-100, le=100)
+    influence: Optional[float] = Field(None, ge=-100, le=100)
+    dependence: Optional[float] = Field(None, ge=-100, le=100)
+    intimacy: Optional[float] = Field(None, ge=-100, le=100)
+    frequency: Optional[float] = Field(None, ge=-100, le=100)
+    volatility: Optional[float] = Field(None, ge=-100, le=100)
+    unresolved_conflict: Optional[float] = Field(None, ge=-100, le=100)
+    hidden_agendas: Optional[float] = Field(None, ge=-100, le=100)
+    
+    def to_dict(self) -> Dict[str, float]:
+        """Convert to dictionary, excluding None values"""
+        return {k: v for k, v in self.dict().items() if v is not None}
+
+class EventChoice(BaseModel):
+    """A choice option in a relationship event"""
+    id: str = Field(..., description="Choice identifier")
+    text: str = Field(..., description="Choice display text")
+    potential_impacts: EventImpacts = Field(
+        default_factory=EventImpacts,
+        description="Dimension changes if this choice is selected"
+    )
+
+class RelationshipEventData(BaseModel):
+    """Data for a relationship event that was triggered"""
+    type: str = Field(..., description="Event type (e.g., 'moment_of_truth')")
+    title: str = Field(..., description="Event title")
+    description: str = Field(..., description="Event description")
+    choices: List[EventChoice] = Field(
+        default_factory=list,
+        description="Available choices for the event"
+    )
+    state_key: Optional[str] = Field(None, description="Canonical relationship key")
+    timestamp: Optional[datetime] = Field(None, description="When the event was triggered")
+
 # ============= GENERATIVE AGENTS =============
 
 # Agent for generating dynamic personal revelations
@@ -4063,10 +4102,10 @@ async def get_npc_stage(
 @track_performance("process_relationship_event_choice")
 async def process_relationship_event_choice(
     ctx: RunContextWrapper[ContextType],
-    state_key: str,  # The canonical key from the event
+    state_key: str,
     event_type: str,
     choice_id: str,
-    event_data: Optional[Dict[str, Any]] = None
+    event_data: Optional[RelationshipEventData] = None 
 ) -> Dict[str, Any]:
     """
     Process a player's choice for a relationship event.
@@ -4169,11 +4208,10 @@ async def process_relationship_event_choice(
         else:
             # Extract impacts from provided event data
             impacts = {}
-            if "choices" in event_data:
-                for choice in event_data["choices"]:
-                    if choice.get("id") == choice_id:
-                        impacts = choice.get("potential_impacts", {})
-                        break
+            for choice in event_data.choices:
+                if choice.id == choice_id:
+                    impacts = choice.potential_impacts.to_dict()
+                    break
         
         if not impacts:
             return {
