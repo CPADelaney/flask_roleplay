@@ -507,6 +507,211 @@ class NPCCreationHandler:
                             is_valid=False, 
                             reasoning="Environment description is too short for effective NPC creation"
                         )
+                # Check for required elements
+                required_elements = ["setting", "environment", "world", "location"]
+                if not any(element in input_str.lower() for element in required_elements):
+                    return GuardrailFunctionOutput(
+                        output_info=EnvironmentGuardrailOutput(
+                            is_valid=False, 
+                            reasoning="Environment description lacks essential setting information"
+                        ),
+                        tripwire_triggered=True
+                    )
+                
+                return GuardrailFunctionOutput(
+                    output_info=EnvironmentGuardrailOutput(
+                        is_valid=True, 
+                        reasoning="Environment description is valid"
+                    ),
+                    tripwire_triggered=False
+                )
+            except Exception as e:
+                logging.error(f"Error in environment guardrail: {e}")
+                return GuardrailFunctionOutput(
+                    output_info=EnvironmentGuardrailOutput(
+                        is_valid=False, 
+                        reasoning=f"Error validating environment: {str(e)}"
+                    ),
+                    tripwire_triggered=True
+                )
+                
+        # Personality designer agent
+        self.personality_designer = Agent(
+            name="NPCPersonalityDesigner",
+            instructions="""
+            You are a specialist in designing unique and consistent NPC personalities.
+            
+            Create personalities with:
+            - 3-5 distinct personality traits that form a coherent character
+            - 3-5 likes that align with the personality
+            - 3-5 dislikes that create interesting tension
+            - 2-4 hobbies or interests that make the character feel three-dimensional
+            
+            The personalities should feel like real individuals with subtle psychological
+            depth. Include traits that suggest hidden layers, secret motivations, or
+            potential for character growth.
+            
+            For femdom-themed worlds, incorporate subtle traits related to control,
+            authority, or psychological dominance.
+            These should be woven naturally into the personality.
+            """,
+            output_type=NPCPersonalityData,
+            model="gpt-4.1-nano",
+        )
+        
+        # Stats calibrator agent
+        self.stats_calibrator = Agent(
+            name="NPCStatsCalibrator",
+            instructions="""
+            You calibrate NPC stats to match their personality and archetypes.
+            
+            Determine appropriate values (0-100) for:
+            - dominance: How naturally controlling/authoritative the NPC is
+            - cruelty: How willing the NPC is to cause discomfort/distress
+            - closeness: How emotionally available/connected the NPC is
+            - trust: Trust toward the player (-100 to 100)
+            - respect: Respect toward the player (-100 to 100)
+            - intensity: Overall emotional/psychological intensity
+            
+            The stats should align coherently with the personality traits and archetypes.
+            For femdom-themed NPCs, calibrate dominance higher (50-90) while ensuring
+            other stats create a balanced, nuanced character. Cruelty can vary widely
+            depending on personality (10-80).
+            """,
+            output_type=NPCStatsData,
+            model="gpt-4.1-nano",
+        )
+        
+        # Archetype synthesizer agent
+        self.archetype_synthesizer = Agent(
+            name="NPCArchetypeSynthesizer",
+            instructions="""
+            You synthesize multiple archetypes into a coherent character concept.
+            
+            Given multiple archetypes, create:
+            - A cohesive archetype summary that blends the archetypes
+            - An extras summary explaining how the archetype fusion affects the character
+            
+            The synthesis should feel natural rather than forced, identifying common
+            themes and resolving contradictions between archetypes. Focus on how the
+            archetypes interact to create a unique character foundation.
+            
+            For femdom-themed archetypes, emphasize subtle dominance dynamics while
+            maintaining psychological realism and depth.
+            """,
+            output_type=NPCArchetypeData,
+            model="gpt-4.1-nano",
+            tools=[function_tool(self.get_available_archetypes)]
+        )
+        
+        # Main NPC creator agent 
+        self.npc_creator = Agent(
+            name="NPCCreator",
+            instructions="""
+            You are a specialized agent for creating detailed NPCs for a roleplaying game with subtle femdom elements.
+            
+            Create NPCs with:
+            - Consistent and coherent personalities
+            - Realistic motivations and backgrounds
+            - Subtle dominance traits hidden behind friendly facades
+            - Detailed physical and personality descriptions
+            - Appropriate archetypes that fit the game's themes
+            
+            The NPCs should feel like real individuals with complex personalities and hidden agendas,
+            while maintaining a balance between mundane everyday characteristics and subtle control dynamics.
+            """,
+            output_type=NPCCreationInput,
+            model="gpt-4.1-nano",
+            tools=[
+                function_tool(self.suggest_archetypes),
+                function_tool(self.get_environment_details)
+            ]
+        )
+        
+        # Schedule creator agent
+        self.schedule_creator = Agent(
+            name="ScheduleCreator",
+            instructions="""
+            You create detailed, realistic daily schedules for NPCs in a roleplaying game.
+            
+            Each schedule should:
+            - Fit the NPC's personality, interests, and social status
+            - Follow a realistic pattern throughout the week
+            - Include variations for different days
+            - Place the NPC in appropriate locations at appropriate times
+            - Include opportunities for player interactions
+            
+            The schedules should feel natural and mundane while creating opportunities for
+            subtle power dynamics to emerge during player encounters.
+            """,
+            model="gpt-4.1-nano",
+            tools=[
+                function_tool(self.get_locations),
+                function_tool(self.get_npc_details)
+            ]
+        )
+        
+        # Memory creator agent
+        self.memory_creator = Agent(
+            name="MemoryCreator",
+            instructions="""
+            You create psychologically rich memories for NPCs that establish their background, relationships, and personality.
+            
+            Each memory should:
+            - Be written in first-person perspective
+            - Include sensory details and emotional responses
+            - Reveal aspects of the NPC's true nature and personality
+            - Establish connections to the environment and other characters
+            - For femdom-themed worlds, subtly hint at control dynamics and authority patterns
+            
+            Memories should feel authentic and provide insight into how the NPC views themselves and others.
+            """,
+            model="gpt-4.1-nano",
+            tools=[
+                function_tool(self.get_npc_details),
+                function_tool(self.get_environment_details)
+            ]
+        )
+        
+        # Main agent with input guardrail
+        self.agent = Agent(
+            name="NPCCreator",
+            instructions="""
+            You are an expert NPC creator for immersive, psychologically realistic role-playing games.
+            
+            Create detailed NPCs with:
+            - Unique names and physical descriptions
+            - Consistent personalities and motivations
+            - Appropriate stat calibrations
+            - Coherent archetype synthesis
+            - Detailed schedules and memories
+            - Subtle elements of control and influence where appropriate
+            
+            The NPCs should feel like real people with histories, quirks, and hidden depths.
+            Focus on psychological realism and subtle complexity rather than explicit themes.
+            
+            For femdom-themed worlds, incorporate subtle dominance dynamics
+            into the character design without being heavy-handed or explicit.
+            These elements should be woven naturally into the character's psychology.
+            """,
+            model="gpt-4.1-nano",
+            tools=[
+                function_tool(self.generate_npc_name),
+                function_tool(self.generate_physical_description),
+                function_tool(self.design_personality),
+                function_tool(self.calibrate_stats),
+                function_tool(self.synthesize_archetypes),
+                function_tool(self.generate_schedule),
+                function_tool(self.generate_memories),
+                function_tool(self.create_npc_in_database),
+                function_tool(self.get_environment_details),
+                function_tool(self.get_day_names)
+            ],
+            input_guardrails=[environment_guardrail]
+        )
+        
+        # Keep track of existing NPC names to ensure uniqueness
+        self.existing_npc_names = set()
     
     async def initialize_npc_emotional_state(self, user_id, conversation_id, npc_id, npc_data, memories):
         """
@@ -1230,205 +1435,6 @@ class NPCCreationHandler:
                         tripwire_triggered=True
                     )
                 
-                # Check for required elements
-                required_elements = ["setting", "environment", "world", "location"]
-                if not any(element in input_str.lower() for element in required_elements):
-                    return GuardrailFunctionOutput(
-                        output_info=EnvironmentGuardrailOutput(
-                            is_valid=False, 
-                            reasoning="Environment description lacks essential setting information"
-                        ),
-                        tripwire_triggered=True
-                    )
-                
-                return GuardrailFunctionOutput(
-                    output_info=EnvironmentGuardrailOutput(
-                        is_valid=True, 
-                        reasoning="Environment description is valid"
-                    ),
-                    tripwire_triggered=False
-                )
-            except Exception as e:
-                logging.error(f"Error in environment guardrail: {e}")
-                return GuardrailFunctionOutput(
-                    output_info=EnvironmentGuardrailOutput(
-                        is_valid=False, 
-                        reasoning=f"Error validating environment: {str(e)}"
-                    ),
-                    tripwire_triggered=True
-                )
-                
-        # Personality designer agent
-        self.personality_designer = Agent(
-            name="NPCPersonalityDesigner",
-            instructions="""
-            You are a specialist in designing unique and consistent NPC personalities.
-            
-            Create personalities with:
-            - 3-5 distinct personality traits that form a coherent character
-            - 3-5 likes that align with the personality
-            - 3-5 dislikes that create interesting tension
-            - 2-4 hobbies or interests that make the character feel three-dimensional
-            
-            The personalities should feel like real individuals with subtle psychological
-            depth. Include traits that suggest hidden layers, secret motivations, or
-            potential for character growth.
-            
-            For femdom-themed worlds, incorporate subtle traits related to control,
-            authority, or psychological dominance.
-            These should be woven naturally into the personality.
-            """,
-            output_type=NPCPersonalityData
-        )
-        
-        # Stats calibrator agent
-        self.stats_calibrator = Agent(
-            name="NPCStatsCalibrator",
-            instructions="""
-            You calibrate NPC stats to match their personality and archetypes.
-            
-            Determine appropriate values (0-100) for:
-            - dominance: How naturally controlling/authoritative the NPC is
-            - cruelty: How willing the NPC is to cause discomfort/distress
-            - closeness: How emotionally available/connected the NPC is
-            - trust: Trust toward the player (-100 to 100)
-            - respect: Respect toward the player (-100 to 100)
-            - intensity: Overall emotional/psychological intensity
-            
-            The stats should align coherently with the personality traits and archetypes.
-            For femdom-themed NPCs, calibrate dominance higher (50-90) while ensuring
-            other stats create a balanced, nuanced character. Cruelty can vary widely
-            depending on personality (10-80).
-            """,
-            output_type=NPCStatsData
-        )
-        
-        # Archetype synthesizer agent
-        self.archetype_synthesizer = Agent(
-            name="NPCArchetypeSynthesizer",
-            instructions="""
-            You synthesize multiple archetypes into a coherent character concept.
-            
-            Given multiple archetypes, create:
-            - A cohesive archetype summary that blends the archetypes
-            - An extras summary explaining how the archetype fusion affects the character
-            
-            The synthesis should feel natural rather than forced, identifying common
-            themes and resolving contradictions between archetypes. Focus on how the
-            archetypes interact to create a unique character foundation.
-            
-            For femdom-themed archetypes, emphasize subtle dominance dynamics while
-            maintaining psychological realism and depth.
-            """,
-            output_type=NPCArchetypeData,
-            tools=[function_tool(self.get_available_archetypes)]
-        )
-        
-        # Main NPC creator agent 
-        self.npc_creator = Agent(
-            name="NPCCreator",
-            instructions="""
-            You are a specialized agent for creating detailed NPCs for a roleplaying game with subtle femdom elements.
-            
-            Create NPCs with:
-            - Consistent and coherent personalities
-            - Realistic motivations and backgrounds
-            - Subtle dominance traits hidden behind friendly facades
-            - Detailed physical and personality descriptions
-            - Appropriate archetypes that fit the game's themes
-            
-            The NPCs should feel like real individuals with complex personalities and hidden agendas,
-            while maintaining a balance between mundane everyday characteristics and subtle control dynamics.
-            """,
-            output_type=NPCCreationInput,
-            tools=[
-                function_tool(self.suggest_archetypes),
-                function_tool(self.get_environment_details)
-            ]
-        )
-        
-        # Schedule creator agent
-        self.schedule_creator = Agent(
-            name="ScheduleCreator",
-            instructions="""
-            You create detailed, realistic daily schedules for NPCs in a roleplaying game.
-            
-            Each schedule should:
-            - Fit the NPC's personality, interests, and social status
-            - Follow a realistic pattern throughout the week
-            - Include variations for different days
-            - Place the NPC in appropriate locations at appropriate times
-            - Include opportunities for player interactions
-            
-            The schedules should feel natural and mundane while creating opportunities for
-            subtle power dynamics to emerge during player encounters.
-            """,
-            tools=[
-                function_tool(self.get_locations),
-                function_tool(self.get_npc_details)
-            ]
-        )
-        
-        # Memory creator agent
-        self.memory_creator = Agent(
-            name="MemoryCreator",
-            instructions="""
-            You create psychologically rich memories for NPCs that establish their background, relationships, and personality.
-            
-            Each memory should:
-            - Be written in first-person perspective
-            - Include sensory details and emotional responses
-            - Reveal aspects of the NPC's true nature and personality
-            - Establish connections to the environment and other characters
-            - For femdom-themed worlds, subtly hint at control dynamics and authority patterns
-            
-            Memories should feel authentic and provide insight into how the NPC views themselves and others.
-            """,
-            tools=[
-                function_tool(self.get_npc_details),
-                function_tool(self.get_environment_details)
-            ]
-        )
-        
-        # Main agent with input guardrail
-        self.agent = Agent(
-            name="NPCCreator",
-            instructions="""
-            You are an expert NPC creator for immersive, psychologically realistic role-playing games.
-            
-            Create detailed NPCs with:
-            - Unique names and physical descriptions
-            - Consistent personalities and motivations
-            - Appropriate stat calibrations
-            - Coherent archetype synthesis
-            - Detailed schedules and memories
-            - Subtle elements of control and influence where appropriate
-            
-            The NPCs should feel like real people with histories, quirks, and hidden depths.
-            Focus on psychological realism and subtle complexity rather than explicit themes.
-            
-            For femdom-themed worlds, incorporate subtle dominance dynamics
-            into the character design without being heavy-handed or explicit.
-            These elements should be woven naturally into the character's psychology.
-            """,
-            tools=[
-                function_tool(self.generate_npc_name),
-                function_tool(self.generate_physical_description),
-                function_tool(self.design_personality),
-                function_tool(self.calibrate_stats),
-                function_tool(self.synthesize_archetypes),
-                function_tool(self.generate_schedule),
-                function_tool(self.generate_memories),
-                function_tool(self.create_npc_in_database),
-                function_tool(self.get_environment_details),
-                function_tool(self.get_day_names)
-            ],
-            input_guardrails=[environment_guardrail]
-        )
-        
-        # Keep track of existing NPC names to ensure uniqueness
-        self.existing_npc_names = set()
-
     def _get_memory_generation_agent(self) -> Agent:
         if self._memory_agent is None:
             self._memory_agent = Agent(
