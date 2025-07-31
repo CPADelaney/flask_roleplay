@@ -24,7 +24,7 @@ import random
 import json
 import asyncio
 from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 
 from agents import Agent, Runner, function_tool
@@ -802,7 +802,12 @@ async def advance_time_with_events(
         get_npc_narrative_stage,
         check_for_npc_revelation
     )
-    from logic.social_links import check_for_relationship_crossroads, check_for_relationship_ritual
+    # Import the new dynamic relationships system instead of social_links
+    from logic.dynamic_relationships import (
+        OptimizedRelationshipManager,
+        event_generator,
+        drain_relationship_events_tool
+    )
     from logic.stats_logic import apply_stat_changes
 
     npc_handler = NPCCreationHandler()
@@ -897,6 +902,29 @@ async def advance_time_with_events(
                 "most_advanced": relationship_overview['most_advanced_npcs'][:1]
             })
 
+        # Check for relationship events using the new dynamic system
+        # Create context for the relationship tools
+        relationship_ctx = RunContextWrapper({
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        })
+        
+        # Drain any pending relationship events
+        relationship_events = await drain_relationship_events_tool(
+            ctx=relationship_ctx,
+            max_events=5  # Limit to 5 events per time advancement
+        )
+        
+        if relationship_events.get("events"):
+            for event_data in relationship_events["events"]:
+                event = event_data.get("event")
+                if event:
+                    events.append({
+                        "type": "relationship_event",
+                        "event": event,
+                        "state_key": event_data.get("state_key")
+                    })
+
         # Use NarrativeDirector for intelligent event selection
         # Adapt based on activity mood if provided
         event_score_modifiers = {}
@@ -906,7 +934,7 @@ async def advance_time_with_events(
                 event_score_modifiers["vital_crisis"] = 1.3
             elif activity_mood == "playful":
                 event_score_modifiers["npc_revelation"] = 1.2
-                event_score_modifiers["relationship_crossroads"] = 1.2
+                event_score_modifiers["relationship_event"] = 1.2
             elif activity_mood == "submissive":
                 event_score_modifiers["personal_revelation"] = 1.3
                 event_score_modifiers["narrative_moment"] = 1.2
@@ -2383,6 +2411,7 @@ Prioritize narrative cohesion and character development over random events.
 TimeCycleAgent = Agent[TimeCycleContext](
     name="TimeCycleAgent",
     instructions=TIMECYCLE_AGENT_INSTRUCTIONS,
+    model="gpt-4.1-nano",
     tools=[
         tool_classify_activity,
         tool_calculate_intensity,
