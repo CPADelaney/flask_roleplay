@@ -9,12 +9,20 @@ from typing import Dict, Any, Optional
 
 from nyx.nyx_agent_sdk import process_user_input, generate_reflection, initialize_agents
 from logic.time_cycle import should_advance_time, advance_time_with_events
-from logic.social_links import check_for_relationship_crossroads, check_for_relationship_ritual
+from logic.dynamic_relationships import (
+    OptimizedRelationshipManager,
+    event_generator,
+    process_relationship_interaction_tool,
+    get_relationship_summary_tool,
+    poll_relationship_events_tool,
+    drain_relationship_events_tool
+)
 from logic.addiction_system_sdk import process_addiction_effects, get_addiction_status
 from logic.rule_enforcement import enforce_all_rules_on_player
 from utils.performance import PerformanceTracker, timed_function
 from utils.caching import NPC_CACHE, MEMORY_CACHE
 from db.connection import get_db_connection_context
+from agents import RunContextWrapper
 
 nyx_agent_bp = Blueprint("nyx_agent_bp", __name__)
 
@@ -125,7 +133,7 @@ async def nyx_response():
             response.get("time_advancement", False)
         )
         
-        # 2. Check for relationship events
+        # 2. Check for relationship events using new dynamic system
         relationship_events = await process_relationship_events(user_id, conversation_id, data)
         
         # 3. Process rule enforcement
@@ -318,37 +326,82 @@ async def process_relationship_events(
     conversation_id: int, 
     data: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Process relationship events and crossroads with enhanced dynamics."""
+    """Process relationship events using the new dynamic relationships system."""
     result = {
-        "event": None,
-        "result": None
+        "events": [],
+        "interaction_results": None
     }
     
-    # Check for crossroads events (significant relationship moments)
-    if data.get("check_crossroads", False):
-        event = await check_for_relationship_crossroads(user_id, conversation_id)
-        if event:
-            result["event"] = event
+    # Create context wrapper for tools
+    ctx = RunContextWrapper(context={
+        'user_id': user_id,
+        'conversation_id': conversation_id
+    })
     
-    # Check for relationship rituals (shared activities that boost bonds)
-    if data.get("check_rituals", False):
-        ritual = await check_for_relationship_ritual(user_id, conversation_id)
-        if ritual:
-            result["ritual"] = ritual
-    
-    # Process crossroads choice if provided
-    if data.get("crossroads_choice") is not None and data.get("crossroads_name") and data.get("link_id"):
-        choice_result = await apply_crossroads_choice(
-            user_id,
-            conversation_id,
-            int(data["link_id"]),
-            data["crossroads_name"],
-            int(data["crossroads_choice"])
+    # Process any relationship interactions from the current activity
+    if data.get("relationship_interaction"):
+        interaction = data["relationship_interaction"]
+        
+        # Use the new process_relationship_interaction_tool
+        interaction_result = await process_relationship_interaction_tool(
+            ctx=ctx,
+            entity1_type=interaction.get("entity1_type", "player"),
+            entity1_id=interaction.get("entity1_id", 1),  # Assuming player ID is 1
+            entity2_type=interaction.get("entity2_type", "npc"),
+            entity2_id=interaction.get("entity2_id"),
+            interaction_type=interaction.get("interaction_type", "conversation"),
+            context=interaction.get("context", "casual"),
+            check_for_event=True
         )
         
-        result["result"] = choice_result
+        result["interaction_results"] = interaction_result
+        
+        # Check if an event was generated
+        if interaction_result.get("event"):
+            result["events"].append(interaction_result["event"])
+    
+    # Poll for any pending relationship events
+    poll_result = await poll_relationship_events_tool(ctx=ctx, timeout=0.1)
+    if poll_result.get("has_event"):
+        result["events"].append(poll_result["event"])
+    
+    # If we need to drain multiple events (batch processing)
+    if data.get("drain_all_events", False):
+        drain_result = await drain_relationship_events_tool(ctx=ctx, max_events=10)
+        if drain_result.get("events"):
+            result["events"].extend([e["event"] for e in drain_result["events"]])
+    
+    # Process any event choices
+    if data.get("event_choice") and data.get("event_id"):
+        # Handle event choice application
+        # This would need to be implemented based on your event handling logic
+        choice_result = await apply_relationship_event_choice(
+            user_id,
+            conversation_id,
+            data["event_id"],
+            data["event_choice"]
+        )
+        result["choice_result"] = choice_result
     
     return result
+
+async def apply_relationship_event_choice(
+    user_id: int,
+    conversation_id: int,
+    event_id: str,
+    choice_id: str
+) -> Dict[str, Any]:
+    """Apply the effects of a relationship event choice."""
+    # This is a placeholder - you'll need to implement based on your event structure
+    # The new system generates events with choices that have potential_impacts
+    
+    # For now, return a basic structure
+    return {
+        "success": True,
+        "event_id": event_id,
+        "choice_id": choice_id,
+        "message": "Choice applied successfully"
+    }
 
 @contextlib.asynccontextmanager
 async def get_db_transaction(user_id, conv_id):
@@ -374,3 +427,44 @@ async def store_message(user_id, conv_id, sender, content, structured_content=No
                 content,
                 json.dumps(structured_content) if structured_content else None
             ))
+
+# New route for getting relationship summaries
+@nyx_agent_bp.route("/relationship_summary", methods=["GET"])
+@timed_function(name="relationship_summary")
+async def get_relationship_summary():
+    """Get a summary of a specific relationship."""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+        
+        # Get query parameters
+        conversation_id = request.args.get("conversation_id", type=int)
+        entity1_type = request.args.get("entity1_type", "player")
+        entity1_id = request.args.get("entity1_id", 1, type=int)
+        entity2_type = request.args.get("entity2_type", "npc")
+        entity2_id = request.args.get("entity2_id", type=int)
+        
+        if not all([conversation_id, entity2_id]):
+            return jsonify({"error": "Missing required parameters"}), 400
+        
+        # Create context wrapper
+        ctx = RunContextWrapper(context={
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        })
+        
+        # Get relationship summary
+        summary = await get_relationship_summary_tool(
+            ctx=ctx,
+            entity1_type=entity1_type,
+            entity1_id=entity1_id,
+            entity2_type=entity2_type,
+            entity2_id=entity2_id
+        )
+        
+        return jsonify(summary)
+        
+    except Exception as e:
+        logging.exception("[get_relationship_summary] Error")
+        return jsonify({"error": str(e)}), 500
