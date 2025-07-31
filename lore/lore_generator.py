@@ -16,7 +16,6 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime
 from dataclasses import dataclass
 from db.connection import get_db_connection_context
-from logic.chatgpt_integration import get_async_openai_client
 
 # Agents SDK imports
 from agents import Agent, ModelSettings, function_tool, Runner
@@ -2077,11 +2076,9 @@ class DynamicLoreGenerator(BaseGenerator):
         if self.lore_evolution:
             await self.lore_evolution.cleanup()
 
-
-# Agent getter functions - Updated with wrap_array_field parameter
-# Agent getter functions - Updated to use the proper client
 def get_foundation_lore_agent():
     """Get or create the foundation lore agent."""
+    from logic.chatgpt_integration import get_async_openai_client
     return Agent(
         name="FoundationLoreAgent",
         instructions=(
@@ -2102,6 +2099,7 @@ def get_foundation_lore_agent():
 
 def get_factions_agent():
     """Get or create the factions agent."""
+    from logic.chatgpt_integration import get_async_openai_client
     return Agent(
         name="FactionsAgent",
         instructions=(
@@ -2143,6 +2141,7 @@ def get_factions_agent():
 
 def get_cultural_agent():
     """Get or create the cultural agent."""
+    from logic.chatgpt_integration import get_async_openai_client
     return Agent(
         name="CulturalAgent",
         instructions=(
@@ -2163,6 +2162,7 @@ def get_cultural_agent():
 
 def get_history_agent():
     """Get or create the history agent."""
+    from logic.chatgpt_integration import get_async_openai_client
     return Agent(
         name="HistoryAgent",
         instructions=(
@@ -2183,6 +2183,7 @@ def get_history_agent():
 
 def get_locations_agent():
     """Get or create the locations agent."""
+    from logic.chatgpt_integration import get_async_openai_client
     return Agent(
         name="LocationsAgent",
         instructions=(
@@ -2205,6 +2206,7 @@ def get_locations_agent():
 
 def get_quests_agent():
     """Get or create the quests agent."""
+    from logic.chatgpt_integration import get_async_openai_client
     return Agent(
         name="QuestsAgent",
         instructions=(
