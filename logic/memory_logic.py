@@ -749,7 +749,7 @@ async def add_memory(user_id: int, conversation_id: int, entity_id: Union[int, s
 
     
 @staticmethod
-async def propagate_significant_memory(user_id: int, conversation_id: int, source_entity_id: Union[int, str], source_entity_type: str, memory: EnhancedMemory): # Changed to async def
+async def propagate_significant_memory(user_id: int, conversation_id: int, source_entity_id: Union[int, str], source_entity_type: str, memory: EnhancedMemory):
     """Propagate significant memories to related NPCs using asyncpg."""
     links = []
     try:
@@ -770,44 +770,51 @@ async def propagate_significant_memory(user_id: int, conversation_id: int, sourc
                 AND ((entity1_type=$3 AND entity1_id=$4) OR (entity2_type=$3 AND entity2_id=$4))
             """, user_id, conversation_id, source_entity_type, int(source_entity_id))
             
-            # Process each link
+            # Filter links to only include strong relationships
+            strong_links = []
             for link in links:
                 # Parse dynamics JSON to check relationship strength
                 dynamics = json.loads(link['dynamics']) if isinstance(link['dynamics'], str) else link['dynamics']
                 
                 # Check if relationship is strong enough (e.g., trust > 50 or affection > 50)
                 if dynamics.get('trust', 0) >= 50 or dynamics.get('affection', 0) >= 50:
-
-        if not links:
-             # logger.debug(f"No strong links found for {source_entity_type} {source_entity_id} to propagate memory.")
-             return True # Not an error if no links exist
-
+                    strong_links.append(link)
+        
+        # Now check if we have any strong links
+        if not strong_links:
+            # logger.debug(f"No strong links found for {source_entity_type} {source_entity_id} to propagate memory.")
+            return True  # Not an error if no links exist
+        
         propagation_tasks = []
-        for link in links:
-            e1_type, e1_id, e2_type, e2_id, link_type, link_level = link['entity1_type'], str(link['entity1_id']), link['entity2_type'], str(link['entity2_id']), link['link_type'], link['link_level']
-
-            target_type, target_id = (e2_type, e2_id) if e1_type == source_entity_type and e1_id == str(source_entity_id) else (e1_type, e1_id)
-
-            if target_type != "npc": # Don't propagate back to player this way
+        for link in strong_links:
+            e1_type, e1_id, e2_type, e2_id = link['entity1_type'], str(link['entity1_id']), link['entity2_type'], str(link['entity2_id'])
+            
+            # Determine target based on source
+            if e1_type == source_entity_type and e1_id == str(source_entity_id):
+                target_type, target_id = e2_type, e2_id
+            else:
+                target_type, target_id = e1_type, e1_id
+            
+            if target_type != "npc":  # Don't propagate back to player this way
                 continue
-            if target_id == str(source_entity_id) and target_type == source_entity_type: # Skip self
-                 continue
-
+            if target_id == str(source_entity_id) and target_type == source_entity_type:  # Skip self
+                continue
+            
             # Create modified memory for target's perspective
             target_memory = EnhancedMemory(
                 f"I heard that {memory.text}",
                 memory_type=MemoryType.OBSERVATION,
                 significance=max(MemorySignificance.LOW, memory.significance - 2),
-                emotional_valence = int(memory.emotional_valence * 0.7), # Keep as int
-                tags = memory.tags + ["secondhand", f"link:{link_type}"]
+                emotional_valence=int(memory.emotional_valence * 0.7),  # Keep as int
+                tags=memory.tags + ["secondhand"]
             )
-
+            
             # Create a task to add the memory to the target NPC
             # Avoid awaiting each add_memory sequentially inside the loop
             propagation_tasks.append(
                 MemoryManager.add_memory(
                     user_id, conversation_id,
-                    int(target_id) if target_id.isdigit() else target_id, # Convert back to int if needed
+                    int(target_id) if target_id.isdigit() else target_id,  # Convert back to int if needed
                     target_type,
                     target_memory.text,
                     target_memory.memory_type,
@@ -816,18 +823,18 @@ async def propagate_significant_memory(user_id: int, conversation_id: int, sourc
                     target_memory.tags
                 )
             )
-
+        
         # Run all propagation additions concurrently
         if propagation_tasks:
             results = await asyncio.gather(*propagation_tasks, return_exceptions=True)
             # Log any errors from propagation attempts
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                     logger.error(f"Error propagating memory during gather task {i}: {result}", exc_info=result)
+                    logger.error(f"Error propagating memory during gather task {i}: {result}", exc_info=result)
             logger.info(f"Attempted to propagate memory to {len(propagation_tasks)} linked NPCs.")
-
-        return True # Indicate propagation attempt finished
-
+        
+        return True  # Indicate propagation attempt finished
+    
     except asyncpg.PostgresError as e:
         logger.error(f"Database error propagating memory from {source_entity_type} {source_entity_id}: {e}", exc_info=True)
         return False
