@@ -235,7 +235,18 @@ function updateAdminButtonVisibility() {
 // ===== New Game Dropdown Functions =====
 function toggleNewGameDropdown() {
   const dropdown = $('newGameDropdown');
-  dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+  console.log("toggleNewGameDropdown called, dropdown:", dropdown);
+  
+  if (!dropdown) {
+    console.error("Dropdown element not found!");
+    return;
+  }
+  
+  const currentDisplay = window.getComputedStyle(dropdown).display;
+  console.log("Computed display:", currentDisplay);
+  
+  dropdown.style.display = currentDisplay === 'none' ? 'block' : 'none';
+  console.log("New display:", dropdown.style.display);
 }
 
 // Show preset stories modal
@@ -294,9 +305,25 @@ async function startPresetGame(storyId) {
   closePresetStoryModal();
 
   const newGameBtn = $("newGameBtn");
+  // Debug version - add this temporarily to chat_page.js
   if (newGameBtn) {
-    newGameBtn.disabled = true;
-    newGameBtn.textContent = "Creating...";
+      console.log("New Game button found:", newGameBtn);
+      
+      newGameBtn.addEventListener("click", function(e) {
+          console.log("New Game button clicked!");
+          e.stopPropagation();
+          e.preventDefault(); // Add this to prevent any default behavior
+          
+          const dropdown = $('newGameDropdown');
+          console.log("Dropdown element:", dropdown);
+          console.log("Current display:", dropdown?.style.display);
+          
+          toggleNewGameDropdown();
+          
+          console.log("After toggle display:", dropdown?.style.display);
+      });
+  } else {
+      console.error("New Game button not found!");
   }
 
   AppState.isCreatingGame = true;
