@@ -106,6 +106,40 @@ class ActivityLogEntry(BaseModel):
     
     model_config = {"extra": "forbid"}
 
+class RelationshipStandingData(BaseModel):
+    """Data for a single relationship standing"""
+    trust: float = Field(0.0, ge=-100.0, le=100.0, description="Trust dimension")
+    affection: float = Field(0.0, ge=-100.0, le=100.0, description="Affection dimension")
+    patterns: List[str] = Field(default_factory=list, description="Active patterns")
+    archetypes: List[str] = Field(default_factory=list, description="Active archetypes")
+    
+    model_config = {"extra": "forbid"}
+
+class RelationshipStandingsMap(BaseModel):
+    """Map of NPC IDs to their relationship standings"""
+    standings: Dict[str, RelationshipStandingData] = Field(
+        default_factory=dict, 
+        description="Map of NPC ID to relationship standing data"
+    )
+    
+    model_config = {"extra": "forbid"}
+
+class ActivityLogSummary(BaseModel):
+    """Summary of activity log for event recommendation"""
+    activity_type: str = Field(..., description="Type of activity")
+    timestamp: str = Field(..., description="ISO format timestamp")
+    
+    model_config = {"extra": "forbid"}
+
+class EventRecommendationRequest(BaseModel):
+    """Request data for event recommendations"""
+    activity_log: List[ActivityLogSummary] = Field(default_factory=list)
+    vitals: VitalsData
+    plot_flags: List[str] = Field(default_factory=list)
+    relationship_standings: RelationshipStandingsMap
+    
+    model_config = {"extra": "forbid"}
+
 class PhaseEventEntry(BaseModel):
     """Event that occurred during a phase - used for phase recaps"""
     type: str = Field(..., description="Event type")
@@ -551,13 +585,10 @@ IntensityScorer = Agent(
 
 # 3. NarrativeDirectorAgent - Intelligent event selection
 @function_tool
-def recommend_events(
-    activity_log: List[ActivityLogEntry], 
-    vitals: VitalsData,
-    plot_flags: List[str],
-    relationship_standings: Dict[str, Dict[str, Any]]  # Updated for dynamic system
-) -> List[EventRecommendation]:
+def recommend_events(request: EventRecommendationRequest) -> List[EventRecommendation]:
     """Recommend narrative events based on game state. Returns array of event recommendations."""
+    # Access data via request object
+    # request.activity_log, request.vitals, request.plot_flags, request.relationship_standings
     return [
         EventRecommendation(event="dream_sequence", score=0.78),
         EventRecommendation(event="npc_revelation", npc_id="nyx", score=0.63)
@@ -574,6 +605,12 @@ NarrativeDirectorAgent = Agent(
     - Unresolved plot threads and Chekhov's guns
     - Relationship progression with NPCs (now using dynamic dimensions)
     - Pacing (avoid event fatigue)
+    
+    The request object contains:
+    - activity_log: Recent player activities
+    - vitals: Current player vitals (hunger, thirst, fatigue, energy)
+    - plot_flags: Active plot flags
+    - relationship_standings: Map of NPC relationships with trust, affection, patterns, and archetypes
     
     Score events from 0-1 based on narrative appropriateness.
     Prioritize character development and meaningful moments.""",
@@ -950,7 +987,7 @@ async def select_events_with_director(
                 )
             """)
             
-            activity_log = []
+            activity_log_summaries = []
             if activity_log_exists:
                 activity_log_rows = await conn.fetch("""
                     SELECT activity_type, timestamp 
@@ -959,13 +996,11 @@ async def select_events_with_director(
                     ORDER BY timestamp DESC LIMIT 10
                 """, user_id, conversation_id)
                 
-                # Convert to Pydantic models
-                activity_log = [
-                    ActivityLogEntry(
+                # Convert to ActivityLogSummary models
+                activity_log_summaries = [
+                    ActivityLogSummary(
                         activity_type=row["activity_type"],
-                        timestamp=row["timestamp"],
-                        user_id=user_id,
-                        conversation_id=conversation_id
+                        timestamp=row["timestamp"].isoformat() if row["timestamp"] else datetime.now().isoformat()
                     )
                     for row in activity_log_rows
                 ]
@@ -1006,20 +1041,32 @@ async def select_events_with_director(
         
         plot_flags_list = [r["key"] for r in plot_flags]
         
-        # Convert relationships to standings format
-        relationship_standings = {}
+        # Convert relationships to standings format with proper models
+        standings_dict = {}
         for rel in relationships:
-            npc_name = rel["npc_name"] or f"NPC_{rel['npc_id']}"
+            npc_id = str(rel["npc_id"])
             dynamics = json.loads(rel["dynamics"]) if isinstance(rel["dynamics"], str) else rel["dynamics"]
             patterns = json.loads(rel["patterns"]) if isinstance(rel["patterns"], str) else rel["patterns"]
             archetypes = json.loads(rel["archetypes"]) if isinstance(rel["archetypes"], str) else rel["archetypes"]
             
-            relationship_standings[str(rel["npc_id"])] = {
-                "trust": dynamics.get("trust", 0),
-                "affection": dynamics.get("affection", 0),
-                "patterns": patterns,
-                "archetypes": archetypes
-            }
+            # Create proper RelationshipStandingData object
+            standings_dict[npc_id] = RelationshipStandingData(
+                trust=float(dynamics.get("trust", 0.0)),
+                affection=float(dynamics.get("affection", 0.0)),
+                patterns=patterns or [],
+                archetypes=archetypes or []
+            )
+        
+        # Create the standings map
+        relationship_standings = RelationshipStandingsMap(standings=standings_dict)
+        
+        # Create the request object
+        event_request = EventRecommendationRequest(
+            activity_log=activity_log_summaries,
+            vitals=vitals,
+            plot_flags=plot_flags_list,
+            relationship_standings=relationship_standings
+        )
         
         # Prepare messages with optional RNG seed
         messages = [{"role": "user", "content": "Select appropriate events for current game state"}]
@@ -1033,10 +1080,7 @@ async def select_events_with_director(
             calls=[{
                 "name": "recommend_events",
                 "kwargs": {
-                    "activity_log": [al.dict() for al in activity_log],  # Convert to dicts
-                    "vitals": vitals.to_dict(),  # Convert to dict
-                    "plot_flags": plot_flags_list,
-                    "relationship_standings": relationship_standings
+                    "request": event_request.dict()  # Convert the entire request to dict
                 }
             }]
         )
