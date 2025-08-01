@@ -170,7 +170,8 @@ class PhaseEventEntry(BaseModel):
     total_relationships: Optional[int] = Field(None, ge=0)
     active_patterns: Optional[List[str]] = Field(None, description="Active relationship patterns")
     active_archetypes: Optional[List[str]] = Field(None, description="Active relationship archetypes")
-    most_significant: Optional[List[Dict[str, Any]]] = Field(None, description="Most significant relationships")
+    # Changed from List[Dict[str, Any]] to a more specific type
+    most_significant: Optional[List[str]] = Field(None, description="Most significant relationships as JSON strings")
     state_key: Optional[str] = Field(None, description="Relationship state key")
     
     # NPC-specific
@@ -200,7 +201,7 @@ class PhaseEventEntry(BaseModel):
     significance: Optional[int] = Field(None, ge=1, le=10)
     
     model_config = {"extra": "forbid"}
-
+  
 class IntentClassification(BaseModel):
     """Result of classifying player intent"""
     activity_type: str = Field(..., description="Activity type from ActivityType enum")
@@ -1231,30 +1232,6 @@ async def calculate_intensity_with_llm(
 
 # The simplest solution - just use primitive types in the function tool itself
 # and handle all the complex typing in the rest of your code
-
-@function_tool
-def recommend_events(
-    activity_log_json: str,  # JSON string of activity log
-    vitals_json: str,        # JSON string of vitals
-    plot_flags_json: str,    # JSON string of plot flags
-    relationships_json: str  # JSON string of relationship standings
-) -> str:  # Return JSON string
-    """Recommend narrative events based on game state. Returns JSON array of event recommendations."""
-    
-    # Parse the JSON strings
-    activity_log = json.loads(activity_log_json)
-    vitals = json.loads(vitals_json)
-    plot_flags = json.loads(plot_flags_json)
-    relationships = json.loads(relationships_json)
-    
-    # Create recommendations
-    recommendations = [
-        {"event": "dream_sequence", "score": 0.78},
-        {"event": "npc_revelation", "score": 0.63, "npc_id": "nyx"}
-    ]
-    
-    # Return as JSON string
-    return json.dumps(recommendations)
 
 # Keep all your existing Pydantic models for type safety in the rest of your code
 # Just update the select_events_with_director function to use the new signature:
