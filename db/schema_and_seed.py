@@ -3540,8 +3540,8 @@ async def create_all_tables():
                         WHERE c.column_name = 'embedding' 
                         AND c.udt_name = 'vector'
                     LOOP
-                        IF r.data_type ~ 'vector\(([0-9]+)\)' THEN
-                            dim_count := substring(r.data_type from 'vector\(([0-9]+)\)')::INTEGER;
+                        IF r.data_type ~ 'vector\\(([0-9]+)\\)' THEN
+                            dim_count := substring(r.data_type from 'vector\\(([0-9]+)\\)')::INTEGER;
                             RAISE NOTICE 'Table % has embedding dimension: %', r.table_name, dim_count;
                             
                             IF dim_count != 1536 THEN
@@ -3550,7 +3550,7 @@ async def create_all_tables():
                         END IF;
                     END LOOP;
                 END $$;
-                ''',
+                '''
             ]  # End of sql_commands list
 
             # Execute commands sequentially
