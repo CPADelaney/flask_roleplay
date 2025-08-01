@@ -453,7 +453,7 @@ PlayerIntentAgent = Agent(
 
 # 2. IntensityScorer - Calculates nuanced intensity
 @function_tool
-def score_intensity(sentence: str, vitals: Dict[str, int], context_tags: List[str]) -> IntensityScore:
+def score_intensity(sentence: str, vitals: VitalsData, context_tags: List[str]) -> IntensityScore:
     """Score the intensity of an activity based on language, vitals, and context."""
     # This would be called by the IntensityScorer agent
     return IntensityScore(
@@ -480,8 +480,8 @@ IntensityScorer = Agent(
 # 3. NarrativeDirectorAgent - Intelligent event selection
 @function_tool
 def recommend_events(
-    activity_log: List[Dict[str, Any]], 
-    vitals: Dict[str, int],
+    activity_log: List[ActivityLogEntry], 
+    vitals: VitalsData,
     plot_flags: List[str],
     relationship_stages: Dict[str, str]
 ) -> List[EventRecommendation]:
@@ -490,7 +490,7 @@ def recommend_events(
         EventRecommendation(event="dream_sequence", score=0.78),
         EventRecommendation(event="npc_revelation", npc_id="nyx", score=0.63)
     ]
-
+  
 NarrativeDirectorAgent = Agent(
     name="NarrativeDirectorAgent",
     instructions="""You are the narrative director for a femdom university game.
@@ -538,10 +538,10 @@ EventWriterAgent = Agent(
 # 6. PhaseRecapAgent - Phase summaries and suggestions
 @function_tool
 def generate_phase_recap(
-    phase_events: List[Dict[str, Any]],
+    phase_events: List[PhaseEventEntry],
     current_goals: List[str],
-    npc_standings: Dict[str, int],
-    vitals: Dict[str, int]
+    npc_standings: Dict[str, int],  # This one is okay as Dict[str, int]
+    vitals: VitalsData
 ) -> PhaseRecapResult:
     """Generate a recap and suggestions for the next phase."""
     return PhaseRecapResult(
@@ -576,7 +576,7 @@ PhaseRecapAgent = Agent(
 def analyze_player_action(
     sentence: str, 
     location: str = "unknown",
-    vitals: Dict[str, int] = None
+    vitals: Optional[VitalsData] = None
 ) -> CombinedAnalysis:
     """
     Combined tool that classifies intent AND calculates intensity in one call.
