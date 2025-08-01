@@ -122,11 +122,7 @@ class PhaseEventEntry(BaseModel):
     description: Optional[str] = Field(None, description="Event description")
     # Add other fields as needed based on your event structure
 
-class NPCStandings(BaseModel):
-    """NPC relationship standings"""
-    # This will be a dynamic model, so we'll use a different approach
-    __root__: Dict[str, int]  # NPC name -> relationship level
-    
+   
     def __getitem__(self, key: str) -> int:
         return self.__root__[key]
     
