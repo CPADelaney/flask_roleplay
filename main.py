@@ -997,10 +997,17 @@ def create_quart_app():
     # --- Core Game Routes (Example - move complex logic to blueprints) ---
 
     @app.route("/chat")
-    async def chat_page():  # Make the function async
+    async def chat_page():
         if "user_id" not in session:
             return redirect("/login_page")
+        
         user_id = session.get("user_id")
+        
+        # Additional validation to ensure user_id is valid
+        if not user_id or user_id == "anonymous":
+            session.clear()  # Clear invalid session
+            return redirect("/login_page")
+        
         # Await the render_template call
         return await render_template("chat.html", user_id=user_id)
 
