@@ -545,6 +545,7 @@ IntensityScorer = Agent(
     - Risk level for femdom activities
     
     Output intensity (0.5-1.5), mood, and risk level.""",
+    model="gpt-4.1-nano",
     tools=[score_intensity]
 )
 
@@ -576,6 +577,7 @@ NarrativeDirectorAgent = Agent(
     
     Score events from 0-1 based on narrative appropriateness.
     Prioritize character development and meaningful moments.""",
+    model="gpt-4.1-nano",
     tools=[recommend_events]
 )
 
@@ -592,7 +594,8 @@ VitalsNarrator = Agent(
     - Exhaustion: "Your legs buckle, drawing Madison's attention. 'Already worn out? How disappointing. Perhaps you need... motivation.'"
     - Thirst: "Your parched throat makes you cough during Lily's lecture. She pauses, eyes narrowing. 'Disrupting my class? We'll discuss your punishment later.'"
     
-    Keep descriptions concise but flavorful."""
+    Keep descriptions concise but flavorful.""",
+    model="gpt-4.1-nano",
 )
 
 # 5. EventWriterAgent - Dynamic conflict descriptions
@@ -603,7 +606,8 @@ EventWriterAgent = Agent(
     Replace generic Mad-Libs style events with contextual, character-driven moments.
     Reference past player choices, NPC relationships, and ongoing conflicts.
     
-    Make each event feel consequential and tied to the larger narrative."""
+    Make each event feel consequential and tied to the larger narrative.""",
+    model="gpt-4.1-nano",
 )
 
 # 6. PhaseRecapAgent - Phase summaries and suggestions
@@ -636,6 +640,7 @@ PhaseRecapAgent = Agent(
     - Upcoming scheduled events
     
     Keep suggestions actionable and varied (mix practical/social/story).""",
+    model="gpt-4.1-nano",
     tools=[generate_phase_recap]
 )
 
@@ -676,6 +681,7 @@ CombinedAnalyzer = Agent(
     Valid activity types: """ + ", ".join(ALL_ACTIVITY_TYPES) + """
     
     Return all analysis in a single response for efficiency.""",
+    model="gpt-4.1-nano",
     tools=[analyze_player_action]
 )
 
