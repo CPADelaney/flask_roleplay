@@ -17,13 +17,14 @@ Code Review Fixes Applied:
   - RNG seed support for reproducibility
   - Performance optimization notes
   - Governance registration with correct agent_id
+  - Pydantic models for all data structures
 """
 
 import logging
 import random
 import json
 import asyncio
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 from datetime import datetime, timedelta
 from enum import Enum
 
@@ -35,39 +36,116 @@ import asyncpg
 from lore.core import canon
 
 # Add Pydantic imports
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 logger = logging.getLogger(__name__)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Activity Types Enum for LLM Classification
+# PYDANTIC MODELS
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-class ActivityType(str, Enum):
-    # Time-consuming activities
-    CLASS_ATTENDANCE = "class_attendance"
-    WORK_SHIFT = "work_shift"
-    SOCIAL_EVENT = "social_event"
-    TRAINING = "training"
-    EXTENDED_CONVERSATION = "extended_conversation"
-    PERSONAL_TIME = "personal_time"
-    SLEEP = "sleep"
-    EATING = "eating"
-    DRINKING = "drinking"
-    INTENSE_ACTIVITY = "intense_activity"
+class VitalsData(BaseModel):
+    """Player vitals data matching PlayerVitals table"""
+    energy: int = Field(100, ge=0, le=100, description="Energy level")
+    hunger: int = Field(100, ge=0, le=100, description="Hunger level (100=full, 0=starving)")
+    thirst: int = Field(100, ge=0, le=100, description="Thirst level (100=hydrated, 0=dehydrated)")
+    fatigue: int = Field(0, ge=0, le=100, description="Fatigue level (0=rested, 100=exhausted)")
     
-    # Quick activities
-    QUICK_CHAT = "quick_chat"
-    OBSERVE = "observe"
-    CHECK_PHONE = "check_phone"
-    QUICK_SNACK = "quick_snack"
-    REST = "rest"
+    # Optional fields from database
+    user_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    player_name: str = Field("Chase", description="Player name")
+    last_update: Optional[datetime] = None
+    
+    def to_dict(self) -> Dict[str, int]:
+        """Convert to simple dict for compatibility"""
+        return {
+            "energy": self.energy,
+            "hunger": self.hunger,
+            "thirst": self.thirst,
+            "fatigue": self.fatigue
+        }
 
-ALL_ACTIVITY_TYPES = [activity.value for activity in ActivityType]
+class PlayerStatsData(BaseModel):
+    """Player stats matching PlayerStats table"""
+    # Visible stats
+    hp: int = Field(100, ge=0, description="Current health points")
+    max_hp: int = Field(100, ge=1, le=999, description="Maximum health points")
+    strength: int = Field(10, ge=1, le=100, description="Physical power")
+    endurance: int = Field(10, ge=1, le=100, description="Stamina and defense")
+    agility: int = Field(10, ge=1, le=100, description="Speed and reflexes")
+    empathy: int = Field(10, ge=1, le=100, description="Social intuition")
+    intelligence: int = Field(10, ge=1, le=100, description="Learning ability")
+    
+    # Hidden stats
+    corruption: int = Field(10, ge=0, le=100, description="Moral degradation")
+    confidence: int = Field(60, ge=0, le=100, description="Self-assurance")
+    willpower: int = Field(50, ge=0, le=100, description="Resistance to control")
+    obedience: int = Field(20, ge=0, le=100, description="Compliance level")
+    dependency: int = Field(10, ge=0, le=100, description="Reliance on others")
+    lust: int = Field(15, ge=0, le=100, description="Arousal and desire")
+    mental_resilience: int = Field(55, ge=0, le=100, description="Psychological endurance")
+    physical_endurance: int = Field(40, ge=0, le=100, description="Legacy stat")
+    
+    # Metadata
+    player_name: str = Field("Chase", description="Player name")
+    stat_visibility: Optional[Dict[str, bool]] = None
 
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Pydantic Models for LLM Tool Outputs
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+class ActivityLogEntry(BaseModel):
+    """Entry in the activity log"""
+    activity_type: str = Field(..., description="Activity type")
+    timestamp: datetime = Field(..., description="When activity occurred")
+    user_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    intensity: Optional[float] = Field(None, ge=0.5, le=1.5)
+    duration: Optional[int] = Field(None, description="Duration in time periods")
+
+class PhaseEventEntry(BaseModel):
+    """Event that occurred during a phase - used for phase recaps"""
+    type: str = Field(..., description="Event type")
+    description: Optional[str] = Field(None, description="Event description")
+    
+    # Event-specific fields based on event types in the code
+    # Vital crisis events
+    crisis_type: Optional[str] = Field(None, description="Type of crisis (hunger/thirst/fatigue)")
+    severity: Optional[str] = Field(None, description="Crisis severity (moderate/severe)")
+    message: Optional[str] = Field(None, description="Crisis message")
+    
+    # Forced events
+    event: Optional[str] = Field(None, description="Forced event type (e.g., sleep)")
+    reason: Optional[str] = Field(None, description="Reason for forced event")
+    
+    # Relationship events
+    total_relationships: Optional[int] = Field(None, ge=0)
+    stage_distribution: Optional[Dict[str, int]] = Field(None)
+    most_advanced: Optional[List[Dict[str, Any]]] = Field(None)
+    state_key: Optional[str] = Field(None, description="Relationship state key")
+    
+    # NPC-specific
+    npc_id: Optional[Union[int, str]] = Field(None, description="NPC ID if relevant")
+    npc_name: Optional[str] = Field(None, description="NPC name")
+    
+    # Conflict events
+    conflict_id: Optional[int] = Field(None)
+    conflict_name: Optional[str] = Field(None)
+    faction: Optional[str] = Field(None)
+    faction_name: Optional[str] = Field(None)
+    
+    # Resource events
+    resource_type: Optional[str] = Field(None)
+    resource_amount: Optional[int] = Field(None, ge=0)
+    expiration: Optional[int] = Field(None)
+    
+    # Progress tracking
+    progress_impact: Optional[int] = Field(None)
+    
+    # Phase recap specific
+    recap: Optional[str] = Field(None, description="Phase summary text")
+    suggestions: Optional[List[str]] = Field(None, description="Suggested next actions")
+    
+    # Metadata
+    timestamp: Optional[datetime] = Field(default_factory=datetime.now)
+    significance: Optional[int] = Field(None, ge=1, le=10)
 
 class IntentClassification(BaseModel):
     """Result of classifying player intent"""
@@ -99,35 +177,58 @@ class CombinedAnalysis(BaseModel):
     mood: str = Field(..., description="Detected mood")
     risk: str = Field(..., description="Risk level")
 
-class VitalsData(BaseModel):
-    """Player vitals data"""
-    hunger: int = Field(..., ge=0, le=100)
-    thirst: int = Field(..., ge=0, le=100)
-    fatigue: int = Field(..., ge=0, le=100)
+class NPCStanding(BaseModel):
+    """NPC relationship standing"""
+    npc_id: int
+    npc_name: str
+    relationship_level: int = Field(0, ge=-100, le=100)
 
-class ActivityLogEntry(BaseModel):
-    """Entry in the activity log"""
-    type: str = Field(..., description="Activity type")
-    time: str = Field(..., description="Timestamp as string")
+class CurrentTimeData(BaseModel):
+    """Current time information"""
+    year: int = Field(1, ge=1)
+    month: int = Field(1, ge=1, le=12)
+    day: int = Field(1, ge=1, le=31)
+    time_of_day: str = Field("Morning", regex="^(Morning|Afternoon|Evening|Night)$")
 
-class VitalsData(BaseModel):
-    """Player vitals data"""
-    hunger: int = Field(..., ge=0, le=100)
-    thirst: int = Field(..., ge=0, le=100)
-    fatigue: int = Field(..., ge=0, le=100)
+class VitalEffectsData(BaseModel):
+    """Effects of activities on vitals"""
+    hunger: int = Field(0, ge=-100, le=100)
+    thirst: int = Field(0, ge=-100, le=100)
+    fatigue: int = Field(0, ge=-100, le=100)
+    energy: int = Field(0, ge=-100, le=100)
 
-class PhaseEventEntry(BaseModel):
-    """Event that occurred during a phase"""
-    type: str = Field(..., description="Event type")
-    description: Optional[str] = Field(None, description="Event description")
-    # Add other fields as needed based on your event structure
+class ActivityDefinition(BaseModel):
+    """Definition of an activity"""
+    time_advance: int = Field(0, ge=0, description="Time periods to advance")
+    description: str = Field(..., description="Activity description")
+    stat_effects: Dict[str, int] = Field(default_factory=dict)
+    vital_effects: Dict[str, int] = Field(default_factory=dict)
 
-   
-    def __getitem__(self, key: str) -> int:
-        return self.__root__[key]
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Activity Types Enum for LLM Classification
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+class ActivityType(str, Enum):
+    # Time-consuming activities
+    CLASS_ATTENDANCE = "class_attendance"
+    WORK_SHIFT = "work_shift"
+    SOCIAL_EVENT = "social_event"
+    TRAINING = "training"
+    EXTENDED_CONVERSATION = "extended_conversation"
+    PERSONAL_TIME = "personal_time"
+    SLEEP = "sleep"
+    EATING = "eating"
+    DRINKING = "drinking"
+    INTENSE_ACTIVITY = "intense_activity"
     
-    def get(self, key: str, default: Any = None) -> Any:
-        return self.__root__.get(key, default)
+    # Quick activities
+    QUICK_CHAT = "quick_chat"
+    OBSERVE = "observe"
+    CHECK_PHONE = "check_phone"
+    QUICK_SNACK = "quick_snack"
+    REST = "rest"
+
+ALL_ACTIVITY_TYPES = [activity.value for activity in ActivityType]
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Constants (unchanged from original)
@@ -270,6 +371,13 @@ VITAL_THRESHOLDS = {
 # LLM-Powered Agents
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+# Check for dev mode to skip LLM calls
+try:
+    import settings
+    LLM_VERBOSE = getattr(settings, "LLM_VERBOSE", True)
+except ImportError:
+    LLM_VERBOSE = True  # Default to using LLMs if settings not found
+
 # 1. PlayerIntentAgent - Replaces keyword-based classification
 @function_tool
 def classify_intent(sentence: str, location: str = "unknown") -> IntentClassification:
@@ -395,7 +503,7 @@ EventWriterAgent = Agent(
 def generate_phase_recap(
     phase_events: List[PhaseEventEntry],
     current_goals: List[str],
-    npc_standings: Dict[str, int],  # Keep this as Dict[str, int] since it's specific
+    npc_standings: List[NPCStanding],
     vitals: VitalsData
 ) -> PhaseRecapResult:
     """Generate a recap and suggestions for the next phase."""
@@ -431,7 +539,7 @@ PhaseRecapAgent = Agent(
 def analyze_player_action(
     sentence: str, 
     location: str = "unknown",
-    vitals: Dict[str, int] = None
+    vitals: VitalsData = None
 ) -> CombinedAnalysis:
     """
     Combined tool that classifies intent AND calculates intensity in one call.
@@ -482,7 +590,14 @@ async def analyze_action_combined(
         }
     
     try:
-        vitals = context.get("vitals", {"hunger": 100, "thirst": 100, "fatigue": 0})
+        vitals_dict = context.get("vitals", {"hunger": 100, "thirst": 100, "fatigue": 0})
+        # Create VitalsData from dict
+        vitals = VitalsData(
+            hunger=vitals_dict.get("hunger", 100),
+            thirst=vitals_dict.get("thirst", 100),
+            fatigue=vitals_dict.get("fatigue", 0),
+            energy=vitals_dict.get("energy", 100)
+        )
         location = context.get("location", "unknown")
         
         messages = [{
@@ -577,13 +692,6 @@ Performance & Cost Optimization Strategies:
 # Enhanced Classification System
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# Check for dev mode to skip LLM calls
-try:
-    import settings
-    LLM_VERBOSE = getattr(settings, "LLM_VERBOSE", True)
-except ImportError:
-    LLM_VERBOSE = True  # Default to using LLMs if settings not found
-
 async def classify_activity_with_llm(
     player_input: str, 
     context: Dict[str, Any],
@@ -648,7 +756,7 @@ async def classify_activity_with_llm(
 
 async def calculate_intensity_with_llm(
     player_input: str,
-    vitals: Dict[str, int],
+    vitals: VitalsData,
     context: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
@@ -668,13 +776,6 @@ async def calculate_intensity_with_llm(
             context_tags.append(f"location:{context['location']}")
         if context.get("mood"):
             context_tags.append(f"mood:{context['mood']}")
-        
-        # Create VitalsData object
-        vitals_data = VitalsData(
-            hunger=vitals.get("hunger", 100),
-            thirst=vitals.get("thirst", 100),
-            fatigue=vitals.get("fatigue", 0)
-        )
             
         result = await Runner.run(
             IntensityScorer,
@@ -686,7 +787,7 @@ async def calculate_intensity_with_llm(
                 "name": "score_intensity",
                 "kwargs": {
                     "sentence": player_input,
-                    "vitals": vitals_data.dict(),  # Convert to dict for the call
+                    "vitals": vitals,
                     "context_tags": context_tags
                 }
             }]
@@ -718,7 +819,7 @@ async def select_events_with_director(
     user_id: int,
     conversation_id: int,
     activity_type: str,
-    vitals: Dict[str, int],
+    vitals: VitalsData,
     rng_seed: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """
@@ -737,12 +838,23 @@ async def select_events_with_director(
             
             activity_log = []
             if activity_log_exists:
-                activity_log = await conn.fetch("""
+                activity_log_rows = await conn.fetch("""
                     SELECT activity_type, timestamp 
                     FROM ActivityLog 
                     WHERE user_id=$1 AND conversation_id=$2 
                     ORDER BY timestamp DESC LIMIT 10
                 """, user_id, conversation_id)
+                
+                # Convert to Pydantic models
+                activity_log = [
+                    ActivityLogEntry(
+                        activity_type=row["activity_type"],
+                        timestamp=row["timestamp"],
+                        user_id=user_id,
+                        conversation_id=conversation_id
+                    )
+                    for row in activity_log_rows
+                ]
             
             # Get plot flags
             plot_flags = await conn.fetch("""
@@ -757,21 +869,8 @@ async def select_events_with_director(
                 WHERE user_id=$1 AND conversation_id=$2
             """, user_id, conversation_id)
         
-        # Convert to appropriate format with Pydantic models
-        activity_log_list = [
-            ActivityLogEntry(type=r["activity_type"], time=str(r["timestamp"])) 
-            for r in activity_log
-        ]
-        
         plot_flags_list = [r["key"] for r in plot_flags]
-        relationship_dict = {r["npc_id"]: r["narrative_stage"] for r in relationships}
-        
-        # Create VitalsData object
-        vitals_data = VitalsData(
-            hunger=vitals.get("hunger", 100),
-            thirst=vitals.get("thirst", 100),
-            fatigue=vitals.get("fatigue", 0)
-        )
+        relationship_dict = {str(r["npc_id"]): r["narrative_stage"] for r in relationships}
         
         # Prepare messages with optional RNG seed
         messages = [{"role": "user", "content": "Select appropriate events for current game state"}]
@@ -785,8 +884,8 @@ async def select_events_with_director(
             calls=[{
                 "name": "recommend_events",
                 "kwargs": {
-                    "activity_log": [al.dict() for al in activity_log_list],  # Convert to dicts
-                    "vitals": vitals_data.dict(),  # Convert to dict
+                    "activity_log": activity_log,
+                    "vitals": vitals,
                     "plot_flags": plot_flags_list,
                     "relationship_stages": relationship_dict
                 }
@@ -817,7 +916,7 @@ async def select_events_randomly(
     user_id: int,
     conversation_id: int,
     activity_type: str,
-    vitals: Dict[str, int]
+    vitals: VitalsData
 ) -> List[Dict[str, Any]]:
     """Fallback random event selection (original logic)."""
     events = []
@@ -827,7 +926,7 @@ async def select_events_randomly(
         "personal_revelation": 0.2,
         "narrative_moment": 0.15,
         "dream_sequence": 0.4 if activity_type == "sleep" else 0.1,
-        "vital_crisis": 0.3 if any(v < 20 for v in vitals.values()) else 0.1
+        "vital_crisis": 0.3 if any(v < 20 for v in [vitals.hunger, vitals.thirst, vitals.energy]) or vitals.fatigue > 80 else 0.1
     }
     
     for event_type, chance in SPECIAL_EVENT_CHANCES.items():
@@ -919,20 +1018,11 @@ async def advance_time_with_events(
 
     try:
         # Get current time and vitals
-        _, _, _, current_time_of_day = await get_current_time(user_id, conversation_id)
+        current_time = await get_current_time_model(user_id, conversation_id)
+        current_time_of_day = current_time.time_of_day
         
         # Get current vitals for context
-        async with get_db_connection_context() as conn:
-            vitals_row = await conn.fetchrow("""
-                SELECT hunger, thirst, fatigue FROM PlayerVitals
-                WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
-            """, user_id, conversation_id)
-            
-        current_vitals = {
-            "hunger": vitals_row["hunger"] if vitals_row else 100,
-            "thirst": vitals_row["thirst"] if vitals_row else 100,
-            "fatigue": vitals_row["fatigue"] if vitals_row else 0
-        }
+        current_vitals = await get_current_vitals(user_id, conversation_id)
         
         adv_info = should_advance_time(activity_type)
         
@@ -963,29 +1053,29 @@ async def advance_time_with_events(
         # Advance time
         periods_to_advance = adv_info["periods"]
         time_result = await advance_time_and_update(user_id, conversation_id, increment=periods_to_advance)
-        (new_year, new_month, new_day, new_time), time_vitals_result = time_result
-
+        new_time, time_vitals_result = time_result
+        
         events = []
         
         # Check for vital crises with enhanced narration
         if time_vitals_result.get("crises"):
             for crisis in time_vitals_result["crises"]:
                 narrated_message = await narrate_vital_crisis(crisis, user_id, conversation_id)
-                events.append({
-                    "type": "vital_crisis",
-                    "crisis_type": crisis["type"],
-                    "severity": crisis["severity"],
-                    "message": narrated_message
-                })
+                events.append(PhaseEventEntry(
+                    type="vital_crisis",
+                    crisis_type=crisis["type"],
+                    severity=crisis["severity"],
+                    message=narrated_message
+                ).dict())
         
         # Handle forced sleep
         if time_vitals_result.get("forced_sleep"):
-            events.append({
-                "type": "forced_event",
-                "event": "sleep",
-                "reason": "exhaustion",
-                "message": "Your vision blurs as exhaustion overtakes you. The world fades to black..."
-            })
+            events.append(PhaseEventEntry(
+                type="forced_event",
+                event="sleep",
+                reason="exhaustion",
+                message="Your vision blurs as exhaustion overtakes you. The world fades to black..."
+            ).dict())
             return await advance_time_with_events(user_id, conversation_id, "sleep", rng_seed, "exhausted")
         
         # Use NPC system for daily activities
@@ -994,18 +1084,18 @@ async def advance_time_with_events(
             "conversation_id": conversation_id
         })
         
-        await npc_handler.process_daily_npc_activities(ctx, new_time)
+        await npc_handler.process_daily_npc_activities(ctx, new_time.time_of_day)
         await npc_handler.detect_relationship_stage_changes(ctx)
 
         # Get relationship overview
         relationship_overview = await get_relationship_overview(user_id, conversation_id)
         if relationship_overview and relationship_overview.get('total_relationships', 0) > 0:
-            events.append({
-                "type": "relationship_overview",
-                "total_relationships": relationship_overview['total_relationships'],
-                "stage_distribution": relationship_overview['stage_distribution'],
-                "most_advanced": relationship_overview['most_advanced_npcs'][:1]
-            })
+            events.append(PhaseEventEntry(
+                type="relationship_overview",
+                total_relationships=relationship_overview['total_relationships'],
+                stage_distribution=relationship_overview['stage_distribution'],
+                most_advanced=relationship_overview['most_advanced_npcs'][:1]
+            ).dict())
 
         # Check for relationship events using the new dynamic system
         # Create context for the relationship tools
@@ -1024,11 +1114,11 @@ async def advance_time_with_events(
             for event_data in relationship_events["events"]:
                 event = event_data.get("event")
                 if event:
-                    events.append({
-                        "type": "relationship_event",
-                        "event": event,
-                        "state_key": event_data.get("state_key")
-                    })
+                    events.append(PhaseEventEntry(
+                        type="relationship_event",
+                        state_key=event_data.get("state_key"),
+                        description=str(event)
+                    ).dict())
 
         # Use NarrativeDirector for intelligent event selection
         # Adapt based on activity mood if provided
@@ -1094,23 +1184,23 @@ async def advance_time_with_events(
                 )
 
         # Generate phase recap if transitioning to new phase
-        if new_time != current_time_of_day:
+        if new_time.time_of_day != current_time_of_day:
             recap = await generate_phase_recap_with_agent(
                 user_id, conversation_id, events, current_vitals
             )
             if recap:
-                events.append({
-                    "type": "phase_recap",
-                    "recap": recap["recap"],
-                    "suggestions": recap["suggestions"]
-                })
+                events.append(PhaseEventEntry(
+                    type="phase_recap",
+                    recap=recap["recap"],
+                    suggestions=recap["suggestions"]
+                ).dict())
 
         return {
             "time_advanced": True,
-            "new_year": new_year,
-            "new_month": new_month,
-            "new_day": new_day,
-            "new_time": new_time,
+            "new_year": new_time.year,
+            "new_month": new_time.month,
+            "new_day": new_time.day,
+            "new_time": new_time.time_of_day,
             "events": events,
             "vitals_result": {
                 "time_drain": time_vitals_result,
@@ -1128,7 +1218,7 @@ async def generate_phase_recap_with_agent(
     user_id: int,
     conversation_id: int,
     phase_events: List[Dict[str, Any]],
-    vitals: Dict[str, int]
+    vitals: VitalsData
 ) -> Optional[Dict[str, Any]]:
     """Generate phase recap using PhaseRecapAgent."""
     try:
@@ -1180,26 +1270,27 @@ async def generate_phase_recap_with_agent(
                     AND introduced = TRUE
                 """, user_id, conversation_id)
         
-        npc_standings = {n["npc_name"]: n["relationship_level"] for n in npcs}
+        # Convert to Pydantic models
+        npc_standings = [
+            NPCStanding(
+                npc_id=n["npc_id"],
+                npc_name=n["npc_name"],
+                relationship_level=n["relationship_level"]
+            )
+            for n in npcs
+        ]
         
         # Handle empty phase_events gracefully and convert to Pydantic models
         if not phase_events:
             phase_events_list = [PhaseEventEntry(type="quiet_phase", description="A quiet moment passes")]
         else:
-            phase_events_list = [
-                PhaseEventEntry(
-                    type=e.get("type", "unknown"), 
-                    description=e.get("description", "")
-                )
-                for e in phase_events
-            ]
-        
-        # Create VitalsData object
-        vitals_data = VitalsData(
-            hunger=vitals.get("hunger", 100),
-            thirst=vitals.get("thirst", 100), 
-            fatigue=vitals.get("fatigue", 0)
-        )
+            phase_events_list = []
+            for e in phase_events:
+                # If it's already a dict from PhaseEventEntry.dict()
+                if isinstance(e, dict):
+                    phase_events_list.append(PhaseEventEntry(**e))
+                else:
+                    phase_events_list.append(e)
         
         result = await Runner.run(
             PhaseRecapAgent,
@@ -1207,10 +1298,10 @@ async def generate_phase_recap_with_agent(
             calls=[{
                 "name": "generate_phase_recap",
                 "kwargs": {
-                    "phase_events": [pe.dict() for pe in phase_events_list],  # Convert to dicts
+                    "phase_events": phase_events_list,
                     "current_goals": current_goals,
                     "npc_standings": npc_standings,
-                    "vitals": vitals_data.dict()  # Convert to dict
+                    "vitals": vitals
                 }
             }]
         )
@@ -1226,43 +1317,6 @@ async def generate_phase_recap_with_agent(
         logger.warning(f"Phase recap generation failed: {e}")
     
     return None
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Enhanced TimeCycleAgent with New Capabilities
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-@function_tool
-async def tool_classify_activity(ctx: RunContextWrapper['TimeCycleContext'], player_input: str, location: str = None, rng_seed: Optional[int] = None) -> str:
-    """Use LLM to classify player activity intent."""
-    context = {"location": location} if location else {}
-    activity_type, confidence = await classify_activity_with_llm(player_input, context, rng_seed)
-    return json.dumps({
-        "activity_type": activity_type,
-        "confidence": confidence,
-        "method": "llm" if confidence > 0.5 else "keyword"
-    })
-
-@function_tool
-async def tool_calculate_intensity(ctx: RunContextWrapper[TimeCycleContext], player_input: str) -> str:
-    """Calculate activity intensity using LLM analysis."""
-    user_id = ctx.context.user_id
-    conv_id = ctx.context.conversation_id
-    
-    # Get current vitals
-    async with get_db_connection_context() as conn:
-        vitals_row = await conn.fetchrow("""
-            SELECT hunger, thirst, fatigue FROM PlayerVitals
-            WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
-        """, user_id, conv_id)
-    
-    vitals = {
-        "hunger": vitals_row["hunger"] if vitals_row else 100,
-        "thirst": vitals_row["thirst"] if vitals_row else 100,
-        "fatigue": vitals_row["fatigue"] if vitals_row else 0
-    }
-    
-    result = await calculate_intensity_with_llm(player_input, vitals, {})
-    return json.dumps(result)
 
 # Keep the original classification function as fallback
 def classify_player_input(input_text: str) -> str:
@@ -1331,6 +1385,27 @@ def _calculate_intensity(player_input: str, context: Dict[str, Any] = None) -> f
 # Enhanced Vitals System
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+async def get_current_vitals(user_id: int, conversation_id: int) -> VitalsData:
+    """Get current player vitals as VitalsData model."""
+    async with get_db_connection_context() as conn:
+        vitals_row = await conn.fetchrow("""
+            SELECT energy, hunger, thirst, fatigue FROM PlayerVitals
+            WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+        """, user_id, conversation_id)
+        
+    if vitals_row:
+        return VitalsData(
+            energy=vitals_row["energy"],
+            hunger=vitals_row["hunger"],
+            thirst=vitals_row["thirst"],
+            fatigue=vitals_row["fatigue"],
+            user_id=user_id,
+            conversation_id=conversation_id
+        )
+    else:
+        # Return default vitals
+        return VitalsData(user_id=user_id, conversation_id=conversation_id)
+
 async def update_vitals_from_time(
     user_id: int, 
     conversation_id: int, 
@@ -1346,7 +1421,7 @@ async def update_vitals_from_time(
             # Get current stats and vitals
             data = await conn.fetchrow("""
                 SELECT ps.endurance, ps.strength, ps.hp, ps.max_hp,
-                       pv.hunger, pv.thirst, pv.fatigue
+                       pv.energy, pv.hunger, pv.thirst, pv.fatigue
                 FROM PlayerStats ps
                 LEFT JOIN PlayerVitals pv ON ps.user_id = pv.user_id 
                     AND ps.conversation_id = pv.conversation_id 
@@ -1360,9 +1435,12 @@ async def update_vitals_from_time(
                 
             endurance = data['endurance'] or 10
             strength = data['strength'] or 10
-            current_hunger = data['hunger'] if data['hunger'] is not None else 100
-            current_thirst = data['thirst'] if data['thirst'] is not None else 100
-            current_fatigue = data['fatigue'] if data['fatigue'] is not None else 0
+            current_vitals = VitalsData(
+                energy=data['energy'] if data['energy'] is not None else 100,
+                hunger=data['hunger'] if data['hunger'] is not None else 100,
+                thirst=data['thirst'] if data['thirst'] is not None else 100,
+                fatigue=data['fatigue'] if data['fatigue'] is not None else 0
+            )
             
             # Get base drain rates for time of day
             drain_rates = VITAL_DRAIN_RATES.get(time_of_day, VITAL_DRAIN_RATES["Morning"])
@@ -1396,62 +1474,59 @@ async def update_vitals_from_time(
                     fatigue_gain = int(fatigue_gain * 1.3)
             
             # Calculate new values
-            new_hunger = max(0, current_hunger - hunger_drain)
-            new_thirst = max(0, current_thirst - thirst_drain)
-            new_fatigue = min(100, current_fatigue + fatigue_gain)
+            new_vitals = VitalsData(
+                energy=current_vitals.energy,  # Energy doesn't drain from time alone
+                hunger=max(0, current_vitals.hunger - hunger_drain),
+                thirst=max(0, current_vitals.thirst - thirst_drain),
+                fatigue=min(100, current_vitals.fatigue + fatigue_gain)
+            )
             
             # Update vitals
             await conn.execute("""
-                INSERT INTO PlayerVitals (user_id, conversation_id, player_name, hunger, thirst, fatigue)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger, thirst, fatigue)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (user_id, conversation_id, player_name)
                 DO UPDATE SET 
-                    hunger = $4, 
-                    thirst = $5, 
-                    fatigue = $6,
+                    energy = $4,
+                    hunger = $5, 
+                    thirst = $6, 
+                    fatigue = $7,
                     last_update = CURRENT_TIMESTAMP
-            """, user_id, conversation_id, player_name, new_hunger, new_thirst, new_fatigue)
+            """, user_id, conversation_id, player_name, 
+                new_vitals.energy, new_vitals.hunger, new_vitals.thirst, new_vitals.fatigue)
             
             # Apply stat penalties based on vital thresholds
             stat_changes = await calculate_vital_stat_effects(
-                new_hunger, new_thirst, new_fatigue
+                new_vitals.hunger, new_vitals.thirst, new_vitals.fatigue
             )
             
             # Check for vital crises
             crises = []
-            if new_hunger < 20:
+            if new_vitals.hunger < 20:
                 crises.append({
                     "type": "hunger_crisis",
-                    "severity": "severe" if new_hunger < 10 else "moderate",
+                    "severity": "severe" if new_vitals.hunger < 10 else "moderate",
                     "message": "You're dangerously hungry. Find food soon!"
                 })
             
-            if new_thirst < 20:
+            if new_vitals.thirst < 20:
                 crises.append({
                     "type": "thirst_crisis", 
-                    "severity": "severe" if new_thirst < 10 else "moderate",
+                    "severity": "severe" if new_vitals.thirst < 10 else "moderate",
                     "message": "You're severely dehydrated. You need water!"
                 })
             
-            if new_fatigue > 80:
+            if new_vitals.fatigue > 80:
                 crises.append({
                     "type": "fatigue_crisis",
-                    "severity": "severe" if new_fatigue > 90 else "moderate",
+                    "severity": "severe" if new_vitals.fatigue > 90 else "moderate",
                     "message": "You're about to collapse from exhaustion!"
                 })
             
             return {
                 "success": True,
-                "old_vitals": {
-                    "hunger": current_hunger,
-                    "thirst": current_thirst,
-                    "fatigue": current_fatigue
-                },
-                "new_vitals": {
-                    "hunger": new_hunger,
-                    "thirst": new_thirst,
-                    "fatigue": new_fatigue
-                },
+                "old_vitals": current_vitals.to_dict(),
+                "new_vitals": new_vitals.to_dict(),
                 "drains": {
                     "hunger": hunger_drain,
                     "thirst": thirst_drain,
@@ -1459,7 +1534,7 @@ async def update_vitals_from_time(
                 },
                 "stat_effects": stat_changes,
                 "crises": crises,
-                "forced_sleep": new_fatigue >= 100
+                "forced_sleep": new_vitals.fatigue >= 100
             }
             
     except Exception as e:
@@ -1537,32 +1612,34 @@ async def process_activity_vitals(
         async with get_db_connection_context() as conn:
             # Get current vitals
             current = await conn.fetchrow("""
-                SELECT hunger, thirst, fatigue FROM PlayerVitals
+                SELECT energy, hunger, thirst, fatigue FROM PlayerVitals
                 WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
             """, user_id, conversation_id, player_name)
             
             if not current:
                 # Initialize vitals if missing
                 await conn.execute("""
-                    INSERT INTO PlayerVitals (user_id, conversation_id, player_name, hunger, thirst, fatigue)
-                    VALUES ($1, $2, $3, 100, 100, 0)
+                    INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger, thirst, fatigue)
+                    VALUES ($1, $2, $3, 100, 100, 100, 0)
                 """, user_id, conversation_id, player_name)
-                current = {"hunger": 100, "thirst": 100, "fatigue": 0}
+                current = {"energy": 100, "hunger": 100, "thirst": 100, "fatigue": 0}
             
             # Apply effects with intensity modifier
             new_vitals = {}
             for vital, change in vital_effects.items():
-                current_value = current[vital]
-                modified_change = int(change * intensity)
-                new_value = max(0, min(100, current_value + modified_change))
-                new_vitals[vital] = new_value
+                if vital in ["hunger", "thirst", "fatigue", "energy"]:
+                    current_value = current[vital]
+                    modified_change = int(change * intensity)
+                    new_value = max(0, min(100, current_value + modified_change))
+                    new_vitals[vital] = new_value
             
             # Update vitals
             await conn.execute("""
                 UPDATE PlayerVitals
-                SET hunger = $1, thirst = $2, fatigue = $3, last_update = CURRENT_TIMESTAMP
-                WHERE user_id = $4 AND conversation_id = $5 AND player_name = $6
+                SET energy = $1, hunger = $2, thirst = $3, fatigue = $4, last_update = CURRENT_TIMESTAMP
+                WHERE user_id = $5 AND conversation_id = $6 AND player_name = $7
             """, 
+                new_vitals.get("energy", current["energy"]),
                 new_vitals.get("hunger", current["hunger"]),
                 new_vitals.get("thirst", current["thirst"]),
                 new_vitals.get("fatigue", current["fatigue"]),
@@ -1573,7 +1650,7 @@ async def process_activity_vitals(
                 "success": True,
                 "vital_changes": {
                     vital: new_vitals.get(vital, current[vital]) - current[vital]
-                    for vital in ["hunger", "thirst", "fatigue"]
+                    for vital in ["energy", "hunger", "thirst", "fatigue"]
                 },
                 "new_vitals": new_vitals
             }
@@ -1656,6 +1733,16 @@ async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str
     except Exception as e:
         logger.error(f"Unexpected error getting current time: {e}", exc_info=True)
         return (1, 1, 1, "Morning")
+
+async def get_current_time_model(user_id: int, conversation_id: int) -> CurrentTimeData:
+    """Get current time as Pydantic model."""
+    year, month, day, time_of_day = await get_current_time(user_id, conversation_id)
+    return CurrentTimeData(
+        year=year,
+        month=month,
+        day=day,
+        time_of_day=time_of_day
+    )
 
 async def set_current_time(user_id, conversation_id, new_year, new_month, new_day, new_phase):
     """
@@ -1759,6 +1846,7 @@ async def update_npc_schedules_for_time(user_id, conversation_id, day, time_of_d
 async def advance_time_and_update(user_id, conversation_id, increment=1):
     """
     Advances time, updates NPC schedules, removes expired planned events, updates vitals.
+    Returns tuple of (CurrentTimeData, vitals_result)
     """
     (new_year, new_month, new_day, new_phase) = await advance_time(user_id, conversation_id, increment)
     await update_npc_schedules_for_time(user_id, conversation_id, new_day, new_phase)
@@ -1769,7 +1857,14 @@ async def advance_time_and_update(user_id, conversation_id, increment=1):
         user_id, conversation_id, "Chase", increment, new_phase
     )
     
-    return (new_year, new_month, new_day, new_phase), vitals_result
+    new_time = CurrentTimeData(
+        year=new_year,
+        month=new_month,
+        day=new_day,
+        time_of_day=new_phase
+    )
+    
+    return new_time, vitals_result
 
 def should_advance_time(activity_type):
     """
@@ -1783,7 +1878,7 @@ def should_advance_time(activity_type):
 
 def _get_vital_status(value: int, vital_type: str) -> str:
     """Helper to get vital status description."""
-    if vital_type in ["hunger", "thirst"]:
+    if vital_type in ["hunger", "thirst", "energy"]:
         if value >= 80:
             return "Good"
         elif value >= 60:
@@ -1903,8 +1998,8 @@ async def process_conflict_time_advancement(user_id: int, conversation_id: int, 
 
     # If new day (i.e. after 'sleep' → next morning?), run daily update
     # We'll guess if it's a new day if we ended up in 'Morning' after 'sleep'
-    new_year, new_month, new_day, new_time = await get_current_time(user_id, conversation_id)
-    if activity_type == "sleep" and new_time == "Morning":
+    new_time = await get_current_time_model(user_id, conversation_id)
+    if activity_type == "sleep" and new_time.time_of_day == "Morning":
         daily_result = await conflict_system.run_daily_update()
         result["daily_update"] = daily_result
         result["daily_update_run"] = True
@@ -2374,6 +2469,29 @@ class TimeCycleContext:
 # Enhanced Tools with vitals support
 
 @function_tool
+async def tool_classify_activity(ctx: RunContextWrapper['TimeCycleContext'], player_input: str, location: str = None, rng_seed: Optional[int] = None) -> str:
+    """Use LLM to classify player activity intent."""
+    context = {"location": location} if location else {}
+    activity_type, confidence = await classify_activity_with_llm(player_input, context, rng_seed)
+    return json.dumps({
+        "activity_type": activity_type,
+        "confidence": confidence,
+        "method": "llm" if confidence > 0.5 else "keyword"
+    })
+
+@function_tool
+async def tool_calculate_intensity(ctx: RunContextWrapper[TimeCycleContext], player_input: str) -> str:
+    """Calculate activity intensity using LLM analysis."""
+    user_id = ctx.context.user_id
+    conv_id = ctx.context.conversation_id
+    
+    # Get current vitals
+    vitals = await get_current_vitals(user_id, conv_id)
+    
+    result = await calculate_intensity_with_llm(player_input, vitals, {})
+    return json.dumps(result)
+
+@function_tool
 async def tool_advance_time_with_events(
     ctx: RunContextWrapper[TimeCycleContext], 
     activity_type: str, 
@@ -2397,27 +2515,22 @@ async def tool_check_vitals(ctx: RunContextWrapper[TimeCycleContext]) -> str:
     conv_id = ctx.context.conversation_id
     
     try:
-        async with get_db_connection_context() as conn:
-            vitals = await conn.fetchrow("""
-                SELECT hunger, thirst, fatigue FROM PlayerVitals
-                WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
-            """, user_id, conv_id)
-            
-            if vitals:
-                result = {
-                    "hunger": vitals['hunger'],
-                    "thirst": vitals['thirst'],
-                    "fatigue": vitals['fatigue'],
-                    "status": {
-                        "hunger": _get_vital_status(vitals['hunger'], "hunger"),
-                        "thirst": _get_vital_status(vitals['thirst'], "thirst"),
-                        "fatigue": _get_vital_status(vitals['fatigue'], "fatigue")
-                    }
-                }
-            else:
-                result = {"error": "No vitals found"}
-            
-            return json.dumps(result)
+        vitals = await get_current_vitals(user_id, conv_id)
+        
+        result = {
+            "energy": vitals.energy,
+            "hunger": vitals.hunger,
+            "thirst": vitals.thirst,
+            "fatigue": vitals.fatigue,
+            "status": {
+                "energy": _get_vital_status(vitals.energy, "energy"),
+                "hunger": _get_vital_status(vitals.hunger, "hunger"),
+                "thirst": _get_vital_status(vitals.thirst, "thirst"),
+                "fatigue": _get_vital_status(vitals.fatigue, "fatigue")
+            }
+        }
+        
+        return json.dumps(result)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -2462,7 +2575,7 @@ async def tool_consume_vital_resource(ctx: RunContextWrapper[TimeCycleContext], 
     try:
         async with get_db_connection_context() as conn:
             current = await conn.fetchrow("""
-                SELECT hunger, thirst FROM PlayerVitals
+                SELECT energy, hunger, thirst FROM PlayerVitals
                 WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
             """, user_id, conv_id)
             
@@ -2516,7 +2629,7 @@ Your tools include:
 - tool_classify_activity: Use LLM for nuanced activity classification
 - tool_calculate_intensity: Determine intensity with context awareness
 - tool_advance_time_with_events: Process time with intelligent event selection
-- tool_check_vitals: Monitor hunger/thirst/fatigue
+- tool_check_vitals: Monitor hunger/thirst/fatigue/energy
 - tool_consume_vital_resource: Handle eating/drinking
 - tool_nightly_maintenance
 - tool_process_conflict_time_advancement
