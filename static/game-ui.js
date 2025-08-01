@@ -581,23 +581,6 @@ document.addEventListener('DOMContentLoaded', function() {
         themeBtn.textContent = '☀️ Light Mode';
       }
     }
-    
-    /*
-    // Fix dropdown toggle
-    const newGameBtn = document.getElementById('newGameBtn');
-    const dropdown = document.getElementById('newGameDropdown');
-    
-    if (newGameBtn && dropdown) {
-      newGameBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
-      });
-      
-      // Close dropdown when clicking outside
-      document.addEventListener('click', () => {
-        dropdown.style.display = 'none';
-      });
-    }
-    */
+
   }, 100);
 });
