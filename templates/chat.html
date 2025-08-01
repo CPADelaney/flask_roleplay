@@ -1007,13 +1007,36 @@
 </div>
   
 <script>
-  // Quart's session.user_id to JSON    
+  // Embed user ID from server session
   window.CURRENT_USER_ID = {{ session.user_id|tojson }};
-  // Check if user is admin (you'll need to pass this from your backend)
-  window.IS_ADMIN = {{ (session.is_admin|default(false))|tojson }};
+  
+  // Fix admin check - use the user_id that was passed to the template
+  window.IS_ADMIN = {{ (user_id in config.get('ADMIN_USER_IDS', []))|tojson if user_id is defined else false|tojson }};
+  
+  // Debug: Log the user ID to console
+  console.log("Current User ID from server:", window.CURRENT_USER_ID);
+  console.log("Is Admin:", window.IS_ADMIN);
+  
+  // Validate user ID on page load
+  if (!window.CURRENT_USER_ID || window.CURRENT_USER_ID === "anonymous") {
+    console.error("No valid user ID found, redirecting to login");
+    // Add a small delay to see the error message
+    setTimeout(() => {
+      window.location.href = "/login_page";
+    }, 100);
+  }
+  
+  // Convert user ID to proper type if needed
+  if (window.CURRENT_USER_ID && typeof window.CURRENT_USER_ID === 'string' && /^\d+$/.test(window.CURRENT_USER_ID)) {
+    window.CURRENT_USER_ID = parseInt(window.CURRENT_USER_ID, 10);
+    console.log("Converted user ID to integer:", window.CURRENT_USER_ID);
+  }
 </script>
-<!-- Link to our refactored script, DEFER is important -->
+
+<!-- Link to our socket fix script FIRST -->
 <script src="/static/socket-fix.js"></script>
+
+<!-- Then load the main application scripts -->
 <script src="/static/chat_page.js" defer></script>
 <script src="/static/game-ui.js" defer></script>
 </body>
