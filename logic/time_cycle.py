@@ -274,6 +274,8 @@ class ActivityDefinition(BaseModel):
     description: str = Field(..., description="Activity description")
     stat_effects: Dict[str, int] = Field(default_factory=dict)
     vital_effects: Dict[str, int] = Field(default_factory=dict)
+    
+    model_config = {"extra": "forbid"}
 
 class EventData(BaseModel):
     """Event data matching Events table"""
@@ -507,11 +509,13 @@ async def get_dynamic_relationship_summary(user_id: int, conversation_id: int) -
         
         rel_summary = {
             "npc_name": npc_name or f"NPC_{entity2_id if entity2_type == 'npc' else entity1_id}",
-            "dimensions": state.dimensions.to_dict(),
+            "trust": float(state.dimensions.trust),  # Ensure float
+            "affection": float(state.dimensions.affection),  # Ensure float
             "patterns": list(state.history.active_patterns),
             "archetypes": list(state.active_archetypes),
-            "momentum": state.momentum.get_magnitude()
+            "momentum": float(state.momentum.get_magnitude())  # Ensure float
         }
+        summary["most_significant"].append(rel_summary)  # Store as dict, not JSON string
         summary["most_significant"].append(rel_summary)
         summary["active_patterns"].update(state.history.active_patterns)
         summary["active_archetypes"].update(state.active_archetypes)
@@ -583,15 +587,32 @@ def score_intensity(sentence: str, vitals: VitalsData, context_tags: List[str]) 
 @function_tool
 def generate_event_content(
     event_type: str,
-    context_data: Dict[str, Any]
-) -> Dict[str, Any]:
+    context_data_json: str  # Changed from Dict[str, Any] to JSON string
+) -> str:  # Return JSON string
     """Generate dynamic content for a narrative event based on context."""
-    # This is the tool that EventContentAgent will use
-    return {
+    context_data = json.loads(context_data_json)
+    
+    # Generate content based on event type
+    content = f"A {event_type} occurs."
+    metadata = {"generated": True}
+    
+    if event_type == "vital_crisis":
+        crisis_type = context_data.get("crisis_type", "unknown")
+        severity = context_data.get("severity", "moderate")
+        content = f"You're experiencing a {severity} {crisis_type} crisis!"
+    elif event_type == "dream_sequence":
+        content = "Strange dreams fill your mind as exhaustion takes hold..."
+    elif event_type == "npc_revelation":
+        npc_id = context_data.get("npc_id", "unknown")
+        content = f"You have a sudden realization about NPC {npc_id}..."
+    
+    result = {
         "event_type": event_type,
-        "content": "Generated content placeholder",
-        "metadata": {}
+        "content": content,
+        "metadata": metadata
     }
+    
+    return json.dumps(result)
 
 # Now update the recommend_events function to generate actual content
 @function_tool
@@ -1345,10 +1366,10 @@ async def select_events_with_director(
             calls=[{
                 "name": "recommend_events",
                 "kwargs": {
-                    "activity_log": [al.dict() for al in activity_log_summaries],
-                    "vitals": vitals_summary.dict(),
-                    "plot_flags": plot_flags_list,
-                    "relationship_standings": [rs.dict() for rs in relationship_standings_list]
+                    "activity_log_json": json.dumps([al.dict() for al in activity_log_summaries]),
+                    "vitals_json": json.dumps(vitals_summary.dict()),
+                    "plot_flags_json": json.dumps(plot_flags_list),
+                    "relationships_json": json.dumps([rs.dict() for rs in relationship_standings_list])
                 }
             }]
         )
@@ -1549,14 +1570,13 @@ async def advance_time_with_events(
         await npc_handler.detect_relationship_stage_changes(ctx)
 
         # Get dynamic relationship summary instead of old overview
-        relationship_summary = await get_dynamic_relationship_summary(user_id, conversation_id)
         if relationship_summary and relationship_summary.get('total_relationships', 0) > 0:
             events.append(PhaseEventEntry(
                 type="relationship_summary",
                 total_relationships=relationship_summary['total_relationships'],
                 active_patterns=relationship_summary['active_patterns'],
                 active_archetypes=relationship_summary['active_archetypes'],
-                most_significant=relationship_summary['most_significant']
+                most_significant_json=[json.dumps(ms) for ms in relationship_summary['most_significant']]
             ).dict())
 
         # Check for relationship events using the new dynamic system
@@ -1739,7 +1759,11 @@ async def generate_phase_recap_with_agent(
             phase_events_list = []
             for e in phase_events:
                 if isinstance(e, dict):
-                    phase_events_list.append(PhaseEventEntry(**e))
+                    # Remove any Dict[str, Any] fields before creating PhaseEventEntry
+                    cleaned_event = {k: v for k, v in e.items() if k != 'most_significant'}
+                    if 'most_significant' in e:
+                        cleaned_event['most_significant_json'] = [json.dumps(ms) for ms in e['most_significant']]
+                    phase_events_list.append(PhaseEventEntry(**cleaned_event))
                 else:
                     phase_events_list.append(e)
         
