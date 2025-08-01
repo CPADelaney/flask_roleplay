@@ -1623,12 +1623,15 @@ async function checkLoggedIn() {
   try {
     const data = await fetchJson("/whoami");
     
-    if (!data.logged_in) {
+    if (!data.logged_in || !data.user_id || data.user_id === "anonymous") {
       window.location.href = "/login_page";
       return false;
     }
     
+    // Update the global state with the valid user ID
     AppState.userId = data.user_id;
+    window.CURRENT_USER_ID = data.user_id; // Ensure consistency
+    
     const logoutBtn = $("logoutBtn");
     if (logoutBtn) {
       logoutBtn.style.display = "inline-block";
