@@ -99,6 +99,40 @@ class CombinedAnalysis(BaseModel):
     mood: str = Field(..., description="Detected mood")
     risk: str = Field(..., description="Risk level")
 
+class VitalsData(BaseModel):
+    """Player vitals data"""
+    hunger: int = Field(..., ge=0, le=100)
+    thirst: int = Field(..., ge=0, le=100)
+    fatigue: int = Field(..., ge=0, le=100)
+
+class ActivityLogEntry(BaseModel):
+    """Entry in the activity log"""
+    type: str = Field(..., description="Activity type")
+    time: str = Field(..., description="Timestamp as string")
+
+class VitalsData(BaseModel):
+    """Player vitals data"""
+    hunger: int = Field(..., ge=0, le=100)
+    thirst: int = Field(..., ge=0, le=100)
+    fatigue: int = Field(..., ge=0, le=100)
+
+class PhaseEventEntry(BaseModel):
+    """Event that occurred during a phase"""
+    type: str = Field(..., description="Event type")
+    description: Optional[str] = Field(None, description="Event description")
+    # Add other fields as needed based on your event structure
+
+class NPCStandings(BaseModel):
+    """NPC relationship standings"""
+    # This will be a dynamic model, so we'll use a different approach
+    __root__: Dict[str, int]  # NPC name -> relationship level
+    
+    def __getitem__(self, key: str) -> int:
+        return self.__root__[key]
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.__root__.get(key, default)
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Constants (unchanged from original)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -278,7 +312,7 @@ PlayerIntentAgent = Agent(
 
 # 2. IntensityScorer - Calculates nuanced intensity
 @function_tool
-def score_intensity(sentence: str, vitals: Dict[str, int], context_tags: List[str]) -> IntensityScore:
+def score_intensity(sentence: str, vitals: VitalsData, context_tags: List[str]) -> IntensityScore:
     """Score the intensity of an activity based on language, vitals, and context."""
     # This would be called by the IntensityScorer agent
     return IntensityScore(
@@ -305,8 +339,8 @@ IntensityScorer = Agent(
 # 3. NarrativeDirectorAgent - Intelligent event selection
 @function_tool
 def recommend_events(
-    activity_log: List[Dict[str, Any]], 
-    vitals: Dict[str, int],
+    activity_log: List[ActivityLogEntry], 
+    vitals: VitalsData,
     plot_flags: List[str],
     relationship_stages: Dict[str, str]
 ) -> List[EventRecommendation]:
@@ -363,10 +397,10 @@ EventWriterAgent = Agent(
 # 6. PhaseRecapAgent - Phase summaries and suggestions
 @function_tool
 def generate_phase_recap(
-    phase_events: List[Dict[str, Any]],
+    phase_events: List[PhaseEventEntry],
     current_goals: List[str],
-    npc_standings: Dict[str, Any],
-    vitals: Dict[str, int]
+    npc_standings: Dict[str, int],  # Keep this as Dict[str, int] since it's specific
+    vitals: VitalsData
 ) -> PhaseRecapResult:
     """Generate a recap and suggestions for the next phase."""
     return PhaseRecapResult(
@@ -638,6 +672,13 @@ async def calculate_intensity_with_llm(
             context_tags.append(f"location:{context['location']}")
         if context.get("mood"):
             context_tags.append(f"mood:{context['mood']}")
+        
+        # Create VitalsData object
+        vitals_data = VitalsData(
+            hunger=vitals.get("hunger", 100),
+            thirst=vitals.get("thirst", 100),
+            fatigue=vitals.get("fatigue", 0)
+        )
             
         result = await Runner.run(
             IntensityScorer,
@@ -649,7 +690,7 @@ async def calculate_intensity_with_llm(
                 "name": "score_intensity",
                 "kwargs": {
                     "sentence": player_input,
-                    "vitals": vitals,
+                    "vitals": vitals_data.dict(),  # Convert to dict for the call
                     "context_tags": context_tags
                 }
             }]
@@ -720,10 +761,21 @@ async def select_events_with_director(
                 WHERE user_id=$1 AND conversation_id=$2
             """, user_id, conversation_id)
         
-        # Convert to appropriate format
-        activity_log_list = [{"type": r["activity_type"], "time": str(r["timestamp"])} for r in activity_log]
+        # Convert to appropriate format with Pydantic models
+        activity_log_list = [
+            ActivityLogEntry(type=r["activity_type"], time=str(r["timestamp"])) 
+            for r in activity_log
+        ]
+        
         plot_flags_list = [r["key"] for r in plot_flags]
         relationship_dict = {r["npc_id"]: r["narrative_stage"] for r in relationships}
+        
+        # Create VitalsData object
+        vitals_data = VitalsData(
+            hunger=vitals.get("hunger", 100),
+            thirst=vitals.get("thirst", 100),
+            fatigue=vitals.get("fatigue", 0)
+        )
         
         # Prepare messages with optional RNG seed
         messages = [{"role": "user", "content": "Select appropriate events for current game state"}]
@@ -737,8 +789,8 @@ async def select_events_with_director(
             calls=[{
                 "name": "recommend_events",
                 "kwargs": {
-                    "activity_log": activity_log_list,
-                    "vitals": vitals,
+                    "activity_log": [al.dict() for al in activity_log_list],  # Convert to dicts
+                    "vitals": vitals_data.dict(),  # Convert to dict
                     "plot_flags": plot_flags_list,
                     "relationship_stages": relationship_dict
                 }
@@ -1134,9 +1186,24 @@ async def generate_phase_recap_with_agent(
         
         npc_standings = {n["npc_name"]: n["relationship_level"] for n in npcs}
         
-        # Handle empty phase_events gracefully
+        # Handle empty phase_events gracefully and convert to Pydantic models
         if not phase_events:
-            phase_events = [{"type": "quiet_phase", "description": "A quiet moment passes"}]
+            phase_events_list = [PhaseEventEntry(type="quiet_phase", description="A quiet moment passes")]
+        else:
+            phase_events_list = [
+                PhaseEventEntry(
+                    type=e.get("type", "unknown"), 
+                    description=e.get("description", "")
+                )
+                for e in phase_events
+            ]
+        
+        # Create VitalsData object
+        vitals_data = VitalsData(
+            hunger=vitals.get("hunger", 100),
+            thirst=vitals.get("thirst", 100), 
+            fatigue=vitals.get("fatigue", 0)
+        )
         
         result = await Runner.run(
             PhaseRecapAgent,
@@ -1144,10 +1211,10 @@ async def generate_phase_recap_with_agent(
             calls=[{
                 "name": "generate_phase_recap",
                 "kwargs": {
-                    "phase_events": phase_events,
+                    "phase_events": [pe.dict() for pe in phase_events_list],  # Convert to dicts
                     "current_goals": current_goals,
                     "npc_standings": npc_standings,
-                    "vitals": vitals
+                    "vitals": vitals_data.dict()  # Convert to dict
                 }
             }]
         )
