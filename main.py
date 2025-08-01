@@ -548,6 +548,13 @@ def create_quart_app():
         sock_sess = await sio.get_session(sid)
         user_id = sock_sess.get("user_id", "anonymous")
         
+        # If still anonymous, try to get from HTTP session one more time
+        if user_id == "anonymous":
+            # This would require passing the environ or request context
+            logger.warning(f"Socket session has anonymous user, cannot process authenticated request")
+            await sio.emit('error', {'error': 'Not authenticated. Please refresh the page and log in again.'}, to=sid)
+            return
+        
         # FIX: Convert IDs to integers
         conversation_id = data.get("conversation_id")
         if conversation_id is not None:
@@ -646,16 +653,23 @@ def create_quart_app():
             await sio.emit('server_heartbeat', {'timestamp': time.time()}, room=sid)
         except Exception as e:
             logger.error(f"Error handling heartbeat from {sid}: {e}")
-    
+        
     @sio.event
     async def connect(sid, environ, auth):
-        # auth comes from the client: io({ auth: { user_id: … } })
-        user_id = auth.get("user_id") if auth else "anonymous"
-        # save into the socketio session
+        # First try to get user_id from auth (if client provides it)
+        user_id = auth.get("user_id") if auth else None
+        
+        # If not in auth, try to get from HTTP session
+        if not user_id:
+            # Get the request from environ to access session
+            from quart import request
+            async with app.test_request_context(environ['PATH_INFO'], environ=environ):
+                user_id = session.get("user_id", "anonymous")
+        
+        # Save to socketio session
         await sio.save_session(sid, {"user_id": user_id})
         app.logger.info(f"Socket connected: sid={sid}, user_id={user_id}")
-        # optional welcome ack
-        await sio.emit("response", {"data": "Connected!"}, to=sid)
+        await sio.emit("response", {"data": "Connected!", "user_id": user_id}, to=sid)
 
     @sio.on("join")
     async def on_join(sid, data):
