@@ -548,14 +548,20 @@ def create_quart_app():
         sock_sess = await sio.get_session(sid)
         user_id = sock_sess.get("user_id", "anonymous")
         
-        # If still anonymous, try to get from HTTP session one more time
+        # Reject anonymous users
         if user_id == "anonymous":
-            # This would require passing the environ or request context
             logger.warning(f"Socket session has anonymous user, cannot process authenticated request")
-            await sio.emit('error', {'error': 'Not authenticated. Please refresh the page and log in again.'}, to=sid)
+            await sio.emit('error', {
+                'error': 'Not authenticated. Please refresh the page and log in again.',
+                'requiresAuth': True
+            }, to=sid)
             return
         
-        # FIX: Convert IDs to integers
+        # Ensure user_id is int
+        if isinstance(user_id, str) and user_id.isdigit():
+            user_id = int(user_id)
+        
+        # Get and validate conversation_id
         conversation_id = data.get("conversation_id")
         if conversation_id is not None:
             try:
@@ -565,47 +571,36 @@ def create_quart_app():
                 await sio.emit('error', {'error': 'Invalid conversation_id format'}, to=sid)
                 return
         
-        # Also ensure user_id is int if it's not "anonymous"
-        if user_id != "anonymous":
-            try:
-                user_id = int(user_id)
-            except (ValueError, TypeError):
-                logger.error(f"Invalid user_id in session: {user_id}")
-                await sio.emit('error', {'error': 'Invalid user_id format'}, to=sid)
-                return
-        
         user_input = data.get("user_input")
         universal_update = data.get("universal_update")
-    
+        
         app.logger.info(f"Received 'storybeat' from sid={sid}, user_id={user_id}, conv_id={conversation_id}")
-    
+        
         # Basic validation
-        if not all([isinstance(conversation_id, (int, str)), user_input is not None]): # user_input can be an empty string
-            error_msg = "Invalid 'storybeat' payload: missing or invalid conversation_id or user_input."
+        if not all([conversation_id is not None, user_input is not None]):
+            error_msg = "Invalid 'storybeat' payload: missing conversation_id or user_input."
             app.logger.error(f"{error_msg} SID: {sid}. Data: {data}")
-            # Emit error to the specific room or SID
-            target_room = str(conversation_id) if conversation_id else sid
-            await sio.emit('error', {'error': error_msg}, room=target_room)
+            await sio.emit('error', {'error': error_msg}, room=str(conversation_id))
             return
-    
+        
         try:
             await sio.emit("processing", {"message": "Your request is being processed..."}, to=sid)
             
-            # Pass sio as a parameter
+            # Start background task with proper user_id
             sio.start_background_task(
                 background_chat_task,
                 conversation_id,
                 user_input,
-                user_id,
+                user_id,  # This will now be the actual user ID, not "anonymous"
                 universal_update,
-                sio  # Pass the socketio instance
+                sio
             )
-            app.logger.info(f"Started background_chat_task for sid={sid}, conv_id={conversation_id}")
-    
+            app.logger.info(f"Started background_chat_task for sid={sid}, user_id={user_id}, conv_id={conversation_id}")
+        
         except Exception as e:
             app.logger.error(f"Error dispatching background_chat_task for sid={sid}: {e}", exc_info=True)
-            target_room = str(conversation_id) if conversation_id else sid
-            await sio.emit('error', {'error': 'Server failed to initiate message processing.'}, room=target_room)
+            await sio.emit('error', {'error': 'Server failed to initiate message processing.'}, room=str(conversation_id))
+
 
     @app.before_serving
     async def on_startup():
@@ -656,15 +651,19 @@ def create_quart_app():
         
     @sio.event
     async def connect(sid, environ, auth):
-        # First try to get user_id from auth (if client provides it)
+        # Get user_id from auth (passed by client)
         user_id = auth.get("user_id") if auth else None
         
-        # If not in auth, try to get from HTTP session
-        if not user_id:
-            # Get the request from environ to access session
-            from quart import request
-            async with app.test_request_context(environ['PATH_INFO'], environ=environ):
-                user_id = session.get("user_id", "anonymous")
+        # Convert to int if it's a valid numeric string
+        if user_id and str(user_id).isdigit():
+            user_id = int(user_id)
+        elif not user_id:
+            # If not in auth, try to get from HTTP session
+            # This requires parsing cookies from environ
+            cookie_header = environ.get('HTTP_COOKIE', '')
+            # For now, if no auth user_id, default to anonymous
+            user_id = "anonymous"
+            app.logger.warning(f"No user_id in auth for sid={sid}, defaulting to anonymous")
         
         # Save to socketio session
         await sio.save_session(sid, {"user_id": user_id})
@@ -676,7 +675,15 @@ def create_quart_app():
         sock_sess = await sio.get_session(sid)
         user_id = sock_sess.get("user_id", "anonymous")
         
-        # FIX: Ensure proper integer conversion
+        # Validate user is authenticated
+        if user_id == "anonymous":
+            await sio.emit("error", {"error": "Not authenticated"}, to=sid)
+            return
+        
+        # Ensure proper integer conversion
+        if isinstance(user_id, str) and user_id.isdigit():
+            user_id = int(user_id)
+        
         try:
             conversation_id = int(data["conversation_id"])
             room = str(conversation_id)  # Room names should be strings
@@ -685,29 +692,24 @@ def create_quart_app():
             await sio.emit("error", {"error": "Invalid conversation_id"}, to=sid)
             return
         
-        # Convert user_id if needed
-        if user_id != "anonymous":
-            try:
-                user_id = int(user_id)
-            except (ValueError, TypeError):
-                pass  # Keep as is if conversion fails
-        
         await sio.enter_room(sid, room)
-        await sio.emit("joined", {"room": room}, to=sid)
+        await sio.emit("joined", {"room": room, "user_id": user_id}, to=sid)
+        app.logger.info(f"User {user_id} joined room {room}")
 
     @sio.on("message")
     async def on_message(sid, data):
         sock_sess = await sio.get_session(sid)
         user_id = sock_sess.get("user_id", "anonymous")
         
-        # FIX: Convert user_id if needed
-        if user_id != "anonymous":
-            try:
-                user_id = int(user_id)
-            except (ValueError, TypeError):
-                logger.error(f"Invalid user_id in session: {user_id}")
-                await sio.emit("error", {"error": "Invalid user session"}, to=sid)
-                return
+        # Validate authentication
+        if user_id == "anonymous":
+            logger.error(f"Anonymous user attempted to send message")
+            await sio.emit("error", {"error": "Not authenticated"}, to=sid)
+            return
+        
+        # Ensure user_id is int
+        if isinstance(user_id, str) and user_id.isdigit():
+            user_id = int(user_id)
         
         # Extract and convert conversation_id
         conversation_id = data.get("conversation_id")
@@ -731,18 +733,17 @@ def create_quart_app():
         # Emit acknowledgment
         await sio.emit("message_received", {"status": "processing"}, to=sid)
         
-        # Start background task (similar to storybeat)
+        # Start background task
         try:
-            # Option 1: Use the same background_chat_task
             sio.start_background_task(
                 background_chat_task,
                 conversation_id,
-                message_content,  # user_input
-                user_id,
+                message_content,
+                user_id,  # Properly authenticated user_id
                 None,  # universal_update
-                sio    # Pass the socketio instance
+                sio
             )
-            app.logger.info(f"Started background task for message from sid={sid}, conv_id={conversation_id}")
+            app.logger.info(f"Started background task for message from user {user_id}, conv_id={conversation_id}")
             
         except Exception as e:
             app.logger.error(f"Error starting message processing task: {e}", exc_info=True)
