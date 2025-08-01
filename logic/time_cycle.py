@@ -578,43 +578,6 @@ def score_intensity(sentence: str, vitals: VitalsData, context_tags: List[str]) 
         risk="low"
     )
 
-IntensityScorer = Agent(
-    name="IntensityScorer",
-    instructions="""Analyze the player's activity description and context to determine intensity.
-    
-    Consider:
-    - Adverbs and intensity modifiers ("frantically", "lazily", "desperately")
-    - Current vitals (low energy = lower intensity possible)
-    - Location context (gym = higher baseline intensity)
-    - Emotional tone and mood
-    - Risk level for femdom activities
-    
-    Output intensity (0.5-1.5), mood, and risk level.""",
-    model="gpt-4.1-nano",
-    tools=[score_intensity]
-)
-
-# 3. NarrativeDirectorAgent - Intelligent event selection
-EventContentAgent = Agent(
-    name="EventContentAgent",
-    instructions="""You generate immersive, contextual narrative events for a femdom university game.
-    
-    Create unique content based on:
-    - Event type (revelation, dream, narrative moment, crisis)
-    - Current game state (vitals, relationships, activities)
-    - Specific NPCs involved and their relationship dynamics
-    - Player's recent actions and emotional state
-    
-    Guidelines:
-    - Revelations should feel like genuine internal realizations
-    - Dreams should be surreal but meaningful, reflecting subconscious fears/desires
-    - Narrative moments should show NPCs' subtle coordination or control
-    - Crises should incorporate nearby NPCs when possible
-    
-    Keep content concise but evocative. Match the game's tone of gradual power dynamics shift.""",
-    model="gpt-4.1-nano",
-    tools=[generate_event_content]
-)
 
 @function_tool
 def generate_event_content(
@@ -1071,6 +1034,44 @@ async def analyze_action_combined(
         "mood": "neutral",
         "risk": "low"
     }
+
+IntensityScorer = Agent(
+    name="IntensityScorer",
+    instructions="""Analyze the player's activity description and context to determine intensity.
+    
+    Consider:
+    - Adverbs and intensity modifiers ("frantically", "lazily", "desperately")
+    - Current vitals (low energy = lower intensity possible)
+    - Location context (gym = higher baseline intensity)
+    - Emotional tone and mood
+    - Risk level for femdom activities
+    
+    Output intensity (0.5-1.5), mood, and risk level.""",
+    model="gpt-4.1-nano",
+    tools=[score_intensity]
+)
+
+# 3. NarrativeDirectorAgent - Intelligent event selection
+EventContentAgent = Agent(
+    name="EventContentAgent",
+    instructions="""You generate immersive, contextual narrative events for a femdom university game.
+    
+    Create unique content based on:
+    - Event type (revelation, dream, narrative moment, crisis)
+    - Current game state (vitals, relationships, activities)
+    - Specific NPCs involved and their relationship dynamics
+    - Player's recent actions and emotional state
+    
+    Guidelines:
+    - Revelations should feel like genuine internal realizations
+    - Dreams should be surreal but meaningful, reflecting subconscious fears/desires
+    - Narrative moments should show NPCs' subtle coordination or control
+    - Crises should incorporate nearby NPCs when possible
+    
+    Keep content concise but evocative. Match the game's tone of gradual power dynamics shift.""",
+    model="gpt-4.1-nano",
+    tools=[generate_event_content]
+)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Performance Optimization Notes (remain the same)
