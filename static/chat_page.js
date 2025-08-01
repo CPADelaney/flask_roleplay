@@ -167,6 +167,9 @@ function createRobustSocketConnection(handlers = {}) {
     onReconnectFailed = () => {}
   } = handlers;
 
+  // Get the user ID from the window object (set by the template)
+  const userId = window.CURRENT_USER_ID;
+  
   const socket = io({
     path: '/socket.io/',
     transports: ['websocket', 'polling'],
@@ -175,12 +178,16 @@ function createRobustSocketConnection(handlers = {}) {
     reconnectionDelayMax: 5000,
     reconnectionAttempts: 10,
     timeout: 20000,
-    autoConnect: true
+    autoConnect: true,
+    // Pass the user_id in the auth object
+    auth: {
+      user_id: userId
+    }
   });
 
   // Connection events
   socket.on('connect', () => {
-    console.log('Socket connected:', socket.id);
+    console.log('Socket connected:', socket.id, 'with user_id:', userId);
     onConnect(socket, false);
   });
 
