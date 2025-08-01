@@ -70,6 +70,16 @@ class VitalsData(BaseModel):
             "fatigue": self.fatigue
         }
 
+class VitalsSummary(BaseModel):
+    """Simplified vitals for event recommendations"""
+    energy: int = Field(..., ge=0, le=100)
+    hunger: int = Field(..., ge=0, le=100)
+    thirst: int = Field(..., ge=0, le=100)
+    fatigue: int = Field(..., ge=0, le=100)
+    
+    model_config = {"extra": "forbid"}
+
+
 class PlayerStatsData(BaseModel):
     """Player stats matching PlayerStats table"""
     # Visible stats
@@ -108,10 +118,11 @@ class ActivityLogEntry(BaseModel):
 
 class RelationshipStandingData(BaseModel):
     """Data for a single relationship standing"""
-    trust: float = Field(0.0, ge=-100.0, le=100.0, description="Trust dimension")
-    affection: float = Field(0.0, ge=-100.0, le=100.0, description="Affection dimension")
-    patterns: List[str] = Field(default_factory=list, description="Active patterns")
-    archetypes: List[str] = Field(default_factory=list, description="Active archetypes")
+    npc_id: str = Field(..., description="NPC ID")
+    trust: float = Field(..., ge=-100.0, le=100.0)
+    affection: float = Field(..., ge=-100.0, le=100.0)
+    patterns: List[str] = Field(default_factory=list)
+    archetypes: List[str] = Field(default_factory=list)
     
     model_config = {"extra": "forbid"}
 
@@ -584,14 +595,49 @@ IntensityScorer = Agent(
 )
 
 # 3. NarrativeDirectorAgent - Intelligent event selection
+EventContentAgent = Agent(
+    name="EventContentAgent",
+    instructions="""You generate immersive, contextual narrative events for a femdom university game.
+    
+    Create unique content based on:
+    - Event type (revelation, dream, narrative moment, crisis)
+    - Current game state (vitals, relationships, activities)
+    - Specific NPCs involved and their relationship dynamics
+    - Player's recent actions and emotional state
+    
+    Guidelines:
+    - Revelations should feel like genuine internal realizations
+    - Dreams should be surreal but meaningful, reflecting subconscious fears/desires
+    - Narrative moments should show NPCs' subtle coordination or control
+    - Crises should incorporate nearby NPCs when possible
+    
+    Keep content concise but evocative. Match the game's tone of gradual power dynamics shift.""",
+    model="gpt-4.1-nano",
+    tools=[generate_event_content]
+)
+
 @function_tool
-def recommend_events(
-    activity_log_json: str,  # JSON string of activity log
-    vitals_json: str,        # JSON string of vitals
-    plot_flags_json: str,    # JSON string of plot flags
-    relationships_json: str  # JSON string of relationship standings
-) -> str:  # Return JSON string
-    """Recommend narrative events based on game state. Returns JSON array of event recommendations."""
+def generate_event_content(
+    event_type: str,
+    context_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Generate dynamic content for a narrative event based on context."""
+    # This is the tool that EventContentAgent will use
+    return {
+        "event_type": event_type,
+        "content": "Generated content placeholder",
+        "metadata": {}
+    }
+
+# Now update the recommend_events function to generate actual content
+@function_tool
+async def recommend_events(
+    activity_log_json: str,
+    vitals_json: str,
+    plot_flags_json: str,
+    relationships_json: str
+) -> str:
+    """Recommend narrative events based on game state. Returns JSON array with generated content."""
     
     # Parse the JSON strings
     activity_log = json.loads(activity_log_json)
@@ -599,13 +645,215 @@ def recommend_events(
     plot_flags = json.loads(plot_flags_json)
     relationships = json.loads(relationships_json)
     
-    # Create recommendations
-    recommendations = [
-        {"event": "dream_sequence", "score": 0.78},
-        {"event": "npc_revelation", "score": 0.63, "npc_id": "nyx"}
-    ]
+    recommendations = []
     
-    # Return as JSON string
+    # Helper to generate event content
+    async def generate_event(event_type: str, score: float, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate actual event content using LLM"""
+        
+        # Build context for the event generation
+        event_context = {
+            "event_type": event_type,
+            "vitals": vitals,
+            "recent_activities": activity_log[:3] if activity_log else [],
+            "score": score,
+            **context
+        }
+        
+        # Use EventContentAgent to generate content
+        prompt = f"""Generate content for a {event_type} event.
+        
+        Context:
+        - Vitals: Energy {vitals.get('energy', 100)}, Hunger {vitals.get('hunger', 100)}, Thirst {vitals.get('thirst', 100)}, Fatigue {vitals.get('fatigue', 0)}
+        - Recent activities: {[a['activity_type'] for a in activity_log[:3]]}
+        """
+        
+        if 'npc_info' in context:
+            npc_info = context['npc_info']
+            prompt += f"\n- NPC: {npc_info.get('name', 'Unknown')}"
+            prompt += f"\n- Relationship: Trust {npc_info.get('trust', 0)}, Affection {npc_info.get('affection', 0)}"
+            prompt += f"\n- Patterns: {npc_info.get('patterns', [])}"
+            prompt += f"\n- Archetypes: {npc_info.get('archetypes', [])}"
+        
+        if 'trigger_reason' in context:
+            prompt += f"\n- Trigger: {context['trigger_reason']}"
+        
+        result = await Runner.run(
+            EventContentAgent,
+            messages=[{"role": "user", "content": prompt}],
+            calls=[{
+                "name": "generate_event_content",
+                "kwargs": {
+                    "event_type": event_type,
+                    "context_data": event_context
+                }
+            }]
+        )
+        
+        # Extract generated content
+        if result.output:
+            return {
+                "event": event_type,
+                "score": score,
+                "generated_content": result.output,
+                **context
+            }
+        
+        # Fallback
+        return {
+            "event": event_type,
+            "score": score,
+            "generated_content": f"A {event_type} occurs.",
+            **context
+        }
+    
+    # Vital-based events with context
+    if vitals.get("fatigue", 0) > 80:
+        event = await generate_event(
+            "dream_sequence",
+            0.85,
+            {
+                "trigger_reason": "extreme_fatigue",
+                "dream_theme": "loss_of_control" if vitals.get("fatigue", 0) > 90 else "subtle_manipulation",
+                "recent_npcs": [r.get("npc_id") for r in relationships[:2]]
+            }
+        )
+        recommendations.append(event)
+    
+    if vitals.get("hunger", 100) < 20:
+        # Find nearby NPC for the crisis
+        dominant_npc = max(relationships, key=lambda r: r.get("trust", 0), default=None)
+        event = await generate_event(
+            "vital_crisis",
+            0.9,
+            {
+                "crisis_type": "hunger",
+                "severity": "severe" if vitals.get("hunger", 100) < 10 else "moderate",
+                "npc_info": dominant_npc if dominant_npc else {},
+                "trigger_reason": "dangerously_hungry"
+            }
+        )
+        recommendations.append(event)
+    
+    # Activity pattern analysis
+    if len(activity_log) >= 3:
+        recent_activities = [a["activity_type"] for a in activity_log[:5]]
+        social_count = sum(1 for a in recent_activities if a in [
+            "social_event", "extended_conversation", "quick_chat"
+        ])
+        
+        if social_count >= 3:
+            # Determine revelation type based on relationships
+            total_dependency = sum(r.get("trust", 0) + r.get("affection", 0) for r in relationships) / max(len(relationships), 1)
+            
+            event = await generate_event(
+                "personal_revelation",
+                0.75,
+                {
+                    "revelation_type": "dependency" if total_dependency > 60 else "awareness",
+                    "trigger_reason": "repeated_social_interactions",
+                    "involved_npcs": [r.get("npc_id") for r in relationships if r.get("trust", 0) > 50]
+                }
+            )
+            recommendations.append(event)
+    
+    # Relationship-specific events
+    for rel_standing in relationships:
+        npc_id = rel_standing.get("npc_id")
+        trust = rel_standing.get("trust", 0)
+        affection = rel_standing.get("affection", 0)
+        patterns = rel_standing.get("patterns", [])
+        archetypes = rel_standing.get("archetypes", [])
+        
+        # High trust + affection = deeper revelation
+        if trust > 70 and affection > 70:
+            event = await generate_event(
+                "npc_revelation",
+                0.8,
+                {
+                    "npc_id": npc_id,
+                    "npc_info": rel_standing,
+                    "revelation_depth": "deep" if trust > 85 else "partial",
+                    "trigger_reason": "high_trust_and_affection"
+                }
+            )
+            recommendations.append(event)
+        
+        # Pattern-specific events
+        if "push_pull" in patterns:
+            event = await generate_event(
+                "narrative_moment",
+                0.7,
+                {
+                    "npc_id": npc_id,
+                    "npc_info": rel_standing,
+                    "moment_type": "relationship_tension",
+                    "pattern": "push_pull",
+                    "trigger_reason": "push_pull_pattern_active"
+                }
+            )
+            recommendations.append(event)
+        
+        if "explosive_chemistry" in patterns and vitals.get("energy", 100) > 50:
+            event = await generate_event(
+                "intense_moment",
+                0.85,
+                {
+                    "npc_id": npc_id,
+                    "npc_info": rel_standing,
+                    "intensity_level": "high",
+                    "trigger_reason": "explosive_chemistry_pattern"
+                }
+            )
+            recommendations.append(event)
+        
+        # Archetype-based events
+        if "toxic_bond" in archetypes:
+            event = await generate_event(
+                "personal_revelation",
+                0.9,
+                {
+                    "npc_id": npc_id,
+                    "npc_info": rel_standing,
+                    "revelation_type": "toxic_realization",
+                    "trigger_reason": "toxic_bond_archetype"
+                }
+            )
+            recommendations.append(event)
+    
+    # Multi-NPC coordination events
+    if len(relationships) >= 2:
+        high_trust_npcs = [r for r in relationships if r.get("trust", 0) > 60]
+        if len(high_trust_npcs) >= 2:
+            event = await generate_event(
+                "narrative_moment",
+                0.75,
+                {
+                    "moment_type": "npc_coordination",
+                    "involved_npcs": [n.get("npc_id") for n in high_trust_npcs[:3]],
+                    "npc_info_list": high_trust_npcs[:3],
+                    "trigger_reason": "multiple_high_trust_npcs"
+                }
+            )
+            recommendations.append(event)
+    
+    # Context-aware moment of clarity
+    if any(r.get("trust", 0) < 30 and len(r.get("patterns", [])) > 0 for r in relationships):
+        event = await generate_event(
+            "moment_of_clarity",
+            0.65,
+            {
+                "clarity_type": "pattern_recognition",
+                "trigger_reason": "suspicious_relationship_patterns",
+                "concerning_npcs": [r.get("npc_id") for r in relationships if r.get("trust", 0) < 30]
+            }
+        )
+        recommendations.append(event)
+    
+    # Sort by score and limit
+    recommendations.sort(key=lambda x: x["score"], reverse=True)
+    recommendations = recommendations[:5]
+    
     return json.dumps(recommendations)
   
 NarrativeDirectorAgent = Agent(
@@ -1031,7 +1279,7 @@ async def select_events_with_director(
                 )
             """)
             
-            activity_log = []
+            activity_log_summaries = []
             if activity_log_exists:
                 activity_log_rows = await conn.fetch("""
                     SELECT activity_type, timestamp 
@@ -1040,14 +1288,12 @@ async def select_events_with_director(
                     ORDER BY timestamp DESC LIMIT 10
                 """, user_id, conversation_id)
                 
-                # Convert to simple dicts
-                activity_log = [
-                    {
-                        "activity_type": row["activity_type"],
-                        "timestamp": row["timestamp"].isoformat() if row["timestamp"] else datetime.now().isoformat()
-                    }
-                    for row in activity_log_rows
-                ]
+                # Create ActivityLogSummary objects
+                for row in activity_log_rows:
+                    activity_log_summaries.append(ActivityLogSummary(
+                        activity_type=row["activity_type"],
+                        timestamp=row["timestamp"].isoformat() if row["timestamp"] else datetime.now().isoformat()
+                    ))
             
             # Get plot flags
             plot_flags = await conn.fetch("""
@@ -1085,56 +1331,61 @@ async def select_events_with_director(
         
         plot_flags_list = [r["key"] for r in plot_flags]
         
-        # Convert relationships to simple list
-        relationship_standings = []
+        # Create RelationshipStandingData objects
+        relationship_standings_list = []
         for rel in relationships:
             npc_id = str(rel["npc_id"])
             dynamics = json.loads(rel["dynamics"]) if isinstance(rel["dynamics"], str) else rel["dynamics"]
             patterns = json.loads(rel["patterns"]) if isinstance(rel["patterns"], str) else rel["patterns"]
             archetypes = json.loads(rel["archetypes"]) if isinstance(rel["archetypes"], str) else rel["archetypes"]
             
-            relationship_standings.append({
-                "npc_id": npc_id,
-                "trust": float(dynamics.get("trust", 0.0)),
-                "affection": float(dynamics.get("affection", 0.0)),
-                "patterns": patterns or [],
-                "archetypes": archetypes or []
-            })
+            relationship_standings_list.append(RelationshipStandingData(
+                npc_id=npc_id,
+                trust=float(dynamics.get("trust", 0.0)),
+                affection=float(dynamics.get("affection", 0.0)),
+                patterns=patterns or [],
+                archetypes=archetypes or []
+            ))
+        
+        # Create VitalsSummary from VitalsData
+        vitals_summary = VitalsSummary(
+            energy=vitals.energy,
+            hunger=vitals.hunger,
+            thirst=vitals.thirst,
+            fatigue=vitals.fatigue
+        )
         
         # Prepare messages with optional RNG seed
         messages = [{"role": "user", "content": "Select appropriate events for current game state"}]
         if rng_seed is not None:
             messages.append({"role": "system", "content": f"RNG_SEED={rng_seed}"})
         
-        # Convert everything to JSON strings for the function call
+        # Call the agent
         result = await Runner.run(
             NarrativeDirectorAgent,
             messages=messages,
             calls=[{
                 "name": "recommend_events",
                 "kwargs": {
-                    "activity_log_json": json.dumps(activity_log),
-                    "vitals_json": json.dumps(vitals.to_dict()),
-                    "plot_flags_json": json.dumps(plot_flags_list),
-                    "relationships_json": json.dumps(relationship_standings)
+                    "activity_log": [al.dict() for al in activity_log_summaries],
+                    "vitals": vitals_summary.dict(),
+                    "plot_flags": plot_flags_list,
+                    "relationship_standings": [rs.dict() for rs in relationship_standings_list]
                 }
             }]
         )
         
         if result.output:
-            # Parse the JSON string output
-            recommendations = json.loads(result.output)
-            
-            # Filter and format events
+            # result.output should be a list of EventRecommendation objects
             events = []
-            for event_rec in recommendations:
-                if event_rec.get("score", 0) > 0.6:
+            for event_rec in result.output:
+                if event_rec.score > 0.6:
                     event_dict = {
-                        "event": event_rec["event"],
-                        "score": event_rec["score"]
+                        "event": event_rec.event,
+                        "score": event_rec.score
                     }
-                    if event_rec.get("npc_id"):
-                        event_dict["npc_id"] = event_rec["npc_id"]
+                    if event_rec.npc_id:
+                        event_dict["npc_id"] = event_rec.npc_id
                     events.append(event_dict)
             return events[:3]  # Limit to top 3 events
             
