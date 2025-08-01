@@ -10,6 +10,8 @@ This module integrates intelligent agents to replace hard-coded logic:
   - EventWriterAgent for dynamic conflict events
   - PhaseRecapAgent for phase summaries and suggestions
 
+REFACTORED: Now uses the new dynamic relationships system instead of discrete levels
+
 Code Review Fixes Applied:
   - Fixed SDK compatibility (result.output vs result.tool_output)
   - Proper ToolCallSpec format for function tools
@@ -119,10 +121,11 @@ class PhaseEventEntry(BaseModel):
     event: Optional[str] = Field(None, description="Forced event type (e.g., sleep)")
     reason: Optional[str] = Field(None, description="Reason for forced event")
     
-    # Relationship events
+    # Relationship events - UPDATED FOR DYNAMIC SYSTEM
     total_relationships: Optional[int] = Field(None, ge=0)
-    stage_distribution: Optional[Dict[str, int]] = Field(None)
-    most_advanced: Optional[List[Dict[str, Any]]] = Field(None)
+    active_patterns: Optional[List[str]] = Field(None, description="Active relationship patterns")
+    active_archetypes: Optional[List[str]] = Field(None, description="Active relationship archetypes")
+    most_significant: Optional[List[Dict[str, Any]]] = Field(None, description="Most significant relationships")
     state_key: Optional[str] = Field(None, description="Relationship state key")
     
     # NPC-specific
@@ -194,10 +197,12 @@ class CombinedAnalysis(BaseModel):
     model_config = {"extra": "forbid"}
 
 class NPCStanding(BaseModel):
-    """NPC relationship standing"""
+    """NPC relationship standing using dynamic system"""
     npc_id: int
     npc_name: str
-    relationship_level: int = Field(0, ge=-100, le=100)
+    general_standing: int = Field(0, ge=-100, le=100, description="General relationship quality based on trust+affection")
+    dominant_emotion: Optional[str] = Field(None, description="Primary emotion in relationship")
+    patterns: Optional[List[str]] = Field(default_factory=list, description="Active relationship patterns")
     
     model_config = {"extra": "forbid"}
 
@@ -405,7 +410,73 @@ VITAL_THRESHOLDS = {
 }
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# LLM-Powered Agents
+# DYNAMIC RELATIONSHIP SUMMARY FUNCTION
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+async def get_dynamic_relationship_summary(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
+    """Get a summary of all active relationships using the new dynamic system."""
+    from logic.dynamic_relationships import OptimizedRelationshipManager
+    
+    manager = OptimizedRelationshipManager(user_id, conversation_id)
+    
+    async with get_db_connection_context() as conn:
+        # Get all active relationships
+        relationships = await conn.fetch("""
+            SELECT sl.*, ns1.npc_name as entity1_name, ns2.npc_name as entity2_name
+            FROM SocialLinks sl
+            LEFT JOIN NPCStats ns1 ON sl.entity1_id = ns1.npc_id 
+                AND sl.entity1_type = 'npc' AND sl.user_id = ns1.user_id
+            LEFT JOIN NPCStats ns2 ON sl.entity2_id = ns2.npc_id 
+                AND sl.entity2_type = 'npc' AND sl.user_id = ns2.user_id
+            WHERE sl.user_id = $1 AND sl.conversation_id = $2
+            AND (sl.entity1_type = 'player' OR sl.entity2_type = 'player')
+            ORDER BY sl.last_interaction DESC
+            LIMIT 10
+        """, user_id, conversation_id)
+    
+    if not relationships:
+        return None
+    
+    summary = {
+        "total_relationships": len(relationships),
+        "most_significant": [],
+        "active_patterns": set(),
+        "active_archetypes": set()
+    }
+    
+    for rel in relationships[:3]:  # Top 3 most recent
+        # Get the actual state for more details
+        if rel['entity1_type'] == 'player':
+            entity1_type, entity1_id = 'npc', rel['entity2_id']
+            entity2_type, entity2_id = 'player', rel['entity1_id']
+            npc_name = rel['entity2_name']
+        else:
+            entity1_type, entity1_id = 'player', rel['entity2_id']
+            entity2_type, entity2_id = 'npc', rel['entity1_id']
+            npc_name = rel['entity1_name']
+        
+        state = await manager.get_relationship_state(
+            entity1_type, entity1_id, entity2_type, entity2_id
+        )
+        
+        rel_summary = {
+            "npc_name": npc_name or f"NPC_{entity2_id if entity2_type == 'npc' else entity1_id}",
+            "dimensions": state.dimensions.to_dict(),
+            "patterns": list(state.history.active_patterns),
+            "archetypes": list(state.active_archetypes),
+            "momentum": state.momentum.get_magnitude()
+        }
+        summary["most_significant"].append(rel_summary)
+        summary["active_patterns"].update(state.history.active_patterns)
+        summary["active_archetypes"].update(state.active_archetypes)
+    
+    summary["active_patterns"] = list(summary["active_patterns"])
+    summary["active_archetypes"] = list(summary["active_archetypes"])
+    
+    return summary
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# LLM-Powered Agents (remain the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # Check for dev mode to skip LLM calls
@@ -483,7 +554,7 @@ def recommend_events(
     activity_log: List[ActivityLogEntry], 
     vitals: VitalsData,
     plot_flags: List[str],
-    relationship_stages: Dict[str, str]
+    relationship_standings: Dict[str, Dict[str, Any]]  # Updated for dynamic system
 ) -> List[EventRecommendation]:
     """Recommend narrative events based on game state. Returns array of event recommendations."""
     return [
@@ -500,7 +571,7 @@ NarrativeDirectorAgent = Agent(
     - Recent player activities and their emotional arc
     - Vital states (exhaustion → dreams, hunger → food events)
     - Unresolved plot threads and Chekhov's guns
-    - Relationship progression with NPCs
+    - Relationship progression with NPCs (now using dynamic dimensions)
     - Pacing (avoid event fatigue)
     
     Score events from 0-1 based on narrative appropriateness.
@@ -561,7 +632,7 @@ PhaseRecapAgent = Agent(
     Suggest 2-3 next actions based on:
     - Current goals and quests
     - Vital needs (hunger, fatigue)
-    - NPC availability and relationship status
+    - NPC availability and relationship status (using dynamic standings)
     - Upcoming scheduled events
     
     Keep suggestions actionable and varied (mix practical/social/story).""",
@@ -697,7 +768,7 @@ async def analyze_action_combined(
     }
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Performance Optimization Notes
+# Performance Optimization Notes (remain the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 """
 Performance & Cost Optimization Strategies:
@@ -726,7 +797,7 @@ Performance & Cost Optimization Strategies:
 """
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Enhanced Classification System
+# Enhanced Classification System (remains the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def classify_activity_with_llm(
@@ -849,7 +920,7 @@ async def calculate_intensity_with_llm(
     }
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Enhanced Event Selection
+# Enhanced Event Selection (updated for dynamic relationships)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def select_events_with_director(
@@ -899,15 +970,50 @@ async def select_events_with_director(
                 WHERE user_id=$1 AND conversation_id=$2 AND key LIKE 'plot_%'
             """, user_id, conversation_id)
             
-            # Get relationship stages
+            # Get relationship standings using dynamic system
             relationships = await conn.fetch("""
-                SELECT npc_id, narrative_stage 
-                FROM NPCNarrativeProgression
-                WHERE user_id=$1 AND conversation_id=$2
+                SELECT 
+                    sl.canonical_key,
+                    sl.dynamics,
+                    sl.patterns,
+                    sl.archetypes,
+                    CASE 
+                        WHEN sl.entity1_type = 'npc' THEN ns1.npc_name
+                        WHEN sl.entity2_type = 'npc' THEN ns2.npc_name
+                    END as npc_name,
+                    CASE
+                        WHEN sl.entity1_type = 'npc' THEN sl.entity1_id
+                        WHEN sl.entity2_type = 'npc' THEN sl.entity2_id
+                    END as npc_id
+                FROM SocialLinks sl
+                LEFT JOIN NPCStats ns1 ON sl.entity1_id = ns1.npc_id 
+                    AND sl.entity1_type = 'npc' 
+                    AND sl.user_id = ns1.user_id
+                LEFT JOIN NPCStats ns2 ON sl.entity2_id = ns2.npc_id 
+                    AND sl.entity2_type = 'npc' 
+                    AND sl.user_id = ns2.user_id
+                WHERE (sl.entity1_type = 'player' OR sl.entity2_type = 'player')
+                AND sl.user_id=$1 AND sl.conversation_id=$2
+                ORDER BY sl.last_interaction DESC
+                LIMIT 5
             """, user_id, conversation_id)
         
         plot_flags_list = [r["key"] for r in plot_flags]
-        relationship_dict = {str(r["npc_id"]): r["narrative_stage"] for r in relationships}
+        
+        # Convert relationships to standings format
+        relationship_standings = {}
+        for rel in relationships:
+            npc_name = rel["npc_name"] or f"NPC_{rel['npc_id']}"
+            dynamics = json.loads(rel["dynamics"]) if isinstance(rel["dynamics"], str) else rel["dynamics"]
+            patterns = json.loads(rel["patterns"]) if isinstance(rel["patterns"], str) else rel["patterns"]
+            archetypes = json.loads(rel["archetypes"]) if isinstance(rel["archetypes"], str) else rel["archetypes"]
+            
+            relationship_standings[str(rel["npc_id"])] = {
+                "trust": dynamics.get("trust", 0),
+                "affection": dynamics.get("affection", 0),
+                "patterns": patterns,
+                "archetypes": archetypes
+            }
         
         # Prepare messages with optional RNG seed
         messages = [{"role": "user", "content": "Select appropriate events for current game state"}]
@@ -924,7 +1030,7 @@ async def select_events_with_director(
                     "activity_log": [al.dict() for al in activity_log],  # Convert to dicts
                     "vitals": vitals.to_dict(),  # Convert to dict
                     "plot_flags": plot_flags_list,
-                    "relationship_stages": relationship_dict
+                    "relationship_standings": relationship_standings
                 }
             }]
         )
@@ -973,7 +1079,7 @@ async def select_events_randomly(
     return events
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Enhanced Vital Crisis Narration
+# Enhanced Vital Crisis Narration (remains the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def narrate_vital_crisis(
@@ -1018,7 +1124,7 @@ async def narrate_vital_crisis(
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Main Enhanced advance_time_with_events Function
+# Main Enhanced advance_time_with_events Function (REFACTORED)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def advance_time_with_events(
@@ -1030,10 +1136,10 @@ async def advance_time_with_events(
 ) -> Dict[str, Any]:
     """
     Enhanced version using LLM agents for intelligent processing.
+    REFACTORED to use dynamic relationships system.
     """
     from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
     from logic.narrative_events import (
-        get_relationship_overview,
         check_for_personal_revelations,
         check_for_narrative_moments,
         add_dream_sequence,
@@ -1043,7 +1149,7 @@ async def advance_time_with_events(
         get_npc_narrative_stage,
         check_for_npc_revelation
     )
-    # Import the new dynamic relationships system instead of social_links
+    # Import the new dynamic relationships system
     from logic.dynamic_relationships import (
         OptimizedRelationshipManager,
         event_generator,
@@ -1124,14 +1230,15 @@ async def advance_time_with_events(
         await npc_handler.process_daily_npc_activities(ctx, new_time.time_of_day)
         await npc_handler.detect_relationship_stage_changes(ctx)
 
-        # Get relationship overview
-        relationship_overview = await get_relationship_overview(user_id, conversation_id)
-        if relationship_overview and relationship_overview.get('total_relationships', 0) > 0:
+        # Get dynamic relationship summary instead of old overview
+        relationship_summary = await get_dynamic_relationship_summary(user_id, conversation_id)
+        if relationship_summary and relationship_summary.get('total_relationships', 0) > 0:
             events.append(PhaseEventEntry(
-                type="relationship_overview",
-                total_relationships=relationship_overview['total_relationships'],
-                stage_distribution=relationship_overview['stage_distribution'],
-                most_advanced=relationship_overview['most_advanced_npcs'][:1]
+                type="relationship_summary",
+                total_relationships=relationship_summary['total_relationships'],
+                active_patterns=relationship_summary['active_patterns'],
+                active_archetypes=relationship_summary['active_archetypes'],
+                most_significant=relationship_summary['most_significant']
             ).dict())
 
         # Check for relationship events using the new dynamic system
@@ -1257,9 +1364,9 @@ async def generate_phase_recap_with_agent(
     phase_events: List[Dict[str, Any]],
     vitals: VitalsData
 ) -> Optional[Dict[str, Any]]:
-    """Generate phase recap using PhaseRecapAgent."""
+    """Generate phase recap using PhaseRecapAgent with dynamic relationships."""
     try:
-        # Get current goals and NPC standings
+        # Get current goals and NPC relationships
         async with get_db_connection_context() as conn:
             # Check if Quests table exists
             quests_exists = await conn.fetchval("""
@@ -1278,44 +1385,34 @@ async def generate_phase_recap_with_agent(
                 """, user_id, conversation_id)
                 current_goals = [g["objective"] for g in goals]
             
-            # Check if NPCRelationships table exists
-            relationships_exists = await conn.fetchval("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_name = 'npcrelationships'
-                )
-            """)
-            
-            # Get NPC relationships with table existence check
-            if relationships_exists:
-                npcs = await conn.fetch("""
-                    SELECT ns.npc_id, ns.npc_name, 
-                           COALESCE(nr.relationship_level, 0) as relationship_level
-                    FROM NPCStats ns
-                    LEFT JOIN NPCRelationships nr ON ns.npc_id = nr.npc_id
-                        AND nr.user_id = ns.user_id 
-                        AND nr.conversation_id = ns.conversation_id
-                    WHERE ns.user_id=$1 AND ns.conversation_id=$2
-                    AND ns.introduced = TRUE
-                """, user_id, conversation_id)
-            else:
-                # Fallback without relationships
-                npcs = await conn.fetch("""
-                    SELECT npc_id, npc_name, 0 as relationship_level
-                    FROM NPCStats
-                    WHERE user_id=$1 AND conversation_id=$2
-                    AND introduced = TRUE
-                """, user_id, conversation_id)
+            # Get NPC relationships using the new dynamic system
+            npcs = await conn.fetch("""
+                SELECT DISTINCT 
+                    CASE 
+                        WHEN sl.entity1_type = 'npc' THEN sl.entity1_id
+                        ELSE sl.entity2_id
+                    END as npc_id,
+                    COALESCE(ns.npc_name, 'Unknown NPC') as npc_name,
+                    sl.dynamics
+                FROM SocialLinks sl
+                LEFT JOIN NPCStats ns ON (
+                    (sl.entity1_type = 'npc' AND sl.entity1_id = ns.npc_id) OR
+                    (sl.entity2_type = 'npc' AND sl.entity2_id = ns.npc_id)
+                ) AND ns.user_id = sl.user_id AND ns.conversation_id = sl.conversation_id
+                WHERE sl.user_id=$1 AND sl.conversation_id=$2
+                AND (sl.entity1_type = 'player' OR sl.entity2_type = 'player')
+                AND sl.last_interaction > NOW() - INTERVAL '7 days'
+            """, user_id, conversation_id)
         
-        # Convert to Pydantic models
-        npc_standings = [
-            NPCStanding(
-                npc_id=n["npc_id"],
-                npc_name=n["npc_name"],
-                relationship_level=n["relationship_level"]
-            )
-            for n in npcs
-        ]
+        # Convert to dynamic relationship standings
+        npc_standings = {}
+        for npc in npcs:
+            dynamics = json.loads(npc["dynamics"]) if isinstance(npc["dynamics"], str) else npc["dynamics"]
+            # Use trust + affection as a general "standing" metric
+            trust = dynamics.get("trust", 0)
+            affection = dynamics.get("affection", 0)
+            general_standing = (trust + affection) / 2
+            npc_standings[npc["npc_name"]] = int(general_standing)
         
         # Handle empty phase_events gracefully and convert to Pydantic models
         if not phase_events:
@@ -1323,7 +1420,6 @@ async def generate_phase_recap_with_agent(
         else:
             phase_events_list = []
             for e in phase_events:
-                # If it's already a dict from PhaseEventEntry.dict()
                 if isinstance(e, dict):
                     phase_events_list.append(PhaseEventEntry(**e))
                 else:
@@ -1335,16 +1431,15 @@ async def generate_phase_recap_with_agent(
             calls=[{
                 "name": "generate_phase_recap",
                 "kwargs": {
-                    "phase_events": [pe.dict() for pe in phase_events_list],  # Convert to dicts
+                    "phase_events": [pe.dict() for pe in phase_events_list],
                     "current_goals": current_goals,
-                    "npc_standings": {n.npc_name: n.relationship_level for n in npc_standings},  # Convert to dict
-                    "vitals": vitals.to_dict()  # Convert to dict
+                    "npc_standings": npc_standings,  # Now using dynamic standings
+                    "vitals": vitals.to_dict()
                 }
             }]
         )
         
         if result.output:
-            # Extract from Pydantic model
             return {
                 "recap": result.output.recap,
                 "suggestions": result.output.suggestions
@@ -1419,7 +1514,7 @@ def _calculate_intensity(player_input: str, context: Dict[str, Any] = None) -> f
     return max(0.5, min(1.5, intensity))
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Enhanced Vitals System
+# Enhanced Vitals System (remains the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def get_current_vitals(user_id: int, conversation_id: int) -> VitalsData:
@@ -1697,7 +1792,7 @@ async def process_activity_vitals(
         return {"success": False, "error": str(e)}
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Basic DB Helpers
+# Basic DB Helpers (remain the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def remove_expired_planned_events(user_id, conversation_id, current_year, current_month, current_day, current_phase):
@@ -1940,25 +2035,20 @@ def _get_vital_status(value: int, vital_type: str) -> str:
 
 async def apply_daily_relationship_drift(user_id: int, conversation_id: int):
     """Apply daily drift to all relationships."""
-    from logic.dynamic_relationships import apply_daily_drift_tool
+    from logic.dynamic_relationships import OptimizedRelationshipManager
     
-    ctx = type('obj', (object,), {
-        'context': {
-            'user_id': user_id, 
-            'conversation_id': conversation_id
-        }
-    })
-    
-    result = await apply_daily_drift_tool(ctx)
-    logger.info(f"Applied daily relationship drift: {result}")
+    manager = OptimizedRelationshipManager(user_id, conversation_id)
+    await manager.apply_daily_drift()
+    logger.info(f"Applied daily relationship drift for user {user_id}")
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Nightly Maintenance
+# Nightly Maintenance (updated to use new relationship drift)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def nightly_maintenance(user_id: int, conversation_id: int):
     """
     Called typically when day increments. Fades NPC memories and performs vitals maintenance.
+    Now includes daily relationship drift.
     """
     from logic.npc_agents.memory_manager import EnhancedMemoryManager
 
@@ -1988,13 +2078,14 @@ async def nightly_maintenance(user_id: int, conversation_id: int):
         logger.error(f"Unexpected error in nightly maintenance: {e}", exc_info=True)
         return
 
+    # Apply relationship drift with the new system
     try:
-        # Apply relationship drift
         await apply_daily_relationship_drift(user_id, conversation_id)
         logger.info(f"Relationship drift applied during nightly maintenance for user {user_id}")
     except Exception as e:
         logger.error(f"Error applying relationship drift during maintenance: {e}")
 
+    # Process NPC memories
     for nid in npc_ids:
         try:
             mem_mgr = EnhancedMemoryManager(nid, user_id, conversation_id)
@@ -2006,7 +2097,7 @@ async def nightly_maintenance(user_id: int, conversation_id: int):
             logger.error(f"Error during memory maintenance for NPC {nid}: {e}", exc_info=True)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Conflict Integration
+# Conflict Integration (remains the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 async def process_conflict_time_advancement(user_id: int, conversation_id: int, activity_type: str) -> Dict[str, Any]:
@@ -2249,7 +2340,7 @@ async def integrate_conflict_with_time_module(user_id: int, conversation_id: int
     }
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Activity Manager Class
+# Activity Manager Class (remains the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 class ActivityManager:
@@ -2492,7 +2583,7 @@ class ActivityManager:
         return intensity
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Context and Agent Setup
+# Context and Agent Setup (remains the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 class TimeCycleContext:
@@ -2579,7 +2670,7 @@ async def tool_nightly_maintenance(ctx: RunContextWrapper[TimeCycleContext]) -> 
     user_id = ctx.context.user_id
     conv_id = ctx.context.conversation_id
     await nightly_maintenance(user_id, conv_id)
-    return "Nightly maintenance completed."
+    return "Nightly maintenance completed with relationship drift applied."
 
 @function_tool
 async def tool_process_conflict_time_advancement(ctx: RunContextWrapper[TimeCycleContext], activity_type: str) -> str:
@@ -2650,6 +2741,30 @@ async def tool_consume_vital_resource(ctx: RunContextWrapper[TimeCycleContext], 
     except Exception as e:
         return json.dumps({"error": str(e)})
 
+# NEW TOOL for checking relationship dynamics
+@function_tool
+async def tool_check_relationship_dynamics(
+    ctx: RunContextWrapper[TimeCycleContext], 
+    npc_id: int
+) -> str:
+    """Check current relationship dynamics with an NPC."""
+    from logic.dynamic_relationships import OptimizedRelationshipManager
+    
+    user_id = ctx.context.user_id
+    conv_id = ctx.context.conversation_id
+    
+    manager = OptimizedRelationshipManager(user_id, conv_id)
+    
+    # Assuming player is entity1
+    state = await manager.get_relationship_state(
+        "player", 1,  # Assuming player_id is 1
+        "npc", npc_id
+    )
+    
+    summary = state.to_summary()
+    summary["npc_id"] = npc_id
+    
+    return json.dumps(summary)
 
 # Enhanced agent instructions
 TIMECYCLE_AGENT_INSTRUCTIONS = """
@@ -2661,6 +2776,7 @@ You manage:
 - Smart event selection via narrative direction
 - Contextual crisis narration
 - Phase recaps and suggestions
+- Dynamic relationship system integration
 
 Your tools include:
 - tool_classify_activity: Use LLM for nuanced activity classification
@@ -2668,16 +2784,21 @@ Your tools include:
 - tool_advance_time_with_events: Process time with intelligent event selection
 - tool_check_vitals: Monitor hunger/thirst/fatigue/energy
 - tool_consume_vital_resource: Handle eating/drinking
-- tool_nightly_maintenance
+- tool_nightly_maintenance (now includes relationship drift)
 - tool_process_conflict_time_advancement
 - tool_integrate_conflict_with_time_module
+- tool_check_relationship_dynamics: Check dynamic relationship state with NPCs
 
 Process flow:
 1. Classify activity using LLM (fall back to keywords if needed)
 2. Calculate intensity considering vitals and context
 3. Check for vital crises and suggest interventions
 4. Advance time with narrative-appropriate events
-5. Generate phase recaps when time changes
+5. Process relationship events from the dynamic system
+6. Generate phase recaps when time changes
+
+The relationship system now uses continuous dimensions (trust, affection, etc.) 
+instead of discrete levels. Relationships evolve based on patterns and archetypes.
 
 Prioritize narrative cohesion and character development over random events.
 """
@@ -2694,6 +2815,7 @@ TimeCycleAgent = Agent[TimeCycleContext](
         tool_consume_vital_resource,
         tool_nightly_maintenance,
         tool_process_conflict_time_advancement,
-        tool_integrate_conflict_with_time_module
+        tool_integrate_conflict_with_time_module,
+        tool_check_relationship_dynamics
     ],
 )
