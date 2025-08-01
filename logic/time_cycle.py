@@ -894,24 +894,52 @@ EventWriterAgent = Agent(
     model="gpt-4.1-nano",
 )
 
-# 6. PhaseRecapAgent - Phase summaries and suggestions
 @function_tool
 def generate_phase_recap(
-    phase_events: List[PhaseEventEntry],
-    current_goals: List[str],
-    npc_standings: Dict[str, int],  # This one is okay as Dict[str, int]
-    vitals: VitalsData
-) -> PhaseRecapResult:
+    phase_events_json: str,  # Changed from List[PhaseEventEntry]
+    current_goals_json: str,  # Changed from List[str]
+    npc_standings: Dict[str, int],  # This stays as Dict[str, int]
+    vitals_json: str  # Changed from VitalsData
+) -> str:  # Return JSON string
     """Generate a recap and suggestions for the next phase."""
-    return PhaseRecapResult(
-        recap="Morning was eventful - you attended classes and had a tense encounter with Nyx.",
-        suggestions=[
-            "Grab lunch before your hunger affects performance",
-            "Check in with Madison about yesterday's incident",
-            "Study for tomorrow's exam with Olivia"
-        ]
-    )
-
+    
+    # Parse JSON strings
+    phase_events = json.loads(phase_events_json)
+    current_goals = json.loads(current_goals_json)
+    vitals = json.loads(vitals_json)
+    
+    # Generate recap based on events
+    event_types = [e.get("type", "unknown") for e in phase_events if isinstance(e, dict)]
+    
+    recap = "The phase was eventful."
+    if "vital_crisis" in event_types:
+        recap = "You struggled with vital needs during this phase."
+    elif "relationship_summary" in event_types:
+        recap = "Your relationships evolved during this phase."
+    elif "conflict_event" in event_types:
+        recap = "Conflicts demanded your attention this phase."
+    
+    # Generate suggestions based on vitals and goals
+    suggestions = []
+    
+    if vitals.get("hunger", 100) < 40:
+        suggestions.append("Find food before your hunger affects performance")
+    if vitals.get("thirst", 100) < 40:
+        suggestions.append("Get something to drink soon")
+    if vitals.get("fatigue", 0) > 60:
+        suggestions.append("Consider resting - you're getting tired")
+    
+    # Add goal-based suggestions
+    for goal in current_goals[:2]:  # First 2 goals
+        suggestions.append(f"Work on: {goal}")
+    
+    result = {
+        "recap": recap,
+        "suggestions": suggestions[:3]  # Limit to 3 suggestions
+    }
+    
+    return json.dumps(result)
+  
 PhaseRecapAgent = Agent(
     name="PhaseRecapAgent",
     instructions="""Provide Persona-style time phase recaps and suggestions.
@@ -936,21 +964,35 @@ PhaseRecapAgent = Agent(
 def analyze_player_action(
     sentence: str, 
     location: str = "unknown",
-    vitals: Optional[VitalsData] = None
-) -> CombinedAnalysis:
+    vitals_json: Optional[str] = None  # Changed from Optional[VitalsData] to JSON string
+) -> str:  # Return JSON string
     """
     Combined tool that classifies intent AND calculates intensity in one call.
-    
-    Returns:
-        CombinedAnalysis with all analysis data
     """
-    return CombinedAnalysis(
-        activity_type="quick_chat",
-        confidence=0.9,
-        intensity=1.0,
-        mood="neutral",
-        risk="low"
-    )
+    # Parse vitals if provided
+    vitals = json.loads(vitals_json) if vitals_json else {"energy": 100, "hunger": 100, "thirst": 100, "fatigue": 0}
+    
+    # Perform analysis (add your logic here)
+    activity_type = "quick_chat"
+    confidence = 0.9
+    intensity = 1.0
+    mood = "neutral"
+    risk = "low"
+    
+    # Adjust based on vitals
+    if vitals.get("fatigue", 0) > 80:
+        intensity *= 0.7
+        mood = "exhausted"
+    
+    result = {
+        "activity_type": activity_type,
+        "confidence": confidence,
+        "intensity": intensity,
+        "mood": mood,
+        "risk": risk
+    }
+    
+    return json.dumps(result)
 
 CombinedAnalyzer = Agent(
     name="CombinedAnalyzer",
@@ -988,14 +1030,7 @@ async def analyze_action_combined(
         }
     
     try:
-        vitals_dict = context.get("vitals", {"hunger": 100, "thirst": 100, "fatigue": 0})
-        # Create VitalsData from dict
-        vitals = VitalsData(
-            hunger=vitals_dict.get("hunger", 100),
-            thirst=vitals_dict.get("thirst", 100),
-            fatigue=vitals_dict.get("fatigue", 0),
-            energy=vitals_dict.get("energy", 100)
-        )
+        vitals_dict = context.get("vitals", {"hunger": 100, "thirst": 100, "fatigue": 0, "energy": 100})
         location = context.get("location", "unknown")
         
         messages = [{
@@ -1014,34 +1049,15 @@ async def analyze_action_combined(
                 "kwargs": {
                     "sentence": player_input,
                     "location": location,
-                    "vitals": vitals.to_dict()  # Convert to dict
+                    "vitals_json": json.dumps(vitals_dict)  # Pass as JSON string
                 }
             }]
         )
         
         if result.output:
-            # Extract from Pydantic model
-            output_data = result.output
-            activity_type = output_data.activity_type
-            
-            # Validate and normalize activity type
-            if activity_type:
-                # Case-insensitive validation
-                activity_type_lower = activity_type.lower()
-                if activity_type_lower in [a.lower() for a in ALL_ACTIVITY_TYPES]:
-                    # Normalize to exact enum value
-                    activity_type = next(
-                        (a for a in ALL_ACTIVITY_TYPES if a.lower() == activity_type_lower), 
-                        activity_type
-                    )
-            
-            return {
-                "activity_type": activity_type,
-                "confidence": output_data.confidence,
-                "intensity": output_data.intensity,
-                "mood": output_data.mood,
-                "risk": output_data.risk
-            }
+            # Parse JSON string output
+            output_data = json.loads(result.output)
+            return output_data
             
     except Exception as e:
         logger.warning(f"Combined analysis failed: {e}")
@@ -1056,6 +1072,7 @@ async def analyze_action_combined(
         "mood": "neutral",
         "risk": "low"
     }
+
 
 IntensityScorer = Agent(
     name="IntensityScorer",
@@ -1223,19 +1240,15 @@ async def calculate_intensity_with_llm(
                 "name": "score_intensity",
                 "kwargs": {
                     "sentence": player_input,
-                    "vitals": vitals,
+                    "vitals_json": json.dumps(vitals.to_dict()),  # Pass as JSON string
                     "context_tags": context_tags
                 }
             }]
         )
         
         if result.output:
-            # Extract from Pydantic model
-            return {
-                "intensity": result.output.intensity,
-                "mood": result.output.mood,
-                "risk": result.output.risk
-            }
+            # Parse JSON string output
+            return json.loads(result.output)
             
     except Exception as e:
         logger.warning(f"LLM intensity scoring failed: {e}")
@@ -1752,20 +1765,11 @@ async def generate_phase_recap_with_agent(
             general_standing = (trust + affection) / 2
             npc_standings[npc["npc_name"]] = int(general_standing)
         
-        # Handle empty phase_events gracefully and convert to Pydantic models
+        # Handle empty phase_events gracefully
         if not phase_events:
-            phase_events_list = [PhaseEventEntry(type="quiet_phase", description="A quiet moment passes")]
+            phase_events_list = [{"type": "quiet_phase", "description": "A quiet moment passes"}]
         else:
-            phase_events_list = []
-            for e in phase_events:
-                if isinstance(e, dict):
-                    # Remove any Dict[str, Any] fields before creating PhaseEventEntry
-                    cleaned_event = {k: v for k, v in e.items() if k != 'most_significant'}
-                    if 'most_significant' in e:
-                        cleaned_event['most_significant_json'] = [json.dumps(ms) for ms in e['most_significant']]
-                    phase_events_list.append(PhaseEventEntry(**cleaned_event))
-                else:
-                    phase_events_list.append(e)
+            phase_events_list = phase_events
         
         result = await Runner.run(
             PhaseRecapAgent,
@@ -1773,25 +1777,24 @@ async def generate_phase_recap_with_agent(
             calls=[{
                 "name": "generate_phase_recap",
                 "kwargs": {
-                    "phase_events": [pe.dict() for pe in phase_events_list],
-                    "current_goals": current_goals,
-                    "npc_standings": npc_standings,  # Now using dynamic standings
-                    "vitals": vitals.to_dict()
+                    "phase_events_json": json.dumps(phase_events_list),
+                    "current_goals_json": json.dumps(current_goals),
+                    "npc_standings": npc_standings,  # This stays as dict
+                    "vitals_json": json.dumps(vitals.to_dict())
                 }
             }]
         )
         
         if result.output:
-            return {
-                "recap": result.output.recap,
-                "suggestions": result.output.suggestions
-            }
+            # Parse JSON string output
+            output_data = json.loads(result.output)
+            return output_data
             
     except Exception as e:
         logger.warning(f"Phase recap generation failed: {e}")
     
     return None
-
+  
 # Keep the original classification function as fallback
 def classify_player_input(input_text: str) -> str:
     """Original keyword-based classifier kept as fallback."""
