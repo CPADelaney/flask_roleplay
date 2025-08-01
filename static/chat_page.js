@@ -1727,8 +1727,10 @@ document.addEventListener('DOMContentLoaded', async function() {
   }
   if (advanceTimeBtn) advanceTimeBtn.addEventListener("click", advanceTime);
   if (newGameBtn) {
-    newGameBtn.removeEventListener("click", startNewGame); // Remove old listener
-    newGameBtn.addEventListener("click", toggleNewGameDropdown); // Add new listener for dropdown
+      newGameBtn.addEventListener("click", function(e) {
+          e.stopPropagation(); // Prevent the click from bubbling up
+          toggleNewGameDropdown();
+      });
   }
   if (nyxSpaceBtn) nyxSpaceBtn.addEventListener("click", () => selectConversation(CONFIG.NYX_SPACE_CONV_ID));
   if (loadMoreBtn) loadMoreBtn.addEventListener("click", loadPreviousMessages);
