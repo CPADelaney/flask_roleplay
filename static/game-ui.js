@@ -582,6 +582,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     }
     
+    /*
     // Fix dropdown toggle
     const newGameBtn = document.getElementById('newGameBtn');
     const dropdown = document.getElementById('newGameDropdown');
@@ -597,5 +598,6 @@ document.addEventListener('DOMContentLoaded', function() {
         dropdown.style.display = 'none';
       });
     }
+    */
   }, 100);
 });
