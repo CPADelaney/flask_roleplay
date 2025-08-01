@@ -188,7 +188,7 @@ class CurrentTimeData(BaseModel):
     year: int = Field(1, ge=1)
     month: int = Field(1, ge=1, le=12)
     day: int = Field(1, ge=1, le=31)
-    time_of_day: str = Field("Morning", regex="^(Morning|Afternoon|Evening|Night)$")
+    time_of_day: str = Field("Morning", pattern="^(Morning|Afternoon|Evening|Night)$")
 
 class VitalEffectsData(BaseModel):
     """Effects of activities on vitals"""
@@ -203,6 +203,23 @@ class ActivityDefinition(BaseModel):
     description: str = Field(..., description="Activity description")
     stat_effects: Dict[str, int] = Field(default_factory=dict)
     vital_effects: Dict[str, int] = Field(default_factory=dict)
+
+class EventData(BaseModel):
+    """Event data matching Events table"""
+    event_name: str = Field(..., description="Event name")
+    description: Optional[str] = Field(None, description="Event description")
+    start_time: str = Field(..., description="Start time")
+    end_time: str = Field(..., description="End time")
+    location: str = Field(..., description="Event location")
+    year: int = Field(1, ge=1, description="Year")
+    month: int = Field(1, ge=1, le=12, description="Month")
+    day: int = Field(1, ge=1, le=31, description="Day")
+    time_of_day: str = Field("Morning", pattern="^(Morning|Afternoon|Evening|Night)$")
+    
+    # Optional fields
+    user_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    embedding: Optional[List[float]] = Field(None, min_length=1536, max_length=1536)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Activity Types Enum for LLM Classification
