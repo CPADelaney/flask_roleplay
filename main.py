@@ -882,6 +882,15 @@ def create_quart_app():
             logger.error(f"Login error for {username}: {e}", exc_info=True)
             return jsonify({"error": "Database error during login"}), 500
 
+    @app.before_request
+    async def validate_session():
+        """Ensure session data is valid"""
+        if 'user_id' in session:
+            user_id = session.get('user_id')
+            # Clear invalid sessions
+            if user_id == "anonymous" or user_id is None:
+                session.clear()
+
     @app.route("/register", methods=["POST"])
     @rate_limit(limit=3, period=300)
     @validate_input({
