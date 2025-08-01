@@ -585,14 +585,28 @@ IntensityScorer = Agent(
 
 # 3. NarrativeDirectorAgent - Intelligent event selection
 @function_tool
-def recommend_events(request: EventRecommendationRequest) -> List[EventRecommendation]:
-    """Recommend narrative events based on game state. Returns array of event recommendations."""
-    # Access data via request object
-    # request.activity_log, request.vitals, request.plot_flags, request.relationship_standings
-    return [
-        EventRecommendation(event="dream_sequence", score=0.78),
-        EventRecommendation(event="npc_revelation", npc_id="nyx", score=0.63)
+def recommend_events(
+    activity_log_json: str,  # JSON string of activity log
+    vitals_json: str,        # JSON string of vitals
+    plot_flags_json: str,    # JSON string of plot flags
+    relationships_json: str  # JSON string of relationship standings
+) -> str:  # Return JSON string
+    """Recommend narrative events based on game state. Returns JSON array of event recommendations."""
+    
+    # Parse the JSON strings
+    activity_log = json.loads(activity_log_json)
+    vitals = json.loads(vitals_json)
+    plot_flags = json.loads(plot_flags_json)
+    relationships = json.loads(relationships_json)
+    
+    # Create recommendations
+    recommendations = [
+        {"event": "dream_sequence", "score": 0.78},
+        {"event": "npc_revelation", "score": 0.63, "npc_id": "nyx"}
     ]
+    
+    # Return as JSON string
+    return json.dumps(recommendations)
   
 NarrativeDirectorAgent = Agent(
     name="NarrativeDirectorAgent",
@@ -966,6 +980,36 @@ async def calculate_intensity_with_llm(
 # Enhanced Event Selection (updated for dynamic relationships)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+# The simplest solution - just use primitive types in the function tool itself
+# and handle all the complex typing in the rest of your code
+
+@function_tool
+def recommend_events(
+    activity_log_json: str,  # JSON string of activity log
+    vitals_json: str,        # JSON string of vitals
+    plot_flags_json: str,    # JSON string of plot flags
+    relationships_json: str  # JSON string of relationship standings
+) -> str:  # Return JSON string
+    """Recommend narrative events based on game state. Returns JSON array of event recommendations."""
+    
+    # Parse the JSON strings
+    activity_log = json.loads(activity_log_json)
+    vitals = json.loads(vitals_json)
+    plot_flags = json.loads(plot_flags_json)
+    relationships = json.loads(relationships_json)
+    
+    # Create recommendations
+    recommendations = [
+        {"event": "dream_sequence", "score": 0.78},
+        {"event": "npc_revelation", "score": 0.63, "npc_id": "nyx"}
+    ]
+    
+    # Return as JSON string
+    return json.dumps(recommendations)
+
+# Keep all your existing Pydantic models for type safety in the rest of your code
+# Just update the select_events_with_director function to use the new signature:
+
 async def select_events_with_director(
     user_id: int,
     conversation_id: int,
@@ -987,7 +1031,7 @@ async def select_events_with_director(
                 )
             """)
             
-            activity_log_summaries = []
+            activity_log = []
             if activity_log_exists:
                 activity_log_rows = await conn.fetch("""
                     SELECT activity_type, timestamp 
@@ -996,12 +1040,12 @@ async def select_events_with_director(
                     ORDER BY timestamp DESC LIMIT 10
                 """, user_id, conversation_id)
                 
-                # Convert to ActivityLogSummary models
-                activity_log_summaries = [
-                    ActivityLogSummary(
-                        activity_type=row["activity_type"],
-                        timestamp=row["timestamp"].isoformat() if row["timestamp"] else datetime.now().isoformat()
-                    )
+                # Convert to simple dicts
+                activity_log = [
+                    {
+                        "activity_type": row["activity_type"],
+                        "timestamp": row["timestamp"].isoformat() if row["timestamp"] else datetime.now().isoformat()
+                    }
                     for row in activity_log_rows
                 ]
             
@@ -1041,61 +1085,56 @@ async def select_events_with_director(
         
         plot_flags_list = [r["key"] for r in plot_flags]
         
-        # Convert relationships to standings format with proper models
-        standings_dict = {}
+        # Convert relationships to simple list
+        relationship_standings = []
         for rel in relationships:
             npc_id = str(rel["npc_id"])
             dynamics = json.loads(rel["dynamics"]) if isinstance(rel["dynamics"], str) else rel["dynamics"]
             patterns = json.loads(rel["patterns"]) if isinstance(rel["patterns"], str) else rel["patterns"]
             archetypes = json.loads(rel["archetypes"]) if isinstance(rel["archetypes"], str) else rel["archetypes"]
             
-            # Create proper RelationshipStandingData object
-            standings_dict[npc_id] = RelationshipStandingData(
-                trust=float(dynamics.get("trust", 0.0)),
-                affection=float(dynamics.get("affection", 0.0)),
-                patterns=patterns or [],
-                archetypes=archetypes or []
-            )
-        
-        # Create the standings map
-        relationship_standings = RelationshipStandingsMap(standings=standings_dict)
-        
-        # Create the request object
-        event_request = EventRecommendationRequest(
-            activity_log=activity_log_summaries,
-            vitals=vitals,
-            plot_flags=plot_flags_list,
-            relationship_standings=relationship_standings
-        )
+            relationship_standings.append({
+                "npc_id": npc_id,
+                "trust": float(dynamics.get("trust", 0.0)),
+                "affection": float(dynamics.get("affection", 0.0)),
+                "patterns": patterns or [],
+                "archetypes": archetypes or []
+            })
         
         # Prepare messages with optional RNG seed
         messages = [{"role": "user", "content": "Select appropriate events for current game state"}]
         if rng_seed is not None:
             messages.append({"role": "system", "content": f"RNG_SEED={rng_seed}"})
         
-        # Get recommendations
+        # Convert everything to JSON strings for the function call
         result = await Runner.run(
             NarrativeDirectorAgent,
             messages=messages,
             calls=[{
                 "name": "recommend_events",
                 "kwargs": {
-                    "request": event_request.dict()  # Convert the entire request to dict
+                    "activity_log_json": json.dumps(activity_log),
+                    "vitals_json": json.dumps(vitals.to_dict()),
+                    "plot_flags_json": json.dumps(plot_flags_list),
+                    "relationships_json": json.dumps(relationship_standings)
                 }
             }]
         )
         
         if result.output:
-            # Extract from list of Pydantic models
+            # Parse the JSON string output
+            recommendations = json.loads(result.output)
+            
+            # Filter and format events
             events = []
-            for event_rec in result.output:
-                if event_rec.score > 0.6:
+            for event_rec in recommendations:
+                if event_rec.get("score", 0) > 0.6:
                     event_dict = {
-                        "event": event_rec.event,
-                        "score": event_rec.score
+                        "event": event_rec["event"],
+                        "score": event_rec["score"]
                     }
-                    if event_rec.npc_id:
-                        event_dict["npc_id"] = event_rec.npc_id
+                    if event_rec.get("npc_id"):
+                        event_dict["npc_id"] = event_rec["npc_id"]
                     events.append(event_dict)
             return events[:3]  # Limit to top 3 events
             
