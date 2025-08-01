@@ -57,6 +57,8 @@ class VitalsData(BaseModel):
     player_name: str = Field("Chase", description="Player name")
     last_update: Optional[datetime] = None
     
+    model_config = {"extra": "forbid"}
+    
     def to_dict(self) -> Dict[str, int]:
         """Convert to simple dict for compatibility"""
         return {
@@ -99,6 +101,8 @@ class ActivityLogEntry(BaseModel):
     conversation_id: Optional[int] = None
     intensity: Optional[float] = Field(None, ge=0.5, le=1.5)
     duration: Optional[int] = Field(None, description="Duration in time periods")
+    
+    model_config = {"extra": "forbid"}
 
 class PhaseEventEntry(BaseModel):
     """Event that occurred during a phase - used for phase recaps"""
@@ -146,28 +150,38 @@ class PhaseEventEntry(BaseModel):
     # Metadata
     timestamp: Optional[datetime] = Field(default_factory=datetime.now)
     significance: Optional[int] = Field(None, ge=1, le=10)
+    
+    model_config = {"extra": "forbid"}
 
 class IntentClassification(BaseModel):
     """Result of classifying player intent"""
     activity_type: str = Field(..., description="Activity type from ActivityType enum")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
+    
+    model_config = {"extra": "forbid"}
 
 class IntensityScore(BaseModel):
     """Result of scoring activity intensity"""
     intensity: float = Field(..., ge=0.5, le=1.5, description="Intensity multiplier")
     mood: str = Field(..., description="Detected mood")
     risk: str = Field(..., description="Risk level")
+    
+    model_config = {"extra": "forbid"}
 
 class EventRecommendation(BaseModel):
     """A single event recommendation"""
     event: str = Field(..., description="Event type")
     score: float = Field(..., ge=0.0, le=1.0, description="Event score")
     npc_id: Optional[str] = Field(None, description="NPC ID if relevant")
+    
+    model_config = {"extra": "forbid"}
 
 class PhaseRecapResult(BaseModel):
     """Phase recap and suggestions"""
     recap: str = Field(..., description="Phase summary")
     suggestions: List[str] = Field(..., description="Suggested next actions")
+    
+    model_config = {"extra": "forbid"}
 
 class CombinedAnalysis(BaseModel):
     """Combined intent and intensity analysis"""
@@ -176,12 +190,16 @@ class CombinedAnalysis(BaseModel):
     intensity: float = Field(..., ge=0.5, le=1.5, description="Intensity multiplier")
     mood: str = Field(..., description="Detected mood")
     risk: str = Field(..., description="Risk level")
+    
+    model_config = {"extra": "forbid"}
 
 class NPCStanding(BaseModel):
     """NPC relationship standing"""
     npc_id: int
     npc_name: str
     relationship_level: int = Field(0, ge=-100, le=100)
+    
+    model_config = {"extra": "forbid"}
 
 class CurrentTimeData(BaseModel):
     """Current time information"""
@@ -189,6 +207,8 @@ class CurrentTimeData(BaseModel):
     month: int = Field(1, ge=1, le=12)
     day: int = Field(1, ge=1, le=31)
     time_of_day: str = Field("Morning", pattern="^(Morning|Afternoon|Evening|Night)$")
+    
+    model_config = {"extra": "forbid"}
 
 class VitalEffectsData(BaseModel):
     """Effects of activities on vitals"""
@@ -433,7 +453,7 @@ PlayerIntentAgent = Agent(
 
 # 2. IntensityScorer - Calculates nuanced intensity
 @function_tool
-def score_intensity(sentence: str, vitals: VitalsData, context_tags: List[str]) -> IntensityScore:
+def score_intensity(sentence: str, vitals: Dict[str, int], context_tags: List[str]) -> IntensityScore:
     """Score the intensity of an activity based on language, vitals, and context."""
     # This would be called by the IntensityScorer agent
     return IntensityScore(
@@ -460,8 +480,8 @@ IntensityScorer = Agent(
 # 3. NarrativeDirectorAgent - Intelligent event selection
 @function_tool
 def recommend_events(
-    activity_log: List[ActivityLogEntry], 
-    vitals: VitalsData,
+    activity_log: List[Dict[str, Any]], 
+    vitals: Dict[str, int],
     plot_flags: List[str],
     relationship_stages: Dict[str, str]
 ) -> List[EventRecommendation]:
@@ -518,10 +538,10 @@ EventWriterAgent = Agent(
 # 6. PhaseRecapAgent - Phase summaries and suggestions
 @function_tool
 def generate_phase_recap(
-    phase_events: List[PhaseEventEntry],
+    phase_events: List[Dict[str, Any]],
     current_goals: List[str],
-    npc_standings: List[NPCStanding],
-    vitals: VitalsData
+    npc_standings: Dict[str, int],
+    vitals: Dict[str, int]
 ) -> PhaseRecapResult:
     """Generate a recap and suggestions for the next phase."""
     return PhaseRecapResult(
@@ -556,7 +576,7 @@ PhaseRecapAgent = Agent(
 def analyze_player_action(
     sentence: str, 
     location: str = "unknown",
-    vitals: VitalsData = None
+    vitals: Dict[str, int] = None
 ) -> CombinedAnalysis:
     """
     Combined tool that classifies intent AND calculates intensity in one call.
@@ -633,7 +653,7 @@ async def analyze_action_combined(
                 "kwargs": {
                     "sentence": player_input,
                     "location": location,
-                    "vitals": vitals
+                    "vitals": vitals.to_dict()  # Convert to dict
                 }
             }]
         )
@@ -901,8 +921,8 @@ async def select_events_with_director(
             calls=[{
                 "name": "recommend_events",
                 "kwargs": {
-                    "activity_log": activity_log,
-                    "vitals": vitals,
+                    "activity_log": [al.dict() for al in activity_log],  # Convert to dicts
+                    "vitals": vitals.to_dict(),  # Convert to dict
                     "plot_flags": plot_flags_list,
                     "relationship_stages": relationship_dict
                 }
@@ -1315,10 +1335,10 @@ async def generate_phase_recap_with_agent(
             calls=[{
                 "name": "generate_phase_recap",
                 "kwargs": {
-                    "phase_events": phase_events_list,
+                    "phase_events": [pe.dict() for pe in phase_events_list],  # Convert to dicts
                     "current_goals": current_goals,
-                    "npc_standings": npc_standings,
-                    "vitals": vitals
+                    "npc_standings": {n.npc_name: n.relationship_level for n in npc_standings},  # Convert to dict
+                    "vitals": vitals.to_dict()  # Convert to dict
                 }
             }]
         )
