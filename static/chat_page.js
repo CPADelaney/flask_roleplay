@@ -167,9 +167,18 @@ function createRobustSocketConnection(handlers = {}) {
     onReconnectFailed = () => {}
   } = handlers;
 
-  // Get the user ID from the window object (set by the template)
+  // ADD THIS VALIDATION AT THE BEGINNING
+  // Get the user ID and validate it
   const userId = window.CURRENT_USER_ID;
   
+  // Don't create socket for anonymous users
+  if (!userId || userId === 'anonymous') {
+    console.error('Cannot create socket connection: user not authenticated');
+    window.location.href = '/login_page';
+    return null;
+  }
+
+  // EXISTING CODE CONTINUES HERE
   const socket = io({
     path: '/socket.io/',
     transports: ['websocket', 'polling'],
@@ -181,7 +190,7 @@ function createRobustSocketConnection(handlers = {}) {
     autoConnect: true,
     // Pass the user_id in the auth object
     auth: {
-      user_id: userId
+      user_id: userId  // This should now be a valid user ID, not 'anonymous'
     }
   });
 
@@ -1728,10 +1737,23 @@ window.addEventListener("unhandledrejection", e => {
 document.addEventListener('DOMContentLoaded', async function() {
   console.log("DOM Content Loaded - Initializing chat page");
   
-  // Check login status
+  // Check if we have a valid user ID BEFORE doing anything else
+  if (!window.CURRENT_USER_ID || window.CURRENT_USER_ID === "anonymous") {
+    console.error("No valid user ID found, redirecting to login");
+    window.location.href = "/login_page";
+    return; // Stop all initialization
+  }
+  
+  // Check login status via API
   const isLoggedIn = await checkLoggedIn();
-  if (!isLoggedIn) return;
+  if (!isLoggedIn) {
+    // checkLoggedIn already redirects, but ensure we stop execution
+    return;
+  }
 
+  // Only initialize socket after confirming authentication
+  console.log("User authenticated, initializing application...");
+  
   // Initialize admin UI
   initializeAdminUI();
 
