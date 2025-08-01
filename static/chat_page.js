@@ -307,23 +307,22 @@ async function startPresetGame(storyId) {
   const newGameBtn = $("newGameBtn");
   // Debug version - add this temporarily to chat_page.js
   if (newGameBtn) {
-      console.log("New Game button found:", newGameBtn);
-      
       newGameBtn.addEventListener("click", function(e) {
-          console.log("New Game button clicked!");
+          e.preventDefault();
           e.stopPropagation();
-          e.preventDefault(); // Add this to prevent any default behavior
           
           const dropdown = $('newGameDropdown');
-          console.log("Dropdown element:", dropdown);
-          console.log("Current display:", dropdown?.style.display);
-          
-          toggleNewGameDropdown();
-          
-          console.log("After toggle display:", dropdown?.style.display);
+          if (dropdown) {
+              // Toggle display directly
+              if (dropdown.style.display === 'none' || !dropdown.style.display) {
+                  dropdown.style.display = 'block';
+              } else {
+                  dropdown.style.display = 'none';
+              }
+          } else {
+              console.error('Dropdown element not found!');
+          }
       });
-  } else {
-      console.error("New Game button not found!");
   }
 
   AppState.isCreatingGame = true;
@@ -1765,22 +1764,32 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // Context menu handlers
   document.addEventListener("click", (e) => {
-    const contextMenu = $("contextMenu");
-    const dropdown = $('newGameDropdown');
-    const newGameBtn = $('newGameBtn');
-    
-    // Close context menu if clicking outside
-    if (contextMenu && !contextMenu.contains(e.target)) {
-      contextMenu.style.display = "none";
-      contextMenuConvId = null;
-    } else if (contextMenu && contextMenu.contains(e.target)) {
-      handleContextMenuClick(e);
-    }
-    
-    // Close dropdown if clicking outside
-    if (dropdown && newGameBtn && !newGameBtn.contains(e.target) && !dropdown.contains(e.target)) {
-      dropdown.style.display = 'none';
-    }
+      const contextMenu = $("contextMenu");
+      const dropdown = $('newGameDropdown');
+      const newGameBtn = $('newGameBtn');
+      
+      // Don't close dropdown if clicking the button or dropdown itself
+      if (newGameBtn && (newGameBtn.contains(e.target) || dropdown?.contains(e.target))) {
+          // Don't close the dropdown
+          if (contextMenu) {
+              contextMenu.style.display = "none";
+              contextMenuConvId = null;
+          }
+          return;
+      }
+      
+      // Close context menu if clicking outside
+      if (contextMenu && !contextMenu.contains(e.target)) {
+          contextMenu.style.display = "none";
+          contextMenuConvId = null;
+      } else if (contextMenu && contextMenu.contains(e.target)) {
+          handleContextMenuClick(e);
+      }
+      
+      // Close dropdown if clicking outside
+      if (dropdown && dropdown.style.display === 'block') {
+          dropdown.style.display = 'none';
+      }
   });
   
   // Keyboard accessibility
