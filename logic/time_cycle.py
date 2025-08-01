@@ -896,16 +896,17 @@ EventWriterAgent = Agent(
 
 @function_tool
 def generate_phase_recap(
-    phase_events_json: str,  # Changed from List[PhaseEventEntry]
-    current_goals_json: str,  # Changed from List[str]
-    npc_standings: Dict[str, int],  # This stays as Dict[str, int]
-    vitals_json: str  # Changed from VitalsData
-) -> str:  # Return JSON string
+    phase_events_json: str,
+    current_goals_json: str,
+    npc_standings_json: str,  # NO Dict types allowed!
+    vitals_json: str
+) -> str:
     """Generate a recap and suggestions for the next phase."""
     
-    # Parse JSON strings
+    # Parse ALL parameters
     phase_events = json.loads(phase_events_json)
     current_goals = json.loads(current_goals_json)
+    npc_standings = json.loads(npc_standings_json)  # Add this line
     vitals = json.loads(vitals_json)
     
     # Generate recap based on events
