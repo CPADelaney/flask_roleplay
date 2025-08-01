@@ -2715,7 +2715,8 @@ async def create_all_tables():
                     id SERIAL PRIMARY KEY,
                     story_id TEXT UNIQUE NOT NULL,
                     story_data JSONB NOT NULL,
-                    created_at TIMESTAMP DEFAULT NOW()
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
                 );
                 ''',
                 '''
