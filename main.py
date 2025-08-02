@@ -670,18 +670,20 @@ def create_quart_app():
             query_string = environ.get('QUERY_STRING', '')
             app.logger.info(f"Query string: {query_string}")
             
-            # Simple query string parsing
+            # Parse query parameters
             import urllib.parse
             query_params = urllib.parse.parse_qs(query_string)
-            user_id = query_params.get('user_id', [None])[0]
             
-            if user_id:
+            # Socket.IO adds its own parameters, look for user_id
+            user_id_list = query_params.get('user_id', [])
+            if user_id_list:
+                user_id = user_id_list[0]
                 app.logger.info(f"User ID from query params: {user_id}")
         
         # Convert to int if it's a valid numeric string
         if user_id and str(user_id).isdigit():
             user_id = int(user_id)
-        elif not user_id:
+        elif not user_id or user_id == 'anonymous':
             user_id = "anonymous"
             app.logger.warning(f"No user_id found for sid={sid}, defaulting to anonymous")
         
@@ -689,7 +691,7 @@ def create_quart_app():
         await sio.save_session(sid, {"user_id": user_id})
         app.logger.info(f"Socket connected: sid={sid}, user_id={user_id}")
         await sio.emit("response", {"data": "Connected!", "user_id": user_id}, to=sid)
-
+    
     @sio.on("join")
     async def on_join(sid, data):
         sock_sess = await sio.get_session(sid)
