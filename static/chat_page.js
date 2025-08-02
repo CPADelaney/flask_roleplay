@@ -167,18 +167,12 @@ function createRobustSocketConnection(handlers = {}) {
     onReconnectFailed = () => {}
   } = handlers;
 
-  // ADD THIS VALIDATION AT THE BEGINNING
-  // Get the user ID and validate it
+  // Get the user ID from the window object (set by the template)
   const userId = window.CURRENT_USER_ID;
   
-  // Don't create socket for anonymous users
-  if (!userId || userId === 'anonymous') {
-    console.error('Cannot create socket connection: user not authenticated');
-    window.location.href = '/login_page';
-    return null;
-  }
-
-  // EXISTING CODE CONTINUES HERE
+  // ADD DEBUGGING
+  console.log('Creating socket with userId:', userId, 'type:', typeof userId);
+  
   const socket = io({
     path: '/socket.io/',
     transports: ['websocket', 'polling'],
@@ -190,10 +184,12 @@ function createRobustSocketConnection(handlers = {}) {
     autoConnect: true,
     // Pass the user_id in the auth object
     auth: {
-      user_id: userId  // This should now be a valid user ID, not 'anonymous'
+      user_id: userId
     }
   });
 
+  // ADD MORE DEBUGGING
+  console.log('Socket created with auth:', socket.auth);
   // Connection events
   socket.on('connect', () => {
     console.log('Socket connected:', socket.id, 'with user_id:', userId);
@@ -534,7 +530,11 @@ class SocketManager {
       console.warn("Socket already initialized");
       return;
     }
-
+  
+    // ADD THIS DEBUG
+    console.log('About to create socket, window.CURRENT_USER_ID:', window.CURRENT_USER_ID);
+    console.log('createRobustSocketConnection is:', typeof createRobustSocketConnection, typeof window.createRobustSocketConnection);
+  
     // Create socket with robust configuration
     this.socket = createRobustSocketConnection({
       onConnect: (socket, wasReconnect) => this.handleConnect(socket, wasReconnect),
