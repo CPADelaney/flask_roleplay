@@ -1704,9 +1704,66 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
     Legacy wrapper - creates relationship using new system.
     Returns link_id for compatibility.
     """
+    import inspect
+    
+    # Check if we're being called from dynamic_relationships to avoid recursion
+    for frame_info in inspect.stack():
+        if 'dynamic_relationships' in frame_info.filename:
+            logger.warning("Detected recursive call from dynamic_relationships - handling directly")
+            
+            # Handle the creation directly without using OptimizedRelationshipManager
+            ctx = ensure_canonical_context(ctx)
+            
+            # Build canonical key
+            e1 = (kwargs['entity1_type'], kwargs['entity1_id'])
+            e2 = (kwargs['entity2_type'], kwargs['entity2_id'])
+            if e1 <= e2:
+                canonical_key = f"{e1[0]}_{e1[1]}_{e2[0]}_{e2[1]}"
+            else:
+                canonical_key = f"{e2[0]}_{e2[1]}_{e1[0]}_{e1[1]}"
+            
+            # Check if already exists
+            existing = await conn.fetchrow("""
+                SELECT link_id FROM SocialLinks
+                WHERE user_id = $1 AND conversation_id = $2 AND canonical_key = $3
+            """, ctx.user_id, ctx.conversation_id, canonical_key)
+            
+            if existing:
+                return existing['link_id']
+            
+            # Create directly
+            link_id = await conn.fetchval("""
+                INSERT INTO SocialLinks (
+                    user_id, conversation_id,
+                    entity1_type, entity1_id, entity2_type, entity2_id,
+                    canonical_key, dynamics, momentum, contexts,
+                    patterns, archetypes, version,
+                    last_interaction, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, 
+                        $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15)
+                RETURNING link_id
+            """,
+                ctx.user_id, ctx.conversation_id,
+                kwargs['entity1_type'], kwargs['entity1_id'],
+                kwargs['entity2_type'], kwargs['entity2_id'],
+                canonical_key,
+                json.dumps({}),  # Empty dynamics
+                json.dumps({'velocities': {}, 'inertia': 50.0}),  # Default momentum
+                json.dumps({'base_dimensions': {}, 'context_deltas': {}}),  # Default contexts
+                json.dumps([]),  # Empty patterns
+                json.dumps([]),  # Empty archetypes
+                0,  # version
+                datetime.now(),
+                datetime.now()
+            )
+            
+            return link_id
+    
+    # Normal path - use OptimizedRelationshipManager
     from logic.dynamic_relationships import OptimizedRelationshipManager
     
-    # Ensure we have a proper context
+    # Rest of your existing code...
     ctx = ensure_canonical_context(ctx)
     
     user_id = kwargs.get('user_id', ctx.user_id)
@@ -1744,7 +1801,8 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
         level = kwargs['link_level']
         state.dimensions.affection = level * 0.4
         state.dimensions.trust = level * 0.3
-        state.dimensions.closeness = level * 0.3
+        # Note: 'closeness' doesn't exist in RelationshipDimensions, use 'intimacy' instead
+        state.dimensions.intimacy = level * 0.3
     
     # Clamp and save
     state.dimensions.clamp()
