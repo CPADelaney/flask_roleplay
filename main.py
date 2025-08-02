@@ -651,17 +651,30 @@ def create_quart_app():
         
     @sio.event
     async def connect(sid, environ, auth):
+        # Debug logging
+        app.logger.info(f"Connect event - sid: {sid}")
+        app.logger.info(f"Auth object: {auth}")
+        app.logger.info(f"Auth type: {type(auth)}")
+        
         # Get user_id from auth (passed by client)
-        user_id = auth.get("user_id") if auth else None
+        user_id = None
+        
+        # Try different ways to get user_id
+        if auth and isinstance(auth, dict):
+            user_id = auth.get("user_id")
+            app.logger.info(f"User ID from auth dict: {user_id}")
+        elif auth:
+            app.logger.info(f"Auth is not a dict, it's: {type(auth)}, value: {auth}")
         
         # Convert to int if it's a valid numeric string
         if user_id and str(user_id).isdigit():
             user_id = int(user_id)
         elif not user_id:
-            # If not in auth, try to get from HTTP session
-            # This requires parsing cookies from environ
-            cookie_header = environ.get('HTTP_COOKIE', '')
-            # For now, if no auth user_id, default to anonymous
+            # Try to get from query string as fallback
+            query_string = environ.get('QUERY_STRING', '')
+            app.logger.info(f"Query string: {query_string}")
+            
+            # If still no user_id, default to anonymous
             user_id = "anonymous"
             app.logger.warning(f"No user_id in auth for sid={sid}, defaulting to anonymous")
         
