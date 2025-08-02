@@ -1495,7 +1495,6 @@ class NewGameAgent:
     async def _create_preset_npcs(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> List[int]:
         """Create NPCs directly from preset data using PresetNPCHandler"""
         from npcs.preset_npc_handler import PresetNPCHandler
-        from story_templates.moth.story_initializer import MothFlameStoryInitializer
         
         npc_ids = []
         story_context = {
@@ -1506,22 +1505,14 @@ class NewGameAgent:
         
         for npc_data in preset_data.get('required_npcs', []):
             try:
-                # Special handling for complex NPCs like Lilith
-                if npc_data.get('id') == 'lilith_ravencroft' or npc_data.get('name') == 'Lilith Ravencroft':
-                    # Use the specialized Lilith creator
-                    npc_id = await MothFlameStoryInitializer._create_lilith_ravencroft(
-                        ctx, ctx.context['user_id'], ctx.context['conversation_id']
-                    )
-                    npc_ids.append(npc_id)
-                else:
-                    # Use PresetNPCHandler for all other NPCs
-                    npc_id = await PresetNPCHandler.create_detailed_npc(
-                        ctx=ctx,
-                        npc_data=npc_data,
-                        story_context=story_context
-                    )
-                    npc_ids.append(npc_id)
-                    
+                # Use PresetNPCHandler for ALL NPCs including Lilith
+                npc_id = await PresetNPCHandler.create_detailed_npc(
+                    ctx=ctx,
+                    npc_data=npc_data,
+                    story_context=story_context
+                )
+                npc_ids.append(npc_id)
+                        
             except Exception as e:
                 logger.error(f"Error creating preset NPC {npc_data.get('name', 'Unknown')}: {e}", exc_info=True)
                 # Continue with other NPCs even if one fails
