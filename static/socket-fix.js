@@ -21,54 +21,61 @@
    * @returns {SocketIO.Socket} - The configured socket instance
    */
   window.createRobustSocketConnection = function(options = {}) {
-    if (typeof io === 'undefined') {
-      console.error('Socket.IO not available');
-      return null;
-    }
-    
-    // Clean up any existing resources
-    cleanupExistingResources();
-    
-    // Combine default options with provided options
-    const config = {
-      path: '/socket.io',
-      transports: ['websocket', 'polling'],
-      auth: { user_id: window.CURRENT_USER_ID || 'anonymous' },
-      reconnection: true,
-      reconnectionAttempts: 10, // Limit max attempts to prevent flooding
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 60000, // Reduce from 120000
-      pingTimeout: 60000, // Reduce from 120000
-      pingInterval: 25000,
-      forceNew: false,
-      ...options
+      if (typeof io === 'undefined') {
+        console.error('Socket.IO not available');
+        return null;
+      }
+      
+      // Clean up any existing resources
+      cleanupExistingResources();
+      
+      // Get the user ID
+      const userId = window.CURRENT_USER_ID || 'anonymous';
+      
+      // Combine default options with provided options
+      const config = {
+        path: '/socket.io/',
+        transports: ['websocket', 'polling'],
+        // Pass user_id as query parameter since auth isn't working
+        query: {
+          user_id: userId
+        },
+        // Still include auth for compatibility
+        auth: { 
+          user_id: userId 
+        },
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 60000,
+        pingTimeout: 60000,
+        pingInterval: 25000,
+        forceNew: false,
+        ...options
+      };
+      
+      debugLog('Creating socket connection with config:', config);
+      
+      // Create the Socket.IO connection
+      const socket = io(config);
+      
+      // Verify what socket.io actually stored
+      console.log('[SocketFix] Socket auth after creation:', socket.auth);
+      console.log('[SocketFix] Socket query after creation:', socket.io.opts.query);
+      
+      // Set up enhanced event handlers
+      setupSocketEventHandlers(socket, options);
+      
+      // Set up browser event handlers for added reliability
+      setupBrowserEventHandlers(socket);
+      
+      // Start health monitoring
+      startHealthMonitoring(socket);
+      
+      return socket;
     };
     
-    debugLog('Creating socket connection with config:', config);
-    
-    // Create the Socket.IO connection
-    const socket = io(config);
-    
-    // Set up enhanced event handlers
-    setupSocketEventHandlers(socket, options);
-    
-    // Set up browser event handlers for added reliability
-    setupBrowserEventHandlers(socket);
-    
-    // Start health monitoring
-    startHealthMonitoring(socket);
-    
-    console.log('[SocketFix] Socket config:', JSON.stringify(config));
-    
-    const socket = io(config);
-    
-    // Verify what socket.io actually stored
-    console.log('[SocketFix] Socket auth after creation:', socket.auth);
-    
-    return socket;
-  };
-  
   /**
    * Set up Socket.IO event handlers with better error handling
    */
