@@ -19,6 +19,8 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
 from memory.memory_nyx_integration import run_maintenance_through_nyx
+
+# IMPORTANT: Import run_async_in_worker_loop for proper event loop management
 from db.connection import get_db_connection_context, run_async_in_worker_loop
 
 # --- Core NyxBrain and Checkpointing ---
@@ -98,7 +100,7 @@ def test_task():
 def background_chat_task_with_memory(conversation_id, user_input, user_id, universal_update=None):
     """
     Enhanced background chat task that includes memory retrieval.
-    Uses asyncio.run() for async execution.
+    Uses run_async_in_worker_loop for proper event loop management.
     """
     async def run_chat_task():
         with trace(workflow_name="background_chat_task_celery"):
@@ -209,10 +211,10 @@ def background_chat_task_with_memory(conversation_id, user_input, user_id, unive
                 logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
                 return {"error": f"Server error processing message: {str(e)}"}
     
-    # Run the async function
-    return asyncio.run(run_chat_task())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_chat_task())
 
-# Memory System Celery Tasks (removed duplicates)
+# Memory System Celery Tasks
 @celery_app.task
 def process_memory_embedding_task(user_id, conversation_id, message_text, entity_type="memory", metadata=None):
     """
@@ -245,8 +247,8 @@ def process_memory_embedding_task(user_id, conversation_id, message_text, entity
                 "error": str(e)
             }
     
-    # Run the async function
-    return asyncio.run(process_memory_async())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(process_memory_async())
 
 @celery_app.task
 def retrieve_memories_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
@@ -281,8 +283,8 @@ def retrieve_memories_task(user_id, conversation_id, query_text, entity_types=No
                 "error": str(e)
             }
     
-    # Run the async function
-    return asyncio.run(retrieve_memories_async())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(retrieve_memories_async())
 
 @celery_app.task
 def analyze_with_memory_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
@@ -317,8 +319,8 @@ def analyze_with_memory_task(user_id, conversation_id, query_text, entity_types=
                 "error": str(e)
             }
     
-    # Run the async function
-    return asyncio.run(analyze_with_memory_async())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(analyze_with_memory_async())
 
 @celery_app.task
 def memory_maintenance_task():
@@ -374,7 +376,8 @@ def memory_maintenance_task():
                 "traceback": traceback.format_exc()
             }
     
-    return asyncio.run(run_maintenance())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_maintenance())
 
 @celery_app.task
 def run_npc_learning_cycle_task():
@@ -433,8 +436,8 @@ def run_npc_learning_cycle_task():
             logger.info(f"NPC learning cycle task finished. Processed {processed_conversations} conversations.")
             return {"status": "success", "processed_conversations": processed_conversations}
     
-    # Run the async function
-    return asyncio.run(run_learning_cycle())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_learning_cycle())
 
 @celery_app.task(expires=3600)
 def process_new_game_task(user_id, conversation_data):
@@ -446,8 +449,6 @@ def process_new_game_task(user_id, conversation_data):
 
     async def run_new_game():
         with trace(workflow_name="process_new_game_celery_task"):
-            # Your existing code here...
-            # (keeping all the logic the same)
             try:
                 logger.info(
                     "[NG] payload keys=%s, preset_id=%s",
@@ -597,8 +598,8 @@ def create_npcs_task(user_id, conversation_id, count=10):
             }
 
     try:
-        # Run the async main function within the synchronous Celery task
-        final_info = asyncio.run(create_npcs_async())
+        # Use run_async_in_worker_loop instead of asyncio.run
+        final_info = run_async_in_worker_loop(create_npcs_async())
         logger.info(f"Finished create_npcs_task successfully for user={user_id}, conv={conversation_id}. NPCs: {final_info.get('npc_ids')}")
         return final_info
     except Exception as e:
@@ -610,6 +611,7 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
     """
     Generate the GPT opening line.
     This task calls the GPT API (or fallback) and returns a JSON-encoded reply.
+    Note: This is a synchronous task as it doesn't use async database operations.
     """
     logger.info(f"Async GPT task: Calling GPT for opening line for conv_id={conversation_id}.")
 
@@ -707,8 +709,8 @@ def nyx_memory_maintenance_task():
                 }
 
     try:
-        # Run the async logic
-        result = asyncio.run(process_all_conversations())
+        # Use run_async_in_worker_loop instead of asyncio.run
+        result = run_async_in_worker_loop(process_all_conversations())
         logger.info(f"Nyx memory maintenance task completed: {result}")
         return result
     except Exception as e:
@@ -811,7 +813,8 @@ def monitor_nyx_performance_task():
             logger.exception("Error in Nyx performance monitoring task")
             return {"status": "error", "error": str(e)}
     
-    return asyncio.run(run_monitoring())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_monitoring())
 
 @celery_app.task
 def aggregate_learning_metrics_task():
@@ -870,7 +873,8 @@ def aggregate_learning_metrics_task():
             logger.exception("Error in learning metrics aggregation")
             return {"status": "error", "error": str(e)}
     
-    return asyncio.run(run_aggregation())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_aggregation())
 
 @celery_app.task
 def cleanup_old_performance_data_task():
@@ -918,7 +922,8 @@ def cleanup_old_performance_data_task():
             logger.exception("Error in cleanup task")
             return {"status": "error", "error": str(e)}
     
-    return asyncio.run(run_cleanup())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_cleanup())
 
 # --- Utility Functions ---
 async def find_split_brain_nyxes():
@@ -994,7 +999,8 @@ def sweep_and_merge_nyx_split_brains():
             logger.exception("Sweep-and-merge task failed critically.")
             return {"status": "error", "error": str(e)}
     
-    return asyncio.run(run_sweep())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_sweep())
 
 @celery_app.task
 def run_llm_periodic_checkpoint_task(user_id: int, conversation_id: int):
@@ -1052,7 +1058,8 @@ def run_llm_periodic_checkpoint_task(user_id: int, conversation_id: int):
             logger.exception(f"Error during LLM periodic checkpoint task for {user_id}-{conversation_id}")
             return {"status": "error", "error": str(e)}
     
-    return asyncio.run(run_checkpoint())
+    # Use run_async_in_worker_loop instead of asyncio.run
+    return run_async_in_worker_loop(run_checkpoint())
 
 # Ensure celery_app is correctly configured if needed elsewhere
 app = celery_app
