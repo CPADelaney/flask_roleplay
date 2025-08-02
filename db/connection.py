@@ -10,6 +10,9 @@ from typing import Optional
 import pgvector.asyncpg as pgvector_asyncpg
 import threading
 
+# Celery worker lifecycle signals
+from celery.signals import worker_process_init, worker_process_shutdown
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -331,16 +334,25 @@ def run_async_in_worker_loop(coro):
     """
     loop = get_or_create_event_loop()
     
+    # Ensure the loop is set as the current event loop
+    asyncio.set_event_loop(loop)
+    
     # If loop is already running, we can't use run_until_complete
     if loop.is_running():
-        # This shouldn't happen in normal Celery operation
+        # This shouldn't happen in normal Celery prefork operation
         raise RuntimeError("Event loop is already running")
     
     try:
+        # Run the coroutine and return the result
         return loop.run_until_complete(coro)
     except Exception:
         # Don't close the loop on error - we want to reuse it
         raise
+    finally:
+        # Important: Don't close the loop here!
+        # We want to keep it alive for the worker's lifetime
+        # It will be closed in the shutdown handler
+        pass
 
 def init_celery_worker():
     """
@@ -362,6 +374,63 @@ def init_celery_worker():
     except Exception as e:
         logger.error(f"Failed to initialize Celery worker database pool: {e}", exc_info=True)
         raise
+
+# Celery Worker Lifecycle Hooks
+@worker_process_init.connect
+def init_worker_pool(**kwargs):
+    """Initialize database pool when worker process starts."""
+    init_celery_worker()
+
+@worker_process_shutdown.connect
+def close_worker_pool(**kwargs):
+    """Close database pool when worker shuts down."""
+    global DB_POOL, DB_POOL_LOOP
+    pid = os.getpid()
+    
+    logger.info(f"Shutting down worker process {pid}")
+    
+    if DB_POOL:
+        logger.info(f"Process {pid}: Will close global DB_POOL.")
+        try:
+            # Use the same event loop that owns the pool
+            if DB_POOL_LOOP and not DB_POOL_LOOP.is_closed():
+                # The pool was created on this loop, so close it there
+                if DB_POOL_LOOP.is_running():
+                    # If loop is still running (shouldn't be in prefork), schedule the close
+                    asyncio.run_coroutine_threadsafe(close_connection_pool(), DB_POOL_LOOP)
+                else:
+                    # More common case: loop exists but isn't running
+                    DB_POOL_LOOP.run_until_complete(close_connection_pool())
+            else:
+                # Fallback: try to use the thread-local loop if available
+                if hasattr(_thread_local, 'event_loop') and not _thread_local.event_loop.is_closed():
+                    loop = _thread_local.event_loop
+                    if not loop.is_running():
+                        loop.run_until_complete(close_connection_pool())
+                    else:
+                        logger.warning(f"Cannot close pool - event loop is running")
+                else:
+                    # Last resort: just mark as None without proper cleanup
+                    logger.warning(f"Process {pid}: No suitable event loop found for pool cleanup")
+                    DB_POOL = None
+                    DB_POOL_LOOP = None
+                    
+            logger.info(f"Worker process {pid} database pool closed successfully")
+        except Exception as e:
+            logger.error(f"Process {pid}: Error during pool cleanup: {e}", exc_info=True)
+            # Force cleanup
+            DB_POOL = None
+            DB_POOL_LOOP = None
+    
+    # Clean up the event loop if it exists and we own it
+    if hasattr(_thread_local, 'event_loop') and _thread_local.event_loop:
+        try:
+            if not _thread_local.event_loop.is_closed():
+                if not _thread_local.event_loop.is_running():
+                    _thread_local.event_loop.close()
+                    logger.info(f"Worker {pid} event loop closed")
+        except Exception as e:
+            logger.error(f"Error closing event loop: {e}")
 
 # Export all public functions
 __all__ = [
