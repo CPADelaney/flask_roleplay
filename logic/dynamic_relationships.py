@@ -1202,11 +1202,9 @@ class OptimizedRelationshipManager:
         return state
     
     async def _create_new_relationship(self, state: RelationshipState):
-        """Create new relationship with canonical ordering"""
-        ctx = RunContextWrapper(context={
-            'user_id': self.user_id,
-            'conversation_id': self.conversation_id
-        })
+        """Create new relationship WITHOUT using canon to avoid recursion"""
+        import json
+        from datetime import datetime
         
         async with get_db_connection_context() as conn:
             # Set initial dynamics based on entity types
@@ -1215,26 +1213,56 @@ class OptimizedRelationshipManager:
                 state.dimensions.fascination = 40
                 state.dimensions.frequency = 20
             
-            # Create with canon and get link_id
-            link_id = await canon.find_or_create_social_link(
-                ctx, conn,
-                user_id=self.user_id,
-                conversation_id=self.conversation_id,
-                entity1_type=state.entity1_type,
-                entity1_id=state.entity1_id,
-                entity2_type=state.entity2_type,
-                entity2_id=state.entity2_id,
-                link_type="neutral",
-                link_level=0,
-                link_history=[],
-                dynamics=state.dimensions.to_dict(),
-                experienced_crossroads=[],
-                experienced_rituals=[],
-                canonical_key=state.canonical_key
-            )
+            # FIXED: Insert directly instead of calling canon.find_or_create_social_link
+            # This avoids the circular dependency
+            try:
+                link_id = await conn.fetchval("""
+                    INSERT INTO SocialLinks (
+                        user_id, conversation_id,
+                        entity1_type, entity1_id, entity2_type, entity2_id,
+                        canonical_key, dynamics, momentum, contexts,
+                        patterns, archetypes, version,
+                        last_interaction, created_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, 
+                            $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15)
+                    ON CONFLICT (user_id, conversation_id, canonical_key) 
+                    DO UPDATE SET 
+                        last_interaction = EXCLUDED.last_interaction
+                    RETURNING link_id
+                """,
+                    self.user_id, self.conversation_id,
+                    state.entity1_type, state.entity1_id,
+                    state.entity2_type, state.entity2_id,
+                    state.canonical_key,
+                    json.dumps(state.dimensions.to_dict()),
+                    json.dumps({
+                        'velocities': state.momentum.velocities,
+                        'inertia': state.momentum.inertia
+                    }),
+                    json.dumps(state.contexts.to_dict()),
+                    json.dumps(list(state.history.active_patterns)),
+                    json.dumps(list(state.active_archetypes)),
+                    0,  # version
+                    datetime.now(),
+                    datetime.now()
+                )
+            except asyncpg.UniqueViolationError:
+                # Handle race condition - another process created it first
+                row = await conn.fetchrow("""
+                    SELECT link_id FROM SocialLinks
+                    WHERE user_id = $1 AND conversation_id = $2 AND canonical_key = $3
+                """, self.user_id, self.conversation_id, state.canonical_key)
+                link_id = row['link_id'] if row else None
+                
+                if not link_id:
+                    raise
             
             # Store link_id
             state.link_id = link_id
+            
+            # Log the creation (optional)
+            logger.info(f"Created new relationship {state.canonical_key} with link_id {link_id}")
     
     async def process_interaction(self,
                                 entity1_type: str, entity1_id: int,
