@@ -59,6 +59,13 @@
     // Start health monitoring
     startHealthMonitoring(socket);
     
+    console.log('[SocketFix] Socket config:', JSON.stringify(config));
+    
+    const socket = io(config);
+    
+    // Verify what socket.io actually stored
+    console.log('[SocketFix] Socket auth after creation:', socket.auth);
+    
     return socket;
   };
   
