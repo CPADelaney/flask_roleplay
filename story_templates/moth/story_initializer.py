@@ -38,9 +38,9 @@ from nyx.governance import AgentType
 from npcs.preset_npc_handler import PresetNPCHandler
 from story_templates.moth.lore.world_lore_manager import (
     SFBayQueenOfThornsPreset,
-    QueenOfThornsConsistencyGuide,
     SFLocalLore
 )
+from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
 from logic.chatgpt_integration import get_async_openai_client
 from embedding.vector_store import generate_embedding
 
