@@ -173,6 +173,7 @@ function createRobustSocketConnection(handlers = {}) {
   // ADD DEBUGGING
   console.log('Creating socket with userId:', userId, 'type:', typeof userId);
   
+  // Pass userId as query parameter since auth object isn't working
   const socket = io({
     path: '/socket.io/',
     transports: ['websocket', 'polling'],
@@ -182,8 +183,8 @@ function createRobustSocketConnection(handlers = {}) {
     reconnectionAttempts: 10,
     timeout: 20000,
     autoConnect: true,
-    // Pass the user_id in the auth object
-    auth: {
+    // Pass user_id as query parameter instead of auth
+    query: {
       user_id: userId
     }
   });
