@@ -656,27 +656,34 @@ def create_quart_app():
         app.logger.info(f"Auth object: {auth}")
         app.logger.info(f"Auth type: {type(auth)}")
         
-        # Get user_id from auth (passed by client)
+        # Get user_id from multiple possible sources
         user_id = None
         
-        # Try different ways to get user_id
+        # Try auth object first (for newer Socket.IO versions)
         if auth and isinstance(auth, dict):
             user_id = auth.get("user_id")
             app.logger.info(f"User ID from auth dict: {user_id}")
-        elif auth:
-            app.logger.info(f"Auth is not a dict, it's: {type(auth)}, value: {auth}")
+        
+        # Try query parameters as fallback
+        if not user_id:
+            # Parse query string
+            query_string = environ.get('QUERY_STRING', '')
+            app.logger.info(f"Query string: {query_string}")
+            
+            # Simple query string parsing
+            import urllib.parse
+            query_params = urllib.parse.parse_qs(query_string)
+            user_id = query_params.get('user_id', [None])[0]
+            
+            if user_id:
+                app.logger.info(f"User ID from query params: {user_id}")
         
         # Convert to int if it's a valid numeric string
         if user_id and str(user_id).isdigit():
             user_id = int(user_id)
         elif not user_id:
-            # Try to get from query string as fallback
-            query_string = environ.get('QUERY_STRING', '')
-            app.logger.info(f"Query string: {query_string}")
-            
-            # If still no user_id, default to anonymous
             user_id = "anonymous"
-            app.logger.warning(f"No user_id in auth for sid={sid}, defaulting to anonymous")
+            app.logger.warning(f"No user_id found for sid={sid}, defaulting to anonymous")
         
         # Save to socketio session
         await sio.save_session(sid, {"user_id": user_id})
