@@ -1298,10 +1298,36 @@ async def create_all_tables():
                     experienced_rituals JSONB,
                     relationship_stage TEXT,
                     group_interaction TEXT,
+                    canonical_key VARCHAR(255),
+                    version INTEGER DEFAULT 0,
+                    momentum JSONB DEFAULT '{}',
+                    contexts JSONB DEFAULT '{}',
+                    patterns JSONB DEFAULT '[]',
+                    archetypes JSONB DEFAULT '[]',
+                    last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_social_links_canonical ON SocialLinks(user_id, conversation_id, canonical_key);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_social_links_drift ON SocialLinks(user_id, conversation_id, last_interaction);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_social_links_version ON SocialLinks(link_id, version);
+                ''',
+                '''
+                UPDATE SocialLinks 
+                SET canonical_key = CASE 
+                    WHEN (entity1_type, entity1_id) <= (entity2_type, entity2_id)
+                    THEN entity1_type || '_' || entity1_id || '_' || entity2_type || '_' || entity2_id
+                    ELSE entity2_type || '_' || entity2_id || '_' || entity1_type || '_' || entity1_id
+                END
+                WHERE canonical_key IS NULL;
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS RelationshipEvolution (
@@ -2874,7 +2900,49 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
-                
+                '''
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint 
+                        WHERE conname = 'playerstats_user_conversation_player_unique'
+                        OR conname = 'playerstats_user_id_conversation_id_player_name_key'
+                    ) THEN
+                        ALTER TABLE PlayerStats 
+                        ADD CONSTRAINT playerstats_user_conversation_player_unique 
+                        UNIQUE (user_id, conversation_id, player_name);
+                    END IF;
+                END $$;
+                ''',
+                '''
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint 
+                        WHERE conname = 'playerinventory_user_conversation_player_item_unique'
+                    ) THEN
+                        ALTER TABLE PlayerInventory 
+                        ADD CONSTRAINT playerinventory_user_conversation_player_item_unique 
+                        UNIQUE (user_id, conversation_id, player_name, item_name);
+                    END IF;
+                END $$;
+                ''',
+                '''
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'sociallinks' AND column_name = 'canonical_key'
+                    ) THEN
+                        ALTER TABLE SocialLinks ADD COLUMN canonical_key TEXT;
+                    END IF;
+                END $$;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_sociallinks_canonical_key 
+                ON SocialLinks(user_id, conversation_id, canonical_key) 
+                WHERE canonical_key IS NOT NULL;
+                ''',
                 # Add indexes for the new tables (add with other indexes):
                 '''
                 CREATE INDEX IF NOT EXISTS idx_npc_special_mechanics_lookup 
