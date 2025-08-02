@@ -3,15 +3,14 @@
 """
 Consolidated Celery configuration with task prioritization, monitoring, and dead letter queues.
 Supports both Redis and RabbitMQ brokers.
-Includes worker process initialization for asyncpg connection pools.
+Worker initialization is handled by db.connection module for proper asyncpg pool management.
 """
 
 from celery import Celery
 import os
 from celery.schedules import crontab
-from celery.signals import task_failure, task_success, task_retry, worker_process_init, worker_process_shutdown
+from celery.signals import task_failure, task_success, task_retry
 import logging
-import asyncio
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -83,6 +82,7 @@ task_routes = {
     # High priority tasks
     'tasks.process_new_game_task': {'queue': 'high'},
     'tasks.create_npcs_task': {'queue': 'high'},
+    'tasks.background_chat_task_with_memory': {'queue': 'high'},
     
     # Default priority tasks
     'tasks.run_npc_learning_cycle_task': {'queue': 'default'},
@@ -91,6 +91,9 @@ task_routes = {
     'tasks.monitor_nyx_performance_task': {'queue': 'default'},
     'tasks.aggregate_learning_metrics_task': {'queue': 'default'},
     'tasks.run_llm_periodic_checkpoint_task': {'queue': 'default'},
+    'tasks.process_memory_embedding_task': {'queue': 'default'},
+    'tasks.retrieve_memories_task': {'queue': 'default'},
+    'tasks.analyze_with_memory_task': {'queue': 'default'},
     
     # Low priority tasks
     'tasks.memory_maintenance_task': {'queue': 'low_priority'},
@@ -115,6 +118,9 @@ base_config = {
     'worker_pool': 'prefork',
     # Limit concurrency to avoid connection pool exhaustion
     'worker_concurrency': int(os.getenv('CELERY_CONCURRENCY', '1')),
+    # Disable gossip and mingle for faster startup
+    'worker_disable_rate_limits': True,
+    'worker_send_task_events': False,  # Enable only if needed for monitoring
 }
 
 # Enhanced configuration for RabbitMQ
@@ -154,7 +160,7 @@ if USE_RABBITMQ:
         'task_default_retry_delay': 60,  # 1 minute
         'task_max_retries': 3,
         
-        # Monitoring settings
+        # Monitoring settings (enable if needed)
         'worker_send_task_events': True,
         'task_send_sent_event': True
     }
@@ -163,7 +169,7 @@ else:
     # Simpler configuration for Redis
     celery_app.conf.update(base_config)
 
-# Comprehensive beat schedule combining both configurations
+# Comprehensive beat schedule
 celery_app.conf.beat_schedule = {
     # --- NPC and Game Tasks ---
     'npc-learning-cycle-every-15-mins': {
@@ -193,11 +199,6 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=4, minute=30),  # Daily at 4:30 AM UTC
         'options': {'queue': 'low_priority'}
     },
-    'memory-embedding-consolidation-weekly': {
-        'task': 'tasks.memory_embedding_consolidation_task',
-        'schedule': crontab(day_of_week='sun', hour=5, minute=0),  # Weekly Sunday 5:00 AM UTC
-        'options': {'queue': 'low_priority'}
-    },
     
     # --- Performance Monitoring Tasks ---
     'monitor-nyx-performance-every-5-mins': {
@@ -215,118 +216,21 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=2, minute=0),  # Daily at 2:00 AM
         'options': {'queue': 'low_priority'}
     },
-    'cleanup-old-data': {
-        'task': 'tasks.cleanup_old_data_task',
-        'schedule': crontab(hour=4, minute=0),  # Daily at 4:00 AM
-        'options': {'queue': 'low'}
-    },
-    
-    # --- Analytics Tasks ---
-    'update-analytics': {
-        'task': 'tasks.analytics_update_task',
-        'schedule': crontab(minute=0),  # Every hour at :00
-        'options': {'queue': 'low'}
-    }
 }
 
 # =====================================================
-# WORKER PROCESS INITIALIZATION - FIXES ASYNCPG ISSUES
+# NOTE: Worker process initialization is handled by
+# db.connection module via Celery signals.
+# This ensures proper asyncpg pool management.
 # =====================================================
 
-@worker_process_init.connect
-def init_worker_process(sender=None, **kwargs):
-    """
-    Initialize each worker process with its own database pool.
-    This fixes the 'Event loop is closed' error with asyncpg.
-    """
-    logger.info(f"Initializing worker process {os.getpid()}")
-    
-    # Set marker for Celery context
-    os.environ['SERVER_SOFTWARE'] = 'celery'
-    
-    # Create new event loop for this worker process
-    try:
-        loop = asyncio.get_running_loop()
-        logger.info(f"Worker {os.getpid()} already has event loop")
-    except RuntimeError:
-        # No running loop, create a new one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        logger.info(f"Worker {os.getpid()} created new event loop")
-    
-    # Initialize the database pool for this worker
-    try:
-        # Import here to avoid circular imports
-        from db.connection import init_celery_worker
-        
-        # Run the initialization
-        init_celery_worker()
-        logger.info(f"Worker process {os.getpid()} database pool initialized successfully")
-        
-    except ImportError:
-        logger.warning("db.connection.init_celery_worker not found, trying direct initialization")
-        # Fallback: Try direct initialization if init_celery_worker doesn't exist
-        try:
-            from db.connection import initialize_connection_pool
-            
-            # Run async initialization in the event loop
-            loop.run_until_complete(initialize_connection_pool(force_new=True))
-            logger.info(f"Worker process {os.getpid()} database pool initialized via fallback")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize database pool for worker {os.getpid()}: {e}", exc_info=True)
-            # Don't raise - let the worker start but tasks may fail
-    
-    except Exception as e:
-        logger.error(f"Failed to initialize worker process {os.getpid()}: {e}", exc_info=True)
-        # Don't raise - let the worker start but tasks may fail
-
-@worker_process_shutdown.connect
-def shutdown_worker_process(sender=None, **kwargs):
-    """
-    Clean up resources when worker shuts down.
-    Properly closes the database connection pool.
-    """
-    logger.info(f"Shutting down worker process {os.getpid()}")
-    
-    try:
-        # Import here to avoid circular imports
-        from db.connection import close_connection_pool
-        
-        # Get or create event loop for cleanup
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        # Close the database pool
-        loop.run_until_complete(close_connection_pool())
-        logger.info(f"Worker process {os.getpid()} database pool closed successfully")
-        
-    except ImportError:
-        logger.warning("db.connection.close_connection_pool not found during shutdown")
-    except Exception as e:
-        logger.error(f"Error during worker {os.getpid()} shutdown: {e}", exc_info=True)
-    finally:
-        # Clean up the event loop
-        try:
-            loop = asyncio.get_event_loop()
-            if not loop.is_closed():
-                # Cancel all pending tasks
-                pending = asyncio.all_tasks(loop) if hasattr(asyncio, 'all_tasks') else asyncio.Task.all_tasks(loop)
-                for task in pending:
-                    task.cancel()
-                # Run until all tasks are cancelled
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                loop.close()
-                logger.info(f"Worker {os.getpid()} event loop closed")
-        except Exception as e:
-            logger.error(f"Error closing event loop for worker {os.getpid()}: {e}")
-
-# =====================================================
-# END WORKER INITIALIZATION
-# =====================================================
+# Import connection module to register signal handlers
+try:
+    import db.connection
+    logger.info("Database connection module imported - worker lifecycle handlers registered")
+except ImportError as e:
+    logger.error(f"Failed to import db.connection module: {e}")
+    logger.error("Worker processes may not initialize database pools correctly!")
 
 # Task monitoring signals (only if Prometheus is available)
 if PROMETHEUS_AVAILABLE:
