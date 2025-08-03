@@ -308,13 +308,17 @@ async def create_all_tables():
                     npc_id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
+                    
                     npc_name TEXT NOT NULL,
-                    introduced BOOLEAN DEFAULT FALSE,
-                    archetypes JSONB,
-                    archetype_summary TEXT,
-                    archetype_extras_summary TEXT,
+                    sex TEXT DEFAULT 'female',
+                    age INT,
+                    birthdate TEXT,
                     physical_description TEXT,
-                    relationships JSONB,
+                    role TEXT,
+                    
+                    introduced BOOLEAN DEFAULT FALSE,
+                    is_active BOOLEAN DEFAULT FALSE,
+                    
                     dominance INT CHECK (dominance BETWEEN -100 AND 100),
                     cruelty INT CHECK (cruelty BETWEEN -100 AND 100),
                     closeness INT CHECK (closeness BETWEEN -100 AND 100),
@@ -323,39 +327,63 @@ async def create_all_tables():
                     affection INT CHECK (affection BETWEEN -100 AND 100) DEFAULT 0,
                     intensity INT CHECK (intensity BETWEEN -100 AND 100),
                     mask_integrity INT CHECK (mask_integrity BETWEEN -100 AND 100) DEFAULT 100,
-                    memory JSONB,
+                    
                     monica_level INT DEFAULT 0,
                     monica_games_left INT DEFAULT 0,
-                    sex TEXT DEFAULT 'female',
-                    hobbies JSONB,
-                    personality_traits JSONB,
-                    likes JSONB,
-                    dislikes JSONB,
-                    affiliations JSONB,
-                    schedule JSONB,
+                    
+                    personality_traits JSONB DEFAULT '[]'::jsonb,
+                    personality_patterns JSONB DEFAULT '[]'::jsonb,
+                    likes JSONB DEFAULT '[]'::jsonb,
+                    dislikes JSONB DEFAULT '[]'::jsonb,
+                    hobbies JSONB DEFAULT '[]'::jsonb,
+                    
+                    relationships JSONB DEFAULT '[]'::jsonb,
+                    
+                    affiliations JSONB DEFAULT '[]'::jsonb,
+                    schedule JSONB DEFAULT '{}'::jsonb,
                     current_location TEXT,
-                    age INT,
-                    birthdate TEXT,
-                    is_active BOOLEAN DEFAULT FALSE,
-                    role TEXT,
+                    
+                    archetypes JSONB,
+                    archetype_summary TEXT,
+                    archetype_extras_summary TEXT,
+                    
+                    memory JSONB,
+                    
                     embedding vector(1536),
-                    personality_patterns JSONB DEFAULT '[]',::jsonb,
-                    trauma_triggers JSONB,
-                    flashback_triggers JSONB,
-                    revelation_plan JSONB,
+                    
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    
+                    special_mechanics JSONB DEFAULT '{}'::jsonb,
+                    
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
+                
                 '''
-                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS role TEXT;
-                ''',             
-                '''
-                CREATE INDEX IF NOT EXISTS idx_npcstats_embedding_hnsw
-                ON NPCStats USING hnsw (embedding vector_cosine_ops);
+                CREATE INDEX IF NOT EXISTS idx_npcstats_user_conv 
+                ON NPCStats(user_id, conversation_id);
                 ''',
+                
                 '''
-                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                CREATE INDEX IF NOT EXISTS idx_npcstats_name_lower 
+                ON NPCStats(user_id, conversation_id, LOWER(npc_name));
+                ''',
+                
+                '''
+                CREATE INDEX IF NOT EXISTS idx_npcstats_active 
+                ON NPCStats(is_active) WHERE is_active = TRUE;
+                ''',
+                
+                '''
+                CREATE INDEX IF NOT EXISTS idx_npcstats_introduced 
+                ON NPCStats(introduced) WHERE introduced = TRUE;
+                ''',
+                
+                '''
+                CREATE INDEX IF NOT EXISTS idx_npcstats_embedding_hnsw 
+                ON NPCStats USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS NPCGroups (
