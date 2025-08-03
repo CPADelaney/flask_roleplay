@@ -1307,7 +1307,7 @@ async def create_all_tables():
                     last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
-                    UNIQUE (user_id, conversation_id, canonical_key),  -- ADD THIS LINE
+                    UNIQUE (user_id, conversation_id, canonical_key),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
