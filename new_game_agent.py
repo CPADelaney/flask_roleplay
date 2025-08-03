@@ -1646,14 +1646,14 @@ class NewGameAgent:
         But here's my gift to you, my newest plaything: you're already hers. You became hers the moment you heard her name. Now all that remains is the delicious descent. The door is opening. Can you hear it? That's the sound of your old life ending. Welcome to the garden where every rose draws blood."""
             ]
             
-            import random
-            selected = random.choice(fallback_openings)
-            
-            # For other stories, keep simple
-            if preset_data['id'] not in ['the_moth_and_flame', 'queen_of_thorns']:
-                return f"Welcome to {preset_data['name']}. {preset_data['synopsis']}\n\nYour story begins..."
-            
-            return selected
+        import random
+        selected = random.choice(fallback_openings)
+        
+        # For other stories, keep simple
+        if preset_data['id'] not in ['the_moth_and_flame', 'queen_of_thorns']:
+            return f"Welcome to {preset_data['name']}. {preset_data['synopsis']}\n\nYour story begins..."
+        
+        return selected
 
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
