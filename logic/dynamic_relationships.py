@@ -246,29 +246,50 @@ def generate_placeholders(count: int, start: int = 1) -> str:
     """Generate PostgreSQL placeholders like $1, $2, ..."""
     return ', '.join(f'${i}' for i in range(start, start + count))
 
-def build_batch_update_query(table: str, key_columns: List[str], 
-                           update_columns: List[str], num_rows: int) -> str:
-    """Build a batch UPDATE query with proper placeholders"""
-    # Calculate placeholders
-    cols_per_row = len(key_columns) + len(update_columns)
+def build_batch_update_query_with_types(
+    table: str, 
+    key_columns: List[Tuple[str, str]],  # [(column_name, pg_type), ...]
+    update_columns: List[Tuple[str, str]],  # [(column_name, pg_type), ...]
+    num_rows: int
+) -> str:
+    """
+    Build a batch UPDATE query with explicit type casting.
     
-    # Build VALUES rows
+    Args:
+        table: Table name
+        key_columns: List of (column_name, postgresql_type) tuples for WHERE clause
+        update_columns: List of (column_name, postgresql_type) tuples for SET clause
+        num_rows: Number of rows to update
+    """
+    all_columns = key_columns + update_columns
+    cols_per_row = len(all_columns)
+    
+    # Build VALUES rows with type casting
     value_rows = []
     for row_idx in range(num_rows):
         start_idx = row_idx * cols_per_row + 1
-        placeholders = generate_placeholders(cols_per_row, start_idx)
-        value_rows.append(f"({placeholders})")
+        placeholders = []
+        
+        for col_idx, (_, pg_type) in enumerate(all_columns):
+            placeholder = f"${start_idx + col_idx}"
+            if pg_type:
+                placeholder = f"{placeholder}::{pg_type}"
+            placeholders.append(placeholder)
+        
+        value_rows.append(f"({', '.join(placeholders)})")
     
-    # Build column lists
-    all_columns = key_columns + update_columns
-    column_list = ', '.join(all_columns)
+    # Build column lists (just names)
+    key_names = [col[0] for col in key_columns]
+    update_names = [col[0] for col in update_columns]
+    all_names = key_names + update_names
+    column_list = ', '.join(all_names)
     
     # Build SET clause
-    set_clauses = [f"{col} = v.{col}" for col in update_columns]
+    set_clauses = [f"{col} = v.{col}" for col in update_names]
     set_clause = ', '.join(set_clauses)
     
     # Build WHERE clause
-    where_clauses = [f"t.{col} = v.{col}" for col in key_columns]
+    where_clauses = [f"t.{col} = v.{col}" for col in key_names]
     where_clause = ' AND '.join(where_clauses)
     
     query = f"""
@@ -279,6 +300,7 @@ def build_batch_update_query(table: str, key_columns: List[str],
     """
     
     return query
+
 
 # ========================================================================
 # OPTIMIZED DATA STRUCTURES
@@ -1359,22 +1381,39 @@ class OptimizedRelationshipManager:
             impacts = {k: v * 1.3 for k, v in impacts.items()}
         
         return impacts
-    
+        
     async def _queue_update(self, state: RelationshipState):
-        """Queue state update for batching"""
+        """Queue state update for batching - only if link_id exists"""
+        # Don't queue states without link_id
+        if state.link_id is None:
+            logger.warning(f"Attempted to queue update for state without link_id: {state.canonical_key}")
+            # Try to create the relationship first
+            await self._create_new_relationship(state)
+            # If still no link_id, skip
+            if state.link_id is None:
+                logger.error(f"Failed to create relationship for {state.canonical_key}")
+                return
+        
         self._update_queue.append(state)
         
         # Batch every second or every 10 updates
         if (len(self._update_queue) >= 10 or 
             (datetime.now() - self._last_batch_time).seconds >= 1):
             await self._flush_updates()
+
     
     async def _flush_updates(self):
-        """Batch update all queued states using proper SQL"""
+        """Batch update all queued states using proper SQL with type casting"""
         if not self._update_queue:
             return
         
-        updates_to_apply = self._update_queue[:]
+        # Filter out states without link_id (defensive programming)
+        updates_to_apply = [s for s in self._update_queue if s.link_id is not None]
+        if not updates_to_apply:
+            self._update_queue.clear()
+            logger.warning("No valid states to flush (all missing link_id)")
+            return
+            
         self._update_queue.clear()
         self._last_batch_time = datetime.now()
         
@@ -1383,35 +1422,50 @@ class OptimizedRelationshipManager:
         for state in updates_to_apply:
             state.version += 1
             flat_values.extend([
-                state.link_id,  # Use link_id instead of canonical_key
-                json.dumps(state.dimensions.to_dict()),
+                state.link_id,  # INTEGER
+                json.dumps(state.dimensions.to_dict()),  # JSONB
                 json.dumps({
                     'velocities': state.momentum.velocities,
                     'inertia': state.momentum.inertia
-                }),
-                json.dumps(state.contexts.to_dict()),  # Include contexts
-                json.dumps(list(state.history.active_patterns)),
-                json.dumps(list(state.active_archetypes)),
-                state.version,
-                datetime.now()
+                }),  # JSONB
+                json.dumps(state.contexts.to_dict()),  # JSONB
+                json.dumps(list(state.history.active_patterns)),  # JSONB
+                json.dumps(list(state.active_archetypes)),  # JSONB
+                state.version,  # INTEGER
+                datetime.now()  # TIMESTAMP
             ])
         
-        # Build query
+        # Build query with type information
         num_rows = len(updates_to_apply)
-        query = build_batch_update_query(
+        query = build_batch_update_query_with_types(
             'SocialLinks',
-            key_columns=['link_id'],  # Use link_id as key
-            update_columns=['dynamics', 'momentum', 'contexts', 'patterns', 
-                          'archetypes', 'version', 'last_interaction'],
+            key_columns=[('link_id', 'INTEGER')],
+            update_columns=[
+                ('dynamics', 'JSONB'),
+                ('momentum', 'JSONB'), 
+                ('contexts', 'JSONB'),
+                ('patterns', 'JSONB'),
+                ('archetypes', 'JSONB'),
+                ('version', 'INTEGER'),
+                ('last_interaction', 'TIMESTAMP')
+            ],
             num_rows=num_rows
         )
         
         # Execute with flattened values
-        async with get_db_connection_context() as conn:
-            await conn.execute(query, *flat_values)
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute(query, *flat_values)
+                logger.debug(f"Successfully flushed {num_rows} relationship updates")
+        except Exception as e:
+            logger.error(f"Failed to flush updates: {e}")
+            logger.error(f"Number of updates attempted: {len(updates_to_apply)}")
+            # Log link_ids for debugging
+            logger.error(f"Link IDs: {[s.link_id for s in updates_to_apply]}")
+            raise
     
     async def apply_daily_drift(self):
-        """Apply drift once per day with proper batch SQL"""
+        """Apply drift once per day with proper batch SQL and type casting"""
         async with get_db_connection_context() as conn:
             # Get all relationships that need drift
             rows = await conn.fetch("""
@@ -1462,12 +1516,12 @@ class OptimizedRelationshipManager:
                     ])
             
             if flat_values:
-                # Build and execute batch update
+                # Build and execute batch update with type casting
                 num_rows = len(flat_values) // 2
-                query = build_batch_update_query(
+                query = build_batch_update_query_with_types(
                     'SocialLinks',
-                    key_columns=['link_id'],
-                    update_columns=['dynamics'],
+                    key_columns=[('link_id', 'INTEGER')],
+                    update_columns=[('dynamics', 'JSONB')],
                     num_rows=num_rows
                 )
                 await conn.execute(query, *flat_values)
