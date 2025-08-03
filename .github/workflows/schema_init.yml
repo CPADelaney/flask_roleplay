@@ -26,5 +26,6 @@ jobs:
       - name: Initialize DB schema
         env:           # Correct indentation (2 spaces)
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |         # Correct indentation (2 spaces)
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  # Add this line
+        run:           # Correct indentation (2 spaces)
           python init_db_script.py
