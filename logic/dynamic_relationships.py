@@ -771,7 +771,15 @@ class RelationshipArchetypes:
         archetypes = cls.get_archetypes()
         
         for archetype_name, archetype_data in archetypes.items():
-            if cls._meets_requirements(state.dimensions, archetype_data["requirements"], state):
+            # Handle both formats: with and without "requirements" wrapper
+            if "requirements" in archetype_data:
+                requirements = archetype_data["requirements"]
+            else:
+                # If no "requirements" key, assume the archetype_data IS the requirements
+                # (this is the format from config)
+                requirements = archetype_data
+                
+            if cls._meets_requirements(state.dimensions, requirements, state):
                 active.add(archetype_name)
         
         return active
