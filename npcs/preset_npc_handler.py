@@ -458,106 +458,57 @@ class PresetNPCHandler:
         })()
         
         async with get_db_connection_context() as conn:
-            # Add dialogue patterns if specified
+            # Collect all story-specific data
+            special_mechanics = {}
+            
+            # Add story identifier
+            special_mechanics["story"] = npc_data.get("story", "queen_of_thorns")
+            
+            # Dialogue patterns (this could stay as separate column if universal)
             if "dialogue_patterns" in npc_data:
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id,
-                    {
-                        "dialogue_patterns": json.dumps(npc_data["dialogue_patterns"]),
-                        "dialogue_style": npc_data.get("dialogue_style", "contextual")
-                    },
-                    f"Adding preset dialogue patterns for {npc_data['name']}"
-                )
+                special_mechanics["dialogue_patterns"] = npc_data["dialogue_patterns"]
+                special_mechanics["dialogue_style"] = npc_data.get("dialogue_style", "contextual")
             
-            # Add trauma triggers if specified
+            # Trauma system (story-specific)
             if "trauma_triggers" in npc_data:
-                flashback_words = PresetNPCHandler._extract_flashback_words(npc_data["trauma_triggers"])
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id,
-                    {
-                        "trauma_triggers": json.dumps(npc_data["trauma_triggers"]),
-                        "flashback_triggers": json.dumps(flashback_words),
-                        "trauma_responses": json.dumps(npc_data.get("trauma_responses", {}))
-                    },
-                    f"Setting trauma triggers for {npc_data['name']}"
-                )
+                special_mechanics["trauma"] = {
+                    "triggers": npc_data["trauma_triggers"],
+                    "flashback_words": PresetNPCHandler._extract_flashback_words(npc_data["trauma_triggers"]),
+                    "responses": npc_data.get("trauma_responses", {})
+                }
             
-            # Add relationship mechanics
+            # Relationship mechanics (could be universal)
             if "relationship_mechanics" in npc_data:
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id,
-                    {
-                        "relationship_mechanics": json.dumps(npc_data["relationship_mechanics"]),
-                        "trust_thresholds": json.dumps(npc_data.get("trust_thresholds", {}))
-                    },
-                    f"Setting relationship mechanics for {npc_data['name']}"
-                )
+                special_mechanics["relationship_mechanics"] = npc_data["relationship_mechanics"]
+                special_mechanics["trust_thresholds"] = npc_data.get("trust_thresholds", {})
             
-            # Add secrets
-            secrets = {}
-            if "secrets" in npc_data:
-                secrets.update(npc_data["secrets"])
-            if "backstory" in npc_data and isinstance(npc_data["backstory"], dict):
-                for key, value in npc_data["backstory"].items():
-                    if key not in ["history", "public_knowledge"]:
-                        secrets[key] = value
+            # Secrets (story-specific)
+            if "secrets" in npc_data or "backstory" in npc_data:
+                special_mechanics["secrets"] = {}
+                if "secrets" in npc_data:
+                    special_mechanics["secrets"].update(npc_data["secrets"])
+                if "backstory" in npc_data and isinstance(npc_data["backstory"], dict):
+                    for key, value in npc_data["backstory"].items():
+                        if key not in ["history", "public_knowledge"]:
+                            special_mechanics["secrets"][key] = value
             
-            if secrets:
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id,
-                    {
-                        "secrets": json.dumps(secrets),
-                        "hidden_stats": json.dumps(npc_data.get("hidden_stats", {}))
-                    },
-                    f"Adding secrets for {npc_data['name']}"
-                )
-            
-            # Add evolution paths
+            # Evolution paths (story-specific)
             if "narrative_evolution" in npc_data:
-                initial_stage = "Initial"
-                if "trust_path" in npc_data["narrative_evolution"]:
-                    stages = npc_data["narrative_evolution"]["trust_path"].get("stages", [])
-                    if stages:
-                        initial_stage = stages[0] if isinstance(stages[0], str) else stages[0].get("name", "Initial")
-                
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id,
-                    {
-                        "evolution_paths": json.dumps(npc_data["narrative_evolution"]),
-                        "current_evolution_stage": initial_stage,
-                        "evolution_triggers_met": json.dumps([])
-                    },
-                    f"Setting evolution paths for {npc_data['name']}"
-                )
+                special_mechanics["evolution"] = npc_data["narrative_evolution"]
+                special_mechanics["evolution_stage"] = "Initial"
+                special_mechanics["evolution_triggers_met"] = []
             
-            # Add memory priorities
-            if "memory_priorities" in npc_data:
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id,
-                    {
-                        "memory_priorities": json.dumps(npc_data["memory_priorities"]),
-                        "memory_focus": npc_data.get("memory_focus", "general")
-                    },
-                    f"Setting memory priorities for {npc_data['name']}"
-                )
-            
-            # Add personality patterns
-            patterns = PresetNPCHandler._create_personality_patterns(npc_data)
-            if patterns:
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id,
-                    {"personality_patterns": json.dumps(patterns)},
-                    f"Setting personality patterns for {npc_data['name']}"
-                )
-            
-            # Add story integration flags
+            # Story flags
             if "story_flags" in npc_data:
-                await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id,
-                    {"story_flags": json.dumps(npc_data["story_flags"])},
-                    f"Setting story flags for {npc_data['name']}"
-                )
-    
+                special_mechanics["story_flags"] = npc_data["story_flags"]
+            
+            # Update once with all mechanics
+            await canon.update_entity_canonically(
+                canon_ctx, conn, "NPCStats", npc_id,
+                {"special_mechanics": json.dumps(special_mechanics)},
+                f"Setting story-specific features for {npc_data['name']}"
+            )
+        
     @staticmethod
     async def _initialize_complete_memory_system(
         ctx, user_id: int, conversation_id: int, 
@@ -1026,18 +977,30 @@ class PresetNPCHandler:
             'conversation_id': conversation_id
         })()
         
-        # Set initial mask
-        initial_mask = mask_data.get("initial_mask", "default")
-        
+        # Store mask data in special_mechanics instead of separate columns
         async with get_db_connection_context() as conn:
+            # Get existing special_mechanics
+            current = await conn.fetchval(
+                "SELECT special_mechanics FROM NPCStats WHERE npc_id = $1",
+                npc_id
+            )
+            mechanics = json.loads(current) if current else {}
+            
+            # Add mask system
+            mechanics["mask_system"] = {
+                "current_mask": mask_data.get("initial_mask", "default"),
+                "masks_available": mask_data.get("types", {}),
+                "integrity": 100
+            }
+            
+            # Update with the combined mechanics
             await canon.update_entity_canonically(
                 canon_ctx, conn, "NPCStats", npc_id,
                 {
-                    "current_mask": initial_mask,
-                    "mask_integrity": 100,
-                    "masks_available": json.dumps(mask_data.get("types", {}))
+                    "special_mechanics": json.dumps(mechanics),
+                    "mask_integrity": 100  # Keep this one as it's a core stat
                 },
-                f"Initializing mask system with {initial_mask}"
+                f"Initializing mask system"
             )
     
     @staticmethod
@@ -1055,13 +1018,23 @@ class PresetNPCHandler:
         })()
         
         async with get_db_connection_context() as conn:
+            # Get existing special_mechanics
+            current = await conn.fetchval(
+                "SELECT special_mechanics FROM NPCStats WHERE npc_id = $1",
+                npc_id
+            )
+            mechanics = json.loads(current) if current else {}
+            
+            # Add dual identity
+            mechanics["dual_identity"] = {
+                "identities": identity_data,
+                "current": identity_data.get("default_identity", "public"),
+                "revealed": False
+            }
+            
             await canon.update_entity_canonically(
                 canon_ctx, conn, "NPCStats", npc_id,
-                {
-                    "dual_identity": json.dumps(identity_data),
-                    "current_identity": identity_data.get("default_identity", "public"),
-                    "identity_revealed": False
-                },
+                {"special_mechanics": json.dumps(mechanics)},
                 f"Initializing dual identity system"
             )
     
