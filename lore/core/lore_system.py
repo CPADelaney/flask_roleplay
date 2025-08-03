@@ -1063,7 +1063,7 @@ class LoreSystem:
                         # SPECIAL CASE: Enhanced relationships handling
                         if field == "relationships" and field in entity_json_fields:
                             # Special handling for relationships to allow multiple compatible types
-                            is_compatible, merged_relationships = self._are_relationships_compatible(current_val, new_val)
+                            is_compatible, merged_relationships = self._merge_compatible_relationships(current_val, new_val)
                             
                             if is_compatible:
                                 logger.debug(f"[propose_and_enact_change] Relationships are compatible, merging")
