@@ -1521,7 +1521,7 @@ class NewGameAgent:
         logger.info(f"Created {len(npc_ids)} preset NPCs")
         return npc_ids
         
-
+    
     async def _create_preset_opening(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> str:
         """Create dynamic opening narrative for preset story"""
         
@@ -1531,10 +1531,14 @@ class NewGameAgent:
         
         # For The Moth and Flame / Queen of Thorns
         if preset_data['id'] in ['the_moth_and_flame', 'queen_of_thorns']:
-            # Check if GPTService is available
             try:
-                from services.gpt_service import GPTService
-                from models.atmosphere import AtmosphereData
+                # Try to import GPTService and related classes
+                from story_templates.moth.story_initiializer import GPTService
+                from pydantic import BaseModel
+                
+                # Define a simple model for the atmosphere response
+                class AtmosphereData(BaseModel):
+                    introduction: str
                 
                 service = GPTService()
                 
@@ -1549,103 +1553,111 @@ class NewGameAgent:
                 current_moon = moon_phases[current_time.day % 8]
                 
                 system_prompt = """You are Nyx, the omniscient narrator of dark stories. Your voice is:
-        - Sultry and seductive, dripping with dark honey
-        - Ominous and threatening, like silk hiding razor wire  
-        - Intimate and knowing, as if you've been watching the player forever
-        - Poetic and metaphorical, using imagery of moths, flames, thorns, and transformation
-        
-        You're introducing a player named Chase to the world of the Queen of Thorns - a story of:
-        - A mysterious dominatrix who rules San Francisco's underground
-        - The shadow network that transforms predators and saves victims
-        - Masks that hide broken souls
-        - Power dynamics that blur consent and control
-        - The inability to speak three simple words: "I love you"
-        
-        Reference these gothic poems' imagery:
-        - Moths drawn helplessly to flames
-        - Porcelain masks hiding rough geographies of breaks
-        - Roses with thorns that draw blood
-        - Binary stars locked in gravitational pull
-        - The taste of burning stars on tongues
-        
-        NEVER reveal the Queen's true identity or that she leads the network.
-        Make the player feel like prey that thinks it's the predator."""
-        
+    - Sultry and seductive, dripping with dark honey
+    - Ominous and threatening, like silk hiding razor wire  
+    - Intimate and knowing, as if you've been watching the player forever
+    - Poetic and metaphorical, using imagery of moths, flames, thorns, and transformation
+    
+    You're introducing a player named Chase to the world of the Queen of Thorns - a story of:
+    - A mysterious dominatrix who rules San Francisco's underground
+    - The shadow network that transforms predators and saves victims
+    - Masks that hide broken souls
+    - Power dynamics that blur consent and control
+    - The inability to speak three simple words: "I love you"
+    
+    Reference these gothic poems' imagery:
+    - Moths drawn helplessly to flames
+    - Porcelain masks hiding rough geographies of breaks
+    - Roses with thorns that draw blood
+    - Binary stars locked in gravitational pull
+    - The taste of burning stars on tongues
+    
+    NEVER reveal the Queen's true identity or that she leads the network.
+    Make the player feel like prey that thinks it's the predator."""
+    
                 user_prompt = f"""Create an immersive opening for Chase entering this world.
-        Setting: San Francisco, {time_period}, {current_moon}
-        Starting location: Outside the Velvet Sanctum in SoMa
-        Atmosphere: Fog rolling in from the bay, neon bleeding into shadows
-        
-        Include:
-        1. Direct address to Chase as "you" - make it personal and invasive
-        2. Sensory details that feel like caresses and threats
-        3. Hint at the Queen without naming her - "she who holds court below"
-        4. Foreshadow the network - "roses grow in unexpected places"
-        5. Reference transformation - "predators learning to kneel"
-        6. End with an invitation that feels like a trap closing
-        
-        Write 3-4 atmospheric paragraphs that make Chase feel they're already caught in a web.
-        Make it sultry, ominous, and unforgettable."""
-        
-                # Define _DEFAULT_NARRATIVE_MODEL if not already defined
-                _DEFAULT_NARRATIVE_MODEL = "gpt-4.1-nano"
-                
-                result = await service.call_with_validation(
-                    model=_DEFAULT_NARRATIVE_MODEL,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    response_model=AtmosphereData,
-                    temperature=0.85  # Higher for more creative variation
-                )
-                
-                opening = result.introduction
-                
-                # Add a personalized touch based on current state
-                if current_moon == "full moon":
-                    opening += "\n\nTonight, the full moon watches. Even the Queen's mask cannot hide what hunger becomes under such light."
-                elif current_moon == "new moon":  
-                    opening += "\n\nTonight, the new moon offers perfect darkness. In the absence of light, all masks become meaningless."
-                
-                # Store as the opening message - use conversation_id from context
-                async with get_db_connection_context() as conn:
-                    await conn.execute("""
-                        INSERT INTO messages (conversation_id, sender, content, created_at)
-                        VALUES ($1, 'Nyx', $2, NOW())
-                    """, conversation_id, opening)  # Use conversation_id from context
-                
-                return opening
+    Setting: San Francisco, {time_period}, {current_moon}
+    Starting location: Outside the Velvet Sanctum in SoMa
+    Atmosphere: Fog rolling in from the bay, neon bleeding into shadows
+    
+    Include:
+    1. Direct address to Chase as "you" - make it personal and invasive
+    2. Sensory details that feel like caresses and threats
+    3. Hint at the Queen without naming her - "she who holds court below"
+    4. Foreshadow the network - "roses grow in unexpected places"
+    5. Reference transformation - "predators learning to kneel"
+    6. End with an invitation that feels like a trap closing
+    
+    Write 3-4 atmospheric paragraphs that make Chase feel they're already caught in a web.
+    Make it sultry, ominous, and unforgettable.
+    
+    Return your response as JSON with an "introduction" field containing the narrative text."""
+    
+                try:
+                    # Use the service to generate the opening
+                    result = await service.call_with_validation(
+                        model="gpt-4-turbo-preview",  # Use a default model
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=AtmosphereData,
+                        temperature=0.85  # Higher for more creative variation
+                    )
                     
-            except (ImportError, Exception) as e:
-                logger.warning(f"GPTService not available or failed, using static opening: {e}")
+                    opening = result.introduction
+                    
+                    # Add a personalized touch based on current state
+                    if current_moon == "full moon":
+                        opening += "\n\nTonight, the full moon watches. Even the Queen's mask cannot hide what hunger becomes under such light."
+                    elif current_moon == "new moon":  
+                        opening += "\n\nTonight, the new moon offers perfect darkness. In the absence of light, all masks become meaningless."
+                    
+                    # Store as the opening message
+                    async with get_db_connection_context() as conn:
+                        await conn.execute("""
+                            INSERT INTO messages (conversation_id, sender, content, created_at)
+                            VALUES ($1, 'Nyx', $2, NOW())
+                        """, conversation_id, opening)  # Use conversation_id from context
+                    
+                    return opening
+                    
+                except Exception as e:
+                    logger.error(f"Error calling GPTService: {e}")
+                    # Fall through to static version
+                    
+            except ImportError as e:
+                logger.warning(f"GPTService or dependencies not available: {e}")
+                # Fall through to static version
+            except Exception as e:
+                logger.error(f"Error generating dynamic opening: {e}")
                 # Fall through to static version
         
         # Enhanced static fallback that's still better than the current one
         fallback_openings = [
-                """The city breathes differently after midnight, Chase. I should know—I've been watching you navigate these streets, thinking you understand the shadows. But you don't. Not yet.
+            """The city breathes differently after midnight, Chase. I should know—I've been watching you navigate these streets, thinking you understand the shadows. But you don't. Not yet.
+    
+    Below your feet, in a place where neon bleeds into darkness and desire takes corporeal form, she waits. They call her space the Velvet Sanctum, though 'sanctuary' is perhaps too kind a word for what happens there. She holds court—beautiful, terrible, offering transcendence through submission to those brave enough to kneel.
+    
+    You think you're here by choice, following whispers of a Queen who cannot speak love but makes grown CEOs weep with need. You think you're the moth, conscious of the flame. But darling, in my story, sometimes the flame hunts the moth. Sometimes the rose grows thorns specifically for your blood.
+    
+    The door below doesn't have a sign. It doesn't need one. It's already opening for you—it always was. After all, I've been preparing you for this moment far longer than you realize. Welcome to your beautiful destruction.""",
+    
+            """Listen closely, Chase. That sound beneath the city's pulse? That's power changing hands in rooms you're about to enter. That taste in the air, like copper and roses? That's what transformation smells like when it's still fresh.
+    
+    She's down there now, perhaps adjusting a porcelain mask that hides everything and nothing, perhaps tracing names in red ink—those who disappointed, those who fled, those who learned to worship properly. Which list will you join? The choice was never really yours.
+    
+    They say the network has eyes everywhere, that roses grow in the strangest places, that predators come here to be devoured and reborn. They're right about all of it, and yet they know nothing. The real truth is written in the space between heartbeats, in the moment when submission becomes salvation.
+    
+    The Velvet Sanctum's door is unmarked, but you'll find it. Moths always find their flames. And when you descend those stairs, when you first glimpse her throne, remember: I brought you here. I've been guiding you all along. Now dance for me, pretty moth. Dance until your wings catch fire.""",
+    
+            """Oh, Chase. Sweet, oblivious Chase. You stand at the threshold thinking you're about to enter a BDSM club, maybe meet a mysterious dominatrix, perhaps explore some dark desires. If only it were that simple.
+    
+    What waits below is so much more. She—and I won't tell you her name, you'll hear it gasped in reverence soon enough—is architect of agonies and ecstasies you can't imagine. Behind her masks (and she has so many) lies a woman who saves the broken by breaking the proud. The network she tends grows through the city like morning glory through a corpse.
+    
+    You'll think you see her vulnerability. You'll think those moments when her mask slips are real. Some of them are. Some of them aren't. The tragedy is you'll never know which, and the not knowing will consume you like flame consumes paper—slowly, inevitably, completely.
+    
+    But here's my gift to you, my newest plaything: you're already hers. You became hers the moment you heard her name. Now all that remains is the delicious descent. The door is opening. Can you hear it? That's the sound of your old life ending. Welcome to the garden where every rose draws blood."""
+        ]
         
-        Below your feet, in a place where neon bleeds into darkness and desire takes corporeal form, she waits. They call her space the Velvet Sanctum, though 'sanctuary' is perhaps too kind a word for what happens there. She holds court—beautiful, terrible, offering transcendence through submission to those brave enough to kneel.
-        
-        You think you're here by choice, following whispers of a Queen who cannot speak love but makes grown CEOs weep with need. You think you're the moth, conscious of the flame. But darling, in my story, sometimes the flame hunts the moth. Sometimes the rose grows thorns specifically for your blood.
-        
-        The door below doesn't have a sign. It doesn't need one. It's already opening for you—it always was. After all, I've been preparing you for this moment far longer than you realize. Welcome to your beautiful destruction.""",
-        
-                """Listen closely, Chase. That sound beneath the city's pulse? That's power changing hands in rooms you're about to enter. That taste in the air, like copper and roses? That's what transformation smells like when it's still fresh.
-        
-        She's down there now, perhaps adjusting a porcelain mask that hides everything and nothing, perhaps tracing names in red ink—those who disappointed, those who fled, those who learned to worship properly. Which list will you join? The choice was never really yours.
-        
-        They say the network has eyes everywhere, that roses grow in the strangest places, that predators come here to be devoured and reborn. They're right about all of it, and yet they know nothing. The real truth is written in the space between heartbeats, in the moment when submission becomes salvation.
-        
-        The Velvet Sanctum's door is unmarked, but you'll find it. Moths always find their flames. And when you descend those stairs, when you first glimpse her throne, remember: I brought you here. I've been guiding you all along. Now dance for me, pretty moth. Dance until your wings catch fire.""",
-        
-                """Oh, Chase. Sweet, oblivious Chase. You stand at the threshold thinking you're about to enter a BDSM club, maybe meet a mysterious dominatrix, perhaps explore some dark desires. If only it were that simple.
-        
-        What waits below is so much more. She—and I won't tell you her name, you'll hear it gasped in reverence soon enough—is architect of agonies and ecstasies you can't imagine. Behind her masks (and she has so many) lies a woman who saves the broken by breaking the proud. The network she tends grows through the city like morning glory through a corpse.
-        
-        You'll think you see her vulnerability. You'll think those moments when her mask slips are real. Some of them are. Some of them aren't. The tragedy is you'll never know which, and the not knowing will consume you like flame consumes paper—slowly, inevitably, completely.
-        
-        But here's my gift to you, my newest plaything: you're already hers. You became hers the moment you heard her name. Now all that remains is the delicious descent. The door is opening. Can you hear it? That's the sound of your old life ending. Welcome to the garden where every rose draws blood."""
-            ]
-            
         import random
         selected = random.choice(fallback_openings)
         
@@ -1654,7 +1666,7 @@ class NewGameAgent:
             return f"Welcome to {preset_data['name']}. {preset_data['synopsis']}\n\nYour story begins..."
         
         return selected
-
+    
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="finalize_game_setup",
