@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from memory.wrapper import MemorySystem
 from logic.stats_logic import insert_default_player_stats_chase, apply_stat_change
+from lore.core.context import CanonicalContext
 
 # Import your existing modules
 from logic.calendar import update_calendar_names
@@ -1520,11 +1521,20 @@ class NewGameAgent:
         logger.info(f"Created {len(npc_ids)} preset NPCs")
         return npc_ids
         
-    async def _create_preset_opening(self, ctx: CanonicalContext, preset_data: Dict[str, Any]) -> str:
-        """Create dynamic opening narrative for preset story"""
-        
-        # For The Moth and Flame / Queen of Thorns
-        if preset_data['id'] in ['the_moth_and_flame', 'queen_of_thorns']:
+async def _create_preset_opening(self, ctx: RunContextWrapper[GameContext], preset_data: Dict[str, Any]) -> str:
+    """Create dynamic opening narrative for preset story"""
+    
+    # Extract user_id and conversation_id from context
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    # For The Moth and Flame / Queen of Thorns
+    if preset_data['id'] in ['the_moth_and_flame', 'queen_of_thorns']:
+        # Check if GPTService is available
+        try:
+            from services.gpt_service import GPTService
+            from models.atmosphere import AtmosphereData
+            
             service = GPTService()
             
             # Get current time/season for atmosphere
@@ -1593,19 +1603,19 @@ class NewGameAgent:
                 elif current_moon == "new moon":  
                     opening += "\n\nTonight, the new moon offers perfect darkness. In the absence of light, all masks become meaningless."
                 
-                # Store as the opening message
+                # Store as the opening message - use conversation_id from context
                 async with get_db_connection_context() as conn:
                     await conn.execute("""
                         INSERT INTO messages (conversation_id, sender, content, created_at)
                         VALUES ($1, 'Nyx', $2, NOW())
-                    """, self.conversation_id, opening)
+                    """, conversation_id, opening)  # Use conversation_id from context
                 
                 return opening
                 
-            except Exception as e:
-                logger.error(f"Error generating dynamic opening: {e}")
-                # Fallback to enhanced static version
-                
+            except ImportError:
+                logger.warning("GPTService not available, using static opening")
+                # Fall through to static version
+
         # Enhanced static fallback that's still better than the current one
         fallback_openings = [
             """The city breathes differently after midnight, Chase. I should know—I've been watching you navigate these streets, thinking you understand the shadows. But you don't. Not yet.
