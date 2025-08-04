@@ -1986,20 +1986,21 @@ async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: D
         reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})"
     ).model_dump_json()
 
-@function_tool
-async def generate_universal_updates(
+async def generate_universal_updates_impl(
     ctx: RunContextWrapper[NyxContext],
-    payload: GenerateUniversalUpdatesInput
+    narrative: str
 ) -> str:
     """
-    Generate universal updates from the narrative using the Universal Updater.
+    Implementation of generate universal updates from the narrative using the Universal Updater.
     
     Args:
-        payload: Input containing narrative to process
+        ctx: RunContextWrapper with NyxContext
+        narrative: The narrative to process
+    
+    Returns:
+        JSON string with results
     """
     from logic.universal_updater_agent import process_universal_update
-    
-    narrative = payload.narrative
     
     try:
         # Process the narrative
@@ -2032,6 +2033,20 @@ async def generate_universal_updates(
             updates_generated=False,
             error=str(e)
         ).model_dump_json()
+
+# Then update the @function_tool to use the implementation
+@function_tool
+async def generate_universal_updates(
+    ctx: RunContextWrapper[NyxContext],
+    payload: GenerateUniversalUpdatesInput
+) -> str:
+    """
+    Generate universal updates from the narrative using the Universal Updater.
+    
+    Args:
+        payload: Input containing narrative to process
+    """
+    return await generate_universal_updates_impl(ctx, payload.narrative)
 
 # ===== Helper Functions for Tools =====
 
@@ -2457,12 +2472,10 @@ async def process_user_input(
         
         # Defensive check: ensure universal updates were generated
         if not nyx_context.current_context.get("universal_updates") and response.narrative:
-            # Call generate_universal_updates if it wasn't called
+            # Call generate_universal_updates_impl directly (not the decorated version)
             try:
-                await generate_universal_updates(
-                    RunContextWrapper(context=nyx_context),
-                    GenerateUniversalUpdatesInput(narrative=response.narrative)
-                )
+                wrapper = RunContextWrapper(context=nyx_context)
+                await generate_universal_updates_impl(wrapper, response.narrative)
             except Exception as e:
                 logger.warning(f"Failed to auto-generate universal updates: {e}")
         
@@ -3088,6 +3101,7 @@ calculate_and_update_emotional_state_impl = calculate_and_update_emotional_state
 manage_beliefs_impl = manage_beliefs
 score_decision_options_impl = score_decision_options
 detect_conflicts_and_instability_impl = detect_conflicts_and_instability
+generate_universal_updates_impl = generate_universal_updates
 
 # Export list for clean imports
 __all__ = [
