@@ -75,31 +75,31 @@ async def _responses_json_call(
     user_prompt: str,
     temperature: float = 0.7,
     max_output_tokens: int | None = None,
-    response_format: dict | None = None,   # e.g. {"type": "json_schema", ...}
     previous_response_id: str | None = None,
 ) -> str:
     """
-    Thin wrapper around `client.responses.create()`.
-    Always returns a str: plain text, JSON (string-ified), or tool-call args.
+    Wrapper around `client.responses.create()`.
+    Always returns a *string* – either plain-text, JSON (string-ified), or
+    the arguments of a function/tool call.
     """
     client = get_async_openai_client()
 
-    params = {
+    # --- assemble request -----------------------------------------------
+    params: Dict[str, Any] = {
         "model": model,
-        "instructions": system_prompt,                    # <-- system prompt lives here
+        "instructions": system_prompt,                     # system prompt lives here
         "input": [{"role": "user", "content": user_prompt}],
         "temperature": temperature,
         "max_output_tokens": max_output_tokens,
     }
-    if response_format is not None:
-        params["response_format"] = response_format
     if previous_response_id:
         params["previous_response_id"] = previous_response_id
 
+    # --- call the endpoint ----------------------------------------------
     try:
         resp = await client.responses.create(**params)
 
-        # 1️⃣  Structured-output helpers (always present when using response_format)
+        # 1️⃣  Structured output helpers (legacy shims)
         if getattr(resp, "output_json", None):
             return json.dumps(resp.output_json, ensure_ascii=False)
         if getattr(resp, "output_text", None):
@@ -107,18 +107,20 @@ async def _responses_json_call(
             if txt:
                 return txt
 
-        # 2️⃣  Walk the list of messages → their content items
-        for msg in resp.output or []:
-            for item in msg.content:
-                if item.type == "output_json":
-                    return json.dumps(item.json, ensure_ascii=False)
-                if item.type == "output_text" and item.text.strip():
-                    return item.text.strip()
+        # 2️⃣  Walk `resp.output` (list of messages)
+        for msg in getattr(resp, "output", []) or []:
+            # Each message has a `content` list (text/json/etc.)
+            for part in getattr(msg, "content", []) or []:
+                if part.type == "output_json":
+                    return json.dumps(part.json, ensure_ascii=False)
+                if part.type == "output_text" and part.text.strip():
+                    return part.text.strip()
 
-        # 3️⃣  Tool / function calls (you can expand this as needed)
+        # 3️⃣  Function / tool calls
         for call in getattr(resp, "tool_calls", []) or []:
-            if getattr(call, "function", None) and call.function.arguments:
-                return json.dumps(call.function.arguments, ensure_ascii=False)
+            fn = getattr(call, "function", None)
+            if fn and fn.arguments:
+                return json.dumps(fn.arguments, ensure_ascii=False)
 
         raise ValueError("Empty model response.")
 
