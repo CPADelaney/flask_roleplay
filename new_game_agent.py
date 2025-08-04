@@ -1344,12 +1344,12 @@ class NewGameAgent:
             opening = await self._create_preset_opening(ctx_wrap, preset_story_data)
             
             # 7. Store opening message
-            async with get_db_connection_context() as conn:
-                await conn.execute("""
-                    INSERT INTO messages (conversation_id, sender, content, created_at)
-                    VALUES ($1, 'Nyx', $2, NOW())
-                """, conversation_id, opening)
-            
+#            async with get_db_connection_context() as conn:
+#                await conn.execute("""
+#                    INSERT INTO messages (conversation_id, sender, content, created_at)
+#                    VALUES ($1, 'Nyx', $2, NOW())
+#                """, conversation_id, opening)
+          
             # 8. Mark as ready
             async with get_db_connection_context() as conn:
                 await conn.execute("""
