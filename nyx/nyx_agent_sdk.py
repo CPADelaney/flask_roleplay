@@ -2484,9 +2484,13 @@ async def process_user_input(
                     type(generate_universal_updates_impl)
                 )
                 wrapper = RunContextWrapper(context=nyx_context)
+                logger.debug(
+                    "Auto-generating universal updates using %s",
+                    type(generate_universal_updates_impl)
+                )
                 await generate_universal_updates_impl(wrapper, response.narrative)
-            except Exception as e:
-                logger.warning(f"Failed to auto-generate universal updates: {e}")
+            except Exception:
+                logger.exception("Failed to auto-generate universal updates")
         
         # Extract universal updates from context - convert to regular dict for compatibility
         universal_updates_dict = {}
@@ -3110,12 +3114,6 @@ calculate_and_update_emotional_state_impl = calculate_and_update_emotional_state
 manage_beliefs_impl = manage_beliefs
 score_decision_options_impl = score_decision_options
 detect_conflicts_and_instability_impl = detect_conflicts_and_instability
-
-# For backward compatibility, expose the decorated tool separately without
-# overwriting the raw implementation used internally. This prevents
-# accidental replacement of the callable function with a FunctionTool
-# instance, which caused 'FunctionTool object is not callable' errors.
-generate_universal_updates_tool = generate_universal_updates
 
 # Export list for clean imports
 __all__ = [
