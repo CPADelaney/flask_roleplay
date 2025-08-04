@@ -1596,7 +1596,7 @@ class NewGameAgent:
                 try:
                     # Use the service to generate the opening
                     result = await service.call_with_validation(
-                        model="gpt-4-turbo-preview",  # Use a default model
+                        model="gpt-4.1-nano",  # Use a default model
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
                         response_model=AtmosphereData,
