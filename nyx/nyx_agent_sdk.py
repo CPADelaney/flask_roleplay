@@ -61,7 +61,6 @@ JsonScalar = Union[str, int, float, bool, None]
 JsonValue  = Union[
     JsonScalar,            # single value
     List[JsonScalar],      # simple array
-    Dict[str, JsonScalar]  # simple object  (values are still scalars)
 ]
 
 class KVPair(BaseModel):
