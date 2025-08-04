@@ -57,21 +57,23 @@ logger = logging.getLogger(__name__)
 
 # ===== Utility Types for Strict Schema =====
 
-# Recursive JSON scalar/value type. This is for *values*, not dicts.
-JsonValue = Union[str, int, float, bool, None, List["JsonValue"]]
+JsonScalar = Union[str, int, float, bool, None]
+JsonValue  = Union[
+    JsonScalar,            # single value
+    List[JsonScalar],      # simple array
+    Dict[str, JsonScalar]  # simple object  (values are still scalars)
+]
 
 class KVPair(BaseModel):
     model_config = ConfigDict(extra='forbid')
     key: str
-    value: JsonValue   # ← replaces Any
+    value: JsonValue        # ← now non-recursive, legal schema
 
 class KVList(BaseModel):
-    """Dict-like but strict: a list of KV pairs."""
     model_config = ConfigDict(extra='forbid')
     items: List[KVPair] = Field(default_factory=list)
 
-# Resolve forward refs
-KVPair.model_rebuild()
+KVPair.model_rebuild()      # leave this, it’s harmless
 
 # Helpers for conversion
 def dict_to_kvlist(d: dict) -> KVList:
