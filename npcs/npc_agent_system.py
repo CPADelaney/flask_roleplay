@@ -388,10 +388,13 @@ class NPCAgentSystem:
         return self._system_agent
 
     @function_tool(strict_mode=False)
-    async def initialize_agents(self, npc_ids: Optional[List[int]] = None) -> InitializeAgentsResult:
+    async def initialize_agents(self, npc_ids: Optional[List[int]] = None) -> str:
         """
         Initialize NPCAgent objects for specified NPCs or all NPCs in the conversation.
         This is a READ-ONLY operation - no database writes.
+
+        Returns:
+            JSON string with initialization results
         """
         logger.info(
             "Initializing NPC agents for user=%s, conversation=%s",
@@ -432,17 +435,20 @@ class NPCAgentSystem:
         return InitializeAgentsResult(
             npc_count=npc_count,
             initialized_ids=list(self.npc_agents.keys())
-        )
+        ).model_dump_json()
         
     @function_tool(strict_mode=False)
     async def handle_player_action(
         self,
         player_action: PlayerAction,
         context: Optional[ActionContext] = None
-    ) -> HandlePlayerActionResult:
+    ) -> str:
         """
         Handle a player action and determine NPC responses with memory integration.
         This creates memories but doesn't modify core NPC state directly.
+
+        Returns:
+            JSON string with NPC responses
         """
         if context is None:
             context = ActionContext()
@@ -479,25 +485,25 @@ class NPCAgentSystem:
             )
             if not affected_npcs:
                 logger.debug("No NPCs were affected by this action: %s", player_action)
-                return HandlePlayerActionResult(npc_responses=[])
+                return HandlePlayerActionResult(npc_responses=[]).model_dump_json()
     
             # Single NPC path
             if len(affected_npcs) == 1:
                 npc_id = affected_npcs[0]
                 result = await self.handle_single_npc_interaction(
-                    npc_id, 
-                    player_action.model_dump(), 
+                    npc_id,
+                    player_action.model_dump(),
                     context.model_dump()
                 )
-                return HandlePlayerActionResult(npc_responses=result.get("npc_responses", []))
+                return HandlePlayerActionResult(npc_responses=result.get("npc_responses", [])).model_dump_json()
     
             # Multiple NPCs => group logic
             result = await self.handle_group_npc_interaction(
-                affected_npcs, 
-                player_action.model_dump(), 
+                affected_npcs,
+                player_action.model_dump(),
                 context.model_dump()
             )
-            return HandlePlayerActionResult(npc_responses=result.get("npc_responses", []))
+            return HandlePlayerActionResult(npc_responses=result.get("npc_responses", [])).model_dump_json()
 
     @function_tool(strict_mode=False)
     async def determine_affected_npcs(
@@ -622,10 +628,13 @@ class NPCAgentSystem:
         npc_ids: List[int],
         update_type: str,
         update_data: BatchUpdateData
-    ) -> BatchUpdateResult:
+    ) -> str:
         """
         Update multiple NPCs in a single batch operation.
         REFACTORED: Now uses LoreSystem for updates instead of direct DB writes.
+
+        Returns:
+            JSON string with update results
         """
         results = BatchUpdateResult()
 
@@ -636,7 +645,7 @@ class NPCAgentSystem:
             if update_type == "location_change":
                 if not update_data.new_location:
                     results.error = "No location specified"
-                    return results
+                    return results.model_dump_json()
                 
                 # Create context for governance
                 ctx = RunContextWrapper(context={
@@ -670,7 +679,7 @@ class NPCAgentSystem:
                 # Emotional updates through memory system (which is allowed)
                 if not update_data.emotion:
                     results.error = "No emotion specified"
-                    return results
+                    return results.model_dump_json()
                     
                 # Get memory system
                 memory_system = await self._get_memory_system()
@@ -713,13 +722,13 @@ class NPCAgentSystem:
                     "location_change", "emotional_update"
                 ]
             
-            return results
+            return results.model_dump_json()
                 
         except Exception as e:
             logger.error(f"Error in batch update: {e}")
             results.error = str(e)
             results.error_count = len(npc_ids)
-            return results
+            return results.model_dump_json()
             
     async def _fetch_current_location(self) -> Optional[str]:
         """
@@ -848,10 +857,13 @@ class NPCAgentSystem:
             return {"npc_responses": npc_responses}
 
     @function_tool(strict_mode=False)
-    async def get_current_game_time(self) -> GameTime:
+    async def get_current_game_time(self) -> str:
         """
         Get the current in-game time information.
         READ-ONLY operation.
+
+        Returns:
+            JSON string with current time data
         """
         year, month, day, time_of_day = None, None, None, None
         try:
@@ -888,13 +900,16 @@ class NPCAgentSystem:
             month=month or "January",
             day=day or 1,
             time_of_day=time_of_day or "afternoon"
-        )
+        ).model_dump_json()
 
     @function_tool(strict_mode=False)
-    async def process_npc_scheduled_activities(self) -> ScheduledActivitiesResult:
+    async def process_npc_scheduled_activities(self) -> str:
         """
         Process scheduled activities for all NPCs using the agent system.
         This doesn't directly update NPC state but processes activities.
+
+        Returns:
+            JSON string with scheduled activity results
         """
         logger.info("Processing scheduled activities")
 
@@ -942,10 +957,10 @@ class NPCAgentSystem:
             total_npcs = len(npc_data)
             if total_npcs == 0:
                 return ScheduledActivitiesResult(
-                    npc_responses=[], 
+                    npc_responses=[],
                     count=0,
                     time_of_day=time_data.time_of_day
-                )
+                ).model_dump_json()
 
             logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
 
@@ -992,7 +1007,7 @@ class NPCAgentSystem:
                 npc_responses=npc_responses,
                 count=len(npc_responses),
                 time_of_day=time_data.time_of_day
-            )
+            ).model_dump_json()
 
         except Exception as e:
             error_msg = f"Error processing NPC scheduled activities: {e}"
@@ -1000,11 +1015,14 @@ class NPCAgentSystem:
             raise NPCSystemError(error_msg)
 
     @function_tool(strict_mode=False)
-    async def run_memory_maintenance(self) -> MaintenanceResult:
+    async def run_memory_maintenance(self) -> str:
         """
         Run comprehensive maintenance tasks on all NPCs' memory systems.
         This includes consolidation, decay, schema formation, and belief updates.
         Memory operations are allowed as they don't modify core game state.
+
+        Returns:
+            JSON string with maintenance results
         """
         results = MaintenanceResult()
         try:
@@ -1036,12 +1054,12 @@ class NPCAgentSystem:
 
             # Update last maintenance time
             self._last_memory_maintenance = datetime.now()
-            
-            return results
+
+            return results.model_dump_json()
         except Exception as e:
             logger.error(f"Error in system-wide memory maintenance: {e}")
             results.error = str(e)
-            return results
+            return results.model_dump_json()
 
     async def _run_comprehensive_npc_maintenance(self, npc_id: int) -> Dict[str, Any]:
         """
@@ -1173,13 +1191,16 @@ class NPCAgentSystem:
 
     @function_tool(strict_mode=False)
     async def generate_npc_flashback(
-        self, 
-        npc_id: int, 
+        self,
+        npc_id: int,
         context_text: str
-    ) -> FlashbackResult:
+    ) -> str:
         """
         Generate a flashback for an NPC based on specific context.
         This is a memory operation which is allowed.
+
+        Returns:
+            JSON string with flashback result
         """
         try:
             # Check if we've recently triggered a flashback for this NPC
@@ -1193,7 +1214,7 @@ class NPCAgentSystem:
                     triggered=False,
                     reason="too_soon",
                     time_since_last_seconds=time_since_last
-                )
+                ).model_dump_json()
 
             memory_system = await self._get_memory_system()
             flashback = await memory_system.npc_flashback(npc_id, context_text)
@@ -1208,7 +1229,7 @@ class NPCAgentSystem:
                     emotion = "fear"  # Default
                     intensity = 0.7
                     text_lower = flashback.get("text", "").lower()
-                    
+
                     if "happy" in text_lower or "joy" in text_lower or "good" in text_lower:
                         emotion = "joy"
                     elif "anger" in text_lower or "angr" in text_lower or "rage" in text_lower:
@@ -1221,31 +1242,31 @@ class NPCAgentSystem:
                         emotion=emotion,
                         intensity=intensity
                     )
-                    
+
                     return FlashbackResult(
                         triggered=True,
                         text=flashback.get("text"),
                         memory_id=flashback.get("memory_id"),
                         triggered_emotion=emotion,
                         emotion_intensity=intensity
-                    )
+                    ).model_dump_json()
                 else:
                     return FlashbackResult(
                         triggered=True,
                         text=flashback.get("text"),
                         memory_id=flashback.get("memory_id")
-                    )
+                    ).model_dump_json()
             else:
                 return FlashbackResult(
                     triggered=False,
                     reason="no_relevant_memory"
-                )
+                ).model_dump_json()
         except Exception as e:
             logger.error(f"Error generating flashback for NPC {npc_id}: {e}")
             return FlashbackResult(
                 triggered=False,
                 error=str(e)
-            )
+            ).model_dump_json()
 
     async def process_command(self, command: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
