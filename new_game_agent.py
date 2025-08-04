@@ -6,6 +6,7 @@ import asyncio
 import uuid
 import os
 import functools
+import random
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -17,7 +18,8 @@ from logic.stats_logic import insert_default_player_stats_chase, apply_stat_chan
 from lore.core.context import CanonicalContext
 
 # Import your existing modules
-from logic.calendar import update_calendar_names
+from logic.calendar import update_calendar_names, load_calendar_names
+from logic.time_cycle import set_current_time, TIME_PHASES
 from lore.core import canon
 from logic.aggregator_sdk import get_aggregated_roleplay_context
 from npcs.new_npc_creation import NPCCreationHandler  # Must properly await all async operations
@@ -1910,7 +1912,46 @@ class NewGameAgent:
             # Log the error but don't fail the entire setup
             logging.warning(f"Failed to generate welcome image: {e}")
             logging.info("Continuing without welcome image")
-        
+
+        # Establish initial player context (location and time)
+        try:
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT location_name FROM Locations
+                    WHERE user_id=$1 AND conversation_id=$2
+                    """,
+                    user_id,
+                    conversation_id,
+                )
+                if rows:
+                    start_location = random.choice([row["location_name"] for row in rows])
+                else:
+                    start_location = "Unknown"
+                await canon.update_current_roleplay(
+                    canon_ctx, conn, "CurrentLocation", start_location
+                )
+
+            calendar_names = await load_calendar_names(user_id, conversation_id)
+            year = random.randint(1, 100)
+            month_idx = random.randint(1, len(calendar_names.get("months", [])) or 1)
+            day_num = random.randint(1, 30)
+            phase = random.choice(TIME_PHASES)
+            month_name = calendar_names.get("months", ["Month"])[month_idx - 1]
+            day_name = calendar_names.get("days", ["Day"])[(day_num - 1) % len(calendar_names.get("days", ["Day"]))]
+
+            await set_current_time(user_id, conversation_id, year, month_idx, day_num, phase)
+
+            async with get_db_connection_context() as conn:
+                await canon.update_current_roleplay(
+                    canon_ctx,
+                    conn,
+                    "CurrentTime",
+                    f"Year {year} {month_name} {day_name} {phase}",
+                )
+        except Exception as e:
+            logging.warning(f"Failed to initialize player context: {e}")
+
         # Return structured result - but DON'T mark as ready yet
         return FinalizeResult(
             status="finalized",  # Not "ready" yet
