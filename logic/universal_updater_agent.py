@@ -18,17 +18,17 @@ from typing import Dict, List, Any, Optional, Union
 
 # OpenAI Agents SDK imports
 from agents import (
-    Agent, 
-    ModelSettings, 
-    Runner, 
-    function_tool, 
+    Agent,
+    ModelSettings,
+    Runner,
+    function_tool,
     RunContextWrapper,
     GuardrailFunctionOutput,
     InputGuardrail,
     trace,
     handoff
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 # DB connection
 from db.connection import get_db_connection_context
@@ -53,7 +53,12 @@ logger = logging.getLogger(__name__)
 # Pydantic Models for Structured Outputs (migrated from universal_updater_agent.py)
 # -------------------------------------------------------------------------------
 
-class NPCCreation(BaseModel):
+class StrictBaseModel(BaseModel):
+    """Base class enforcing a strict schema for OpenAI Agents"""
+
+    model_config = ConfigDict(extra='forbid')
+
+class NPCCreation(StrictBaseModel):
     npc_name: str
     introduced: bool = False
     sex: str = "female"
@@ -78,7 +83,7 @@ class NPCCreation(BaseModel):
     age: Optional[int] = None
     birthdate: Optional[str] = None
 
-class NPCUpdate(BaseModel):
+class NPCUpdate(StrictBaseModel):
     npc_id: int
     npc_name: Optional[str] = None
     introduced: Optional[bool] = None
@@ -102,10 +107,10 @@ class NPCUpdate(BaseModel):
     affiliations: Optional[List[str]] = None
     current_location: Optional[str] = None
 
-class NPCIntroduction(BaseModel):
+class NPCIntroduction(StrictBaseModel):
     npc_id: int
 
-class PlayerStats(BaseModel):
+class PlayerStats(StrictBaseModel):
     corruption: Optional[int] = None
     confidence: Optional[int] = None
     willpower: Optional[int] = None
@@ -115,15 +120,15 @@ class PlayerStats(BaseModel):
     mental_resilience: Optional[int] = None
     physical_endurance: Optional[int] = None
 
-class CharacterStatUpdates(BaseModel):
+class CharacterStatUpdates(StrictBaseModel):
     player_name: str = "Chase"
     stats: PlayerStats
 
-class RelationshipUpdate(BaseModel):
+class RelationshipUpdate(StrictBaseModel):
     npc_id: int
     affiliations: List[str]
 
-class SocialLink(BaseModel):
+class SocialLink(StrictBaseModel):
     entity1_type: str
     entity1_id: int
     entity2_type: str
@@ -133,12 +138,12 @@ class SocialLink(BaseModel):
     new_event: Optional[str] = None
     group_context: Optional[str] = None
 
-class Location(BaseModel):
+class Location(StrictBaseModel):
     location_name: str
     description: Optional[str] = None
     open_hours: List[str] = Field(default_factory=list)
 
-class Event(BaseModel):
+class Event(StrictBaseModel):
     event_name: Optional[str] = None
     description: Optional[str] = None
     start_time: Optional[str] = None
@@ -152,7 +157,7 @@ class Event(BaseModel):
     override_location: Optional[str] = None
     fantasy_level: str = "realistic"
 
-class Quest(BaseModel):
+class Quest(StrictBaseModel):
     quest_id: Optional[int] = None
     quest_name: Optional[str] = None
     status: Optional[str] = None
@@ -160,44 +165,44 @@ class Quest(BaseModel):
     quest_giver: Optional[str] = None
     reward: Optional[str] = None
 
-class InventoryItem(BaseModel):
+class InventoryItem(StrictBaseModel):
     item_name: str
     item_description: Optional[str] = None
     item_effect: Optional[str] = None
     category: Optional[str] = None
 
-class InventoryUpdates(BaseModel):
+class InventoryUpdates(StrictBaseModel):
     player_name: str = "Chase"
     added_items: List[InventoryItem] = Field(default_factory=list)
     removed_items: List[str] = Field(default_factory=list) # Assuming you just need names to remove
 
-class Perk(BaseModel):
+class Perk(StrictBaseModel):
     player_name: str = "Chase"
     perk_name: str
     perk_description: Optional[str] = None
     perk_effect: Optional[str] = None
 
-class Activity(BaseModel):
+class Activity(StrictBaseModel):
     activity_name: str
     purpose: Optional[Dict[str, Any]] = None
     stat_integration: Optional[Dict[str, Any]] = None
     intensity_tier: Optional[int] = None
     setting_variant: Optional[str] = None
 
-class JournalEntry(BaseModel):
+class JournalEntry(StrictBaseModel):
     entry_type: str
     entry_text: str
     fantasy_flag: bool = False
     intensity_level: Optional[int] = None
 
-class ImageGeneration(BaseModel):
+class ImageGeneration(StrictBaseModel):
     generate: bool = False
     priority: str = "low"
     focus: str = "balanced"
     framing: str = "medium_shot"
     reason: Optional[str] = None
 
-class UniversalUpdateInput(BaseModel):
+class UniversalUpdateInput(StrictBaseModel):
     user_id: int
     conversation_id: int
     narrative: str
@@ -220,7 +225,7 @@ class UniversalUpdateInput(BaseModel):
     journal_updates: List[JournalEntry] = Field(default_factory=list)
     image_generation: Optional[ImageGeneration] = None
 
-class ContentSafety(BaseModel):
+class ContentSafety(StrictBaseModel):
     """Output for content moderation guardrail"""
     is_appropriate: bool = Field(..., description="Whether the content is appropriate")
     reasoning: str = Field(..., description="Reasoning for the decision")
@@ -1048,6 +1053,7 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
         handoff(extraction_agent, tool_name_override="extract_state_changes")
     ],
     output_type=UniversalUpdateInput,
+    output_schema_strict=False,
     input_guardrails=[
         InputGuardrail(guardrail_function=content_safety_guardrail),
     ],

@@ -38,7 +38,7 @@ from contextlib import suppress
 import statistics
 
 from agents import (
-    Agent, Runner, function_tool, handoff, 
+    Agent, Runner, function_tool, handoff,
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
@@ -54,6 +54,10 @@ from .response_filter import ResponseFilter
 from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
+
+# Base class enforcing strict schema for tools that require it
+class StrictBaseModel(BaseModel):
+    model_config = ConfigDict(extra='forbid')
 
 # ===== Utility Types for Strict Schema =====
 
@@ -377,7 +381,7 @@ class DetectConflictsAndInstabilityInput(BaseModel):
     
     scenario_state: KVList = Field(..., description="Current scenario state")
 
-class GenerateUniversalUpdatesInput(BaseModel):
+class GenerateUniversalUpdatesInput(StrictBaseModel):
     """Input for generate_universal_updates function"""
     
     
@@ -494,7 +498,7 @@ class ConflictDetectionResult(BaseModel):
     stability_note: str = Field(..., description="Explanation of stability score")
     requires_intervention: bool = Field(..., description="Whether intervention is needed")
 
-class UniversalUpdateResult(BaseModel):
+class UniversalUpdateResult(StrictBaseModel):
     """Output for generate_universal_updates function"""
     
     
@@ -1989,7 +1993,7 @@ async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: D
 async def generate_universal_updates_impl(
     ctx: RunContextWrapper[NyxContext],
     narrative: str
-) -> str:
+) -> UniversalUpdateResult:
     """
     Implementation of generate universal updates from the narrative using the Universal Updater.
     
@@ -1998,7 +2002,7 @@ async def generate_universal_updates_impl(
         narrative: The narrative to process
     
     Returns:
-        JSON string with results
+        UniversalUpdateResult with operation status
     """
     from logic.universal_updater_agent import process_universal_update
     
@@ -2025,21 +2029,21 @@ async def generate_universal_updates_impl(
             success=update_result.get("success", False),
             updates_generated=bool(update_result.get("details")),
             error=None
-        ).model_dump_json()
+        )
     except Exception as e:
         logger.error(f"Error generating universal updates: {e}")
         return UniversalUpdateResult(
             success=False,
             updates_generated=False,
             error=str(e)
-        ).model_dump_json()
+        )
 
 # Then update the @function_tool to use the implementation
 @function_tool
 async def generate_universal_updates(
     ctx: RunContextWrapper[NyxContext],
     payload: GenerateUniversalUpdatesInput
-) -> str:
+) -> UniversalUpdateResult:
     """
     Generate universal updates from the narrative using the Universal Updater.
     
@@ -2474,6 +2478,11 @@ async def process_user_input(
         if not nyx_context.current_context.get("universal_updates") and response.narrative:
             # Call generate_universal_updates_impl directly (not the decorated version)
             try:
+                # Debugging: ensure we're calling the raw function, not a FunctionTool
+                logger.debug(
+                    "generate_universal_updates_impl type: %s",
+                    type(generate_universal_updates_impl)
+                )
                 wrapper = RunContextWrapper(context=nyx_context)
                 await generate_universal_updates_impl(wrapper, response.narrative)
             except Exception as e:
@@ -3101,7 +3110,12 @@ calculate_and_update_emotional_state_impl = calculate_and_update_emotional_state
 manage_beliefs_impl = manage_beliefs
 score_decision_options_impl = score_decision_options
 detect_conflicts_and_instability_impl = detect_conflicts_and_instability
-generate_universal_updates_impl = generate_universal_updates
+
+# For backward compatibility, expose the decorated tool separately without
+# overwriting the raw implementation used internally. This prevents
+# accidental replacement of the callable function with a FunctionTool
+# instance, which caused 'FunctionTool object is not callable' errors.
+generate_universal_updates_tool = generate_universal_updates
 
 # Export list for clean imports
 __all__ = [
