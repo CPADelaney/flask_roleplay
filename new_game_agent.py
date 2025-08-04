@@ -1533,7 +1533,7 @@ class NewGameAgent:
         if preset_data['id'] in ['the_moth_and_flame', 'queen_of_thorns']:
             try:
                 # Try to import GPTService and related classes
-                from story_templates.moth.story_initiializer import GPTService
+                from story_templates.moth.story_initializer import GPTService
                 from pydantic import BaseModel
                 
                 # Define a simple model for the atmosphere response
