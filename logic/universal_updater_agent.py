@@ -73,7 +73,7 @@ class NPCCreation(BaseModel):
     dislikes: List[str] = Field(default_factory=list)
     affiliations: List[str] = Field(default_factory=list)
     schedule: Dict[str, Any] = Field(default_factory=dict)
-    memory: Union[List[str], str, None] = None
+    memory: List[str] = Field(default_factory=list)
     monica_level: Optional[int] = None
     age: Optional[int] = None
     birthdate: Optional[str] = None
@@ -96,7 +96,7 @@ class NPCUpdate(BaseModel):
     likes: Optional[List[str]] = None
     dislikes: Optional[List[str]] = None
     sex: Optional[str] = None
-    memory: Optional[Union[List[str], str]] = None
+    memory: Optional[List[str]] = None
     schedule: Optional[Dict[str, Any]] = None
     schedule_updates: Optional[Dict[str, Any]] = None
     affiliations: Optional[List[str]] = None
@@ -168,8 +168,8 @@ class InventoryItem(BaseModel):
 
 class InventoryUpdates(BaseModel):
     player_name: str = "Chase"
-    added_items: List[Union[str, InventoryItem]] = Field(default_factory=list)
-    removed_items: List[Union[str, Dict[str, str]]] = Field(default_factory=list)
+    added_items: List[InventoryItem] = Field(default_factory=list)
+    removed_items: List[str] = Field(default_factory=list) # Assuming you just need names to remove
 
 class Perk(BaseModel):
     player_name: str = "Chase"
@@ -201,8 +201,8 @@ class UniversalUpdateInput(BaseModel):
     user_id: int
     conversation_id: int
     narrative: str
-    roleplay_updates: Dict[str, Any] = Field(default_factory=dict)
-    ChaseSchedule: Optional[Dict[str, Any]] = None
+    roleplay_updates: Dict[str, str] = Field(default_factory=dict)
+    ChaseSchedule: Optional[Dict[str, str]] = None
     MainQuest: Optional[str] = None
     PlayerRole: Optional[str] = None
     npc_creations: List[NPCCreation] = Field(default_factory=list)
