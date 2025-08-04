@@ -547,9 +547,12 @@ class NPCContext:
 # -------------------------------------------------------
 
 @function_tool
-async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> NPCStats:
+async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> str:
     """
     Get the NPC's stats and traits from the database.
+
+    Returns:
+        JSON string with NPC stats
     """
     with custom_span("get_npc_stats"):
         npc_id = ctx.context.npc_id
@@ -570,7 +573,7 @@ async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> NPCStats:
                 )
                 row = await cursor.fetchone()
                 if not row:
-                    return NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}")
+                    return NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}").model_dump_json()
 
         # Parse JSON fields
         def _parse_json_field(field):
@@ -611,21 +614,24 @@ async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> NPCStats:
         
         # Cache the stats
         ctx.context.current_stats = stats.model_dump()
-        return stats
+        return stats.model_dump_json()
 
 @function_tool(strict_mode=False)
 async def execute_npc_action(
     ctx: RunContextWrapper[NPCContext],
     action: NPCAction,
     context: Dict[str, Any] = None
-) -> ActionResult:
+) -> str:
     """
     Execute the chosen NPC action with Nyx governance.
     Updated to use fallback generation if agents aren't available.
-    
+
     Args:
         action: The action to execute
         context: Additional context information
+
+    Returns:
+        JSON string with action execution result
     """
     with function_span("execute_npc_action"):
         perf_start = time.perf_counter()
@@ -741,7 +747,7 @@ async def execute_npc_action(
             except Exception as reporting_error:
                 logger.error(f"Error reporting to Nyx: {reporting_error}")
             
-            return result
+            return result.model_dump_json()
             
         except Exception as e:
             elapsed = time.perf_counter() - perf_start
@@ -750,7 +756,7 @@ async def execute_npc_action(
             return ActionResult(
                 outcome=f"NPC attempted to {action.description} but encountered an error: {str(e)}",
                 emotional_impact=-1
-            )
+            ).model_dump_json()
 
 async def report_action_to_nyx(
     ctx: RunContextWrapper[NPCContext],

@@ -1088,10 +1088,10 @@ async def process_universal_update(
     # Set up context data
     ctx_data = context or {}
     
-    # Create trace for monitoring
+    # Create trace for monitoring - Fix the trace ID format
     with trace(
         workflow_name="Universal Update",
-        trace_id=f"universal-update-{conversation_id}-{int(datetime.now().timestamp())}",
+        trace_id=f"trace_universal_update_{conversation_id}_{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
         # Create prompt for the agent

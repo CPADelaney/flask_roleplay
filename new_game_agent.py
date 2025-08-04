@@ -271,7 +271,7 @@ class GameCreationResult(BaseModel):
 async def _calendar_tool_wrapper(
     ctx: RunContextWrapper[GameContext],
     params: CalendarToolParams,
-) -> CalendarData:
+) -> str:
     """Create calendar for the game world."""
     call_id = str(uuid.uuid4())[:8]
     
@@ -304,12 +304,13 @@ async def _calendar_tool_wrapper(
                     days=cal_data.get("days", []),
                     months=cal_data.get("months", []),
                     seasons=cal_data.get("seasons", [])
-                )
+                ).model_dump_json()
             except:
                 pass
     
     logger.info(f"[{call_id}] Creating new calendar")
-    return await agent.create_calendar(ctx, cal_params)
+    result = await agent.create_calendar(ctx, cal_params)
+    return result.model_dump_json()
 
 
 @function_tool
@@ -343,10 +344,11 @@ async def _create_chase_schedule_tool_wrapper(ctx: RunContextWrapper[GameContext
 async def generate_environment_tool(
     ctx: RunContextWrapper[GameContext],
     params: GenerateEnvironmentParams,
-) -> EnvironmentData:
+) -> str:
     """Module‑level wrapper around NewGameAgent.generate_environment()."""
     agent = ctx.context.get("agent_instance") or NewGameAgent()
-    return await agent.generate_environment(ctx, params)
+    result = await agent.generate_environment(ctx, params)
+    return result.model_dump_json()
 
 class NewGameAgent:
     """Agent for handling new game creation process with Nyx governance integration"""

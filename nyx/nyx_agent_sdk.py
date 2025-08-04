@@ -1057,15 +1057,15 @@ def extract_token_usage(result: Any) -> int:
 # ===== Function Tools =====
 
 @function_tool
-async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: RetrieveMemoriesInput) -> MemorySearchResult:
+async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: RetrieveMemoriesInput) -> str:
     """
     Retrieve relevant memories for Nyx.
-    
+
     Args:
         payload: Input containing query and limit
-    
+
     Returns:
-        MemorySearchResult object (not JSON string)
+        JSON string with memory search results
     """
     query = payload.query
     limit = payload.limit
@@ -1100,11 +1100,12 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Retriev
         formatted_memories.append(f"I {confidence_marker}: {memory.text}")
     
     formatted_text = "\n".join(formatted_memories) if formatted_memories else "No relevant memories found."
-    
+
+    # Return as JSON string
     return MemorySearchResult(
         memories=memories,
         formatted_text=formatted_text
-    )
+    ).model_dump_json()
 
 @function_tool
 async def add_memory(ctx: RunContextWrapper[NyxContext], payload: AddMemoryInput) -> str:
@@ -2043,14 +2044,19 @@ async def generate_universal_updates_impl(
 async def generate_universal_updates(
     ctx: RunContextWrapper[NyxContext],
     payload: GenerateUniversalUpdatesInput
-) -> UniversalUpdateResult:
+) -> str:
     """
     Generate universal updates from the narrative using the Universal Updater.
-    
+
     Args:
         payload: Input containing narrative to process
+
+    Returns:
+        JSON string with operation status
     """
-    return await generate_universal_updates_impl(ctx, payload.narrative)
+    result = await generate_universal_updates_impl(ctx, payload.narrative)
+    # Convert the Pydantic model to JSON string
+    return result.model_dump_json()
 
 # ===== Helper Functions for Tools =====
 
