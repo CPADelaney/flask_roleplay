@@ -75,43 +75,31 @@ async def _responses_json_call(
     user_prompt: str,
     temperature: float = 0.7,
     max_output_tokens: int | None = None,
-    response_format: dict | None = None,          # ➟ keep, default=None
-    previous_response_id: str | None = None,      # ➟ new, optional thread-continue
+    response_format: dict | None = None,   # e.g. {"type": "json_schema", ...}
+    previous_response_id: str | None = None,
 ) -> str:
     """
-    Wrapper for the new `client.responses.create()` endpoint.
-    Returns the best-effort STRING representation of whatever the
-    model produced: JSON (stringified), plain text, or arguments for a tool call.
+    Thin wrapper around `client.responses.create()`.
+    Always returns a str: plain text, JSON (string-ified), or tool-call args.
     """
     client = get_async_openai_client()
 
     params = {
         "model": model,
-        "input": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt},
-        ],
+        "instructions": system_prompt,                    # <-- system prompt lives here
+        "input": [{"role": "user", "content": user_prompt}],
         "temperature": temperature,
         "max_output_tokens": max_output_tokens,
     }
-    if response_format:
-        params["response_format"] = response_format            # e.g. {"type":"json_object"}
+    if response_format is not None:
+        params["response_format"] = response_format
     if previous_response_id:
-        params["previous_response_id"] = previous_response_id  # thread continuity
+        params["previous_response_id"] = previous_response_id
 
     try:
         resp = await client.responses.create(**params)
 
-        # ── 1️⃣  preferred: look at the generic output list ──────────────────
-        if getattr(resp, "output", None):            # SDK ≥1.14
-            for piece in resp.output:                # keep first usable
-                if piece.type == "output_json":
-                    # piece.json is already a Python dict
-                    return json.dumps(piece.json, ensure_ascii=False)
-                if piece.type == "output_text" and piece.text.strip():
-                    return piece.text.strip()
-
-        # ── 2️⃣  legacy shims kept by SDK for a while ────────────────────────
+        # 1️⃣  Structured-output helpers (always present when using response_format)
         if getattr(resp, "output_json", None):
             return json.dumps(resp.output_json, ensure_ascii=False)
         if getattr(resp, "output_text", None):
@@ -119,26 +107,23 @@ async def _responses_json_call(
             if txt:
                 return txt
 
-        # ── 3️⃣  tool / function calls ───────────────────────────────────────
-        for accessor in ("tool_calls", "function_call"):        # SDK exposes both
-            tc = getattr(resp, accessor, None)
-            if not tc:
-                continue
-            if isinstance(tc, list):                            # tool_calls
-                for call in tc:
-                    if getattr(call, "function", None):
-                        args = call.function.arguments
-                        if args:                                # args already dict
-                            return json.dumps(args, ensure_ascii=False)
-            else:                                               # single function_call
-                if getattr(tc, "arguments", None):
-                    return json.dumps(tc.arguments, ensure_ascii=False)
+        # 2️⃣  Walk the list of messages → their content items
+        for msg in resp.output or []:
+            for item in msg.content:
+                if item.type == "output_json":
+                    return json.dumps(item.json, ensure_ascii=False)
+                if item.type == "output_text" and item.text.strip():
+                    return item.text.strip()
 
-        # ── 4️⃣  truly empty / error case ────────────────────────────────────
+        # 3️⃣  Tool / function calls (you can expand this as needed)
+        for call in getattr(resp, "tool_calls", []) or []:
+            if getattr(call, "function", None) and call.function.arguments:
+                return json.dumps(call.function.arguments, ensure_ascii=False)
+
         raise ValueError("Empty model response.")
 
-    except Exception as e:
-        logging.error(f"_responses_json_call failed (model={model}): {e}", exc_info=True)
+    except Exception:
+        logging.exception("_responses_json_call failed (model=%s)", model)
         raise
 
 def _json_first_obj(text: str) -> dict | None:
