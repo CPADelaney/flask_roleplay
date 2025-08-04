@@ -65,12 +65,12 @@ JsonValue  = Union[
 ]
 
 class KVPair(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     key: str
     value: JsonValue        # ← now non-recursive, legal schema
 
 class KVList(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     items: List[KVPair] = Field(default_factory=list)
 
 KVPair.model_rebuild()      # leave this, it’s harmless
@@ -137,34 +137,34 @@ class Config:
 # ===== Core Data Models =====
 
 class MemoryItem(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     id: Optional[str] = Field(None, description="Memory ID if available")
     text: str = Field(..., description="Memory text")
     relevance: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score 0-1")
     tags: List[str] = Field(default_factory=list, description="Memory tags")
 
 class EmotionalChanges(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     valence_change: float
     arousal_change: float
     dominance_change: float
 
 class ScoreComponents(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     context: float
     emotional: float
     pattern: float
     relationship: float
 
 class PerformanceNumbers(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     memory_mb: float
     cpu_percent: float
     avg_response_time: float
     success_rate: float
 
 class ConflictItem(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     type: str
     severity: float
     description: str
@@ -172,14 +172,14 @@ class ConflictItem(BaseModel):
     blocked_objectives: Optional[List[str]] = None
 
 class InstabilityItem(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     type: str
     severity: float
     description: str
     recommendation: Optional[str] = None
 
 class ActivityRec(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     name: str
     description: str
     requirements: List[str]
@@ -188,7 +188,7 @@ class ActivityRec(BaseModel):
     partner_id: Optional[str] = None
 
 class RelationshipStateOut(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     trust: float
     power_dynamic: float
     emotional_bond: float
@@ -197,17 +197,17 @@ class RelationshipStateOut(BaseModel):
     type: str
 
 class RelationshipChanges(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     trust: float
     power: float
     bond: float
 
 class DecisionMetadata(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     data: KVList = Field(default_factory=KVList, description="Additional metadata")
 
 class ScoredOption(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    
     option: 'DecisionOption'  # Forward reference
     score: float
     components: ScoreComponents
@@ -217,7 +217,7 @@ class ScoredOption(BaseModel):
 
 class NarrativeResponse(BaseModel):
     """Structured output for Nyx's narrative responses"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     narrative: str = Field(..., description="The main narrative response as Nyx")
     tension_level: int = Field(0, description="Current narrative tension level (0-10)")
@@ -229,7 +229,7 @@ class NarrativeResponse(BaseModel):
 
 class MemoryReflection(BaseModel):
     """Structured output for memory reflections"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     reflection: str = Field(..., description="The reflection text")
     confidence: float = Field(..., description="Confidence level in the reflection (0.0-1.0)")
@@ -237,7 +237,7 @@ class MemoryReflection(BaseModel):
 
 class ContentModeration(BaseModel):
     """Output for content moderation guardrail"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     is_appropriate: bool = Field(..., description="Whether the content is appropriate")
     reasoning: str = Field(..., description="Reasoning for the decision")
@@ -245,7 +245,7 @@ class ContentModeration(BaseModel):
 
 class EmotionalStateUpdate(BaseModel):
     """Structured output for emotional state changes"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     valence: float = Field(..., description="Positive/negative emotion (-1 to 1)")
     arousal: float = Field(..., description="Emotional intensity (0 to 1)")
@@ -255,7 +255,7 @@ class EmotionalStateUpdate(BaseModel):
 
 class ScenarioDecision(BaseModel):
     """Structured output for scenario management decisions"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     action: str = Field(..., description="Action to take (advance, maintain, escalate, de-escalate)")
     next_phase: str = Field(..., description="Next scenario phase")
@@ -265,7 +265,7 @@ class ScenarioDecision(BaseModel):
 
 class RelationshipUpdate(BaseModel):
     """Structured output for relationship changes"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     trust_change: float = Field(0.0, description="Change in trust level")
     power_dynamic_change: float = Field(0.0, description="Change in power dynamic")
@@ -274,14 +274,14 @@ class RelationshipUpdate(BaseModel):
 
 class ActivityRecommendation(BaseModel):
     """Structured output for activity recommendations"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     recommended_activities: List[ActivityRec] = Field(..., description="List of recommended activities")
     reasoning: str = Field(..., description="Why these activities are recommended")
 
 class ImageGenerationDecision(BaseModel):
     """Decision about whether to generate an image"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     should_generate: bool = Field(..., description="Whether an image should be generated")
     score: float = Field(0.0, description="Confidence score for the decision")
@@ -292,14 +292,14 @@ class ImageGenerationDecision(BaseModel):
 
 class RetrieveMemoriesInput(BaseModel):
     """Input for retrieve_memories function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     query: str = Field(..., description="Search query to find memories")
     limit: int = Field(5, description="Maximum number of memories to return", ge=1, le=20)
 
 class AddMemoryInput(BaseModel):
     """Input for add_memory function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     memory_text: str = Field(..., description="The content of the memory")
     memory_type: str = Field("observation", description="Type of memory (observation, reflection, abstraction)")
@@ -307,13 +307,13 @@ class AddMemoryInput(BaseModel):
 
 class DetectUserRevelationsInput(BaseModel):
     """Input for detect_user_revelations function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     user_message: str = Field(..., description="The user's message to analyze")
 
 class GenerateImageFromSceneInput(BaseModel):
     """Input for generate_image_from_scene function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     scene_description: str = Field(..., description="Description of the scene")
     characters: List[str] = Field(..., description="List of characters in the scene")
@@ -321,13 +321,13 @@ class GenerateImageFromSceneInput(BaseModel):
 
 class CalculateEmotionalStateInput(BaseModel):
     """Input for calculate_and_update_emotional_state and calculate_emotional_impact functions"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     context: KVList = Field(..., description="Current interaction context")
 
 class UpdateRelationshipStateInput(BaseModel):
     """Input for update_relationship_state function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     entity_id: str = Field(..., description="ID of the entity (NPC or user)")
     trust_change: float = Field(0.0, description="Change in trust level", ge=-1.0, le=1.0)
@@ -336,14 +336,14 @@ class UpdateRelationshipStateInput(BaseModel):
 
 class GetActivityRecommendationsInput(BaseModel):
     """Input for get_activity_recommendations function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     scenario_type: str = Field(..., description="Type of current scenario")
     npc_ids: List[str] = Field(..., description="List of present NPC IDs")
 
 class BeliefDataModel(BaseModel):
     """Model for belief data to avoid raw dicts"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     entity_id: str = Field("nyx", description="Entity ID")
     type: str = Field("general", description="Belief type")
@@ -352,14 +352,14 @@ class BeliefDataModel(BaseModel):
 
 class ManageBeliefsInput(BaseModel):
     """Input for manage_beliefs function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     action: Literal["get", "update", "query"] = Field(..., description="Action to perform")
     belief_data: BeliefDataModel = Field(..., description="Data for the belief operation")
 
 class DecisionOption(BaseModel):
     """Model for decision options to avoid raw dicts"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     id: str = Field(..., description="Option ID")
     description: str = Field(..., description="Option description")
@@ -367,53 +367,53 @@ class DecisionOption(BaseModel):
 
 class ScoreDecisionOptionsInput(BaseModel):
     """Input for score_decision_options function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     options: List[DecisionOption] = Field(..., description="List of possible decisions/actions")
     decision_context: KVList = Field(..., description="Context for making the decision")
 
 class DetectConflictsAndInstabilityInput(BaseModel):
     """Input for detect_conflicts_and_instability function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     scenario_state: KVList = Field(..., description="Current scenario state")
 
 class GenerateUniversalUpdatesInput(BaseModel):
     """Input for generate_universal_updates function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     narrative: str = Field(..., description="The narrative text to process")
 
 class DecideImageInput(BaseModel):
     """Input for decide_image_generation function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     scene_text: str = Field(..., description="Scene description to evaluate for image generation")
 
 class EmptyInput(BaseModel):
     """Empty input for functions that don't require parameters"""
-    model_config = ConfigDict(extra='forbid')
+    
     pass
 
 # ===== Function Tool Output Models =====
 
 class MemorySearchResult(BaseModel):
     """Output for retrieve_memories function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     memories: List[MemoryItem] = Field(..., description="List of retrieved memories")
     formatted_text: str = Field(..., description="Formatted memory text")
 
 class MemoryStorageResult(BaseModel):
     """Output for add_memory function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     memory_id: str = Field(..., description="ID of stored memory")
     success: bool = Field(..., description="Whether memory was stored successfully")
 
 class UserGuidanceResult(BaseModel):
     """Output for get_user_model_guidance function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     top_kinks: List[Tuple[str, float]] = Field(..., description="Top user preferences with levels")
     behavior_patterns: KVList = Field(..., description="Identified behavior patterns")
@@ -422,14 +422,14 @@ class UserGuidanceResult(BaseModel):
 
 class RevelationDetectionResult(BaseModel):
     """Output for detect_user_revelations function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     revelations: List[KVList] = Field(..., description="Detected revelations")
     has_revelations: bool = Field(..., description="Whether any revelations were found")
 
 class ImageGenerationResult(BaseModel):
     """Output for generate_image_from_scene function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     success: bool = Field(..., description="Whether image was generated")
     image_url: Optional[str] = Field(None, description="URL of generated image")
@@ -437,7 +437,7 @@ class ImageGenerationResult(BaseModel):
 
 class EmotionalCalculationResult(BaseModel):
     """Output for emotional calculation functions"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     valence: float = Field(..., description="New valence value")
     arousal: float = Field(..., description="New arousal value")
@@ -448,7 +448,7 @@ class EmotionalCalculationResult(BaseModel):
 
 class RelationshipUpdateResult(BaseModel):
     """Output for update_relationship_state function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     entity_id: str = Field(..., description="Entity ID")
     relationship: RelationshipStateOut = Field(..., description="Updated relationship state")
@@ -456,7 +456,7 @@ class RelationshipUpdateResult(BaseModel):
 
 class PerformanceMetricsResult(BaseModel):
     """Output for check_performance_metrics function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     metrics: PerformanceNumbers = Field(..., description="Current performance metrics")
     suggestions: List[str] = Field(..., description="Performance improvement suggestions")
@@ -465,21 +465,21 @@ class PerformanceMetricsResult(BaseModel):
 
 class ActivityRecommendationsResult(BaseModel):
     """Output for get_activity_recommendations function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     recommendations: List[ActivityRec] = Field(..., description="Recommended activities")
     total_available: int = Field(..., description="Total number of available activities")
 
 class BeliefManagementResult(BaseModel):
     """Output for manage_beliefs function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     result: Union[str, KVList] = Field(..., description="Operation result")
     error: Optional[str] = Field(None, description="Error message if failed")
 
 class DecisionScoringResult(BaseModel):
     """Output for score_decision_options function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     scored_options: List[ScoredOption] = Field(..., description="Options with scores")
     best_option: DecisionOption = Field(..., description="Highest scoring option")
@@ -487,7 +487,7 @@ class DecisionScoringResult(BaseModel):
 
 class ConflictDetectionResult(BaseModel):
     """Output for detect_conflicts_and_instability function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     conflicts: List[ConflictItem] = Field(..., description="Detected conflicts")
     instabilities: List[InstabilityItem] = Field(..., description="Detected instabilities")
@@ -497,7 +497,7 @@ class ConflictDetectionResult(BaseModel):
 
 class UniversalUpdateResult(BaseModel):
     """Output for generate_universal_updates function"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     success: bool = Field(..., description="Whether updates were generated")
     updates_generated: bool = Field(..., description="Whether any updates were found")
@@ -507,7 +507,7 @@ class UniversalUpdateResult(BaseModel):
 
 class ScenarioManagementRequest(BaseModel):
     """Request for scenario management"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     user_id: int = Field(..., description="User ID")
     conversation_id: int = Field(..., description="Conversation ID")
@@ -518,7 +518,7 @@ class ScenarioManagementRequest(BaseModel):
 
 class RelationshipInteractionData(BaseModel):
     """Data for relationship interactions"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     user_id: int = Field(..., description="User ID")
     conversation_id: int = Field(..., description="Conversation ID")
@@ -531,7 +531,7 @@ class RelationshipInteractionData(BaseModel):
 
 class EmotionalState(BaseModel):
     """Emotional state representation"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     valence: float = Field(0.0, description="Positive/negative emotion (-1 to 1)", ge=-1.0, le=1.0)
     arousal: float = Field(0.5, description="Emotional intensity (0 to 1)", ge=0.0, le=1.0)
@@ -539,7 +539,7 @@ class EmotionalState(BaseModel):
 
 class RelationshipState(BaseModel):
     """Relationship state representation"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     trust: float = Field(0.5, description="Trust level (0-1)", ge=0.0, le=1.0)
     power_dynamic: float = Field(0.5, description="Power dynamic (0-1)", ge=0.0, le=1.0)
@@ -550,7 +550,7 @@ class RelationshipState(BaseModel):
 
 class PerformanceMetrics(BaseModel):
     """Performance metrics structure"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     total_actions: int = Field(0, ge=0)
     successful_actions: int = Field(0, ge=0)
@@ -562,7 +562,7 @@ class PerformanceMetrics(BaseModel):
 
 class LearningMetrics(BaseModel):
     """Learning metrics structure"""
-    model_config = ConfigDict(extra='forbid')
+    
     
     pattern_recognition_rate: float = Field(0.0, ge=0.0, le=1.0)
     strategy_improvement_rate: float = Field(0.0, ge=0.0, le=1.0)
