@@ -61,10 +61,9 @@ logger = logging.getLogger(__name__)
 JsonValue = Union[str, int, float, bool, None, List["JsonValue"]]
 
 class KVPair(BaseModel):
-    """Key/value record to represent arbitrary dicts in a strict schema world."""
     model_config = ConfigDict(extra='forbid')
     key: str
-    value: Any
+    value: JsonValue   # ← replaces Any
 
 class KVList(BaseModel):
     """Dict-like but strict: a list of KV pairs."""
