@@ -490,16 +490,59 @@ class LoreSystem:
     # Enhanced Relationship Methods - Multi-Relationship Support
     # ---------------------------------------------------------------------
 
-    def _merge_compatible_relationships(self, current_relationships: List[Dict], new_relationships: List[Dict]) -> Tuple[bool, List[Dict]]:
+    def _merge_compatible_relationships(self, current_relationships, new_relationships) -> Tuple[bool, List[Dict]]:
         """
         Merge relationship lists, allowing multiple compatible relationship types per entity.
+        Handles both JSON strings and Python lists/dicts.
+        
+        Args:
+            current_relationships: Can be JSON string, list of dicts, or None
+            new_relationships: Can be JSON string, list of dicts, or None
         
         Returns:
             (is_compatible, merged_relationships)
         """
+        import json  # Import here if not available at module level
+        
+        # Parse JSON strings if needed
+        def parse_relationships(rels):
+            """Parse relationships from various formats into a list of dicts."""
+            if rels is None:
+                return []
+            if isinstance(rels, str):
+                try:
+                    parsed = json.loads(rels) if rels else []
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse relationships JSON: {rels}")
+                    return []
+            else:
+                parsed = rels
+            
+            # Ensure it's a list
+            if not isinstance(parsed, list):
+                if isinstance(parsed, dict):
+                    return [parsed]  # Wrap single dict in list
+                else:
+                    return []
+            
+            return parsed
+        
+        # Parse both inputs
+        current_relationships = parse_relationships(current_relationships)
+        new_relationships = parse_relationships(new_relationships)
+        
+        # If either is empty, just return the other
+        if not current_relationships:
+            return True, new_relationships
+        if not new_relationships:
+            return True, current_relationships
+        
         # Group current relationships by entity
         current_by_entity = {}
         for rel in current_relationships:
+            if not isinstance(rel, dict):
+                logger.warning(f"Skipping non-dict relationship: {rel}")
+                continue
             key = (rel.get('entity_id'), rel.get('entity_type'))
             if key not in current_by_entity:
                 current_by_entity[key] = []
@@ -508,6 +551,9 @@ class LoreSystem:
         # Group new relationships by entity  
         new_by_entity = {}
         for rel in new_relationships:
+            if not isinstance(rel, dict):
+                logger.warning(f"Skipping non-dict relationship: {rel}")
+                continue
             key = (rel.get('entity_id'), rel.get('entity_type'))
             if key not in new_by_entity:
                 new_by_entity[key] = []
