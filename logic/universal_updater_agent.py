@@ -1053,7 +1053,6 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
         handoff(extraction_agent, tool_name_override="extract_state_changes")
     ],
     output_type=UniversalUpdateInput,
-    output_schema_strict=False,
     input_guardrails=[
         InputGuardrail(guardrail_function=content_safety_guardrail),
     ],
