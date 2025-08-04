@@ -235,8 +235,7 @@ class GPTService:
             model=model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            temperature=temperature,
-            response_format={"type": "json_object"}
+            temperature=temperature
         )
     
     def _parse_json_response(self, response: str) -> dict:
