@@ -1779,6 +1779,13 @@ class CompleteWorldDirector:
         state = self.context.current_world_state
         
         return f"""Generate the next moment in this complete simulation.
+    
+    Current World State (JSON):
+    {json.dumps(state.model_dump(), indent=2, default=str)}
+    
+    Emergent Patterns (JSON):
+    {json.dumps(patterns, indent=2, default=str)}
+    """  # <-- this line was missing
         
     async def process_player_action(self, action: str) -> Dict[str, Any]:
         """Process player action through ALL systems"""
