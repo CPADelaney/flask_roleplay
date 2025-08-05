@@ -1,9 +1,8 @@
 # story_agent/agent_interaction.py
 
 """
-This module handles interactions between specialized agents in the Story Director system.
-It provides orchestration for complex story development tasks that require input from
-multiple specialized agents, with full integration of the comprehensive context system.
+Agent Interaction Module for Open-World Slice-of-Life Simulation.
+Coordinates specialized agents for emergent gameplay and dynamic world simulation.
 """
 
 import logging
@@ -12,1320 +11,616 @@ import asyncio
 import time
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime
-
-from context.context_config import get_config
+from dataclasses import dataclass, field
 
 from agents import Agent, Runner, trace, handoff
 from agents.exceptions import AgentsException, ModelBehaviorError
 
-from story_agent.specialized_agents import (
-    initialize_specialized_agents,
-    analyze_conflict,
-    generate_narrative_element,
-    ConflictAnalystContext,
-    NarrativeCrafterContext
+# Import world simulation components
+from story_agent.world_director_agent import (
+    WorldDirector, WorldState, SliceOfLifeEvent,
+    PowerExchange, WorldMood, TimeOfDay, 
+    ActivityType, PowerDynamicType
 )
 
-from story_agent.story_director_agent import (
-    initialize_story_director,
-    StoryDirectorContext
+from story_agent.world_simulation_agents import (
+    initialize_world_simulation_agents,
+    SliceOfLifeContext,
+    coordinate_slice_of_life_scene,
+    detect_emergent_patterns
 )
 
 # Context system integration
-from context.context_service import get_context_service, get_comprehensive_context
-from context.memory_manager import get_memory_manager, Memory
+from context.context_service import get_context_service
+from context.memory_manager import get_memory_manager
 from context.vector_service import get_vector_service
-from context.context_manager import get_context_manager, ContextDiff
 from context.context_performance import PerformanceMonitor, track_performance
-from context.unified_cache import context_cache
-
-# Progressive summarization integration
-from story_agent.progressive_summarization import (
-    RPGNarrativeManager,
-    SummaryLevel
-)
 
 # Database connection
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
-# ----- Orchestration Functions -----
+# ===============================================================================
+# Agent Coordination Context
+# ===============================================================================
 
-@track_performance("orchestrate_conflict_analysis")
-async def orchestrate_conflict_analysis_and_narrative(
-    user_id: int, 
-    conversation_id: int,
-    conflict_id: int
-) -> Dict[str, Any]:
-    """
-    Orchestrate a complex interaction that:
-    1. Analyzes a conflict with the Conflict Analyst agent
-    2. Generates narrative elements with the Narrative Crafter agent
-    3. Integrates both into a comprehensive story update
+@dataclass
+class AgentCoordinationContext:
+    """Context for coordinating multiple agents in slice-of-life simulation"""
+    user_id: int
+    conversation_id: int
     
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        conflict_id: ID of the conflict to analyze
-        
-    Returns:
-        Dictionary with the orchestrated result
-    """
-    start_time = time.time()
+    # World state tracking
+    world_director: Optional[WorldDirector] = None
+    current_world_state: Optional[WorldState] = None
+    active_scene: Optional[SliceOfLifeEvent] = None
     
-    # Initialize performance monitoring
-    performance_monitor = PerformanceMonitor.get_instance(user_id, conversation_id)
-    timer_id = performance_monitor.start_timer("conflict_analysis_orchestration")
+    # Agent references
+    simulation_agents: Dict[str, Agent] = field(default_factory=dict)
     
-    try:
-        # Get context service for comprehensive context
-        context_service = await get_context_service(user_id, conversation_id)
+    # Interaction tracking
+    recent_interactions: List[Dict[str, Any]] = field(default_factory=list)
+    emergent_patterns: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Context components
+    context_service: Optional[Any] = None
+    memory_manager: Optional[Any] = None
+    performance_monitor: Optional[Any] = None
+    
+    async def initialize(self):
+        """Initialize all components"""
+        # Initialize world director
+        self.world_director = WorldDirector(self.user_id, self.conversation_id)
+        await self.world_director.initialize()
         
-        # Initialize memory manager for sophisticated memory handling
-        memory_manager = await get_memory_manager(user_id, conversation_id)
+        # Get current world state
+        self.current_world_state = await self.world_director.get_world_state()
         
-        # Initialize vector service for semantic search
-        vector_service = await get_vector_service(user_id, conversation_id)
+        # Initialize simulation agents
+        self.simulation_agents = initialize_world_simulation_agents()
         
-        # Initialize narrative manager for progressive summarization
-        narrative_manager = None
-        try:
-            narrative_manager = RPGNarrativeManager(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                db_connection_string=None  # Will be initialized from config
-            )
-            await narrative_manager.initialize()
-        except Exception as e:
-            logger.warning(f"Could not initialize narrative manager: {e}")
-        
-        # Create all necessary contexts with full integration
-        conflict_context = ConflictAnalystContext(
-            user_id=user_id, 
-            conversation_id=conversation_id
-        )
-        
-        narrative_context = NarrativeCrafterContext(
-            user_id=user_id,
-            conversation_id=conversation_id
-        )
-        
-        director_context = StoryDirectorContext(
-            user_id=user_id,
-            conversation_id=conversation_id
-        )
-        
-        # Initialize context components with error handling
-        await director_context.initialize_context_components()
-        
-        # Run tasks in parallel to improve performance
-        # First, create a semantically relevant query for the conflict
-        from logic.conflict_system.conflict_manager import ConflictManager
-        conflict_manager = ConflictManager(user_id, conversation_id)
-        conflict_details = await conflict_manager.get_conflict(conflict_id)
-        
-        # Form a query based on conflict details for vector search
-        query = f"conflict analysis for {conflict_details.get('conflict_name', '')} involving {conflict_details.get('faction_a_name', '')} and {conflict_details.get('faction_b_name', '')}"
-        
-        # Launch parallel tasks
-        tasks = [
-            asyncio.create_task(analyze_conflict(conflict_id, conflict_context)),
-            asyncio.create_task(context_service.get_context(
-                input_text=query,
-                use_vector_search=True,
-                context_budget=context_service.config.get_token_budget("analysis")
-            ))
-        ]
-        
-        # Use vector search to find NPCs involved in this conflict
-        involved_npcs_task = asyncio.create_task(
-            vector_service.search_entities(
-                query_text=f"conflict {conflict_details.get('conflict_name', '')}",
-                entity_types=["npc"],
-                top_k=5
-            )
-        )
-        
-        # Use vector search to find relevant memories
-        relevant_memories_task = asyncio.create_task(
-            memory_manager.search_memories(
-                query_text=query,
-                limit=5,
-                use_vector=True
-            )
-        )
-        
-        # Get relationship overview instead of single narrative stage
-        from logic.narrative_events import get_relationship_overview
-        relationship_overview_task = asyncio.create_task(
-            get_relationship_overview(user_id, conversation_id)
-        )
-        
-        # Wait for all primary tasks to complete
-        conflict_analysis, comprehensive_context = await asyncio.gather(*tasks)
-        
-        # Wait for secondary tasks
-        involved_npcs_results = await involved_npcs_task
-        relevant_memories = await relevant_memories_task
-        relationship_overview = await relationship_overview_task
-        
-        # Process involved NPCs from vector search
-        npc_names = []
-        for result in involved_npcs_results:
-            if "metadata" in result and "npc_name" in result["metadata"]:
-                npc_names.append(result["metadata"]["npc_name"])
-            elif "metadata" in result and "entity_id" in result["metadata"]:
-                # Try to get NPC name from database
-                try:
-                    # Using the new async context manager for database connection
-                    async with get_db_connection_context() as conn:
-                        row = await conn.fetchrow(
-                            "SELECT npc_name FROM NPCStats WHERE npc_id = $1",
-                            int(result["metadata"]["entity_id"])
-                        )
-                        if row:
-                            npc_names.append(row["npc_name"])
-                except Exception as db_error:
-                    logger.warning(f"Error retrieving NPC name: {db_error}")
-        
-        # If we still don't have enough NPCs, get from comprehensive context
-        if len(npc_names) < 3:
-            for npc in comprehensive_context.get("npcs", []):
-                if "npc_name" in npc and npc["npc_name"] not in npc_names:
-                    npc_names.append(npc["npc_name"])
-                    if len(npc_names) >= 3:
-                        break
-        
-        # Format memories for context
-        recent_events = []
-        for memory in relevant_memories:
-            if hasattr(memory, 'content'):
-                recent_events.append(memory.content)
-            elif isinstance(memory, dict) and 'content' in memory:
-                recent_events.append(memory['content'])
-        
-        # If we have a narrative manager, get optimal context
-        if narrative_manager:
-            narrative_context_result = await narrative_manager.get_optimal_narrative_context(
-                query=query,
-                max_tokens=1000
-            )
-            
-            # Extract key events from optimal context
-            for event in narrative_context_result.get("relevant_events", []):
-                if "content" in event and event["content"] not in recent_events:
-                    recent_events.append(event["content"])
-        
-        # Generate narrative based on conflict analysis with enriched context
-        # Get the most advanced NPC's stage from relationship overview
-        most_advanced_stage = "Unknown"
-        if relationship_overview and relationship_overview.get('most_advanced_npcs'):
-            most_advanced_stage = relationship_overview['most_advanced_npcs'][0].get('stage', 'Unknown')
-        
-        # Pass context to narrative generation
-        narrative_task = asyncio.create_task(
-            generate_narrative_element(
-                "conflict_narrative",
-                {
-                    "npc_names": npc_names[:3],  # Limit to top 3 most relevant NPCs
-                    "narrative_stage": most_advanced_stage,
-                    "relationship_overview": relationship_overview,
-                    "recent_events": "\n".join(recent_events[:5]),  # Top 5 most relevant memories
-                    "conflict_name": conflict_details.get("conflict_name", ""),
-                    "faction_a": conflict_details.get("faction_a_name", ""),
-                    "faction_b": conflict_details.get("faction_b_name", ""),
-                    "conflict_analysis": conflict_analysis["analysis"],
-                    "comprehensive_context": comprehensive_context  # Pass the complete context
-                },
-                narrative_context
-            )
-        )
-        
-        # Initialize the Story Director to integrate everything
-        director_agent, _ = await initialize_story_director(user_id, conversation_id)
-        
-        # Wait for narrative generation to complete
-        narrative_element = await narrative_task
-        
-        # Store in both memory systems for redundancy and richness
-        
-        # 1. Store in memory manager
-        memory_id = await memory_manager.add_memory(
-            content=narrative_element["content"],
-            memory_type="narrative_element",
-            importance=0.8,
-            tags=["conflict", conflict_details.get("conflict_name", "").lower().replace(" ", "_"), "narrative"],
-            metadata={
-                "conflict_id": conflict_id,
-                "conflict_name": conflict_details.get("conflict_name", ""),
-                "source": "orchestration"
-            }
-        )
-        
-        # 2. Store in narrative manager for progressive summarization
-        if narrative_manager:
-            await narrative_manager.add_revelation(
-                content=narrative_element["content"],
-                revelation_type="conflict_narrative",
-                importance=0.8,
-                tags=["conflict", conflict_details.get("conflict_name", "").lower().replace(" ", "_"), "narrative"]
-            )
-        
-        # Build an enhanced prompt with comprehensive context
-        integration_prompt = f"""
-        I need you to integrate conflict analysis and a narrative element into a comprehensive story update.
-        
-        CONFLICT ANALYSIS:
-        {conflict_analysis["analysis"]}
-        
-        NARRATIVE ELEMENT:
-        {narrative_element["content"]}
-        
-        CONFLICT DETAILS:
-        - Name: {conflict_details.get('conflict_name', '')}
-        - Type: {conflict_details.get('conflict_type', '')}
-        - Phase: {conflict_details.get('phase', '')}
-        - Progress: {conflict_details.get('progress', 0)}%
-        - Faction A: {conflict_details.get('faction_a_name', '')}
-        - Faction B: {conflict_details.get('faction_b_name', '')}
-        
-        KEY NPCs INVOLVED:
-        {', '.join(npc_names[:5])}
-        
-        RELATIONSHIP OVERVIEW:
-        - Total relationships: {relationship_overview.get('total_relationships', 0)}
-        - Most advanced stage: {most_advanced_stage}
-        - Stage distribution: {relationship_overview.get('stage_distribution', {})}
-        
-        RELEVANT MEMORIES:
-        {recent_events[0] if recent_events else "No relevant memories found."}
-        
-        Please create a comprehensive story update that:
-        1. Summarizes the current state of the conflict
-        2. Integrates the narrative element to advance the story
-        3. Suggests clear next steps for the player
-        4. Hints at possible consequences of different choices
-        
-        Format your response as a structured story update with clear sections.
-        """
-        
-        # Run the Story Director to integrate everything with tracing
-        with trace(workflow_name="StoryOrchestration", group_id=f"conflict_{conflict_id}"):
-            integration_result = await Runner.run(
-                director_agent,
-                integration_prompt,
-                context=director_context
-            )
-        
-        # Track token usage for this operation
-        if hasattr(integration_result, 'raw_responses') and integration_result.raw_responses:
-            for response in integration_result.raw_responses:
-                if hasattr(response, 'usage'):
-                    performance_monitor.record_token_usage(response.usage.total_tokens)
-        
-        execution_time = time.time() - start_time
-        
-        # Store the final integrated result as a memory
-        await memory_manager.add_memory(
-            content=f"Integrated story update for conflict {conflict_details.get('conflict_name', '')}: {integration_result.final_output[:200]}...",
-            memory_type="integrated_story_update",
-            importance=0.8,
-            tags=["integrated", "conflict", conflict_details.get("conflict_name", "").lower().replace(" ", "_")],
-            metadata={
-                "conflict_id": conflict_id,
-                "execution_time": execution_time,
-                "source": "orchestration"
-            }
-        )
-        
-        # Record performance metrics
-        performance_monitor.stop_timer(timer_id)
-        
-        # Return the final orchestrated result with rich metadata
-        return {
-            "conflict_id": conflict_id,
-            "conflict_name": conflict_details.get("conflict_name", ""),
-            "conflict_analysis": conflict_analysis,
-            "narrative_element": narrative_element,
-            "integrated_update": integration_result.final_output,
-            "execution_time": execution_time,
-            "involved_npcs": npc_names[:5],
-            "relationship_overview": relationship_overview,
-            "most_advanced_stage": most_advanced_stage,
-            "metrics": {
-                "conflict_analysis_metrics": conflict_context.get_metrics() if hasattr(conflict_context, "get_metrics") else {},
-                "narrative_metrics": narrative_context.get_metrics() if hasattr(narrative_context, "get_metrics") else {},
-                "director_metrics": director_context.metrics if hasattr(director_context, "metrics") else {},
-                "performance": performance_monitor.get_metrics()
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error in orchestrate_conflict_analysis_and_narrative: {e}", exc_info=True)
-        
-        # Attempt to record the error as a memory for future reference
-        try:
-            memory_manager = await get_memory_manager(user_id, conversation_id)
-            await memory_manager.add_memory(
-                content=f"Error during conflict analysis orchestration: {str(e)}",
-                memory_type="error",
-                importance=0.7,
-                tags=["error", "orchestration", "conflict_analysis"],
-                metadata={
-                    "conflict_id": conflict_id,
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-        except Exception as mem_error:
-            logger.error(f"Failed to record error in memory system: {mem_error}")
-            
-        # Stop the performance timer if running
-        if 'timer_id' in locals():
-            performance_monitor.stop_timer(timer_id)
-            
-        return {
-            "conflict_id": conflict_id,
-            "error": str(e),
-            "success": False,
-            "execution_time": time.time() - start_time
-        }
+        # Initialize context components
+        self.context_service = await get_context_service(self.user_id, self.conversation_id)
+        self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+        self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
 
-async def process_relationship_events(user_id: int, conversation_id: int) -> List[Dict[str, Any]]:
-    """Process any pending relationship events."""
-    from logic.dynamic_relationships import drain_relationship_events_tool
-    
-    ctx = type('obj', (object,), {
-        'context': {
-            'user_id': user_id,
-            'conversation_id': conversation_id
-        }
-    })
-    
-    result = await drain_relationship_events_tool(ctx, max_events=10)
-    events = result.get("events", [])
-    
-    # Process each event
-    processed_events = []
-    for event_data in events:
-        event = event_data["event"]
-        
-        # Generate narrative for the event
-        narrative = await generate_narrative_element(
-            event["type"],
-            event,
-            NarrativeCrafterContext(user_id, conversation_id)
-        )
-        
-        processed_events.append({
-            "event": event,
-            "narrative": narrative
-        })
+# ===============================================================================
+# Scene Orchestration Functions
+# ===============================================================================
 
-@track_performance("generate_story_beat")
-async def generate_comprehensive_story_beat(
+@track_performance("orchestrate_daily_scene")
+async def orchestrate_daily_scene(
     user_id: int,
     conversation_id: int,
-    story_context: Dict[str, Any]
+    scene_focus: str = "routine",
+    involved_npcs: Optional[List[int]] = None
 ) -> Dict[str, Any]:
     """
-    Generate a comprehensive story beat involving multiple specialized agents.
-    
-    This function:
-    1. Uses conflict analysis to understand the current conflict landscape
-    2. Uses relationship analysis to understand character dynamics
-    3. Uses narrative crafting to create emotionally resonant moments
-    4. Integrates everything into a cohesive story beat
+    Orchestrate a complete daily life scene with multiple agents.
     
     Args:
         user_id: User ID
         conversation_id: Conversation ID
-        story_context: Dictionary with context about the current story state
+        scene_focus: Type of scene (routine, social, intimate, etc.)
+        involved_npcs: Optional list of NPCs to involve
         
     Returns:
-        Dictionary with the comprehensive story beat
+        Complete scene with dialogue, atmosphere, and interactions
     """
     start_time = time.time()
     
-    # Initialize performance monitoring
-    performance_monitor = PerformanceMonitor.get_instance(user_id, conversation_id)
-    timer_id = performance_monitor.start_timer("story_beat_generation")
+    # Initialize coordination context
+    context = AgentCoordinationContext(user_id, conversation_id)
+    await context.initialize()
     
-    # Store context manager for delta updates
-    context_manager = get_context_manager()
+    timer_id = context.performance_monitor.start_timer("daily_scene_orchestration")
     
     try:
-        # Initialize context components with full integration
-        context_service = await get_context_service(user_id, conversation_id)
-        memory_manager = await get_memory_manager(user_id, conversation_id)
-        vector_service = await get_vector_service(user_id, conversation_id)
-        
-        # Try to initialize narrative manager for progressive summarization
-        narrative_manager = None
-        try:
-            narrative_manager = RPGNarrativeManager(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                db_connection_string=None  # Will be initialized from config
-            )
-            await narrative_manager.initialize()
-        except Exception as e:
-            logger.warning(f"Could not initialize narrative manager: {e}")
-        
-        # Initialize specialized agents
-        specialized_agents = initialize_specialized_agents()
-        
-        # Initialize contexts for each agent with context system integration
-        director_context = StoryDirectorContext(
+        # Create slice-of-life context
+        sol_context = SliceOfLifeContext(
             user_id=user_id,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            world_state=context.current_world_state
         )
-        await director_context.initialize_context_components()
         
-        # Build a semantically meaningful query based on story context
-        query = story_context.get("narrative_focus", "current story state")
+        # Generate base scene
+        scene = await coordinate_slice_of_life_scene(sol_context, scene_focus)
         
-        # If there are key NPCs, add them to the query for better relevance
-        if "key_npcs" in story_context:
-            npcs = ", ".join(story_context["key_npcs"][:3])
-            query = f"{query} involving {npcs}"
+        # Select NPCs if not specified
+        if not involved_npcs and context.current_world_state:
+            available_npcs = [
+                npc.npc_id for npc in context.current_world_state.active_npcs
+                if npc.availability in ["available", "eager", "commanding"]
+            ]
+            involved_npcs = available_npcs[:2]  # Limit to 2 for focused interaction
+        
+        # Generate dialogue for each NPC
+        dialogues = []
+        if involved_npcs:
+            dialogue_agent = context.simulation_agents.get("dialogue_specialist")
             
-        # If there's a specific theme, add it for better relevance
-        if "theme" in story_context:
-            query = f"{query} with theme of {story_context['theme']}"
-            
-        # Get comprehensive context with vector search for relevance
-        comprehensive_context = await context_service.get_context(
-            input_text=query,
-            use_vector_search=True,
-            context_budget=context_service.config.get_token_budget("story_beat")
-        )
-        
-        # Launch parallel tasks for efficiency
-        from logic.narrative_events import get_relationship_overview
-        relationship_overview_task = asyncio.create_task(
-            get_relationship_overview(user_id, conversation_id)
-        )
-        
-        relevant_memories_task = asyncio.create_task(
-            memory_manager.search_memories(
-                query_text=query,
-                limit=7,  # Get more memories for richer context
-                use_vector=True
-            )
-        )
-        
-        # Get active conflicts in parallel
-        conflict_manager = director_context.conflict_manager
-        active_conflicts_task = asyncio.create_task(
-            conflict_manager.get_active_conflicts()
-        )
-        
-        # Use vector search to find related entities
-        vector_results_task = asyncio.create_task(
-            vector_service.search_entities(
-                query_text=query,
-                entity_types=["npc", "location", "memory", "narrative"],
-                top_k=10,
-                hybrid_ranking=True  # Use hybrid ranking for better relevance
-            )
-        )
-        
-        # Wait for all parallel tasks
-        relationship_overview = await relationship_overview_task
-        relevant_memories = await relevant_memories_task
-        active_conflicts = await active_conflicts_task
-        vector_results = await vector_results_task
-        
-        # Extract and organize memory content
-        memory_content = []
-        for memory in relevant_memories:
-            if hasattr(memory, 'content'):
-                memory_content.append(memory.content)
-            elif isinstance(memory, dict) and 'content' in memory:
-                memory_content.append(memory['content'])
+            for npc_id in involved_npcs:
+                # Get NPC data
+                async with get_db_connection_context() as conn:
+                    npc = await conn.fetchrow("""
+                        SELECT npc_name, dominance, closeness
+                        FROM NPCStats WHERE npc_id=$1
+                    """, npc_id)
                 
-        # Get NPCs from comprehensive context and vector results
-        npcs = comprehensive_context.get("npcs", [])
-        npc_names = [npc.get("npc_name", "Unknown") for npc in npcs[:5]]
+                if npc and dialogue_agent:
+                    prompt = f"""
+                    Generate natural dialogue for {npc['npc_name']} in a {scene_focus} scene.
+                    Dominance: {npc['dominance']}, Closeness: {npc['closeness']}
+                    Time: {context.current_world_state.current_time.value}
+                    Keep it slice-of-life, 1-2 sentences.
+                    """
+                    
+                    result = await Runner.run(dialogue_agent, prompt)
+                    if result:
+                        dialogues.append({
+                            "npc_id": npc_id,
+                            "npc_name": npc['npc_name'],
+                            "dialogue": result.final_output
+                        })
         
-        # Add NPCs from vector results if not already included
-        for result in vector_results:
-            if "metadata" in result and "entity_type" in result["metadata"] and result["metadata"]["entity_type"] == "npc":
-                npc_name = result["metadata"].get("npc_name", "")
-                if npc_name and npc_name not in npc_names:
-                    npc_names.append(npc_name)
-                    if len(npc_names) >= 5:  # Limit to 5 NPCs
-                        break
-        
-        # Use conflict analyst if active conflicts exist
-        conflict_analysis = {"analysis": "No active conflicts found."}
-        if active_conflicts:
-            main_conflict = active_conflicts[0]  # Most important conflict
-            conflict_context = ConflictAnalystContext(
-                user_id=user_id,
-                conversation_id=conversation_id
-            )
-            
-            conflict_analysis = await analyze_conflict(main_conflict["conflict_id"], conflict_context)
-        
-        # Determine appropriate narrative element type based on story context
-        element_type = story_context.get("requested_element_type", "")
-        if not element_type:
-            # Choose appropriate element type based on relationship stages
-            most_advanced_stage = "Unknown"
-            if relationship_overview and relationship_overview.get('most_advanced_npcs'):
-                most_advanced_stage = relationship_overview['most_advanced_npcs'][0].get('stage', 'Unknown')
-            
-            if most_advanced_stage in ["Innocent Beginning", "First Doubts"]:
-                element_type = "subtle_manipulation"
-            elif most_advanced_stage in ["Creeping Realization"]:
-                element_type = "revelation"
-            else:
-                element_type = "explicit_control"
-        
-        # Get player stats for context
-        player_stats = comprehensive_context.get("player_stats", {})
-        
-        # Initialize narrative context with full context integration
-        narrative_context = NarrativeCrafterContext(
-            user_id=user_id,
-            conversation_id=conversation_id
-        )
-        
-        # Get optimal narrative context if available
-        narrative_context_data = {}
-        if narrative_manager:
-            try:
-                narrative_context_data = await narrative_manager.get_optimal_narrative_context(
-                    query=query,
-                    max_tokens=1000
+        # Check for power dynamics opportunities
+        power_dynamics = []
+        if context.current_world_state and context.current_world_state.world_tension.power_tension > 0.3:
+            for npc_id in involved_npcs[:1]:  # One main dynamic per scene
+                power_exchange = await generate_contextual_power_exchange(
+                    context, npc_id, scene_focus
                 )
-            except Exception as narrative_error:
-                logger.warning(f"Error getting narrative context: {narrative_error}")
+                if power_exchange:
+                    power_dynamics.append(power_exchange)
         
-        # Generate narrative element with rich context
-        narrative_element = await generate_narrative_element(
-            element_type,
-            {
-                "npc_names": npc_names,
-                "relationship_overview": relationship_overview,
-                "player_stats": player_stats,
-                "conflict_analysis": conflict_analysis["analysis"],
-                "requested_focus": story_context.get("narrative_focus", ""),
-                "recent_memories": "\n".join(memory_content[:3]),  # Top 3 memories
-                "comprehensive_context": comprehensive_context,  # Pass complete context
-                "narrative_context": narrative_context_data  # Pass optimal narrative context
-            },
-            narrative_context
-        )
+        # Detect emergent patterns
+        sol_context.record_interaction({
+            "type": "scene",
+            "focus": scene_focus,
+            "npcs": involved_npcs,
+            "time": datetime.now().isoformat()
+        })
         
-        # Store the narrative element in both memory systems
-        memory_id = await memory_manager.add_memory(
-            content=narrative_element["content"],
-            memory_type="narrative_element",
-            importance=0.8,
-            tags=[element_type, "story_beat"],
-            metadata={
-                "element_type": element_type,
-                "relationship_stages": relationship_overview.get('stage_distribution', {}),
-                "source": "story_beat_generation"
-            }
-        )
+        patterns = await detect_emergent_patterns(sol_context)
         
-        # Add to narrative manager for progressive summarization
-        if narrative_manager:
-            try:
-                await narrative_manager.add_revelation(
-                    content=narrative_element["content"],
-                    revelation_type=element_type,
-                    importance=0.8,
-                    tags=[element_type, "story_beat"]
-                )
-            except Exception as narrative_error:
-                logger.warning(f"Error adding to narrative manager: {narrative_error}")
-        
-        # Create a context diff for the new narrative element
-        context_manager.apply_targeted_change(
-            path="/narrative_elements",
-            value={
-                "type": element_type,
-                "content": narrative_element["content"],
-                "timestamp": datetime.now().isoformat()
-            },
-            operation="add"
-        )
-        
-        # Use the Story Director to integrate everything
-        director_agent, _ = await initialize_story_director(user_id, conversation_id)
-        
-        # Build a rich, context-aware prompt
-        most_advanced_stage = "Unknown"
-        if relationship_overview and relationship_overview.get('most_advanced_npcs'):
-            most_advanced_stage = relationship_overview['most_advanced_npcs'][0].get('stage', 'Unknown')
-        
-        integration_prompt = f"""
-        Create a compelling story beat that integrates the following elements:
-        
-        RELATIONSHIP OVERVIEW:
-        - Total relationships: {relationship_overview.get('total_relationships', 0)}
-        - Most advanced stage: {most_advanced_stage}
-        - Stage distribution: {json.dumps(relationship_overview.get('stage_distribution', {}), indent=2)}
-        
-        CONFLICT ANALYSIS: 
-        {conflict_analysis["analysis"]}
-        
-        NARRATIVE ELEMENT:
-        {narrative_element["content"]}
-        
-        PLAYER STATS:
-        {json.dumps(player_stats, indent=2)}
-        
-        KEY NPCs:
-        {", ".join(npc_names)}
-        
-        RECENT MEMORIES:
-        {memory_content[0] if memory_content else "No recent memories"}
-        
-        USER REQUESTS:
-        Focus: {story_context.get("narrative_focus", "No specific focus")}
-        Tone: {story_context.get("tone", "Default tone")}
-        
-        Create a cohesive story beat that:
-        1. Advances the narrative appropriately for the current relationship stages
-        2. Integrates conflict elements naturally
-        3. Showcases characters authentically
-        4. Presents meaningful choices to the player
-        5. Maintains the overarching theme of subtle control and manipulation
-        
-        Format your response as a rich narrative scene followed by potential player choices and their implications.
-        """
-        
-        with trace(workflow_name="StoryBeatGeneration", group_id=f"user_{user_id}"):
-            story_beat = await Runner.run(
-                director_agent,
-                integration_prompt,
-                context=director_context
-            )
-        
-        # Track token usage and performance
-        if hasattr(story_beat, 'raw_responses') and story_beat.raw_responses:
-            for response in story_beat.raw_responses:
-                if hasattr(response, 'usage'):
-                    performance_monitor.record_token_usage(response.usage.total_tokens)
-        
-        # Store the story beat as a memory
-        await memory_manager.add_memory(
-            content=f"Generated story beat: {story_beat.final_output[:200]}...",
-            memory_type="story_beat",
-            importance=0.9,  # High importance for story beats
-            tags=["story_beat", element_type, most_advanced_stage.lower().replace(" ", "_")],
-            metadata={
-                "element_type": element_type,
-                "relationship_overview": relationship_overview,
-                "timestamp": datetime.now().isoformat()
-            }
+        # Store scene in memory
+        scene_description = f"{scene_focus} scene with {len(involved_npcs)} NPCs"
+        await context.memory_manager.add_memory(
+            content=scene_description,
+            memory_type="daily_scene",
+            importance=0.5,
+            tags=["scene", scene_focus, f"time_{context.current_world_state.current_time.value}"]
         )
         
         execution_time = time.time() - start_time
+        context.performance_monitor.stop_timer(timer_id)
         
-        # Stop performance tracking
-        performance_monitor.stop_timer(timer_id)
-        
-        # Return the final comprehensive story beat with rich metadata
         return {
-            "story_beat": story_beat.final_output,
-            "relationship_overview": relationship_overview,
-            "most_advanced_stage": most_advanced_stage,
-            "element_type": element_type,
-            "conflict_analysis": conflict_analysis,
-            "narrative_element": narrative_element,
-            "execution_time": execution_time,
-            "success": True,
-            "performance_metrics": performance_monitor.get_metrics(),
-            "context_version": comprehensive_context.get("version", None)
+            "scene": scene,
+            "dialogues": dialogues,
+            "power_dynamics": power_dynamics,
+            "emergent_patterns": patterns,
+            "world_mood": context.current_world_state.world_mood.value,
+            "execution_time": execution_time
         }
+        
     except Exception as e:
-        logger.error(f"Error generating comprehensive story beat: {e}", exc_info=True)
-        
-        # Stop the timer if still running
-        if 'timer_id' in locals() and 'performance_monitor' in locals():
-            performance_monitor.stop_timer(timer_id)
-            
-        # Try to record the error as a memory
-        try:
-            memory_manager = await get_memory_manager(user_id, conversation_id)
-            await memory_manager.add_memory(
-                content=f"Error generating story beat: {str(e)}",
-                memory_type="error",
-                importance=0.7,
-                tags=["error", "story_beat"],
-                metadata={
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-        except Exception as mem_error:
-            logger.error(f"Failed to record error in memory system: {mem_error}")
-            
-        return {
-            "error": str(e),
-            "success": False,
-            "execution_time": time.time() - start_time
-        }
+        logger.error(f"Error orchestrating daily scene: {e}", exc_info=True)
+        if 'timer_id' in locals():
+            context.performance_monitor.stop_timer(timer_id)
+        return {"error": str(e), "execution_time": time.time() - start_time}
 
-async def get_narrative_stage_info(comprehensive_context: Dict[str, Any]) -> Dict[str, str]:
-    """
-    Extract narrative stage information from comprehensive context.
-    Now uses relationship overview to determine the overall narrative state.
-    
-    Args:
-        comprehensive_context: Comprehensive context from context service
-        
-    Returns:
-        Dictionary with narrative stage name and description
-    """
-    relationship_overview = comprehensive_context.get("relationship_overview", {})
-    if not relationship_overview or not isinstance(relationship_overview, dict):
-        return {"name": "Unknown", "description": "No relationship overview information available"}
-    
-    # Get the most advanced NPC's stage
-    most_advanced_npcs = relationship_overview.get("most_advanced_npcs", [])
-    if most_advanced_npcs and len(most_advanced_npcs) > 0:
-        most_advanced = most_advanced_npcs[0]
-        return {
-            "name": most_advanced.get("stage", "Unknown"),
-            "description": f"Relationship with {most_advanced.get('npc_name', 'Unknown')} has progressed to {most_advanced.get('stage', 'Unknown')}"
-        }
-    
-    # If no advanced NPCs, check stage distribution
-    stage_distribution = relationship_overview.get("stage_distribution", {})
-    if stage_distribution:
-        # Find the most advanced stage with NPCs
-        stages_order = ["Full Revelation", "Veil Thinning", "Creeping Realization", "First Doubts", "Innocent Beginning"]
-        for stage in stages_order:
-            if stage in stage_distribution and stage_distribution[stage] > 0:
-                return {
-                    "name": stage,
-                    "description": f"{stage_distribution[stage]} NPCs are at the {stage} stage"
-                }
-    
-    return {"name": "Unknown", "description": "No narrative stage information available"}
-
-# ----- Agent Communication Interface -----
-
-@track_performance("agent_communicate")
-async def agent_communicate(
-    source_agent_type: str,
-    target_agent_type: str,
-    message: str,
-    context_data: Dict[str, Any]
+@track_performance("process_power_exchange")
+async def process_power_exchange_with_agents(
+    user_id: int,
+    conversation_id: int,
+    exchange: PowerExchange,
+    player_response: str
 ) -> Dict[str, Any]:
     """
-    Facilitate communication between two specialized agents.
-    
-    Args:
-        source_agent_type: Type of the source agent (e.g., "conflict_analyst")
-        target_agent_type: Type of the target agent (e.g., "narrative_crafter")
-        message: Message to send from source to target
-        context_data: Dictionary with additional context (user_id, conversation_id, etc.)
-        
-    Returns:
-        Response from the target agent
-    """
-    user_id = context_data.get("user_id")
-    conversation_id = context_data.get("conversation_id")
-    
-    if not user_id or not conversation_id:
-        raise ValueError("Missing user_id or conversation_id in context_data")
-    
-    # Initialize performance monitoring
-    performance_monitor = PerformanceMonitor.get_instance(user_id, conversation_id)
-    timer_id = performance_monitor.start_timer("agent_communication")
-    
-    # Context manager for tracking changes
-    context_manager = get_context_manager()
-    
-    try:
-        # Initialize comprehensive context components
-        context_service = await get_context_service(user_id, conversation_id)
-        memory_manager = await get_memory_manager(user_id, conversation_id)
-        vector_service = await get_vector_service(user_id, conversation_id)
-        
-        # Try to initialize narrative manager for progressive summarization
-        narrative_manager = None
-        try:
-            narrative_manager = RPGNarrativeManager(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                db_connection_string=None  # Will be initialized from config
-            )
-            await narrative_manager.initialize()
-        except Exception as e:
-            logger.warning(f"Could not initialize narrative manager: {e}")
-        
-        # Initialize specialized agents
-        specialized_agents = initialize_specialized_agents()
-        
-        # Validate agent types
-        if source_agent_type not in specialized_agents:
-            raise ValueError(f"Invalid source agent type: {source_agent_type}")
-        
-        if target_agent_type not in specialized_agents:
-            raise ValueError(f"Invalid target agent type: {target_agent_type}")
-        
-        source_agent = specialized_agents[source_agent_type]
-        target_agent = specialized_agents[target_agent_type]
-        
-        # Create appropriate context for the target agent
-        if target_agent_type == "conflict_analyst":
-            target_context = ConflictAnalystContext(
-                user_id=user_id,
-                conversation_id=conversation_id
-            )
-        elif target_agent_type == "narrative_crafter":
-            target_context = NarrativeCrafterContext(
-                user_id=user_id,
-                conversation_id=conversation_id
-            )
-        else:
-            # Generic context for other agent types
-            from story_agent.specialized_agents import AgentContext
-            target_context = AgentContext(
-                user_id=user_id,
-                conversation_id=conversation_id
-            )
-        
-        # Get comprehensive context with vector search for relevance
-        comprehensive_context = await context_service.get_context(
-            input_text=message,
-            use_vector_search=True
-        )
-        
-        # Get semantically relevant memories using vector search
-        relevant_memories = await memory_manager.search_memories(
-            query_text=message,
-            limit=5,
-            use_vector=True
-        )
-        
-        # Format memories
-        memory_text = ""
-        for memory in relevant_memories:
-            if hasattr(memory, 'content'):
-                memory_text += f"- {memory.content[:200]}...\n"
-            elif isinstance(memory, dict) and 'content' in memory:
-                memory_text += f"- {memory['content'][:200]}...\n"
-        
-        # Get optimal narrative context if available
-        narrative_context_text = ""
-        if narrative_manager:
-            try:
-                narrative_context_data = await narrative_manager.get_optimal_narrative_context(
-                    query=message,
-                    max_tokens=800
-                )
-                
-                for event in narrative_context_data.get("relevant_events", []):
-                    if "content" in event:
-                        narrative_context_text += f"- {event['content'][:150]}...\n"
-            except Exception as narrative_error:
-                logger.warning(f"Error getting narrative context: {narrative_error}")
-        
-        # Get key NPCs from context
-        npcs = comprehensive_context.get("npcs", [])
-        npc_text = ""
-        if npcs:
-            npc_text = "Key NPCs:\n"
-            for npc in npcs[:3]:  # Limit to top 3
-                npc_text += f"- {npc.get('npc_name', 'Unknown')}: {npc.get('description', '')[:100]}...\n"
-        
-        # Get relationship overview for context
-        from logic.narrative_events import get_relationship_overview
-        relationship_overview = await get_relationship_overview(user_id, conversation_id)
-        relationship_text = ""
-        if relationship_overview:
-            relationship_text = f"\nRelationship Overview:\n"
-            relationship_text += f"- Total relationships: {relationship_overview.get('total_relationships', 0)}\n"
-            if relationship_overview.get('most_advanced_npcs'):
-                most_advanced = relationship_overview['most_advanced_npcs'][0]
-                relationship_text += f"- Most advanced: {most_advanced.get('npc_name', 'Unknown')} at {most_advanced.get('stage', 'Unknown')}\n"
-        
-        # Format the message with rich context
-        formatted_message = f"""
-        Message from {source_agent_type.replace('_', ' ').title()}:
-        
-        {message}
-        
-        Relevant context:
-        - Current location: {comprehensive_context.get('current_location', 'Unknown')}
-        {relationship_text}
-        
-        {npc_text}
-        
-        Relevant memories:
-        {memory_text}
-        
-        {narrative_context_text}
-        
-        Please respond with your thoughts and analysis based on your expertise as {target_agent_type.replace('_', ' ').title()}.
-        """
-        
-        try:
-            # Send the message to the target agent with tracing
-            with trace(workflow_name="AgentCommunication", group_id=f"user_{user_id}"):
-                response = await Runner.run(
-                    target_agent,
-                    formatted_message,
-                    context=target_context
-                )
-            
-            # Track token usage
-            if hasattr(response, 'raw_responses') and response.raw_responses:
-                for resp in response.raw_responses:
-                    if hasattr(resp, 'usage'):
-                        performance_monitor.record_token_usage(resp.usage.total_tokens)
-            
-            # Store this communication as a memory
-            memory_id = await memory_manager.add_memory(
-                content=f"Communication from {source_agent_type} to {target_agent_type}: {message[:100]}...\nResponse: {response.final_output[:100]}...",
-                memory_type="agent_communication",
-                importance=0.4,
-                tags=[source_agent_type, target_agent_type, "communication"],
-                metadata={
-                    "source_agent": source_agent_type,
-                    "target_agent": target_agent_type,
-                    "full_message": message,
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-            
-            # Add to narrative manager for progressive summarization
-            if narrative_manager:
-                try:
-                    await narrative_manager.add_interaction(
-                        content=f"Agent communication: {source_agent_type} -> {target_agent_type}\nMessage: {message[:100]}...\nResponse: {response.final_output[:100]}...",
-                        importance=0.4,
-                        tags=[source_agent_type, target_agent_type, "communication"]
-                    )
-                except Exception as narrative_error:
-                    logger.warning(f"Error adding to narrative manager: {narrative_error}")
-            
-            # Create a context diff for the new communication
-            await context_manager.apply_targeted_change(
-                path="/agent_communications",
-                value={
-                    "source": source_agent_type,
-                    "target": target_agent_type,
-                    "message_fragment": message[:50],
-                    "response_fragment": response.final_output[:50],
-                    "timestamp": datetime.now().isoformat()
-                },
-                operation="add"
-            )
-            
-            # Return the response with metadata
-            return {
-                "source_agent": source_agent_type,
-                "target_agent": target_agent_type,
-                "original_message": message,
-                "response": response.final_output,
-                "memory_id": memory_id,
-                "success": True,
-                "context_version": comprehensive_context.get("version", None)
-            }
-        except Exception as e:
-            logger.error(f"Error in agent communication: {e}", exc_info=True)
-            
-            # Record the error as a memory
-            await memory_manager.add_memory(
-                content=f"Error in communication from {source_agent_type} to {target_agent_type}: {str(e)}",
-                memory_type="error",
-                importance=0.5,
-                tags=[source_agent_type, target_agent_type, "error", "communication"],
-                metadata={
-                    "source_agent": source_agent_type,
-                    "target_agent": target_agent_type,
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-            
-            return {
-                "source_agent": source_agent_type,
-                "target_agent": target_agent_type,
-                "original_message": message,
-                "error": str(e),
-                "success": False
-            }
-    finally:
-        # Stop the timer
-        if 'timer_id' in locals() and 'performance_monitor' in locals():
-            performance_monitor.stop_timer(timer_id)
-
-# ----- API Interface Functions -----
-
-@track_performance("get_agent_recommendations")
-async def get_agent_recommendations(user_id: int, conversation_id: int) -> Dict[str, Any]:
-    """
-    Get recommendations from all specialized agents regarding the current story state.
+    Process a power exchange using multiple agents to determine outcomes.
     
     Args:
         user_id: User ID
         conversation_id: Conversation ID
+        exchange: The power exchange to process
+        player_response: How the player responded
         
     Returns:
-        Dictionary with recommendations from each agent
+        Outcomes and narrative consequences
     """
-    # Initialize performance monitoring
-    performance_monitor = PerformanceMonitor.get_instance(user_id, conversation_id)
-    timer_id = performance_monitor.start_timer("get_agent_recommendations")
+    context = AgentCoordinationContext(user_id, conversation_id)
+    await context.initialize()
     
     try:
-        # Initialize comprehensive context components
-        context_service = await get_context_service(user_id, conversation_id)
-        memory_manager = await get_memory_manager(user_id, conversation_id)
-        vector_service = await get_vector_service(user_id, conversation_id)
+        # Analyze response type
+        response_type = analyze_response_type(player_response)
         
-        # Try to initialize narrative manager for progressive summarization
-        narrative_manager = None
-        try:
-            narrative_manager = RPGNarrativeManager(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                db_connection_string=None  # Will be initialized from config
-            )
-            await narrative_manager.initialize()
-        except Exception as e:
-            logger.warning(f"Could not initialize narrative manager: {e}")
+        # Get relationship dynamics agent
+        relationship_agent = context.simulation_agents.get("relationship_dynamics")
         
-        # Get comprehensive context with vector search
-        config = get_config()
-        comprehensive_context = await context_service.get_context(
-            input_text="story state recommendations",
-            use_vector_search=True,
-            context_budget=context_service.config.get_token_budget("recommendations")
-        )
+        # Process relationship impact
+        relationship_prompt = f"""
+        Player responded to {exchange.exchange_type.value} with: {player_response}
+        Response type: {response_type}
+        Intensity: {exchange.intensity}
         
-        # Initialize specialized agents
-        specialized_agents = initialize_specialized_agents()
-        
-        # Get current story state
-        director_agent, director_context = await initialize_story_director(user_id, conversation_id)
-        
-        # Get relationship overview
-        from logic.narrative_events import get_relationship_overview
-        relationship_overview = await get_relationship_overview(user_id, conversation_id)
-        
-        # Build an enhanced prompt with comprehensive context
-        story_state_prompt = f"""
-        Analyze the current state of the story and provide a comprehensive overview of:
-        1. The relationship overview ({relationship_overview.get('total_relationships', 0)} relationships, stage distribution: {relationship_overview.get('stage_distribution', {})})
-        2. Active conflicts and their status ({len(comprehensive_context.get('conflicts', []))})
-        3. Key NPC relationships ({len(comprehensive_context.get('npcs', []))})
-        4. Player stats and their implications
-        5. Recent significant events
-        
-        Format this as a structured summary of the current story state.
+        Determine relationship impacts and progression.
         """
         
-        with trace(workflow_name="StoryStateAnalysis", group_id=f"user_{user_id}"):
-            story_state = await Runner.run(
-                director_agent,
-                story_state_prompt,
-                context=director_context
-            )
+        relationship_result = None
+        if relationship_agent:
+            relationship_result = await Runner.run(relationship_agent, relationship_prompt)
         
-        # Track token usage
-        if hasattr(story_state, 'raw_responses') and story_state.raw_responses:
-            for resp in story_state.raw_responses:
-                if hasattr(resp, 'usage'):
-                    performance_monitor.record_token_usage(resp.usage.total_tokens)
+        # Update relationship in database
+        relationship_impacts = await update_relationship_from_exchange(
+            context, exchange, response_type
+        )
         
-        # Get optimal context in parallel for each agent
-        if narrative_manager:
-            optimal_contexts = {}
-            for agent_type in specialized_agents.keys():
-                try:
-                    optimal_contexts[agent_type] = asyncio.create_task(
-                        narrative_manager.get_optimal_narrative_context(
-                            query=f"{agent_type} recommendation for current story state",
-                            max_tokens=800
-                        )
-                    )
-                except Exception as e:
-                    logger.warning(f"Error getting optimal context for {agent_type}: {e}")
+        # Generate narrative outcome
+        pattern_agent = context.simulation_agents.get("pattern_recognition")
+        narrative_outcome = "The moment passes."
         
-        # Gather recommendations from each specialized agent
-        recommendations = {}
-        tasks = []
-        
-        for agent_type, agent in specialized_agents.items():
-            # Create appropriate context for each agent
-            if agent_type == "conflict_analyst":
-                agent_context = ConflictAnalystContext(
-                    user_id=user_id,
-                    conversation_id=conversation_id
-                )
-            elif agent_type == "narrative_crafter":
-                agent_context = NarrativeCrafterContext(
-                    user_id=user_id,
-                    conversation_id=conversation_id
-                )
-            else:
-                # Generic context for other agent types
-                from story_agent.specialized_agents import AgentContext
-                agent_context = AgentContext(
-                    user_id=user_id,
-                    conversation_id=conversation_id
-                )
+        if pattern_agent:
+            pattern_prompt = f"""
+            Analyze this power exchange for narrative significance:
+            Type: {exchange.exchange_type.value}
+            Response: {response_type}
             
-            # Get semantically relevant memories for each agent
-            relevant_memories_task = asyncio.create_task(
-                memory_manager.search_memories(
-                    query_text=f"{agent_type} recommendation",
-                    limit=3,
-                    use_vector=True
-                )
-            )
-            
-            # Wait for memories
-            relevant_memories = await relevant_memories_task
-            
-            memory_text = ""
-            for memory in relevant_memories:
-                if hasattr(memory, 'content'):
-                    memory_text += f"- {memory.content[:150]}...\n"
-                elif isinstance(memory, dict) and 'content' in memory:
-                    memory_text += f"- {memory['content'][:150]}...\n"
-            
-            # Get optimal context for this agent if available
-            narrative_context_text = ""
-            if narrative_manager and agent_type in optimal_contexts:
-                try:
-                    narrative_context_data = await optimal_contexts[agent_type]
-                    
-                    for event in narrative_context_data.get("relevant_events", []):
-                        if "content" in event:
-                            narrative_context_text += f"- {event['content'][:150]}...\n"
-                except Exception as e:
-                    logger.warning(f"Error retrieving optimal context for {agent_type}: {e}")
-            
-            # Create recommendation prompt for each agent with rich context
-            agent_prompt = f"""
-            Based on the current story state:
-            
-            {story_state.final_output}
-            
-            Relevant memories:
-            {memory_text}
-            
-            {narrative_context_text}
-            
-            Relationship Overview:
-            - Total relationships: {relationship_overview.get('total_relationships', 0)}
-            - Stage distribution: {relationship_overview.get('stage_distribution', {})}
-            
-            As the {agent_type.replace('_', ' ').title()}, what do you recommend for advancing the story?
-            
-            Focus on your specific area of expertise and provide clear, actionable recommendations.
+            What patterns or narrative threads emerge?
             """
             
-            # Create task for this agent
-            async def get_agent_recommendation(agent_name, agent_obj, context, prompt):
-                try:
-                    with trace(workflow_name=f"{agent_name.capitalize()}Recommendation", group_id=f"user_{user_id}"):
-                        result = await Runner.run(
-                            agent_obj,
-                            prompt,
-                            context=context
-                        )
-                    
-                    # Track token usage
-                    if hasattr(result, 'raw_responses') and result.raw_responses:
-                        for resp in result.raw_responses:
-                            if hasattr(resp, 'usage'):
-                                performance_monitor.record_token_usage(resp.usage.total_tokens)
-                    
-                    return agent_name, result.final_output
-                except Exception as e:
-                    logger.error(f"Error getting recommendation from {agent_name}: {e}", exc_info=True)
-                    return agent_name, f"Error: {str(e)}"
-            
-            tasks.append(
-                asyncio.create_task(
-                    get_agent_recommendation(agent_type, agent, agent_context, agent_prompt)
-                )
-            )
+            pattern_result = await Runner.run(pattern_agent, pattern_prompt)
+            if pattern_result:
+                narrative_outcome = pattern_result.final_output
         
-        # Wait for all recommendations
-        results = await asyncio.gather(*tasks)
+        # Adjust world tensions
+        await adjust_world_tensions_from_exchange(context, exchange, response_type)
         
-        # Compile results
-        for agent_name, recommendation in results:
-            recommendations[agent_name] = recommendation
-        
-        # Store this as a memory in both systems
-        memory_id = await memory_manager.add_memory(
-            content=f"Generated agent recommendations for story state",
-            memory_type="recommendation_generation",
-            importance=0.6,
-            tags=["recommendations", "story_state"],
+        # Store in memory
+        memory_content = f"Power exchange ({exchange.exchange_type.value}): {response_type} response"
+        await context.memory_manager.add_memory(
+            content=memory_content,
+            memory_type="power_exchange",
+            importance=0.6 + (exchange.intensity * 0.2),
+            tags=["power_exchange", exchange.exchange_type.value, response_type],
             metadata={
-                "agents": list(recommendations.keys()),
-                "timestamp": datetime.now().isoformat()
+                "npc_id": exchange.initiator_npc_id,
+                "intensity": exchange.intensity,
+                "public": exchange.is_public
             }
         )
         
-        # Add to narrative manager for progressive summarization
-        if narrative_manager:
-            try:
-                summary_content = f"Agent recommendations for story state:\n"
-                for agent_type, rec in recommendations.items():
-                    summary_content += f"- {agent_type}: {rec[:100]}...\n"
-                
-                await narrative_manager.add_interaction(
-                    content=summary_content,
-                    importance=0.6,
-                    tags=["recommendations", "story_state"]
-                )
-            except Exception as narrative_error:
-                logger.warning(f"Error adding to narrative manager: {narrative_error}")
-        
-        # Return compiled recommendations with rich metadata
         return {
-            "story_state": story_state.final_output,
-            "recommendations": recommendations,
-            "relationship_overview": relationship_overview,
-            "timestamp": datetime.now().isoformat(),
-            "performance_metrics": performance_monitor.get_metrics(),
-            "context_version": comprehensive_context.get("version", None),
-            "memory_id": memory_id
+            "response_type": response_type,
+            "relationship_impacts": relationship_impacts,
+            "narrative_outcome": narrative_outcome,
+            "world_tension_changes": {
+                "power": 0.1 if response_type == "submit" else -0.05,
+                "sexual": 0.05 if exchange.intensity > 0.7 else 0
+            }
         }
+        
     except Exception as e:
-        logger.error(f"Error getting agent recommendations: {e}", exc_info=True)
+        logger.error(f"Error processing power exchange: {e}", exc_info=True)
+        return {"error": str(e)}
+
+@track_performance("generate_ambient_world")
+async def generate_ambient_world_details(
+    user_id: int,
+    conversation_id: int
+) -> Dict[str, Any]:
+    """
+    Generate ambient world details using specialized agents.
+    
+    Returns:
+        Ambient details including background NPCs, atmosphere, etc.
+    """
+    context = AgentCoordinationContext(user_id, conversation_id)
+    await context.initialize()
+    
+    try:
+        ambient_agent = context.simulation_agents.get("ambient_world")
         
-        # Try to record the error as a memory
-        try:
-            memory_manager = await get_memory_manager(user_id, conversation_id)
-            await memory_manager.add_memory(
-                content=f"Error getting agent recommendations: {str(e)}",
-                memory_type="error",
-                importance=0.5,
-                tags=["error", "recommendations"],
-                metadata={
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-        except Exception as mem_error:
-            logger.error(f"Failed to record error in memory system: {mem_error}")
-            
+        if not ambient_agent:
+            return {"error": "Ambient agent not available"}
+        
+        prompt = f"""
+        Generate ambient details for:
+        Time: {context.current_world_state.current_time.value}
+        Mood: {context.current_world_state.world_mood.value}
+        Location: current
+        Active NPCs: {len(context.current_world_state.active_npcs)}
+        
+        Include sensory details, background activity, and atmosphere.
+        """
+        
+        result = await Runner.run(ambient_agent, prompt)
+        
         return {
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
+            "ambient_details": result.final_output if result else "",
+            "world_mood": context.current_world_state.world_mood.value,
+            "time_of_day": context.current_world_state.current_time.value
         }
-    finally:
-        # Stop the timer
-        if 'timer_id' in locals() and 'performance_monitor' in locals():
-            performance_monitor.stop_timer(timer_id)
+        
+    except Exception as e:
+        logger.error(f"Error generating ambient details: {e}", exc_info=True)
+        return {"error": str(e)}
+
+# ===============================================================================
+# Inter-Agent Communication
+# ===============================================================================
+
+@track_performance("agent_handoff")
+async def coordinate_agent_handoff(
+    user_id: int,
+    conversation_id: int,
+    from_agent: str,
+    to_agent: str,
+    handoff_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Coordinate handoff between specialized agents.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        from_agent: Source agent name
+        to_agent: Target agent name
+        handoff_data: Data to pass between agents
+        
+    Returns:
+        Result of the handoff
+    """
+    context = AgentCoordinationContext(user_id, conversation_id)
+    await context.initialize()
+    
+    try:
+        source = context.simulation_agents.get(from_agent)
+        target = context.simulation_agents.get(to_agent)
+        
+        if not source or not target:
+            return {"error": f"Agent not found: {from_agent if not source else to_agent}"}
+        
+        # Format handoff message
+        handoff_message = f"""
+        Handoff from {from_agent}:
+        
+        Context: {json.dumps(handoff_data, indent=2)}
+        World State: Time={context.current_world_state.current_time.value}, 
+                    Mood={context.current_world_state.world_mood.value}
+        
+        Please continue with your specialized processing.
+        """
+        
+        with trace(workflow_name="AgentHandoff", group_id=f"user_{user_id}"):
+            result = await Runner.run(target, handoff_message)
+        
+        return {
+            "from_agent": from_agent,
+            "to_agent": to_agent,
+            "result": result.final_output if result else None,
+            "success": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in agent handoff: {e}", exc_info=True)
+        return {"error": str(e), "success": False}
+
+# ===============================================================================
+# Helper Functions
+# ===============================================================================
+
+def analyze_response_type(response: str) -> str:
+    """Analyze player response to categorize it"""
+    response_lower = response.lower()
+    
+    if any(word in response_lower for word in ["yes", "okay", "sure", "of course", "gladly"]):
+        return "submit"
+    elif any(word in response_lower for word in ["no", "don't", "won't", "refuse", "never"]):
+        return "resist"
+    elif any(word in response_lower for word in ["maybe", "later", "busy", "hmm"]):
+        return "deflect"
+    elif any(word in response_lower for word in ["why", "what", "how", "explain"]):
+        return "question"
+    else:
+        return "neutral"
+
+async def generate_contextual_power_exchange(
+    context: AgentCoordinationContext,
+    npc_id: int,
+    scene_focus: str
+) -> Optional[Dict[str, Any]]:
+    """Generate a contextual power exchange for the scene"""
+    
+    # Get NPC data
+    async with get_db_connection_context() as conn:
+        npc = await conn.fetchrow("""
+            SELECT npc_name, dominance, closeness, intensity
+            FROM NPCStats WHERE npc_id=$1
+        """, npc_id)
+    
+    if not npc:
+        return None
+    
+    # Determine exchange type based on scene and NPC
+    if scene_focus == "intimate" and npc['closeness'] > 60:
+        exchange_type = PowerDynamicType.INTIMATE_COMMAND
+    elif scene_focus == "routine" and npc['dominance'] > 60:
+        exchange_type = PowerDynamicType.CASUAL_DOMINANCE
+    elif scene_focus == "social":
+        exchange_type = PowerDynamicType.SOCIAL_HIERARCHY
+    else:
+        exchange_type = PowerDynamicType.SUBTLE_CONTROL
+    
+    return {
+        "type": exchange_type.value,
+        "npc_id": npc_id,
+        "npc_name": npc['npc_name'],
+        "intensity": min(1.0, npc['intensity'] / 100.0),
+        "description": f"{npc['npc_name']} subtly asserts control"
+    }
+
+async def update_relationship_from_exchange(
+    context: AgentCoordinationContext,
+    exchange: PowerExchange,
+    response_type: str
+) -> Dict[str, float]:
+    """Update relationship based on power exchange outcome"""
+    
+    impacts = {}
+    
+    # Determine impacts based on response
+    if response_type == "submit":
+        impacts = {
+            "submission": 0.02 * exchange.intensity,
+            "trust": 0.01,
+            "dependency": 0.015 * exchange.intensity
+        }
+    elif response_type == "resist":
+        impacts = {
+            "submission": -0.01,
+            "tension": 0.02,
+            "conflict": 0.01
+        }
+    elif response_type == "deflect":
+        impacts = {
+            "tension": 0.01,
+            "mystery": 0.01
+        }
+    
+    # Apply impacts (would integrate with relationship system)
+    # This is a placeholder for the actual relationship update
+    
+    return impacts
+
+async def adjust_world_tensions_from_exchange(
+    context: AgentCoordinationContext,
+    exchange: PowerExchange,
+    response_type: str
+):
+    """Adjust world tensions based on power exchange"""
+    
+    if context.current_world_state:
+        # Adjust power tension
+        if response_type == "submit":
+            context.current_world_state.world_tension.power_tension = min(
+                1.0,
+                context.current_world_state.world_tension.power_tension + (0.1 * exchange.intensity)
+            )
+        elif response_type == "resist":
+            context.current_world_state.world_tension.conflict_tension = min(
+                1.0,
+                context.current_world_state.world_tension.conflict_tension + 0.05
+            )
+        
+        # Adjust sexual tension for intimate exchanges
+        if exchange.exchange_type in [PowerDynamicType.INTIMATE_COMMAND, PowerDynamicType.RITUAL_SUBMISSION]:
+            context.current_world_state.world_tension.sexual_tension = min(
+                1.0,
+                context.current_world_state.world_tension.sexual_tension + (0.05 * exchange.intensity)
+            )
+
+# ===============================================================================
+# Public API Functions
+# ===============================================================================
+
+async def get_agent_analysis(
+    user_id: int,
+    conversation_id: int,
+    analysis_type: str = "patterns"
+) -> Dict[str, Any]:
+    """
+    Get agent analysis of current game state.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        analysis_type: Type of analysis (patterns, relationships, tensions)
+        
+    Returns:
+        Analysis results from specialized agents
+    """
+    context = AgentCoordinationContext(user_id, conversation_id)
+    await context.initialize()
+    
+    results = {}
+    
+    if analysis_type == "patterns":
+        # Use pattern recognition agent
+        agent = context.simulation_agents.get("pattern_recognition")
+        if agent:
+            prompt = "Analyze current patterns in player behavior and relationships"
+            result = await Runner.run(agent, prompt)
+            results["patterns"] = result.final_output if result else "No patterns detected"
+    
+    elif analysis_type == "relationships":
+        # Use relationship dynamics agent
+        agent = context.simulation_agents.get("relationship_dynamics")
+        if agent:
+            prompt = "Analyze current relationship dynamics and power structures"
+            result = await Runner.run(agent, prompt)
+            results["relationships"] = result.final_output if result else "No analysis available"
+    
+    elif analysis_type == "tensions":
+        # Analyze world tensions
+        if context.current_world_state:
+            dominant_tension, level = context.current_world_state.world_tension.get_dominant_tension()
+            results["tensions"] = {
+                "dominant": dominant_tension,
+                "level": level,
+                "all_tensions": {
+                    "social": context.current_world_state.world_tension.social_tension,
+                    "sexual": context.current_world_state.world_tension.sexual_tension,
+                    "power": context.current_world_state.world_tension.power_tension,
+                    "mystery": context.current_world_state.world_tension.mystery_tension,
+                    "conflict": context.current_world_state.world_tension.conflict_tension
+                }
+            }
+    
+    return results
+
+async def simulate_autonomous_world(
+    user_id: int,
+    conversation_id: int,
+    hours: int = 1
+) -> Dict[str, Any]:
+    """
+    Simulate autonomous world progression without player input.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        hours: Hours to simulate
+        
+    Returns:
+        Summary of autonomous world events
+    """
+    context = AgentCoordinationContext(user_id, conversation_id)
+    await context.initialize()
+    
+    events = []
+    
+    for hour in range(hours):
+        # Advance time
+        await context.world_director.simulate_world_tick()
+        
+        # Generate NPC autonomous actions
+        if context.current_world_state:
+            for npc in context.current_world_state.active_npcs[:3]:  # Limit to 3 NPCs
+                activity = await context.simulation_agents["activity_generator"].run(
+                    f"Generate autonomous activity for NPC {npc.npc_name}"
+                )
+                if activity:
+                    events.append({
+                        "hour": hour,
+                        "npc": npc.npc_name,
+                        "activity": activity
+                    })
+    
+    return {
+        "simulated_hours": hours,
+        "events": events,
+        "final_world_state": context.current_world_state.model_dump() if context.current_world_state else None
+    }
