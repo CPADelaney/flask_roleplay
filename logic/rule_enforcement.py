@@ -15,7 +15,6 @@ from db.connection import get_db_connection_context
 import json, random, asyncio
 import logging
 import asyncpg
-from logic.chatgpt_integration import get_openai_client
 
 """
 # If meltdown logic or memory logic are used
@@ -200,6 +199,7 @@ async def apply_effect(effect_str, player_name, npc_id=None):
     
     Now uses NPC-specific intensity rather than global plot intensity.
     """
+    from logic.chatgpt_integration import get_openai_client
     result = {
         "message": "",
         "statUpdates": {},
