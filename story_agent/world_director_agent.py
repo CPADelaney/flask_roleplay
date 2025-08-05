@@ -27,8 +27,7 @@ from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContex
 # Universal Updater for Narrative Processing
 from logic.universal_updater_agent import (
     UniversalUpdaterAgent,
-    process_universal_update,
-    convert_response_to_array_format
+    process_universal_update
 )
 
 # Memory System Integration
