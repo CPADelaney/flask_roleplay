@@ -10,7 +10,6 @@ from typing import Dict
 import asyncio
 import asyncpg
 from db.connection import get_db_connection_context
-from logic.chatgpt_integration import get_async_openai_client, build_message_history, safe_json_loads
 from lore.core import canon
 from agents import RunContextWrapper
 
@@ -26,7 +25,7 @@ async def get_chatgpt_response_no_function(
     """
     Fire a call to the Responses endpoint and return the plain-text output.
     """
-
+    from logic.chatgpt_integration import get_async_openai_client, build_message_history, safe_json_loads
     client = get_async_openai_client()   # Use the existing function
 
     # prepare the request payload ------------------------------------------
