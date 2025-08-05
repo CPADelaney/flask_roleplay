@@ -7,14 +7,14 @@ This module provides a unified central governance system that controls all aspec
 including world simulation, NPCs, memory systems, user modeling, and more. All agent modules
 are coordinated through this central authority, ensuring Nyx maintains consistent control.
 
-REFACTORED: Adapted for open-world slice-of-life simulation instead of linear story progression.
+REFACTORED: Complete lazy loading to prevent circular imports while preserving ALL functionality.
 """
 
 import logging
 import json
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, List, Any, Optional, Union, Tuple, TYPE_CHECKING
 from memory.memory_nyx_integration import (
     get_memory_nyx_bridge,
     remember_through_nyx,
@@ -28,91 +28,90 @@ from lore.validation import ValidationManager
 
 import asyncpg
 
-# ===============================================================================
-# WORLD SIMULATION IMPORTS (replacing old story imports)
-# ===============================================================================
-
-# Core world simulation
-from story_agent.world_director_agent import (
-    CompleteWorldDirector,
-    CompleteWorldState,
-    WorldMood,
-    TimeOfDay,
-    ActivityType,
-    PowerDynamicType,
-    CompleteWorldDirectorContext
-)
-
-# Slice-of-life narration
-from story_agent.slice_of_life_narrator import (
-    SliceOfLifeNarrator,
-    create_slice_of_life_narrator,
-    SliceOfLifeNarration,
-    NPCDialogue,
-    PowerMomentNarration,
-    DailyActivityNarration,
-    AmbientNarration,
-    NarrativeTone,
-    SceneFocus
-)
-
-# Activity and task generation
-from story_agent.activity_recommender import (
-    recommend_activities,
-    get_quick_activity_suggestion,
-    get_npc_initiated_activity,
-    ActivityContext,
-    RecommendedActivity,
-    ActivityPriority
-)
-from story_agent.daily_task_generator import (
-    DailyTaskGenerator,
-    DailyTask,
-    TaskContext,
-    DailyTaskType,
-    TaskComplexity
-)
-
-# World simulation agents
-from story_agent.world_simulation_agents import (
-    initialize_world_simulation_agents,
-    SliceOfLifeContext,
-    coordinate_slice_of_life_scene,
-    detect_emergent_patterns
-)
-
-# Agent interaction and coordination
-from story_agent.agent_interaction import (
-    orchestrate_daily_scene,
-    process_power_exchange_with_agents,
-    generate_ambient_world_details,
-    coordinate_agent_handoff,
-    get_agent_analysis,
-    simulate_autonomous_world,
-    AgentCoordinationContext
-)
-
-# Balance and memory systems
-from story_agent.emergent_balance_manager import (
-    EmergentBalanceManager,
-    SimulationBalance,
-    BalanceAxis
-)
-from story_agent.world_memory_system import (
-    WorldMemorySystem,
-    DailyRoutineMemory,
-    RelationshipMemory
-)
+# Type checking imports (don't cause circular imports)
+if TYPE_CHECKING:
+    from story_agent.world_director_agent import (
+        CompleteWorldDirector,
+        CompleteWorldState,
+        WorldMood,
+        TimeOfDay,
+        ActivityType,
+        PowerDynamicType,
+        CompleteWorldDirectorContext
+    )
+    from story_agent.slice_of_life_narrator import (
+        SliceOfLifeNarrator,
+        create_slice_of_life_narrator,
+        SliceOfLifeNarration,
+        NPCDialogue,
+        PowerMomentNarration,
+        DailyActivityNarration,
+        AmbientNarration,
+        NarrativeTone,
+        SceneFocus
+    )
+    from story_agent.activity_recommender import (
+        recommend_activities,
+        get_quick_activity_suggestion,
+        get_npc_initiated_activity,
+        ActivityContext,
+        RecommendedActivity,
+        ActivityPriority
+    )
+    from story_agent.daily_task_generator import (
+        DailyTaskGenerator,
+        DailyTask,
+        TaskContext,
+        DailyTaskType,
+        TaskComplexity
+    )
+    from story_agent.world_simulation_agents import (
+        initialize_world_simulation_agents,
+        SliceOfLifeContext,
+        coordinate_slice_of_life_scene,
+        detect_emergent_patterns
+    )
+    from story_agent.agent_interaction import (
+        orchestrate_daily_scene,
+        process_power_exchange_with_agents,
+        generate_ambient_world_details,
+        coordinate_agent_handoff,
+        get_agent_analysis,
+        simulate_autonomous_world,
+        AgentCoordinationContext
+    )
+    from story_agent.emergent_balance_manager import (
+        EmergentBalanceManager,
+        SimulationBalance,
+        BalanceAxis
+    )
+    from story_agent.world_memory_system import (
+        WorldMemorySystem,
+        DailyRoutineMemory,
+        RelationshipMemory
+    )
+    from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
+    from nyx.nyx_agent_sdk import process_user_input, generate_reflection
+    from nyx.user_model_sdk import process_user_input_for_model, get_response_guidance_for_user
+    from nyx.scene_manager_sdk import process_scene_input, generate_npc_response
+    from logic.chatgpt_integration import generate_text_completion
+    from new_game_agent import NewGameAgent
+    from agents import Runner
 
 # Import agent processing components for full integration
-from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
-from nyx.nyx_agent_sdk import process_user_input, generate_reflection
-from nyx.user_model_sdk import process_user_input_for_model, get_response_guidance_for_user
-from nyx.scene_manager_sdk import process_scene_input, generate_npc_response
-from logic.chatgpt_integration import generate_text_completion
+from nyx.nyx_agent_sdk import AgentContext
+from nyx.nyx_enhanced_system import NyxEnhancedSystem
+from nyx.response_filter import ResponseFilter
+from nyx.nyx_planner import NyxPlanner
+from nyx.nyx_task_integration import NyxTaskIntegration
+from memory.memory_integration import MemoryIntegration
+from nyx.scene_manager_sdk import SceneContext
+from nyx.user_model_sdk import UserModelContext, UserModelManager
 
-# Import new game components
-from new_game_agent import NewGameAgent
+from lore.core.lore_system import LoreSystem
+from lore.lore_generator import DynamicLoreGenerator
+from lore.validation import ValidationManager
+from lore.error_manager import ErrorHandler
 
 # The agent trace utility
 from agents import trace
@@ -123,30 +122,205 @@ from db.connection import get_db_connection_context
 # Caching utilities
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 
-from lore.lore_generator import DynamicLoreGenerator
-from lore.validation import ValidationManager
-from lore.error_manager import ErrorHandler
-
-from .nyx_agent_sdk import AgentContext
-from .nyx_enhanced_system import NyxEnhancedSystem
-from .response_filter import ResponseFilter
-from .nyx_planner import NyxPlanner
-from .nyx_task_integration import NyxTaskIntegration
-from memory.memory_integration import MemoryIntegration
-from .scene_manager_sdk import SceneContext
-from .user_model_sdk import UserModelContext, UserModelManager
-
-from lore.core.lore_system import LoreSystem
-
 logger = logging.getLogger(__name__)
 
-_GOVERNANCE_CACHE: Dict[Tuple[int, int], NyxUnifiedGovernor] = {}
+_GOVERNANCE_CACHE: Dict[Tuple[int, int], Any] = {}
 _GOVERNANCE_INIT_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 
 _governance_instances: Dict[str, Any] = {}
 _governance_locks: Dict[str, asyncio.Lock] = {}
 _initialization_in_progress: Dict[str, bool] = {}
 _global_lock = asyncio.Lock()  # Global lock for creating per-instance locks
+
+# ===============================================================================
+# LAZY LOADING FUNCTIONS FOR STORY AGENTS
+# ===============================================================================
+
+def _lazy_load_world_director():
+    """Lazy load CompleteWorldDirector to avoid circular imports"""
+    from story_agent.world_director_agent import CompleteWorldDirector
+    return CompleteWorldDirector
+
+def _lazy_load_world_state():
+    """Lazy load world state types"""
+    from story_agent.world_director_agent import (
+        CompleteWorldState,
+        WorldMood,
+        TimeOfDay,
+        ActivityType,
+        PowerDynamicType,
+        CompleteWorldDirectorContext
+    )
+    return {
+        'CompleteWorldState': CompleteWorldState,
+        'WorldMood': WorldMood,
+        'TimeOfDay': TimeOfDay,
+        'ActivityType': ActivityType,
+        'PowerDynamicType': PowerDynamicType,
+        'CompleteWorldDirectorContext': CompleteWorldDirectorContext
+    }
+
+def _lazy_load_narrator():
+    """Lazy load narrator components"""
+    from story_agent.slice_of_life_narrator import (
+        SliceOfLifeNarrator,
+        create_slice_of_life_narrator,
+        SliceOfLifeNarration,
+        NPCDialogue,
+        PowerMomentNarration,
+        DailyActivityNarration,
+        AmbientNarration,
+        NarrativeTone,
+        SceneFocus
+    )
+    return {
+        'SliceOfLifeNarrator': SliceOfLifeNarrator,
+        'create_slice_of_life_narrator': create_slice_of_life_narrator,
+        'SliceOfLifeNarration': SliceOfLifeNarration,
+        'NPCDialogue': NPCDialogue,
+        'PowerMomentNarration': PowerMomentNarration,
+        'DailyActivityNarration': DailyActivityNarration,
+        'AmbientNarration': AmbientNarration,
+        'NarrativeTone': NarrativeTone,
+        'SceneFocus': SceneFocus
+    }
+
+def _lazy_load_activity():
+    """Lazy load activity components"""
+    from story_agent.activity_recommender import (
+        recommend_activities,
+        get_quick_activity_suggestion,
+        get_npc_initiated_activity,
+        ActivityContext,
+        RecommendedActivity,
+        ActivityPriority
+    )
+    return {
+        'recommend_activities': recommend_activities,
+        'get_quick_activity_suggestion': get_quick_activity_suggestion,
+        'get_npc_initiated_activity': get_npc_initiated_activity,
+        'ActivityContext': ActivityContext,
+        'RecommendedActivity': RecommendedActivity,
+        'ActivityPriority': ActivityPriority
+    }
+
+def _lazy_load_task_generator():
+    """Lazy load task generator components"""
+    from story_agent.daily_task_generator import (
+        DailyTaskGenerator,
+        DailyTask,
+        TaskContext,
+        DailyTaskType,
+        TaskComplexity
+    )
+    return {
+        'DailyTaskGenerator': DailyTaskGenerator,
+        'DailyTask': DailyTask,
+        'TaskContext': TaskContext,
+        'DailyTaskType': DailyTaskType,
+        'TaskComplexity': TaskComplexity
+    }
+
+def _lazy_load_simulation_agents():
+    """Lazy load simulation agent components"""
+    from story_agent.world_simulation_agents import (
+        initialize_world_simulation_agents,
+        SliceOfLifeContext,
+        coordinate_slice_of_life_scene,
+        detect_emergent_patterns
+    )
+    return {
+        'initialize_world_simulation_agents': initialize_world_simulation_agents,
+        'SliceOfLifeContext': SliceOfLifeContext,
+        'coordinate_slice_of_life_scene': coordinate_slice_of_life_scene,
+        'detect_emergent_patterns': detect_emergent_patterns
+    }
+
+def _lazy_load_agent_interaction():
+    """Lazy load agent interaction components"""
+    from story_agent.agent_interaction import (
+        orchestrate_daily_scene,
+        process_power_exchange_with_agents,
+        generate_ambient_world_details,
+        coordinate_agent_handoff,
+        get_agent_analysis,
+        simulate_autonomous_world,
+        AgentCoordinationContext
+    )
+    return {
+        'orchestrate_daily_scene': orchestrate_daily_scene,
+        'process_power_exchange_with_agents': process_power_exchange_with_agents,
+        'generate_ambient_world_details': generate_ambient_world_details,
+        'coordinate_agent_handoff': coordinate_agent_handoff,
+        'get_agent_analysis': get_agent_analysis,
+        'simulate_autonomous_world': simulate_autonomous_world,
+        'AgentCoordinationContext': AgentCoordinationContext
+    }
+
+def _lazy_load_balance_manager():
+    """Lazy load balance manager components"""
+    from story_agent.emergent_balance_manager import (
+        EmergentBalanceManager,
+        SimulationBalance,
+        BalanceAxis
+    )
+    return {
+        'EmergentBalanceManager': EmergentBalanceManager,
+        'SimulationBalance': SimulationBalance,
+        'BalanceAxis': BalanceAxis
+    }
+
+def _lazy_load_memory_system():
+    """Lazy load memory system components"""
+    from story_agent.world_memory_system import (
+        WorldMemorySystem,
+        DailyRoutineMemory,
+        RelationshipMemory
+    )
+    return {
+        'WorldMemorySystem': WorldMemorySystem,
+        'DailyRoutineMemory': DailyRoutineMemory,
+        'RelationshipMemory': RelationshipMemory
+    }
+
+def _lazy_load_governance():
+    """Lazy load governance components"""
+    from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
+    return {
+        'NyxUnifiedGovernor': NyxUnifiedGovernor,
+        'AgentType': AgentType,
+        'DirectiveType': DirectiveType,
+        'DirectivePriority': DirectivePriority
+    }
+
+def _lazy_load_nyx_sdk():
+    """Lazy load Nyx SDK components"""
+    from nyx.nyx_agent_sdk import process_user_input, generate_reflection
+    from nyx.user_model_sdk import process_user_input_for_model, get_response_guidance_for_user
+    from nyx.scene_manager_sdk import process_scene_input, generate_npc_response
+    return {
+        'process_user_input': process_user_input,
+        'generate_reflection': generate_reflection,
+        'process_user_input_for_model': process_user_input_for_model,
+        'get_response_guidance_for_user': get_response_guidance_for_user,
+        'process_scene_input': process_scene_input,
+        'generate_npc_response': generate_npc_response
+    }
+
+def _lazy_load_chatgpt():
+    """Lazy load ChatGPT integration"""
+    from logic.chatgpt_integration import generate_text_completion
+    return generate_text_completion
+
+def _lazy_load_new_game():
+    """Lazy load new game agent"""
+    from new_game_agent import NewGameAgent
+    return NewGameAgent
+
+def _lazy_load_runner():
+    """Lazy load agent runner"""
+    from agents import Runner
+    return Runner
 
 # ===============================================================================
 # CORE GOVERNANCE FUNCTIONS (preserved)
@@ -202,7 +376,7 @@ async def get_central_governance(user_id: int, conversation_id: int) -> Any:
             _initialization_in_progress[key] = True
             logger.info(f"Initializing governance for {key}")
             
-            # Import the correct class - NyxUnifiedGovernor instead of NyxGovernanceSystem
+            # Import the correct class - NyxUnifiedGovernor
             from nyx.governance import NyxUnifiedGovernor
             
             # Create new governance instance
@@ -256,7 +430,7 @@ def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optio
 async def initialize_world_simulation(
     user_id: int,
     conversation_id: int
-) -> CompleteWorldDirector:
+) -> Any:  # Returns CompleteWorldDirector but using Any to avoid import
     """
     Initialize the world simulation with governance oversight.
     
@@ -269,9 +443,16 @@ async def initialize_world_simulation(
     """
     governance = await get_central_governance(user_id, conversation_id)
     
+    # Lazy load CompleteWorldDirector
+    CompleteWorldDirector = _lazy_load_world_director()
+    
     # Create and initialize world director
     world_director = CompleteWorldDirector(user_id, conversation_id)
     await world_director.initialize()
+    
+    # Lazy load AgentType
+    gov_types = _lazy_load_governance()
+    AgentType = gov_types['AgentType']
     
     # Register with governance
     await governance.register_subsystem(
@@ -284,7 +465,7 @@ async def initialize_world_simulation(
     return world_director
 
 
-async def get_world_director(user_id: int, conversation_id: int) -> CompleteWorldDirector:
+async def get_world_director(user_id: int, conversation_id: int) -> Any:
     """
     Get or create the world director for a user/conversation.
     
@@ -324,6 +505,10 @@ async def generate_slice_of_life_moment(
     """
     governance = await get_central_governance(user_id, conversation_id)
     world_director = await get_world_director(user_id, conversation_id)
+    
+    # Lazy load governance types
+    gov_types = _lazy_load_governance()
+    AgentType = gov_types['AgentType']
     
     # Check governance permission
     permission = await governance.check_action_permission(
@@ -377,6 +562,13 @@ async def orchestrate_scene_with_governance(
     """
     governance = await get_central_governance(user_id, conversation_id)
     
+    # Lazy load required components
+    gov_types = _lazy_load_governance()
+    AgentType = gov_types['AgentType']
+    
+    interaction_funcs = _lazy_load_agent_interaction()
+    orchestrate_daily_scene = interaction_funcs['orchestrate_daily_scene']
+    
     # Check permission
     permission = await governance.check_action_permission(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -419,7 +611,7 @@ async def orchestrate_scene_with_governance(
 async def recommend_activities_with_governance(
     user_id: int,
     conversation_id: int,
-    context: Optional[ActivityContext] = None,
+    context: Optional[Any] = None,  # ActivityContext
     num_recommendations: int = 4
 ) -> Dict[str, Any]:
     """
@@ -435,6 +627,10 @@ async def recommend_activities_with_governance(
         Activity recommendations
     """
     governance = await get_central_governance(user_id, conversation_id)
+    
+    # Lazy load activity functions
+    activity_funcs = _lazy_load_activity()
+    recommend_activities = activity_funcs['recommend_activities']
     
     # Get recommendations
     recommendations = await recommend_activities(
@@ -468,8 +664,8 @@ async def recommend_activities_with_governance(
 async def generate_daily_task_with_governance(
     user_id: int,
     conversation_id: int,
-    task_type: Optional[DailyTaskType] = None
-) -> DailyTask:
+    task_type: Optional[Any] = None  # DailyTaskType
+) -> Any:  # Returns DailyTask
     """
     Generate a daily task with governance oversight.
     
@@ -483,8 +679,12 @@ async def generate_daily_task_with_governance(
     """
     governance = await get_central_governance(user_id, conversation_id)
     
+    # Lazy load components
+    Runner = _lazy_load_runner()
+    task_components = _lazy_load_task_generator()
+    DailyTaskGenerator = task_components['DailyTaskGenerator']
+    
     # Initialize task generator
-    from agents import Runner
     task_prompt = f"Generate a daily task{f' of type {task_type.value}' if task_type else ''}"
     
     result = await Runner.run(DailyTaskGenerator, task_prompt)
@@ -516,7 +716,7 @@ async def generate_daily_task_with_governance(
 async def create_narrator_with_governance(
     user_id: int,
     conversation_id: int
-) -> SliceOfLifeNarrator:
+) -> Any:  # Returns SliceOfLifeNarrator
     """
     Create a slice-of-life narrator with governance integration.
     
@@ -528,6 +728,14 @@ async def create_narrator_with_governance(
         Initialized SliceOfLifeNarrator
     """
     governance = await get_central_governance(user_id, conversation_id)
+    
+    # Lazy load narrator components
+    narrator_components = _lazy_load_narrator()
+    create_slice_of_life_narrator = narrator_components['create_slice_of_life_narrator']
+    
+    # Lazy load governance types
+    gov_types = _lazy_load_governance()
+    AgentType = gov_types['AgentType']
     
     # Create narrator
     narrator = create_slice_of_life_narrator(user_id, conversation_id)
@@ -593,6 +801,10 @@ async def check_simulation_balance(
     # Get world state
     world_state = await world_director.context.current_world_state
     
+    # Lazy load balance manager
+    balance_components = _lazy_load_balance_manager()
+    EmergentBalanceManager = balance_components['EmergentBalanceManager']
+    
     # Initialize balance manager
     balance_manager = EmergentBalanceManager(user_id, conversation_id)
     
@@ -632,7 +844,7 @@ async def check_simulation_balance(
 async def initialize_world_memory(
     user_id: int,
     conversation_id: int
-) -> WorldMemorySystem:
+) -> Any:  # Returns WorldMemorySystem
     """
     Initialize world memory system with governance oversight.
     
@@ -644,6 +856,14 @@ async def initialize_world_memory(
         Initialized WorldMemorySystem
     """
     governance = await get_central_governance(user_id, conversation_id)
+    
+    # Lazy load memory components
+    memory_components = _lazy_load_memory_system()
+    WorldMemorySystem = memory_components['WorldMemorySystem']
+    
+    # Lazy load governance types
+    gov_types = _lazy_load_governance()
+    AgentType = gov_types['AgentType']
     
     # Create memory system
     memory_system = WorldMemorySystem(user_id, conversation_id)
@@ -913,10 +1133,9 @@ class JointMemoryGraph:
                     )
 
                     if memory_id is None:
-                         raise RuntimeError("Failed to insert memory, memory_id is NULL.") # Or handle differently
+                         raise RuntimeError("Failed to insert memory, memory_id is NULL.")
 
                     # Store memory sharing relationships
-                    # Consider executemany for potential performance improvement if many entities
                     for entity in shared_with:
                         await conn.execute("""
                             INSERT INTO JointMemorySharing (
@@ -933,7 +1152,7 @@ class JointMemoryGraph:
         except (asyncpg.PostgresError, ConnectionError, RuntimeError) as e:
             logger.error(f"Error storing joint memory: {e}", exc_info=True)
             return -1
-        except Exception as e: # Catch unexpected errors
+        except Exception as e:
              logger.error(f"Unexpected error storing joint memory: {e}", exc_info=True)
              return -1
     
@@ -962,14 +1181,12 @@ class JointMemoryGraph:
                     AND m.significance >= $5
                 """
                 params = [self.user_id, self.conversation_id, entity_type, entity_id, min_significance]
-                param_index = 6 # Next parameter index
+                param_index = 6
 
-                # Add tag filtering if needed (using JSONB array containment)
-                # Assumes 'tags' column is JSONB and contains an array of strings.
-                # If 'tags' is TEXT[], use `m.tags @> $${param_index}::text[]`
+                # Add tag filtering if needed
                 if filter_tags:
                     query += f" AND m.tags::jsonb @> ${param_index}::jsonb"
-                    params.append(json.dumps(filter_tags)) # Pass tags as a JSON string array
+                    params.append(json.dumps(filter_tags))
                     param_index += 1
 
                 # Add ordering and limit
@@ -979,11 +1196,9 @@ class JointMemoryGraph:
                 rows = await conn.fetch(query, *params)
 
                 for row in rows:
-                    # asyncpg can often auto-decode JSON/JSONB
-                    tags_data = row['tags'] # Might be already parsed list/dict
-                    metadata_data = row['metadata'] # Might be already parsed list/dict
+                    tags_data = row['tags']
+                    metadata_data = row['metadata']
 
-                    # Optional: Ensure correct type if needed (e.g., if NULL or not auto-parsed)
                     parsed_tags = tags_data if isinstance(tags_data, list) else (json.loads(tags_data) if isinstance(tags_data, str) else [])
                     parsed_metadata = metadata_data if isinstance(metadata_data, dict) else (json.loads(metadata_data) if isinstance(metadata_data, str) else {})
 
@@ -1002,8 +1217,8 @@ class JointMemoryGraph:
 
         except (asyncpg.PostgresError, ConnectionError, json.JSONDecodeError) as e:
             logger.error(f"Error getting shared memories for entity {entity_type}/{entity_id}: {e}", exc_info=True)
-            return [] # Return empty list on error
-        except Exception as e: # Catch unexpected errors
+            return []
+        except Exception as e:
              logger.error(f"Unexpected error getting shared memories: {e}", exc_info=True)
              return []
 
@@ -1013,7 +1228,7 @@ class GameEventManager:
     Now adapted for open-world simulation events.
     """
     
-    def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor = None):
+    def __init__(self, user_id: int, conversation_id: int, governor: Any = None):
         """Initialize with governor access."""
         self.user_id = user_id
         self.conversation_id = conversation_id
@@ -1119,6 +1334,9 @@ class GameEventManager:
                 "task": "event_analysis"
             }
             
+            # Lazy load ChatGPT
+            generate_text_completion = _lazy_load_chatgpt()
+            
             # Generate analysis
             analysis = await generate_text_completion(prompt=prompt)
             
@@ -1188,7 +1406,7 @@ class GameEventManager:
         try:
             # Get location context
             location = event_data.get("location", "")
-            location_info = await self.governor.get_location_info(location)
+            location_info = await self.governor.get_location_info(location) if self.governor else {}
             
             # Get NPC context
             npc_ids = event_data.get("npc_ids", [])
@@ -1198,12 +1416,14 @@ class GameEventManager:
                 npc_info.append(npc_data)
                 
             # Get memory context
-            memory_manager = await self.governor.get_memory_manager()
-            memories = await memory_manager.recall(
-                entity_type="event",
-                entity_id=event_data.get("id", 0),
-                limit=5
-            )
+            memory_manager = await self.governor.get_memory_manager() if self.governor else None
+            memories = []
+            if memory_manager:
+                memories = await memory_manager.recall(
+                    entity_type="event",
+                    entity_id=event_data.get("id", 0),
+                    limit=5
+                )
             
             return {
                 "location": location_info,
@@ -1256,7 +1476,7 @@ class GameEventManager:
                     continue
                     
                 # Check magnitude-based awareness (major events)
-                if event_magnitude >= 0.8:  # Major event threshold
+                if event_magnitude >= 0.8:
                     awareness_context["awareness_level"] = 0.9
                     awareness_context["awareness_reasons"].append("major_event")
                     aware_npcs.append(awareness_context)
@@ -1342,10 +1562,10 @@ class GameEventManager:
             
             # Normalize each factor to 0-1 range
             normalized_factors = {
-                "casualties": min(casualties / 100, 1.0),  # Assuming 100 casualties is max
-                "damage": min(damage / 1000, 1.0),  # Assuming 1000 damage units is max
-                "social_disruption": min(social_disruption / 10, 1.0),  # 0-10 scale
-                "economic_impact": min(economic_impact / 10000, 1.0)  # Assuming 10000 economic units is max
+                "casualties": min(casualties / 100, 1.0),
+                "damage": min(damage / 1000, 1.0),
+                "social_disruption": min(social_disruption / 10, 1.0),
+                "economic_impact": min(economic_impact / 10000, 1.0)
             }
             
             # Calculate weighted sum
@@ -1395,10 +1615,10 @@ class GameEventManager:
             
             # Normalize each factor to 0-1 range
             normalized_factors = {
-                "political_change": min(political_change / 10, 1.0),  # 0-10 scale
-                "environmental_effect": min(environmental_effect / 10, 1.0),  # 0-10 scale
-                "social_change": min(social_change / 10, 1.0),  # 0-10 scale
-                "economic_change": min(economic_change / 10000, 1.0)  # Assuming 10000 economic units is max
+                "political_change": min(political_change / 10, 1.0),
+                "environmental_effect": min(environmental_effect / 10, 1.0),
+                "social_change": min(social_change / 10, 1.0),
+                "economic_change": min(economic_change / 10000, 1.0)
             }
             
             # Calculate weighted sum
@@ -1448,10 +1668,10 @@ class GameEventManager:
             
             # Normalize each factor to 0-1 range
             normalized_factors = {
-                "relationship_impact": min(relationship_impact / 10, 1.0),  # 0-10 scale
-                "goal_impact": min(goal_impact / 10, 1.0),  # 0-10 scale
-                "resource_impact": min(resource_impact / 1000, 1.0),  # Assuming 1000 resource units is max
-                "influence_impact": min(influence_impact / 10, 1.0)  # 0-10 scale
+                "relationship_impact": min(relationship_impact / 10, 1.0),
+                "goal_impact": min(goal_impact / 10, 1.0),
+                "resource_impact": min(resource_impact / 1000, 1.0),
+                "influence_impact": min(influence_impact / 10, 1.0)
             }
             
             # Calculate weighted sum
@@ -1479,13 +1699,13 @@ class GameEventManager:
         Update a single NPC's state and information using asyncpg.
         """
         try:
-            # Get current NPC data (assuming _get_npc_info is also converted)
+            # Get current NPC data
             current_data = await self._get_npc_info(npc_id)
             if not current_data:
                 logger.error(f"NPC {npc_id} not found for update.")
                 return {"error": "NPC not found", "status": "failed"}
 
-            # Validate update data (assuming async validation)
+            # Validate update data
             validation_result = await self._validate_npc_update(npc_data)
             if not validation_result["valid"]:
                 logger.warning(f"Invalid NPC update data for {npc_id}: {validation_result['errors']}")
@@ -1495,7 +1715,7 @@ class GameEventManager:
                     "status": "failed"
                 }
 
-            # --- Database Update Section ---
+            # Database Update Section
             async with get_db_connection_context() as conn:
                 async with conn.transaction():
                     # Update basic info
@@ -1526,10 +1746,8 @@ class GameEventManager:
 
                     # Update relationships
                     if "relationships" in npc_data:
-                        # First remove old relationships for this NPC
                         await conn.execute("DELETE FROM NPCRelationships WHERE npc_id = $1", npc_id)
 
-                        # Insert new relationships (Consider executemany if performance is critical)
                         for rel in npc_data["relationships"]:
                             await conn.execute("""
                                 INSERT INTO NPCRelationships
@@ -1552,19 +1770,17 @@ class GameEventManager:
                             json.dumps(npc_data["schedule"]),
                             npc_id
                         )
-            # --- End Database Update Section ---
 
             logger.info(f"Successfully updated NPC {npc_id} in database.")
 
             # Get updated NPC data after successful transaction
             updated_data = await self._get_npc_info(npc_id)
             if not updated_data:
-                 # This shouldn't happen if the update succeeded, but handle defensively
-                 logger.error(f"Failed to retrieve updated data for NPC {npc_id} after update.")
-                 return {
+                logger.error(f"Failed to retrieve updated data for NPC {npc_id} after update.")
+                return {
                     "error": "Failed to retrieve updated data post-update",
                     "status": "failed"
-                 }
+                }
 
             # Let Nyx analyze the update
             nyx_agent = await self.get_nyx_agent()
@@ -1592,7 +1808,6 @@ class GameEventManager:
                 "error": str(e),
                 "status": "failed"
             }
-
 
     async def _get_npc_info(self, npc_id: int) -> Dict[str, Any] | None:
         """
@@ -1638,10 +1853,9 @@ class GameEventManager:
                     WHERE npc_id = $1
                 """, npc_id)
 
-                # Process schedule data (assuming it's stored as JSON/JSONB)
+                # Process schedule data
                 schedule_data = {}
                 if schedule_row and schedule_row['schedule_data']:
-                    # asyncpg might auto-decode JSONB, otherwise use json.loads
                     if isinstance(schedule_row['schedule_data'], dict):
                         schedule_data = schedule_row['schedule_data']
                     elif isinstance(schedule_row['schedule_data'], str):
@@ -1650,28 +1864,25 @@ class GameEventManager:
                          except json.JSONDecodeError:
                             logger.warning(f"Failed to parse schedule JSON for NPC {npc_id}")
                             schedule_data = {"error": "invalid JSON format"}
-                    else: # Handle unexpected types
+                    else:
                         logger.warning(f"Unexpected schedule data type for NPC {npc_id}: {type(schedule_row['schedule_data'])}")
                         schedule_data = {"error": "unexpected data type"}
 
-
-            # Get recent memories (outside the DB connection block if it doesn't need DB access)
-            # Assuming governor and memory_manager are available via self
+            # Get recent memories
             memories = []
             if hasattr(self, 'governor') and self.governor:
                  try:
-                     memory_manager = await self.governor.get_memory_manager() # Assuming this exists and is async
-                     memories = await memory_manager.recall( # Assuming this exists and is async
+                     memory_manager = await self.governor.get_memory_manager()
+                     memories = await memory_manager.recall(
                          entity_type="npc",
                          entity_id=npc_id,
                          limit=5
                      )
                  except Exception as mem_err:
                      logger.error(f"Failed to recall memories for NPC {npc_id}: {mem_err}", exc_info=True)
-                     memories = [{"error": "Failed to retrieve memories"}] # Indicate memory retrieval failure
+                     memories = [{"error": "Failed to retrieve memories"}]
             else:
                  logger.warning("Governor or memory manager not available for NPC memory recall.")
-
 
             return {
                 "id": npc_id,
@@ -1687,7 +1898,7 @@ class GameEventManager:
                 },
                 "relationships": relationships,
                 "schedule": schedule_data,
-                "recent_memories": memories # Include memories fetched after DB ops
+                "recent_memories": memories
             }
 
         except (asyncpg.PostgresError, ConnectionError) as db_err:
@@ -1767,16 +1978,16 @@ class GameEventManager:
         Batch update multiple NPCs efficiently using asyncpg within a single transaction.
         """
         results = []
-        valid_updates = [] # Store validated data with IDs for processing
+        valid_updates = []
 
-        # --- Pre-processing and Validation ---
+        # Pre-processing and Validation
         for npc_data in npcs_data:
             npc_id = npc_data.get("id")
             if not npc_id:
                 results.append({"error": "Missing NPC ID", "status": "failed", "original_data": npc_data})
                 continue
 
-            # Validate update data (assuming async validation)
+            # Validate update data
             validation_result = await self._validate_npc_update(npc_data)
             if not validation_result["valid"]:
                 results.append({
@@ -1788,13 +1999,13 @@ class GameEventManager:
                 continue
 
             # Add valid data for processing
-            valid_updates.append(npc_data) # Keep original structure with ID
+            valid_updates.append(npc_data)
 
         if not valid_updates:
             logger.warning("Batch NPC update: No valid updates to process.")
-            return results # Return results accumulated so far (only errors)
+            return results
 
-        # --- Database Update Section (Single Transaction) ---
+        # Database Update Section (Single Transaction)
         processed_ids = set()
         try:
             async with get_db_connection_context() as conn:
@@ -1802,17 +2013,14 @@ class GameEventManager:
                     # Iterate through the validated updates and apply them
                     for npc_data in valid_updates:
                         npc_id = npc_data["id"]
-                        processed_ids.add(npc_id) # Track IDs processed in this batch
+                        processed_ids.add(npc_id)
 
                         # Apply updates based on keys present in npc_data
                         # Basic Info
                         if any(k in npc_data for k in ["name", "location", "status"]):
-                            # Fetch potentially missing values to avoid setting NULL unintentionally
-                            # In a real scenario, you might fetch defaults or require keys
-                            current_name = npc_data.get("name") # simplified: assumes name is always provided if changed
+                            current_name = npc_data.get("name")
                             current_location = npc_data.get("location")
                             current_status = npc_data.get("status")
-                            # A SELECT might be needed here if partial updates are common and defaults complex
 
                             await conn.execute("""
                                 UPDATE NPCs
@@ -1823,10 +2031,8 @@ class GameEventManager:
                                 WHERE npc_id = $4
                             """, current_name, current_location, current_status, npc_id)
 
-
                         # Stats
                         if "stats" in npc_data:
-                             # Similar COALESCE approach or assume full stats dict if present
                             await conn.execute("""
                                 UPDATE NPCStats
                                 SET health = COALESCE($1, health),
@@ -1843,7 +2049,7 @@ class GameEventManager:
                         # Relationships (Replace logic)
                         if "relationships" in npc_data:
                             await conn.execute("DELETE FROM NPCRelationships WHERE npc_id = $1", npc_id)
-                            if npc_data["relationships"]: # Only insert if there are new relationships
+                            if npc_data["relationships"]:
                                 for rel in npc_data["relationships"]:
                                     await conn.execute("""
                                         INSERT INTO NPCRelationships
@@ -1869,9 +2075,9 @@ class GameEventManager:
 
             logger.info(f"Successfully processed batch update for {len(processed_ids)} NPCs in transaction.")
 
-            # --- Post-processing: Fetch updated data and build results ---
+            # Post-processing: Fetch updated data and build results
             for npc_id in processed_ids:
-                 updated_data = await self._get_npc_info(npc_id) # Fetch fresh data
+                 updated_data = await self._get_npc_info(npc_id)
                  if updated_data:
                      results.append({
                          "npc_id": npc_id,
@@ -1879,7 +2085,6 @@ class GameEventManager:
                          "status": "success"
                      })
                  else:
-                     # Should be rare if transaction succeeded and ID was valid
                      logger.error(f"Batch Update: Failed to retrieve updated data for NPC {npc_id} after successful transaction.")
                      results.append({
                          "npc_id": npc_id,
@@ -1891,33 +2096,29 @@ class GameEventManager:
             try:
                 nyx_agent = await self.get_nyx_agent()
                 nyx_analysis = await nyx_agent.analyze_batch_update(
-                    npcs_data=valid_updates, # Pass the data that was attempted
-                    results=results # Pass the outcome
+                    npcs_data=valid_updates,
+                    results=results
                 )
-                # You might want to add nyx_analysis to the overall return or log it
                 logger.info(f"Nyx batch analysis completed: {nyx_analysis}")
             except Exception as nyx_err:
                 logger.error(f"Failed to run Nyx batch analysis: {nyx_err}", exc_info=True)
 
-            return results # Contains success and failure info
+            return results
 
         except (asyncpg.PostgresError, ConnectionError) as db_err:
             logger.error(f"Database error during batch NPC update transaction: {db_err}", exc_info=True)
-            # Add error results for all IDs that were *supposed* to be processed in the failed transaction
             for npc_id in processed_ids:
-                 # Avoid overwriting existing specific validation errors
                  if not any(r.get("npc_id") == npc_id for r in results):
                      results.append({
                          "npc_id": npc_id,
                          "error": f"Database transaction error: {db_err}",
                          "status": "failed"
                      })
-            return results # Return accumulated validation errors + transaction error results
+            return results
 
         except Exception as e:
             logger.error(f"Unexpected error during batch NPC update: {e}", exc_info=True)
-            # Add generic error results for unprocessed/failed IDs
-            processed_in_error = processed_ids or {upd['id'] for upd in valid_updates} # Best guess at affected IDs
+            processed_in_error = processed_ids or {upd['id'] for upd in valid_updates}
             for npc_id in processed_in_error:
                  if not any(r.get("npc_id") == npc_id for r in results):
                     results.append({
@@ -1926,7 +2127,7 @@ class GameEventManager:
                         "status": "failed"
                     })
             return results
-
+            
 # ===============================================================================
 # PRESERVED UNIVERSAL UPDATER INTEGRATION
 # ===============================================================================
@@ -3332,3 +3533,50 @@ class NyxIntegration:
             "lore": self.get_lore_health_metrics(),
             "scene": self.scene_manager.get_health_metrics()
         }
+
+__all__ = [
+    # Core governance functions
+    'get_central_governance',
+    'clear_governance_cache',
+    
+    # World simulation functions
+    'initialize_world_simulation',
+    'get_world_director',
+    'generate_slice_of_life_moment',
+    'orchestrate_scene_with_governance',
+    'recommend_activities_with_governance',
+    'generate_daily_task_with_governance',
+    
+    # Narration functions
+    'create_narrator_with_governance',
+    'narrate_world_state_with_governance',
+    
+    # Balance and memory management
+    'check_simulation_balance',
+    'initialize_world_memory',
+    'record_world_activity',
+    
+    # Message processing
+    'process_message_with_governance',
+    
+    # Lore functions
+    'generate_lore_with_governance',
+    'integrate_lore_with_npcs',
+    'enhance_context_with_lore',
+    'generate_scene_with_lore',
+    
+    # Memory functions
+    'add_joint_memory_with_governance',
+    'remember_with_governance',
+    'recall_with_governance',
+    
+    # Universal updater functions
+    'process_universal_update_with_governance',
+    'register_universal_updater',
+    
+    # Classes
+    'JointMemoryGraph',
+    'GameEventManager',
+    'LoreIntegration',
+    'NyxIntegration',
+]
