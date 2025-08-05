@@ -110,9 +110,12 @@ class ScheduleEntry(StrictBaseModel):
     where: Optional[str] = None
     activity: Optional[str] = None
 
+class KeyedScheduleEntry(StrictBaseModel):
+    key: str
+    entry: ScheduleEntry
+
 class NPCSchedule(StrictBaseModel):
-    """Typed model for NPC schedules"""
-    entries: Dict[str, ScheduleEntry] = Field(default_factory=dict)
+    entries: List[KeyedScheduleEntry] = Field(default_factory=list)
 
 class ActivityPurpose(StrictBaseModel):
     """Typed model for activity purpose"""
