@@ -273,12 +273,16 @@ class ImageGeneration(StrictBaseModel):
     framing: str = "medium_shot"
     reason: Optional[str] = None
 
+class KeyValueStr(StrictBaseModel):
+    key: str
+    value: str
+
 class UniversalUpdateInput(StrictBaseModel):
     user_id: int
     conversation_id: int
     narrative: str
-    roleplay_updates: Dict[str, str] = Field(default_factory=dict)
-    ChaseSchedule: Optional[Dict[str, str]] = None
+    roleplay_updates: List[KeyValueStr] = Field(default_factory=list)
+    ChaseSchedule: Optional[List[KeyValueStr]] = None
     MainQuest: Optional[str] = None
     PlayerRole: Optional[str] = None
     npc_creations: List[NPCCreation] = Field(default_factory=list)
@@ -1038,6 +1042,32 @@ async def process_roleplay_updates_canonical(
             await canon.update_current_roleplay(
                 canon_ctx, conn, user_id, conversation_id, key, str(value)
             )
+            count += 1
+    
+    return count
+
+async def process_roleplay_updates_canonical(
+    ctx: UniversalUpdaterContext,
+    user_id: int,
+    conversation_id: int,
+    roleplay_updates: List[Dict[str, str]] | List[KeyValueStr],
+    conn: asyncpg.Connection
+) -> int:
+    count = 0
+    canon_ctx = RunContextWrapper(context={'user_id': user_id, 'conversation_id': conversation_id})
+    
+    if not roleplay_updates:
+        return 0
+    
+    for kv in roleplay_updates:
+        if isinstance(kv, KeyValueStr):
+            k, v = kv.key, kv.value
+        else:
+            k = kv.get('key')
+            v = kv.get('value')
+        
+        if k and v is not None:
+            await canon.update_current_roleplay(canon_ctx, conn, user_id, conversation_id, k, str(v))
             count += 1
     
     return count
