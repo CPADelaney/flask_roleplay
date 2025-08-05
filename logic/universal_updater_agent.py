@@ -1043,8 +1043,7 @@ async def content_safety_guardrail(ctx, agent, input_data):
             Allow adult themes within the context of a consensual femdom relationship,
             but flag anything that might be genuinely harmful or problematic.
             """,
-            output_type=ContentSafety,
-            output_schema_strict=True  # Ensure strict output
+            output_type=ContentSafety
         )
         
         result = await Runner.run(content_moderator, input_data, context=ctx.context)
@@ -1129,7 +1128,7 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
         handoff(extraction_agent, tool_name_override="extract_state_changes")
     ],
     output_type=UniversalUpdateInput,
-    output_schema_strict=True,  # Explicitly enable strict schema
+      # Explicitly enable strict schema
     input_guardrails=[
         InputGuardrail(guardrail_function=content_safety_guardrail),
     ],
