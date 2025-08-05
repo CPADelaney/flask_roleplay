@@ -47,7 +47,7 @@ TEMPERATURE_SETTINGS = {
     "memory": 0.3
 }
 
-# Use your full schema, but add a "narrative" field at the top.
+# Updated schema with arrays instead of object maps
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     "name": "apply_universal_update",
     "description": "Insert or update roleplay elements (NPCs, locations, events, etc.), including fantastical punishments and image generation, returning a narrative.",
@@ -59,33 +59,43 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 "description": "The narrative text to display, potentially describing surreal punishments or events."
             },
             "roleplay_updates": {
-                "type": "object",
-                "description": "Updates to CurrentRoleplay with arbitrary key-value pairs (e.g., 'CurrentYear', 'TimeOfDay' for time).",
-                "properties": {
-                    "CurrentYear": {"type": "number"},
-                    "CurrentMonth": {"type": "number"},
-                    "CurrentDay": {"type": "number"},
-                    "TimeOfDay": {"type": "string"}
-                },
-                "additionalProperties": True
+                "type": "array",
+                "description": "Updates to CurrentRoleplay as key-value pairs (e.g., 'CurrentYear', 'TimeOfDay' for time).",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string"},
+                        "value": {}  # Can be any JSON value
+                    },
+                    "required": ["key", "value"],
+                    "additionalProperties": False
+                }
             },
             "ChaseSchedule": {
-                "type": "object",
-                "patternProperties": {
-                    "^[A-Z][a-zA-Z]*$": {
-                        "type": "object",
-                        "properties": {
-                            "Morning": {"type": "string"},
-                            "Afternoon": {"type": "string"},
-                            "Evening": {"type": "string"},
-                            "Night": {"type": "string"}
+                "type": "array",
+                "description": "Chase's detailed weekly schedule as key-value pairs where key is day name.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "pattern": "^[A-Z][a-zA-Z]*$"
                         },
-                        "required": ["Morning", "Afternoon", "Evening", "Night"],
-                        "additionalProperties": False
-                    }
-                },
-                "additionalProperties": False,
-                "description": "Chase's detailed weekly schedule."
+                        "value": {
+                            "type": "object",
+                            "properties": {
+                                "Morning": {"type": "string"},
+                                "Afternoon": {"type": "string"},
+                                "Evening": {"type": "string"},
+                                "Night": {"type": "string"}
+                            },
+                            "required": ["Morning", "Afternoon", "Evening", "Night"],
+                            "additionalProperties": False
+                        }
+                    },
+                    "required": ["key", "value"],
+                    "additionalProperties": False
+                }
             },
             "MainQuest": {
                 "type": "string",
@@ -111,7 +121,8 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                 "properties": {
                                     "id": {"type": "number"},
                                     "name": {"type": "string"}
-                                }
+                                },
+                                "additionalProperties": False
                             }
                         },
                         "archetype_summary": {"type": "string"},
@@ -129,21 +140,30 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "dislikes": {"type": "array", "items": {"type": "string"}},
                         "affiliations": {"type": "array", "items": {"type": "string"}},
                         "schedule": {
-                            "type": "object",
-                            "patternProperties": {
-                                "^[A-Z][a-zA-Z]*$": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
+                            "type": "array",
+                            "description": "Weekly schedule as key-value pairs where key is day name.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "key": {
+                                        "type": "string",
+                                        "pattern": "^[A-Z][a-zA-Z]*$"
                                     },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                }
-                            },
-                            "additionalProperties": False
+                                    "value": {
+                                        "type": "object",
+                                        "properties": {
+                                            "Morning": {"type": "string"},
+                                            "Afternoon": {"type": "string"},
+                                            "Evening": {"type": "string"},
+                                            "Night": {"type": "string"}
+                                        },
+                                        "required": ["Morning", "Afternoon", "Evening", "Night"],
+                                        "additionalProperties": False
+                                    }
+                                },
+                                "required": ["key", "value"],
+                                "additionalProperties": False
+                            }
                         },
                         "memory": {
                             "anyOf": [
@@ -156,7 +176,8 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "age": {"type": "number"},
                         "birthdate": {"type": "string", "format": "date"}
                     },
-                    "required": ["npc_name"]
+                    "required": ["npc_name"],
+                    "additionalProperties": False
                 }
             },
             "npc_updates": {
@@ -189,27 +210,63 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                             ]
                         },
                         "schedule": {
-                            "type": "object",
-                            "patternProperties": {
-                                "^[A-Z][a-zA-Z]*$": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
+                            "type": "array",
+                            "description": "Weekly schedule as key-value pairs where key is day name.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "key": {
+                                        "type": "string",
+                                        "pattern": "^[A-Z][a-zA-Z]*$"
                                     },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                }
-                            },
-                            "additionalProperties": False
+                                    "value": {
+                                        "type": "object",
+                                        "properties": {
+                                            "Morning": {"type": "string"},
+                                            "Afternoon": {"type": "string"},
+                                            "Evening": {"type": "string"},
+                                            "Night": {"type": "string"}
+                                        },
+                                        "required": ["Morning", "Afternoon", "Evening", "Night"],
+                                        "additionalProperties": False
+                                    }
+                                },
+                                "required": ["key", "value"],
+                                "additionalProperties": False
+                            }
                         },
-                        "schedule_updates": {"type": "object"},
+                        "schedule_updates": {
+                            "type": "array",
+                            "description": "Partial schedule updates. Omit value to delete the key.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "key": {"type": "string"},
+                                    "value": {
+                                        "anyOf": [
+                                            {
+                                                "type": "object",
+                                                "properties": {
+                                                    "Morning": {"type": "string"},
+                                                    "Afternoon": {"type": "string"},
+                                                    "Evening": {"type": "string"},
+                                                    "Night": {"type": "string"}
+                                                },
+                                                "additionalProperties": False
+                                            },
+                                            {"type": "null"}
+                                        ]
+                                    }
+                                },
+                                "required": ["key"],
+                                "additionalProperties": False
+                            }
+                        },
                         "affiliations": {"type": "array", "items": {"type": "string"}},
                         "current_location": {"type": "string"}
                     },
-                    "required": ["npc_id"]
+                    "required": ["npc_id"],
+                    "additionalProperties": False
                 }
             },
             "character_stat_updates": {
@@ -217,19 +274,24 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 "properties": {
                     "player_name": {"type": "string", "default": "Chase"},
                     "stats": {
-                        "type": "object",
-                        "properties": {
-                            "corruption": {"type": "number"},
-                            "confidence": {"type": "number"},
-                            "willpower": {"type": "number"},
-                            "obedience": {"type": "number"},
-                            "dependency": {"type": "number"},
-                            "lust": {"type": "number"},
-                            "mental_resilience": {"type": "number"},
-                            "physical_endurance": {"type": "number"}
+                        "type": "array",
+                        "description": "Character stats as key-value pairs.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "enum": ["corruption", "confidence", "willpower", "obedience", 
+                                             "dependency", "lust", "mental_resilience", "physical_endurance"]
+                                },
+                                "value": {"type": "number"}
+                            },
+                            "required": ["key", "value"],
+                            "additionalProperties": False
                         }
                     }
-                }
+                },
+                "additionalProperties": False
             },
             "relationship_updates": {
                 "type": "array",
@@ -238,7 +300,8 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                     "properties": {
                         "npc_id": {"type": "number"},
                         "affiliations": {"type": "array", "items": {"type": "string"}}
-                    }
+                    },
+                    "additionalProperties": False
                 }
             },
             "npc_introductions": {
@@ -248,7 +311,8 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                     "properties": {
                         "npc_id": {"type": "number"}
                     },
-                    "required": ["npc_id"]
+                    "required": ["npc_id"],
+                    "additionalProperties": False
                 }
             },
             "location_creations": {
@@ -260,7 +324,8 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "description": {"type": "string"},
                         "open_hours": {"type": "array", "items": {"type": "string"}}
                     },
-                    "required": ["location_name"]
+                    "required": ["location_name"],
+                    "additionalProperties": False
                 }
             },
             "event_list_updates": {
@@ -279,13 +344,14 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "day": {"type": "number"},
                         "time_of_day": {"type": "string"},
                         "override_location": {"type": "string"},
-                        "fantasy_level": {  # Added for surreal events
+                        "fantasy_level": {
                             "type": "string",
                             "enum": ["realistic", "fantastical", "surreal"],
                             "default": "realistic",
                             "description": "Indicates if the event involves reality-breaking elements."
                         }
-                    }
+                    },
+                    "additionalProperties": False
                 }
             },
             "inventory_updates": {
@@ -304,7 +370,8 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                         "item_description": {"type": "string"},
                                         "item_effect": {"type": "string"},
                                         "category": {"type": "string"}
-                                    }
+                                    },
+                                    "additionalProperties": False
                                 }
                             ]
                         }
@@ -314,11 +381,18 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "items": {
                             "oneOf": [
                                 {"type": "string"},
-                                {"type": "object", "properties": {"item_name": {"type": "string"}}}
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "item_name": {"type": "string"}
+                                    },
+                                    "additionalProperties": False
+                                }
                             ]
                         }
                     }
-                }
+                },
+                "additionalProperties": False
             },
             "quest_updates": {
                 "type": "array",
@@ -331,7 +405,8 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "progress_detail": {"type": "string"},
                         "quest_giver": {"type": "string"},
                         "reward": {"type": "string"}
-                    }
+                    },
+                    "additionalProperties": False
                 }
             },
             "social_links": {
@@ -346,11 +421,12 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "link_type": {"type": "string"},
                         "level_change": {"type": "number"},
                         "new_event": {"type": "string"},
-                        "group_context": {  # Added for group dynamics
+                        "group_context": {
                             "type": "string",
                             "description": "Describes multi-NPC interactions (e.g., 'NPC2 and five others gang up')."
                         }
-                    }
+                    },
+                    "additionalProperties": False
                 }
             },
             "perk_unlocks": {
@@ -362,10 +438,11 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "perk_name": {"type": "string"},
                         "perk_description": {"type": "string"},
                         "perk_effect": {"type": "string"}
-                    }
+                    },
+                    "additionalProperties": False
                 }
             },
-            "activity_updates": {  # Added for punishment tracking
+            "activity_updates": {
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -380,17 +457,31 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                     "enum": ["realistic", "fantastical", "surreal"],
                                     "default": "realistic"
                                 }
+                            },
+                            "additionalProperties": False
+                        },
+                        "stat_integration": {
+                            "type": "array",
+                            "description": "Stat integration as key-value pairs.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "key": {"type": "string"},
+                                    "value": {}
+                                },
+                                "required": ["key", "value"],
+                                "additionalProperties": False
                             }
                         },
-                        "stat_integration": {"type": "object"},
                         "intensity_tier": {"type": "number", "minimum": 0, "maximum": 4},
                         "setting_variant": {"type": "string"}
                     },
-                    "required": ["activity_name"]
+                    "required": ["activity_name"],
+                    "additionalProperties": False
                 },
                 "description": "Create or update Activities for punishments, including surreal elements."
             },
-            "journal_updates": {  # Added for PlayerJournal
+            "journal_updates": {
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -400,11 +491,12 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "fantasy_flag": {"type": "boolean", "default": False},
                         "intensity_level": {"type": "number", "minimum": 0, "maximum": 4}
                     },
-                    "required": ["entry_type", "entry_text"]
+                    "required": ["entry_type", "entry_text"],
+                    "additionalProperties": False
                 },
                 "description": "Log narrative events or punishments in PlayerJournal, including surreal ones."
             },
-            "image_generation": {  # Added for explicit image triggering
+            "image_generation": {
                 "type": "object",
                 "properties": {
                     "generate": {"type": "boolean", "default": False},
@@ -413,7 +505,8 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                     "framing": {"type": "string", "enum": ["close_up", "medium_shot", "wide_shot"], "default": "medium_shot"},
                     "reason": {"type": "string", "description": "Why this image is generated (e.g., 'surreal punishment')."}
                 },
-                "description": "Trigger and configure image generation for the scene."
+                "description": "Trigger and configure image generation for the scene.",
+                "additionalProperties": False
             }
         },
         "required": [
@@ -436,10 +529,121 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
             "activity_updates",
             "journal_updates",
             "image_generation"
-        ]
+        ],
+        "additionalProperties": False
     }
 }
 
+
+# =====================================================
+# Utility functions for array<->dict conversion
+# =====================================================
+
+def dict_to_array(obj_data: Dict[str, Any], key_name: str = "key", value_name: str = "value") -> List[Dict[str, Any]]:
+    """Convert object/dict to array of key-value pairs."""
+    if not isinstance(obj_data, dict):
+        return []
+    return [
+        {key_name: k, value_name: v} 
+        for k, v in obj_data.items()
+    ]
+
+
+def array_to_dict(array_data: List[Dict[str, Any]], key_name: str = "key", value_name: str = "value") -> Dict[str, Any]:
+    """Convert array of key-value pairs back to dict."""
+    if not isinstance(array_data, list):
+        return {}
+    result = {}
+    for item in array_data:
+        if isinstance(item, dict) and key_name in item and value_name in item:
+            result[item[key_name]] = item[value_name]
+    return result
+
+
+def convert_npc_schedule_to_array(npc_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert NPC schedule from dict to array format."""
+    if "schedule" in npc_data and isinstance(npc_data["schedule"], dict):
+        npc_data["schedule"] = dict_to_array(npc_data["schedule"])
+    if "schedule_updates" in npc_data and isinstance(npc_data["schedule_updates"], dict):
+        npc_data["schedule_updates"] = dict_to_array(npc_data["schedule_updates"])
+    return npc_data
+
+
+def convert_npc_schedule_to_dict(npc_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert NPC schedule from array to dict format (for database storage)."""
+    if "schedule" in npc_data and isinstance(npc_data["schedule"], list):
+        npc_data["schedule"] = array_to_dict(npc_data["schedule"])
+    if "schedule_updates" in npc_data and isinstance(npc_data["schedule_updates"], list):
+        npc_data["schedule_updates"] = array_to_dict(npc_data["schedule_updates"])
+    return npc_data
+
+
+def convert_response_to_array_format(response_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert Nyx/OpenAI response from dict format to array format for the schema."""
+    universal_updates = response_data.get("universal_updates", {})
+    
+    # Convert roleplay_updates
+    roleplay_updates_obj = universal_updates.get("roleplay_updates", {})
+    roleplay_updates_array = dict_to_array(roleplay_updates_obj)
+    
+    # Convert ChaseSchedule
+    chase_schedule_obj = universal_updates.get("ChaseSchedule", {})
+    chase_schedule_array = dict_to_array(chase_schedule_obj)
+    
+    # Convert character stats
+    char_stats_obj = universal_updates.get("character_stat_updates", {}).get("stats", {})
+    char_stats_array = dict_to_array(char_stats_obj)
+    
+    # Process NPC creations and updates
+    npc_creations = universal_updates.get("npc_creations", [])
+    for npc in npc_creations:
+        convert_npc_schedule_to_array(npc)
+    
+    npc_updates = universal_updates.get("npc_updates", [])
+    for npc in npc_updates:
+        convert_npc_schedule_to_array(npc)
+    
+    # Process activity updates
+    activity_updates = universal_updates.get("activity_updates", [])
+    for activity in activity_updates:
+        if "stat_integration" in activity and isinstance(activity["stat_integration"], dict):
+            activity["stat_integration"] = dict_to_array(activity["stat_integration"])
+    
+    return {
+        "narrative": response_data.get("narrative", ""),
+        "roleplay_updates": roleplay_updates_array,
+        "ChaseSchedule": chase_schedule_array,
+        "MainQuest": universal_updates.get("MainQuest", ""),
+        "PlayerRole": universal_updates.get("PlayerRole", ""),
+        "npc_creations": npc_creations,
+        "npc_updates": npc_updates,
+        "character_stat_updates": {
+            "player_name": universal_updates.get("character_stat_updates", {}).get("player_name", "Chase"),
+            "stats": char_stats_array
+        },
+        "relationship_updates": universal_updates.get("relationship_updates", []),
+        "npc_introductions": universal_updates.get("npc_introductions", []),
+        "location_creations": universal_updates.get("location_creations", []),
+        "event_list_updates": universal_updates.get("event_list_updates", []),
+        "inventory_updates": universal_updates.get("inventory_updates", {}),
+        "quest_updates": universal_updates.get("quest_updates", []),
+        "social_links": universal_updates.get("social_links", []),
+        "perk_unlocks": universal_updates.get("perk_unlocks", []),
+        "activity_updates": activity_updates,
+        "journal_updates": universal_updates.get("journal_updates", []),
+        "image_generation": {
+            "generate": response_data.get("generate_image", False),
+            "priority": "high" if response_data.get("generate_image") else "low",
+            "focus": "scene",
+            "framing": "medium_shot",
+            "reason": response_data.get("image_prompt", "")
+        }
+    }
+
+
+# =====================================================
+# OpenAI Client Manager (unchanged)
+# =====================================================
 
 import threading
 from typing import Optional, Dict, Any
@@ -593,7 +797,7 @@ class OpenAIClientManager:
             if "organization" in kwargs:
                 openai.organization = kwargs["organization"]
     
-            # drop cached clients so they’ll be recreated lazily
+            # drop cached clients so they'll be recreated lazily
             self._sync_client = None
             self._async_client = None
     
@@ -908,34 +1112,8 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
                         context=update_context
                     )
                 
-                # Build the expected function call format
-                function_args = {
-                    "narrative": response_data.get("narrative", ""),
-                    "roleplay_updates": response_data.get("universal_updates", {}).get("roleplay_updates", {}),
-                    "ChaseSchedule": response_data.get("universal_updates", {}).get("ChaseSchedule", {}),
-                    "MainQuest": response_data.get("universal_updates", {}).get("MainQuest", ""),
-                    "PlayerRole": response_data.get("universal_updates", {}).get("PlayerRole", ""),
-                    "npc_creations": response_data.get("universal_updates", {}).get("npc_creations", []),
-                    "npc_updates": response_data.get("universal_updates", {}).get("npc_updates", []),
-                    "character_stat_updates": response_data.get("universal_updates", {}).get("character_stat_updates", {}),
-                    "relationship_updates": response_data.get("universal_updates", {}).get("relationship_updates", []),
-                    "npc_introductions": response_data.get("universal_updates", {}).get("npc_introductions", []),
-                    "location_creations": response_data.get("universal_updates", {}).get("location_creations", []),
-                    "event_list_updates": response_data.get("universal_updates", {}).get("event_list_updates", []),
-                    "inventory_updates": response_data.get("universal_updates", {}).get("inventory_updates", {}),
-                    "quest_updates": response_data.get("universal_updates", {}).get("quest_updates", []),
-                    "social_links": response_data.get("universal_updates", {}).get("social_links", []),
-                    "perk_unlocks": response_data.get("universal_updates", {}).get("perk_unlocks", []),
-                    "activity_updates": response_data.get("universal_updates", {}).get("activity_updates", []),
-                    "journal_updates": response_data.get("universal_updates", {}).get("journal_updates", []),
-                    "image_generation": {
-                        "generate": response_data.get("generate_image", False),
-                        "priority": "high" if response_data.get("generate_image") else "low",
-                        "focus": "scene",
-                        "framing": "medium_shot",
-                        "reason": response_data.get("image_prompt", "")
-                    }
-                }
+                # Convert response to array format
+                function_args = convert_response_to_array_format(response_data)
                 
                 return {
                     "type": "function_call",
