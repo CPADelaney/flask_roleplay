@@ -123,7 +123,6 @@ from logic.narrative_events import (
     add_dream_sequence,
     add_moment_of_clarity,
     get_relationship_overview,
-    process_narrative_event,
     generate_inner_monologue
 )
 
