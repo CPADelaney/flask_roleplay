@@ -141,9 +141,7 @@ from logic.addiction_system_sdk import (
     addiction_system_agent,
     process_addiction_update,
     check_addiction_status,
-    get_addiction_status,
-    AddictionType,
-    AddictionLevel
+    get_addiction_status
 )
 
 # Currency System
