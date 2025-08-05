@@ -9,20 +9,21 @@ import logging
 import json
 import asyncio
 import time
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, List, Any, Optional, Union, Tuple, TYPE_CHECKING
 from datetime import datetime
 from dataclasses import dataclass, field
+from enum import Enum
 
 from agents import Agent, Runner, trace, handoff
 from agents.exceptions import AgentsException, ModelBehaviorError
 
-# Import world simulation components
-from story_agent.world_director_agent import (
-    WorldDirector, WorldState, SliceOfLifeEvent,
-    PowerExchange, WorldMood, TimeOfDay, 
-    ActivityType, PowerDynamicType
-)
+# Lazy loading to avoid circular imports
+if TYPE_CHECKING:
+    from story_agent.world_director_agent import (
+        CompleteWorldDirector, CompleteWorldState, WorldMood, ActivityType
+    )
 
+# Import world simulation components
 from story_agent.world_simulation_agents import (
     initialize_world_simulation_agents,
     SliceOfLifeContext,
@@ -42,7 +43,51 @@ from db.connection import get_db_connection_context
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# Agent Coordination Context
+# Local Enums (to avoid circular import)
+# ===============================================================================
+
+class PowerDynamicType(Enum):
+    """Types of power dynamics in interactions"""
+    CASUAL_DOMINANCE = "casual_dominance"
+    INTIMATE_COMMAND = "intimate_command"
+    SOCIAL_HIERARCHY = "social_hierarchy"
+    SUBTLE_CONTROL = "subtle_control"
+    RITUAL_SUBMISSION = "ritual_submission"
+
+class TimeOfDay(Enum):
+    """Time of day for scene context"""
+    MORNING = "morning"
+    AFTERNOON = "afternoon"
+    EVENING = "evening"
+    NIGHT = "night"
+    LATE_NIGHT = "late_night"
+
+# ===============================================================================
+# Local Data Classes
+# ===============================================================================
+
+@dataclass
+class SliceOfLifeEvent:
+    """Represents a slice-of-life event"""
+    event_type: str
+    title: str
+    description: str
+    involved_npcs: List[int] = field(default_factory=list)
+    location: Optional[str] = None
+    mood: Optional[str] = None
+    choices: List[Dict[str, Any]] = field(default_factory=list)
+
+@dataclass
+class PowerExchange:
+    """Represents a power exchange interaction"""
+    exchange_type: PowerDynamicType
+    initiator_npc_id: int
+    intensity: float
+    is_public: bool = False
+    description: Optional[str] = None
+
+# ===============================================================================
+# Agent Coordination Context with Lazy Loading
 # ===============================================================================
 
 @dataclass
@@ -51,9 +96,9 @@ class AgentCoordinationContext:
     user_id: int
     conversation_id: int
     
-    # World state tracking
-    world_director: Optional[WorldDirector] = None
-    current_world_state: Optional[WorldState] = None
+    # World state tracking - lazy loaded
+    world_director: Optional[Any] = None  # Will be CompleteWorldDirector
+    current_world_state: Optional[Any] = None  # Will be CompleteWorldState
     active_scene: Optional[SliceOfLifeEvent] = None
     
     # Agent references
@@ -69,13 +114,17 @@ class AgentCoordinationContext:
     performance_monitor: Optional[Any] = None
     
     async def initialize(self):
-        """Initialize all components"""
+        """Initialize all components with lazy loading"""
+        # Lazy import to avoid circular dependency
+        from story_agent.world_director_agent import CompleteWorldDirector
+        
         # Initialize world director
-        self.world_director = WorldDirector(self.user_id, self.conversation_id)
+        self.world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
         await self.world_director.initialize()
         
         # Get current world state
-        self.current_world_state = await self.world_director.get_world_state()
+        if self.world_director.context:
+            self.current_world_state = self.world_director.context.current_world_state
         
         # Initialize simulation agents
         self.simulation_agents = initialize_world_simulation_agents()
@@ -84,6 +133,15 @@ class AgentCoordinationContext:
         self.context_service = await get_context_service(self.user_id, self.conversation_id)
         self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
         self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
+
+# ===============================================================================
+# Helper function to get WorldMood enum
+# ===============================================================================
+
+def _get_world_mood_enum():
+    """Lazy load WorldMood enum"""
+    from story_agent.world_director_agent import WorldMood
+    return WorldMood
 
 # ===============================================================================
 # Scene Orchestration Functions
@@ -129,10 +187,18 @@ async def orchestrate_daily_scene(
         
         # Select NPCs if not specified
         if not involved_npcs and context.current_world_state:
-            available_npcs = [
-                npc.npc_id for npc in context.current_world_state.active_npcs
-                if npc.availability in ["available", "eager", "commanding"]
-            ]
+            available_npcs = []
+            if hasattr(context.current_world_state, 'active_npcs'):
+                for npc in context.current_world_state.active_npcs:
+                    # Handle both dict and object representations
+                    if isinstance(npc, dict):
+                        npc_id = npc.get('npc_id')
+                    else:
+                        npc_id = getattr(npc, 'npc_id', None)
+                    
+                    if npc_id:
+                        available_npcs.append(npc_id)
+            
             involved_npcs = available_npcs[:2]  # Limit to 2 for focused interaction
         
         # Generate dialogue for each NPC
@@ -149,10 +215,18 @@ async def orchestrate_daily_scene(
                     """, npc_id)
                 
                 if npc and dialogue_agent:
+                    # Get current time safely
+                    time_value = "afternoon"  # default
+                    if context.current_world_state:
+                        if hasattr(context.current_world_state, 'current_time'):
+                            current_time = context.current_world_state.current_time
+                            if hasattr(current_time, 'time_of_day'):
+                                time_value = str(current_time.time_of_day.value)
+                    
                     prompt = f"""
                     Generate natural dialogue for {npc['npc_name']} in a {scene_focus} scene.
                     Dominance: {npc['dominance']}, Closeness: {npc['closeness']}
-                    Time: {context.current_world_state.current_time.value}
+                    Time: {time_value}
                     Keep it slice-of-life, 1-2 sentences.
                     """
                     
@@ -166,13 +240,19 @@ async def orchestrate_daily_scene(
         
         # Check for power dynamics opportunities
         power_dynamics = []
-        if context.current_world_state and context.current_world_state.world_tension.power_tension > 0.3:
-            for npc_id in involved_npcs[:1]:  # One main dynamic per scene
-                power_exchange = await generate_contextual_power_exchange(
-                    context, npc_id, scene_focus
-                )
-                if power_exchange:
-                    power_dynamics.append(power_exchange)
+        if context.current_world_state:
+            # Check tension safely
+            tension_value = 0.0
+            if hasattr(context.current_world_state, 'tension_factors'):
+                tension_value = context.current_world_state.tension_factors.get('power', 0.0)
+            
+            if tension_value > 0.3:
+                for npc_id in involved_npcs[:1]:  # One main dynamic per scene
+                    power_exchange = await generate_contextual_power_exchange(
+                        context, npc_id, scene_focus
+                    )
+                    if power_exchange:
+                        power_dynamics.append(power_exchange)
         
         # Detect emergent patterns
         sol_context.record_interaction({
@@ -190,18 +270,25 @@ async def orchestrate_daily_scene(
             content=scene_description,
             memory_type="daily_scene",
             importance=0.5,
-            tags=["scene", scene_focus, f"time_{context.current_world_state.current_time.value}"]
+            tags=["scene", scene_focus]
         )
         
         execution_time = time.time() - start_time
         context.performance_monitor.stop_timer(timer_id)
+        
+        # Get world mood safely
+        world_mood_value = "relaxed"
+        if context.current_world_state and hasattr(context.current_world_state, 'world_mood'):
+            world_mood = context.current_world_state.world_mood
+            if hasattr(world_mood, 'value'):
+                world_mood_value = world_mood.value
         
         return {
             "scene": scene,
             "dialogues": dialogues,
             "power_dynamics": power_dynamics,
             "emergent_patterns": patterns,
-            "world_mood": context.current_world_state.world_mood.value,
+            "world_mood": world_mood_value,
             "execution_time": execution_time
         }
         
@@ -326,12 +413,31 @@ async def generate_ambient_world_details(
         if not ambient_agent:
             return {"error": "Ambient agent not available"}
         
+        # Get world state values safely
+        time_value = "afternoon"
+        mood_value = "relaxed"
+        active_npc_count = 0
+        
+        if context.current_world_state:
+            if hasattr(context.current_world_state, 'current_time'):
+                current_time = context.current_world_state.current_time
+                if hasattr(current_time, 'time_of_day'):
+                    time_value = str(current_time.time_of_day.value)
+            
+            if hasattr(context.current_world_state, 'world_mood'):
+                world_mood = context.current_world_state.world_mood
+                if hasattr(world_mood, 'value'):
+                    mood_value = world_mood.value
+            
+            if hasattr(context.current_world_state, 'active_npcs'):
+                active_npc_count = len(context.current_world_state.active_npcs)
+        
         prompt = f"""
         Generate ambient details for:
-        Time: {context.current_world_state.current_time.value}
-        Mood: {context.current_world_state.world_mood.value}
+        Time: {time_value}
+        Mood: {mood_value}
         Location: current
-        Active NPCs: {len(context.current_world_state.active_npcs)}
+        Active NPCs: {active_npc_count}
         
         Include sensory details, background activity, and atmosphere.
         """
@@ -340,8 +446,8 @@ async def generate_ambient_world_details(
         
         return {
             "ambient_details": result.final_output if result else "",
-            "world_mood": context.current_world_state.world_mood.value,
-            "time_of_day": context.current_world_state.current_time.value
+            "world_mood": mood_value,
+            "time_of_day": time_value
         }
         
     except Exception as e:
@@ -383,13 +489,28 @@ async def coordinate_agent_handoff(
         if not source or not target:
             return {"error": f"Agent not found: {from_agent if not source else to_agent}"}
         
+        # Get world state values safely
+        time_value = "afternoon"
+        mood_value = "relaxed"
+        
+        if context.current_world_state:
+            if hasattr(context.current_world_state, 'current_time'):
+                current_time = context.current_world_state.current_time
+                if hasattr(current_time, 'time_of_day'):
+                    time_value = str(current_time.time_of_day.value)
+            
+            if hasattr(context.current_world_state, 'world_mood'):
+                world_mood = context.current_world_state.world_mood
+                if hasattr(world_mood, 'value'):
+                    mood_value = world_mood.value
+        
         # Format handoff message
         handoff_message = f"""
         Handoff from {from_agent}:
         
         Context: {json.dumps(handoff_data, indent=2)}
-        World State: Time={context.current_world_state.current_time.value}, 
-                    Mood={context.current_world_state.world_mood.value}
+        World State: Time={time_value}, 
+                    Mood={mood_value}
         
         Please continue with your specialized processing.
         """
@@ -502,25 +623,28 @@ async def adjust_world_tensions_from_exchange(
 ):
     """Adjust world tensions based on power exchange"""
     
-    if context.current_world_state:
+    if context.current_world_state and hasattr(context.current_world_state, 'tension_factors'):
         # Adjust power tension
         if response_type == "submit":
-            context.current_world_state.world_tension.power_tension = min(
-                1.0,
-                context.current_world_state.world_tension.power_tension + (0.1 * exchange.intensity)
-            )
+            if 'power' in context.current_world_state.tension_factors:
+                context.current_world_state.tension_factors['power'] = min(
+                    1.0,
+                    context.current_world_state.tension_factors['power'] + (0.1 * exchange.intensity)
+                )
         elif response_type == "resist":
-            context.current_world_state.world_tension.conflict_tension = min(
-                1.0,
-                context.current_world_state.world_tension.conflict_tension + 0.05
-            )
+            if 'conflict' in context.current_world_state.tension_factors:
+                context.current_world_state.tension_factors['conflict'] = min(
+                    1.0,
+                    context.current_world_state.tension_factors.get('conflict', 0) + 0.05
+                )
         
         # Adjust sexual tension for intimate exchanges
         if exchange.exchange_type in [PowerDynamicType.INTIMATE_COMMAND, PowerDynamicType.RITUAL_SUBMISSION]:
-            context.current_world_state.world_tension.sexual_tension = min(
-                1.0,
-                context.current_world_state.world_tension.sexual_tension + (0.05 * exchange.intensity)
-            )
+            if 'sexual' in context.current_world_state.tension_factors:
+                context.current_world_state.tension_factors['sexual'] = min(
+                    1.0,
+                    context.current_world_state.tension_factors.get('sexual', 0) + (0.05 * exchange.intensity)
+                )
 
 # ===============================================================================
 # Public API Functions
@@ -565,18 +689,21 @@ async def get_agent_analysis(
     
     elif analysis_type == "tensions":
         # Analyze world tensions
-        if context.current_world_state:
-            dominant_tension, level = context.current_world_state.world_tension.get_dominant_tension()
+        if context.current_world_state and hasattr(context.current_world_state, 'tension_factors'):
+            tensions = context.current_world_state.tension_factors
+            
+            # Find dominant tension
+            dominant_tension = "none"
+            max_level = 0
+            for tension_type, level in tensions.items():
+                if level > max_level:
+                    max_level = level
+                    dominant_tension = tension_type
+            
             results["tensions"] = {
                 "dominant": dominant_tension,
-                "level": level,
-                "all_tensions": {
-                    "social": context.current_world_state.world_tension.social_tension,
-                    "sexual": context.current_world_state.world_tension.sexual_tension,
-                    "power": context.current_world_state.world_tension.power_tension,
-                    "mystery": context.current_world_state.world_tension.mystery_tension,
-                    "conflict": context.current_world_state.world_tension.conflict_tension
-                }
+                "level": max_level,
+                "all_tensions": tensions
             }
     
     return results
@@ -604,23 +731,36 @@ async def simulate_autonomous_world(
     
     for hour in range(hours):
         # Advance time
-        await context.world_director.simulate_world_tick()
+        if context.world_director:
+            await context.world_director.advance_time(1)
         
         # Generate NPC autonomous actions
-        if context.current_world_state:
+        if context.current_world_state and hasattr(context.current_world_state, 'active_npcs'):
             for npc in context.current_world_state.active_npcs[:3]:  # Limit to 3 NPCs
-                activity = await context.simulation_agents["activity_generator"].run(
-                    f"Generate autonomous activity for NPC {npc.npc_name}"
-                )
-                if activity:
-                    events.append({
-                        "hour": hour,
-                        "npc": npc.npc_name,
-                        "activity": activity
-                    })
+                activity_agent = context.simulation_agents.get("activity_generator")
+                if activity_agent:
+                    npc_name = npc.get('npc_name', 'Unknown') if isinstance(npc, dict) else getattr(npc, 'npc_name', 'Unknown')
+                    activity = await Runner.run(
+                        activity_agent,
+                        f"Generate autonomous activity for NPC {npc_name}"
+                    )
+                    if activity:
+                        events.append({
+                            "hour": hour,
+                            "npc": npc_name,
+                            "activity": activity.final_output if activity else "Unknown activity"
+                        })
+    
+    # Get final world state safely
+    final_state = None
+    if context.current_world_state:
+        if hasattr(context.current_world_state, 'model_dump'):
+            final_state = context.current_world_state.model_dump()
+        elif hasattr(context.current_world_state, '__dict__'):
+            final_state = context.current_world_state.__dict__
     
     return {
         "simulated_hours": hours,
         "events": events,
-        "final_world_state": context.current_world_state.model_dump() if context.current_world_state else None
+        "final_world_state": final_state
     }
