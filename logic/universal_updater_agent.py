@@ -96,6 +96,36 @@ class ApplyUpdatesResult(StrictBaseModel):
     error: Optional[str] = None
     reason: Optional[str] = None
 
+# ADD NEW TYPED MODELS FOR STRICT SCHEMA COMPLIANCE
+class NPCArchetype(StrictBaseModel):
+    """Typed model for NPC archetype entries"""
+    name: Optional[str] = None
+    traits: Dict[str, str] = Field(default_factory=dict)
+    weight: Optional[float] = None
+    notes: Optional[str] = None
+
+class ScheduleEntry(StrictBaseModel):
+    """Typed model for schedule entries"""
+    when: str  # e.g., "Mon 9-5"
+    where: Optional[str] = None
+    activity: Optional[str] = None
+
+class NPCSchedule(StrictBaseModel):
+    """Typed model for NPC schedules"""
+    entries: Dict[str, ScheduleEntry] = Field(default_factory=dict)
+
+class ActivityPurpose(StrictBaseModel):
+    """Typed model for activity purpose"""
+    goal: Optional[str] = None
+    target_npc_id: Optional[int] = None
+    context: Optional[str] = None
+
+class StatIntegration(StrictBaseModel):
+    """Typed model for stat integration"""
+    stat: Optional[str] = None
+    delta: Optional[int] = None
+    rationale: Optional[str] = None
+
 class NPCCreation(StrictBaseModel):
     npc_name: str
     introduced: bool = False
@@ -106,7 +136,7 @@ class NPCCreation(StrictBaseModel):
     trust: Optional[int] = None
     respect: Optional[int] = None
     intensity: Optional[int] = None
-    archetypes: List[Dict[str, Any]] = Field(default_factory=list)
+    archetypes: List[NPCArchetype] = Field(default_factory=list)  # Changed from List[Dict[str, Any]]
     archetype_summary: Optional[str] = None
     archetype_extras_summary: Optional[str] = None
     physical_description: Optional[str] = None
@@ -115,7 +145,7 @@ class NPCCreation(StrictBaseModel):
     likes: List[str] = Field(default_factory=list)
     dislikes: List[str] = Field(default_factory=list)
     affiliations: List[str] = Field(default_factory=list)
-    schedule: Dict[str, Any] = Field(default_factory=dict)
+    schedule: NPCSchedule = Field(default_factory=NPCSchedule)  # Changed from Dict[str, Any]
     memory: List[str] = Field(default_factory=list)
     monica_level: Optional[int] = None
     age: Optional[int] = None
@@ -140,8 +170,8 @@ class NPCUpdate(StrictBaseModel):
     dislikes: Optional[List[str]] = None
     sex: Optional[str] = None
     memory: Optional[List[str]] = None
-    schedule: Optional[Dict[str, Any]] = None
-    schedule_updates: Optional[Dict[str, Any]] = None
+    schedule: Optional[NPCSchedule] = None  # Changed from Dict[str, Any]
+    schedule_updates: Optional[NPCSchedule] = None  # Changed from Dict[str, Any]
     affiliations: Optional[List[str]] = None
     current_location: Optional[str] = None
 
@@ -222,8 +252,8 @@ class Perk(StrictBaseModel):
 
 class Activity(StrictBaseModel):
     activity_name: str
-    purpose: Optional[Dict[str, Any]] = None
-    stat_integration: Optional[Dict[str, Any]] = None
+    purpose: Optional[ActivityPurpose] = None  # Changed from Dict[str, Any]
+    stat_integration: Optional[StatIntegration] = None  # Changed from Dict[str, Any]
     intensity_tier: Optional[int] = None
     setting_variant: Optional[str] = None
 
@@ -690,6 +720,33 @@ async def process_npc_creations_canonical(
     })
     
     for npc in npc_creations:
+        # Convert archetypes to JSON format for storage
+        archetypes_json = None
+        if npc.get('archetypes'):
+            # Handle typed NPCArchetype objects
+            archetypes_list = []
+            for arch in npc['archetypes']:
+                if isinstance(arch, dict):
+                    # If it's already a dict, use it
+                    archetypes_list.append(arch)
+                else:
+                    # If it's an NPCArchetype object, convert to dict
+                    archetypes_list.append(arch.model_dump() if hasattr(arch, 'model_dump') else arch.dict())
+            archetypes_json = json.dumps(archetypes_list)
+        
+        # Convert schedule to JSON format for storage
+        schedule_json = None
+        if npc.get('schedule'):
+            if isinstance(npc['schedule'], NPCSchedule):
+                # Convert NPCSchedule to dict format
+                schedule_dict = {}
+                for key, entry in npc['schedule'].entries.items():
+                    schedule_dict[key] = entry.model_dump() if hasattr(entry, 'model_dump') else entry.dict()
+                schedule_json = json.dumps(schedule_dict)
+            elif isinstance(npc['schedule'], dict):
+                # If it's already a dict, just serialize it
+                schedule_json = json.dumps(npc['schedule'])
+        
         # Prepare NPC data package
         npc_data = {
             'npc_name': npc['npc_name'],
@@ -701,7 +758,7 @@ async def process_npc_creations_canonical(
             'trust': npc.get('trust'),
             'respect': npc.get('respect'),
             'intensity': npc.get('intensity'),
-            'archetypes': json.dumps(npc.get('archetypes', [])) if npc.get('archetypes') else None,
+            'archetypes': archetypes_json,
             'archetype_summary': npc.get('archetype_summary'),
             'archetype_extras_summary': npc.get('archetype_extras_summary'),
             'physical_description': npc.get('physical_description'),
@@ -710,7 +767,7 @@ async def process_npc_creations_canonical(
             'likes': json.dumps(npc.get('likes', [])) if npc.get('likes') else None,
             'dislikes': json.dumps(npc.get('dislikes', [])) if npc.get('dislikes') else None,
             'affiliations': json.dumps(npc.get('affiliations', [])) if npc.get('affiliations') else None,
-            'schedule': json.dumps(npc.get('schedule', {})) if npc.get('schedule') else None,
+            'schedule': schedule_json,
             'memory': json.dumps(npc.get('memory')) if npc.get('memory') else None,
             'monica_level': npc.get('monica_level'),
             'age': npc.get('age'),
@@ -756,13 +813,35 @@ async def process_npc_updates_canonical(
             if field in npc and npc[field] is not None:
                 updates[field] = npc[field]
         
-        # JSON fields
+        # JSON fields (excluding schedule which needs special handling)
         json_fields = ["hobbies", "personality_traits", "likes", "dislikes", 
-                       "affiliations", "memory", "schedule"]
+                       "affiliations", "memory"]
         
         for field in json_fields:
             if field in npc and npc[field] is not None:
                 updates[field] = json.dumps(npc[field]) if isinstance(npc[field], (list, dict)) else npc[field]
+        
+        # Handle schedule specially
+        if "schedule" in npc and npc["schedule"] is not None:
+            if isinstance(npc["schedule"], NPCSchedule):
+                # Convert NPCSchedule to dict format
+                schedule_dict = {}
+                for key, entry in npc["schedule"].entries.items():
+                    schedule_dict[key] = entry.model_dump() if hasattr(entry, 'model_dump') else entry.dict()
+                updates["schedule"] = json.dumps(schedule_dict)
+            elif isinstance(npc["schedule"], dict):
+                updates["schedule"] = json.dumps(npc["schedule"])
+        
+        # Handle schedule_updates similarly
+        if "schedule_updates" in npc and npc["schedule_updates"] is not None:
+            if isinstance(npc["schedule_updates"], NPCSchedule):
+                # Convert NPCSchedule to dict format
+                schedule_dict = {}
+                for key, entry in npc["schedule_updates"].entries.items():
+                    schedule_dict[key] = entry.model_dump() if hasattr(entry, 'model_dump') else entry.dict()
+                updates["schedule"] = json.dumps(schedule_dict)  # Note: maps to schedule field
+            elif isinstance(npc["schedule_updates"], dict):
+                updates["schedule"] = json.dumps(npc["schedule_updates"])
         
         # Skip if no fields to update
         if not updates:
@@ -1043,7 +1122,8 @@ async def content_safety_guardrail(ctx, agent, input_data):
             Allow adult themes within the context of a consensual femdom relationship,
             but flag anything that might be genuinely harmful or problematic.
             """,
-            output_type=ContentSafety
+            output_type=ContentSafety,
+              # Ensure strict output
         )
         
         result = await Runner.run(content_moderator, input_data, context=ctx.context)
@@ -1115,6 +1195,10 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
     
     IMPORTANT: Only include fields that are part of the UniversalUpdateInput schema.
     Do not include any fields that are not defined in the schema.
+    
+    For NPC archetypes, use the NPCArchetype structure with name, traits, weight, and notes.
+    For NPC schedules, use the NPCSchedule structure with entries containing when, where, and activity.
+    For Activity purpose and stat_integration, use the provided typed structures.
     """,
     tools=[
         normalize_json,
