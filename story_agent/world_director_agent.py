@@ -11,7 +11,7 @@ import logging
 import json
 import time
 import random
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, List, Any, Optional, Union, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime, timezone, timedelta
