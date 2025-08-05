@@ -1003,9 +1003,9 @@ async def generate_addiction_craving_event(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
     craving_data: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Generate an addiction craving event using LLM"""
+    """Generate an addiction-craving event via LLM"""
     context = ctx.context
-    
+
     try:
         prompt = f"""Generate an addiction craving event for a femdom RPG.
 
@@ -1020,45 +1020,41 @@ Create an event that:
 5. Escalates based on how long since last indulgence
 
 Output as JSON with choices and consequences."""
-
         response = await generate_text_completion(
             system_prompt="You are creating addiction mechanics that drive narrative tension.",
             user_prompt=prompt,
             temperature=0.8,
             max_tokens=800
         )
-        
+
         try:
-            event = json.loads(response) if response else {}
-            
-            # Trigger the craving event in the addiction system
-            # Note: trigger_craving_event doesn't exist in the imports shown
-            # The addiction_system_sdk doesn't export this function
-            # We'll store a placeholder result instead
-            craving_result = {
-                "triggered": True,
-                "addiction_type": craving_data.get('addiction_type'),
-                "intensity": craving_data.get('intensity', 1.0)
-            }
-            
-            event['system_result'] = craving_result
-                
-            event['system_result'] = craving_result
-            
-        return event
-            
+            event: Dict[str, Any] = json.loads(response) if response else {}
         except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Error parsing addiction event JSON: {e}")
+            logger.error("Error parsing addiction event JSON: %s", e)
             return {
                 "event_type": "craving",
                 "title": "Craving Strikes",
-                "description": response if response else "A familiar need washes over you.",
-                "parse_error": str(e)
+                "description": response or "A familiar need washes over you.",
+                "parse_error": str(e),
             }
-            
+
+        # attach system-side result once
+        event["system_result"] = {
+            "triggered": True,
+            "addiction_type": craving_data.get("addiction_type"),
+            "intensity": craving_data.get("intensity", 1.0),
+        }
+        return event
+
     except Exception as e:
-        logger.error(f"Error generating addiction event: {e}", exc_info=True)
-        return {"error": str(e), "event_type": "craving", "title": "Internal Struggle"}
+        logger.exception("Error generating addiction event")
+        return {
+            "event_type": "craving",
+            "title": "Internal Struggle",
+            "description": "Something went wrong while generating the craving event.",
+            "error": str(e),
+        }
+
 
 @function_tool
 async def generate_dream_event(
