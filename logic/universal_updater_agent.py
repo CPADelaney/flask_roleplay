@@ -58,6 +58,44 @@ class StrictBaseModel(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
+# ADD NEW STRICT OUTPUT MODELS FOR TOOLS
+class NormalizedJson(StrictBaseModel):
+    """Strict model for normalized JSON tool output"""
+    ok: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+    original: Optional[str] = None
+
+class PlayerStatsExtraction(StrictBaseModel):
+    """Strict model for player stats extraction tool output"""
+    player_name: str = "Chase"
+    stats: Dict[str, int] = Field(default_factory=dict)
+
+class NPCSimpleUpdate(StrictBaseModel):
+    """Strict model for NPC update tool output"""
+    npc_id: int
+    current_location: Optional[str] = None
+    npc_name: Optional[str] = None
+
+class RelationshipSimpleChange(StrictBaseModel):
+    """Strict model for relationship change tool output"""
+    entity1_type: str
+    entity1_id: int
+    entity2_type: str
+    entity2_id: int
+    level_change: Optional[int] = None
+    new_event: Optional[str] = None
+    group_context: Optional[str] = None
+
+class ApplyUpdatesResult(StrictBaseModel):
+    """Strict model for apply updates tool output"""
+    success: bool
+    updates_applied: Optional[int] = None
+    details: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    reason: Optional[str] = None
+
 class NPCCreation(StrictBaseModel):
     npc_name: str
     introduced: bool = False
@@ -249,11 +287,11 @@ class UniversalUpdaterContext:
         self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
 
 # -------------------------------------------------------------------------------
-# Function Tools
+# Function Tools (UPDATED TO RETURN STRICT MODELS)
 # -------------------------------------------------------------------------------
 
 @function_tool
-async def normalize_json(ctx, json_str: str) -> Dict[str, Any]:
+async def normalize_json(ctx, json_str: str) -> NormalizedJson:
     """
     Normalize JSON string, fixing common errors:
     - Replace curly quotes with straight quotes
@@ -264,21 +302,31 @@ async def normalize_json(ctx, json_str: str) -> Dict[str, Any]:
         json_str: A potentially malformed JSON string
         
     Returns:
-        Parsed JSON object as a dictionary
+        NormalizedJson with parsed data or error info
     """
     try:
         # Try to parse as-is first
-        return json.loads(json_str)
+        data = json.loads(json_str)
+        return NormalizedJson(ok=True, data=data)
     except json.JSONDecodeError:
-        # Simple normalization - replace curly quotes
-        normalized = json_str.replace("'", "'").replace("'", "'").replace(""", '"').replace(""", '"')
+        # Simple normalization - replace curly quotes using unicode escapes
+        normalized = (json_str
+            .replace("\u201c", '"').replace("\u201d", '"')  # Curly double quotes
+            .replace("\u2018", "'").replace("\u2019", "'")  # Curly single quotes
+        )
         
         try:
-            return json.loads(normalized)
+            data = json.loads(normalized)
+            return NormalizedJson(ok=True, data=data)
         except json.JSONDecodeError as e:
             logging.error(f"Failed to normalize JSON: {e}")
-            # Return a simple dict with error info
-            return {"error": "Failed to parse JSON", "message": str(e), "original": json_str}
+            # Return structured failure info
+            return NormalizedJson(
+                ok=False,
+                error="Failed to parse JSON",
+                message=str(e),
+                original=json_str
+            )
 
 @function_tool
 async def check_npc_exists(ctx, npc_id: int) -> bool:
@@ -329,7 +377,7 @@ async def check_npc_exists(ctx, npc_id: int) -> bool:
         return False
 
 @function_tool
-async def extract_player_stats(ctx, narrative: str) -> Dict[str, Any]:
+async def extract_player_stats(ctx, narrative: str) -> PlayerStatsExtraction:
     """
     Extract player stat changes from narrative text.
     
@@ -337,7 +385,7 @@ async def extract_player_stats(ctx, narrative: str) -> Dict[str, Any]:
         narrative: The narrative text to analyze
         
     Returns:
-        Dictionary of player stat changes
+        PlayerStatsExtraction with player stat changes
     """
     # The stats to look for
     stats = ["corruption", "confidence", "willpower", "obedience", 
@@ -354,7 +402,7 @@ async def extract_player_stats(ctx, narrative: str) -> Dict[str, Any]:
     )
     
     if not permission["approved"]:
-        return {"player_name": "Chase", "stats": {}}
+        return PlayerStatsExtraction(player_name="Chase", stats={})
     
     changes = {}
     
@@ -374,10 +422,10 @@ async def extract_player_stats(ctx, narrative: str) -> Dict[str, Any]:
         result={"stats_changed": len(changes)}
     )
     
-    return {"player_name": "Chase", "stats": changes}
+    return PlayerStatsExtraction(player_name="Chase", stats=changes)
 
 @function_tool
-async def extract_npc_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
+async def extract_npc_changes(ctx, narrative: str) -> List[NPCSimpleUpdate]:
     """
     Extract NPC changes from narrative text.
     
@@ -385,7 +433,7 @@ async def extract_npc_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
         narrative: The narrative text to analyze
         
     Returns:
-        List of NPC updates
+        List of NPCSimpleUpdate models
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
@@ -442,7 +490,7 @@ async def extract_npc_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
             
             # Only add the update if we found changes
             if len(npc_update) > 1:  # More than just npc_id
-                updates.append(npc_update)
+                updates.append(NPCSimpleUpdate(**npc_update))
         
         # Report action to governance
         await governor.process_agent_action_report(
@@ -458,7 +506,7 @@ async def extract_npc_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
         return []
 
 @function_tool
-async def extract_relationship_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
+async def extract_relationship_changes(ctx, narrative: str) -> List[RelationshipSimpleChange]:
     """
     Extract relationship changes from narrative text.
     
@@ -466,7 +514,7 @@ async def extract_relationship_changes(ctx, narrative: str) -> List[Dict[str, An
         narrative: The narrative text to analyze
         
     Returns:
-        List of relationship changes
+        List of RelationshipSimpleChange models
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
@@ -511,27 +559,27 @@ async def extract_relationship_changes(ctx, narrative: str) -> List[Dict[str, An
             
             for indicator in positive_indicators:
                 if f"{npc_name} {indicator}" in narrative:
-                    relationship_change = {
-                        "entity1_type": "player",
-                        "entity1_id": 0,  # Player ID
-                        "entity2_type": "npc",
-                        "entity2_id": npc_id,
-                        "level_change": 5,  # Modest increase
-                        "new_event": f"{npc_name} {indicator}"
-                    }
+                    relationship_change = RelationshipSimpleChange(
+                        entity1_type="player",
+                        entity1_id=0,  # Player ID
+                        entity2_type="npc",
+                        entity2_id=npc_id,
+                        level_change=5,  # Modest increase
+                        new_event=f"{npc_name} {indicator}"
+                    )
                     break
             
             if not relationship_change:
                 for indicator in negative_indicators:
                     if f"{npc_name} {indicator}" in narrative:
-                        relationship_change = {
-                            "entity1_type": "player",
-                            "entity1_id": 0,  # Player ID
-                            "entity2_type": "npc",
-                            "entity2_id": npc_id,
-                            "level_change": -5,  # Modest decrease
-                            "new_event": f"{npc_name} {indicator}"
-                        }
+                        relationship_change = RelationshipSimpleChange(
+                            entity1_type="player",
+                            entity1_id=0,  # Player ID
+                            entity2_type="npc",
+                            entity2_id=npc_id,
+                            level_change=-5,  # Modest decrease
+                            new_event=f"{npc_name} {indicator}"
+                        )
                         break
             
             if relationship_change:
@@ -887,6 +935,7 @@ async def process_social_links_canonical(
     await manager._flush_updates()
     
     return count
+
 async def process_roleplay_updates_canonical(
     ctx: UniversalUpdaterContext,
     user_id: int,
@@ -912,7 +961,7 @@ async def process_roleplay_updates_canonical(
     return count
 
 @function_tool
-async def apply_universal_updates(ctx, updates_json: str) -> Dict[str, Any]:
+async def apply_universal_updates(ctx, updates_json: str) -> ApplyUpdatesResult:
     """
     Apply universal updates to the database.
     
@@ -920,13 +969,22 @@ async def apply_universal_updates(ctx, updates_json: str) -> Dict[str, Any]:
         updates_json: JSON string containing all the updates to apply
         
     Returns:
-        Dictionary with update results
+        ApplyUpdatesResult with update results
     """
-    # Parse the JSON string
+    # Parse the JSON string - handle NormalizedJson if needed
     try:
+        # First try direct parsing
         updates = json.loads(updates_json)
-    except json.JSONDecodeError as e:
-        return {"success": False, "error": f"Invalid JSON: {str(e)}"}
+    except json.JSONDecodeError:
+        # If it fails, try normalizing with our tool
+        normalized = await normalize_json(ctx, updates_json)
+        if normalized.ok and normalized.data:
+            updates = normalized.data
+        else:
+            return ApplyUpdatesResult(
+                success=False, 
+                error=f"Invalid JSON: {normalized.error or 'Unknown error'}"
+            )
     
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
@@ -941,7 +999,7 @@ async def apply_universal_updates(ctx, updates_json: str) -> Dict[str, Any]:
     )
     
     if not permission["approved"]:
-        return {"success": False, "reason": permission["reasoning"]}
+        return ApplyUpdatesResult(success=False, reason=permission["reasoning"])
     
     try:
         # Ensure user_id and conversation_id are set in updates
@@ -966,12 +1024,10 @@ async def apply_universal_updates(ctx, updates_json: str) -> Dict[str, Any]:
                 result={"success": True, "updates_applied": result.get("updates_applied", 0)}
             )
             
-            return result
+            return ApplyUpdatesResult(**result)
     except Exception as e:
         logging.error(f"Error applying universal updates: {e}")
-        return {"success": False, "error": str(e)}
-
-
+        return ApplyUpdatesResult(success=False, error=str(e))
 
 # -------------------------------------------------------------------------------
 # Guardrail Functions
@@ -979,29 +1035,42 @@ async def apply_universal_updates(ctx, updates_json: str) -> Dict[str, Any]:
 
 async def content_safety_guardrail(ctx, agent, input_data):
     """Input guardrail for content moderation"""
-    content_moderator = Agent(
-        name="Content Moderator",
-        instructions="""
-        You check if content is appropriate for a femdom roleplay game. 
-        Allow adult themes within the context of a consensual femdom relationship,
-        but flag anything that might be genuinely harmful or problematic.
-        """,
-        output_type=ContentSafety
-    )
-    
-    result = await Runner.run(content_moderator, input_data, context=ctx.context)
-    final_output = result.final_output_as(ContentSafety)
-    
-    return GuardrailFunctionOutput(
-        output_info=final_output,
-        tripwire_triggered=not final_output.is_appropriate,
-    )
+    try:
+        content_moderator = Agent(
+            name="Content Moderator",
+            instructions="""
+            You check if content is appropriate for a femdom roleplay game. 
+            Allow adult themes within the context of a consensual femdom relationship,
+            but flag anything that might be genuinely harmful or problematic.
+            """,
+            output_type=ContentSafety,
+            output_schema_strict=True  # Ensure strict output
+        )
+        
+        result = await Runner.run(content_moderator, input_data, context=ctx.context)
+        final_output = result.final_output_as(ContentSafety)
+        
+        return GuardrailFunctionOutput(
+            output_info=final_output,
+            tripwire_triggered=not final_output.is_appropriate,
+        )
+    except Exception as e:
+        logging.error(f"Error in content safety guardrail: {str(e)}", exc_info=True)
+        # Return safe default on error
+        return GuardrailFunctionOutput(
+            output_info=ContentSafety(
+                is_appropriate=True,
+                reasoning="Error in content moderation, defaulting to safe",
+                suggested_adjustment=None
+            ),
+            tripwire_triggered=False,
+        )
 
 # -------------------------------------------------------------------------------
-# Agent Definitions
+# Agent Definitions (UPDATED WITH STRICT SCHEMAS)
 # -------------------------------------------------------------------------------
 
-# Extraction agent for initial analysis
+# Extraction agent for initial analysis - now with output_type
 extraction_agent = Agent[UniversalUpdaterContext](
     name="StateExtractor",
     instructions="""
@@ -1016,12 +1085,16 @@ extraction_agent = Agent[UniversalUpdaterContext](
     
     Be precise and avoid over-interpretation. Only extract changes that are clearly
     indicated in the text or strongly implied.
+    
+    Return your findings as plain text describing the extracted changes.
     """,
     tools=[
         extract_player_stats,
         extract_npc_changes,
         extract_relationship_changes
     ],
+    output_type=str,  # Explicitly set as string output
+    # output_schema_strict=False,  # Optional: explicitly disable strict schema for text output
     model_settings=ModelSettings(temperature=0.1)  # Low temperature for accuracy
 )
 
@@ -1040,6 +1113,9 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
     
     Focus on extracting concrete changes rather than inferring too much.
     Be subtle in handling femdom themes - identify power dynamics but keep them understated.
+    
+    IMPORTANT: Only include fields that are part of the UniversalUpdateInput schema.
+    Do not include any fields that are not defined in the schema.
     """,
     tools=[
         normalize_json,
@@ -1053,6 +1129,7 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
         handoff(extraction_agent, tool_name_override="extract_state_changes")
     ],
     output_type=UniversalUpdateInput,
+    output_schema_strict=True,  # Explicitly enable strict schema
     input_guardrails=[
         InputGuardrail(guardrail_function=content_safety_guardrail),
     ],
@@ -1112,27 +1189,39 @@ async def process_universal_update(
         Provide a structured output conforming to the UniversalUpdateInput schema.
         Include the narrative text in the 'narrative' field and fill in other fields as appropriate.
         Only include fields where you have identified changes or updates.
+        Do not include any additional fields not defined in the schema.
         """
         
-        # Run the agent to extract updates
-        result = await Runner.run(
-            universal_updater_agent,
-            prompt,
-            context=updater_context
-        )
-        
-        # Get the output
-        update_data = result.final_output
-        
-        # Apply the updates
-        if update_data:
-            # Convert the Pydantic model to dict, then to JSON string
-            update_dict = update_data.dict()
-            update_json = json.dumps(update_dict)
-            update_result = await apply_universal_updates(RunContextWrapper(updater_context), update_json)
-            return update_result
-        else:
-            return {"success": False, "error": "No updates extracted"}
+        try:
+            # Run the agent to extract updates
+            result = await Runner.run(
+                universal_updater_agent,
+                prompt,
+                context=updater_context
+            )
+            
+            # Get the output
+            update_data = result.final_output
+            
+            # Apply the updates
+            if update_data:
+                # Convert the Pydantic model to dict, then to JSON string
+                update_dict = update_data.dict()
+                update_json = json.dumps(update_dict)
+                
+                # Wrap the context for the tool call
+                wrapped_ctx = RunContextWrapper(updater_context)
+                update_result = await apply_universal_updates(wrapped_ctx, update_json)
+                
+                # Convert ApplyUpdatesResult back to dict for backward compatibility
+                return update_result.model_dump()
+            else:
+                return {"success": False, "error": "No updates extracted"}
+                
+        except Exception as e:
+            logging.error(f"Error in universal updater agent execution: {str(e)}", exc_info=True)
+            logging.error(f"Agent: universal_updater_agent, Context: user_id={user_id}, conversation_id={conversation_id}")
+            return {"success": False, "error": f"Agent execution error: {str(e)}"}
 
 async def register_with_governance(user_id: int, conversation_id: int):
     """
