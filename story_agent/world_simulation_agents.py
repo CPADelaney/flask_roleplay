@@ -9,16 +9,18 @@ import asyncio
 import logging
 import json
 import time
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 
 from agents import Agent, Runner, function_tool, trace, ModelSettings
 from agents.exceptions import AgentsException, ModelBehaviorError
 
-from story_agent.world_director_agent import (
-    WorldState, WorldMood, TimeOfDay, ActivityType, PowerDynamicType
-)
+# Use TYPE_CHECKING to avoid circular imports at runtime
+if TYPE_CHECKING:
+    from story_agent.world_director_agent import (
+        WorldState, WorldMood, TimeOfDay, ActivityType, PowerDynamicType
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,7 @@ class SliceOfLifeContext:
     """Context for slice-of-life agents"""
     user_id: int
     conversation_id: int
-    world_state: Optional[WorldState] = None
+    world_state: Optional[Any] = None  # Changed from WorldState to Any
     current_scene: Optional[Dict[str, Any]] = None
     recent_interactions: List[Dict[str, Any]] = field(default_factory=list)
     
@@ -71,12 +73,18 @@ def create_daily_life_coordinator():
     not forced or explicit. Focus on the slice-of-life aspect.
     """
     
-    from story_agent.tools import daily_life_tools
+    # Lazy import to avoid circular dependency
+    try:
+        from story_agent.tools import daily_life_tools
+        tools = daily_life_tools
+    except ImportError:
+        logger.warning("Could not import daily_life_tools, using empty tools list")
+        tools = []
     
     agent = Agent(
         name="Daily Life Coordinator",
         instructions=instructions,
-        tools=daily_life_tools,
+        tools=tools,
         model=DEFAULT_MODEL,
         model_settings=ModelSettings(temperature=0.6, max_tokens=1536)
     )
@@ -113,12 +121,18 @@ def create_relationship_dynamics_agent():
     Focus on the slow, natural evolution of relationships.
     """
     
-    from story_agent.tools import npc_routine_tools
+    # Lazy import to avoid circular dependency
+    try:
+        from story_agent.tools import npc_routine_tools
+        tools = npc_routine_tools
+    except ImportError:
+        logger.warning("Could not import npc_routine_tools, using empty tools list")
+        tools = []
     
     agent = Agent(
         name="Relationship Dynamics",
         instructions=instructions,
-        tools=npc_routine_tools,
+        tools=tools,
         model=DEFAULT_MODEL,
         model_settings=ModelSettings(temperature=0.5, max_tokens=1536)
     )
@@ -228,8 +242,19 @@ def create_dialogue_specialist():
     Keep dialogue concise (1-3 sentences) and natural.
     """
     
-    from story_agent.specialized_agents import create_dialogue_generator
-    return create_dialogue_generator()
+    # Lazy import
+    try:
+        from story_agent.specialized_agents import create_dialogue_generator
+        return create_dialogue_generator()
+    except ImportError:
+        logger.warning("Could not import specialized_agents, creating basic dialogue agent")
+        return Agent(
+            name="Dialogue Specialist",
+            instructions=instructions,
+            tools=[],
+            model=DEFAULT_MODEL,
+            model_settings=ModelSettings(temperature=0.6, max_tokens=1024)
+        )
 
 # ----- Activity Generator Agent -----
 
@@ -282,31 +307,57 @@ async def coordinate_slice_of_life_scene(
     relationship_agent = create_relationship_dynamics_agent()
     ambient_agent = create_ambient_world_agent()
     
+    # Get world state values with safe access
+    time_value = "morning"
+    mood_value = "relaxed"
+    
+    if context.world_state:
+        # Safely access attributes if they exist
+        if hasattr(context.world_state, 'current_time'):
+            time_obj = context.world_state.current_time
+            if hasattr(time_obj, 'value'):
+                time_value = time_obj.value
+            elif isinstance(time_obj, str):
+                time_value = time_obj
+        
+        if hasattr(context.world_state, 'world_mood'):
+            mood_obj = context.world_state.world_mood
+            if hasattr(mood_obj, 'value'):
+                mood_value = mood_obj.value
+            elif isinstance(mood_obj, str):
+                mood_value = mood_obj
+    
     # Generate base scene with daily coordinator
     scene_prompt = f"""
     Create a {focus_type} slice-of-life scene for:
-    Time: {context.world_state.current_time.value if context.world_state else 'morning'}
-    Mood: {context.world_state.world_mood.value if context.world_state else 'relaxed'}
+    Time: {time_value}
+    Mood: {mood_value}
     
     Focus on natural daily activities with subtle power dynamics.
     """
     
     scene_result = await Runner.run(daily_coordinator, scene_prompt, context=context)
     
+    # Initialize results
+    relationship_result = None
+    ambient_result = None
+    
     # Add relationship dynamics
-    if context.world_state and context.world_state.active_npcs:
-        relationship_prompt = f"""
-        Add relationship dynamics to this scene.
-        NPCs present: {len(context.world_state.active_npcs)}
-        
-        Include subtle power dynamics appropriate to relationships.
-        """
-        
-        relationship_result = await Runner.run(
-            relationship_agent, 
-            relationship_prompt, 
-            context=context
-        )
+    if context.world_state and hasattr(context.world_state, 'active_npcs'):
+        active_npcs = context.world_state.active_npcs
+        if active_npcs:
+            relationship_prompt = f"""
+            Add relationship dynamics to this scene.
+            NPCs present: {len(active_npcs)}
+            
+            Include subtle power dynamics appropriate to relationships.
+            """
+            
+            relationship_result = await Runner.run(
+                relationship_agent, 
+                relationship_prompt, 
+                context=context
+            )
     
     # Add ambient details
     ambient_prompt = "Add atmospheric and sensory details to make the scene immersive."
