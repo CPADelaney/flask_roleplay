@@ -1,280 +1,230 @@
 """
-Slice-of-Life Narrator Agent - The narrative voice for the open-world femdom simulation.
+Slice-of-Life Narrator Agent - Enhanced with full system integration
 
 This system provides:
-- Atmospheric narration for world events
-- Slice-of-life scenes with subtle femdom dynamics
-- NPC voices in everyday situations
-- Immersive descriptions of routine activities
-- Response to emergent world states rather than driving plot
+- Atmospheric narration with relationship and progression awareness
+- Dynamic tone based on vitals and addictions
+- Calendar-aware time references
+- Event system integration
+- Currency and world-specific details
 """
 
 import logging
 import json
 import asyncio
-import time
 import random
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
 from enum import Enum
 from dataclasses import dataclass, field
 
-from agents import Agent, Runner, function_tool, handoff, ModelSettings, RunContextWrapper
+from agents import Agent, Runner, function_tool, RunContextWrapper, ModelSettings
 from pydantic import BaseModel, Field, ConfigDict
 
 # Database connection
 from db.connection import get_db_connection_context
 
-# GPT Integration
-from logic.chatgpt_integration import (
-    generate_text_completion,
-    get_chatgpt_response,
-    TEMPERATURE_SETTINGS
+# Core system integrations
+from logic.dynamic_relationships import OptimizedRelationshipManager, event_generator
+from logic.npc_narrative_progression import get_npc_narrative_stage, NPCNarrativeStage
+from logic.calendar import load_calendar_names
+from logic.time_cycle import get_current_vitals, get_current_time_model, CurrentTimeData
+from logic.addiction_system_sdk import (
+    get_addiction_status, 
+    AddictionContext,
+    check_addiction_levels_impl
 )
+from logic.narrative_events import (
+    check_for_personal_revelations,
+    check_for_narrative_moments,
+    add_dream_sequence
+)
+from logic.event_system import EventSystem
+from logic.currency_generator import CurrencyGenerator
+from logic.relationship_integration import RelationshipIntegration
+
+# GPT Integration
+from logic.chatgpt_integration import generate_text_completion
 
 # World Director integration
 from story_agent.world_director_agent import (
     WorldState, WorldMood, TimeOfDay, ActivityType, PowerDynamicType,
-    SliceOfLifeEvent, NPCRoutine, PowerExchange, WorldTension,
-    WorldDirector
+    SliceOfLifeEvent, NPCRoutine, PowerExchange, WorldTension
 )
-
-# Import world simulation tools
-from story_agent.tools import (
-    DailyLifeDirector, AmbientDialogueWriter, 
-    PowerDynamicsOrchestrator, PlayerAgencyManager
-)
-
-# Nyx governance integration
-from nyx.governance_helpers import with_governance, with_governance_permission
-from nyx.integrate import get_central_governance, remember_with_governance
-
-# Context system integration
-from context.context_service import get_context_service
-from context.memory_manager import get_memory_manager
-from context.vector_service import get_vector_service
-from context.context_performance import PerformanceMonitor, track_performance
-
-# NPC systems
-from logic.npc_narrative_progression import get_npc_narrative_stage
-from logic.dynamic_relationships import OptimizedRelationshipManager
 
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# Narrative Tone and Style Enums
-# ===============================================================================
-
-class NarrativeTone(Enum):
-    """Tone for slice-of-life narration"""
-    CASUAL = "casual"           # Everyday, relaxed narration
-    INTIMATE = "intimate"        # Close, personal moments
-    OBSERVATIONAL = "observational"  # Detached, voyeuristic
-    SENSUAL = "sensual"         # Emphasizing physical/emotional sensation
-    TEASING = "teasing"         # Playful, slightly mocking
-    COMMANDING = "commanding"    # Direct, authoritative
-    SUBTLE = "subtle"           # Understated power dynamics
-
-class SceneFocus(Enum):
-    """What to emphasize in scene narration"""
-    ATMOSPHERE = "atmosphere"    # Environmental details
-    DIALOGUE = "dialogue"        # Character interactions
-    INTERNAL = "internal"        # Player's thoughts/feelings
-    DYNAMICS = "dynamics"        # Power relationships
-    ROUTINE = "routine"         # Everyday activities
-    TENSION = "tension"         # Underlying conflicts
-
-# ===============================================================================
-# Pydantic Models for Narration
-# ===============================================================================
-
-class SliceOfLifeNarration(BaseModel):
-    """Narration for a slice-of-life scene"""
-    scene_description: str
-    atmosphere: str
-    tone: NarrativeTone
-    focus: SceneFocus
-    power_dynamic_hints: List[str] = Field(default_factory=list)
-    sensory_details: List[str] = Field(default_factory=list)
-    npc_observations: List[str] = Field(default_factory=list)
-    internal_monologue: Optional[str] = None
-    
-    model_config = ConfigDict(extra="forbid")
-
-class NPCDialogue(BaseModel):
-    """Dialogue from an NPC in daily life"""
-    npc_id: int
-    npc_name: str
-    dialogue: str
-    tone: str  # How they say it
-    subtext: str  # What they really mean
-    body_language: str
-    power_dynamic: Optional[PowerDynamicType] = None
-    requires_response: bool = False
-    
-    model_config = ConfigDict(extra="forbid")
-
-class AmbientNarration(BaseModel):
-    """Ambient narration for world atmosphere"""
-    description: str
-    focus: str  # What we're describing (time passing, mood shift, etc.)
-    intensity: float = 0.5  # How prominent this is
-    affects_mood: bool = False
-    
-    model_config = ConfigDict(extra="forbid")
-
-class PowerMomentNarration(BaseModel):
-    """Narration for a power exchange moment"""
-    setup: str  # Building to the moment
-    moment: str  # The actual exchange
-    aftermath: str  # Immediate reaction
-    player_feelings: str  # Internal reaction
-    options_presentation: List[str]  # How choices are presented
-    
-    model_config = ConfigDict(extra="forbid")
-
-class DailyActivityNarration(BaseModel):
-    """Narration for routine daily activities"""
-    activity: str
-    description: str
-    routine_with_dynamics: str  # How power dynamics color routine
-    npc_involvement: List[str] = Field(default_factory=list)
-    subtle_control_elements: List[str] = Field(default_factory=list)
-    
-    model_config = ConfigDict(extra="forbid")
-
-# ===============================================================================
-# Narrator Context
+# Enhanced Narrative Context with System Integration
 # ===============================================================================
 
 @dataclass
-class NarratorContext:
-    """Context for the Slice-of-Life Narrator"""
+class EnhancedNarratorContext:
+    """Enhanced context with all system integrations"""
     user_id: int
     conversation_id: int
     
-    # World integration
-    world_director: Optional[WorldDirector] = None
-    current_world_state: Optional[WorldState] = None
+    # Core systems
+    relationship_manager: Optional[OptimizedRelationshipManager] = None
+    relationship_integration: Optional[RelationshipIntegration] = None
+    event_system: Optional[EventSystem] = None
+    addiction_context: Optional[AddictionContext] = None
+    currency_generator: Optional[CurrencyGenerator] = None
+    
+    # Cached data
+    calendar_names: Optional[Dict[str, Any]] = None
+    current_vitals: Optional[Dict[str, int]] = None
+    current_time: Optional[CurrentTimeData] = None
+    active_addictions: Optional[Dict[str, Any]] = None
     
     # Narrative tracking
     recent_narrations: List[str] = field(default_factory=list)
-    current_tone: NarrativeTone = NarrativeTone.CASUAL
-    narrative_momentum: float = 0.0  # How intense narration has been
+    narrative_momentum: float = 0.0
+    last_revelation_check: Optional[datetime] = None
     
-    # NPC voice tracking
-    npc_voices: Dict[int, Dict[str, Any]] = field(default_factory=dict)
-    
-    # Context management
-    context_service: Optional[Any] = None
-    memory_manager: Optional[Any] = None
-    performance_monitor: Optional[Any] = None
-    
-    # Caching
-    last_narration_time: Optional[datetime] = None
-    narrative_cache: Dict[str, Any] = field(default_factory=dict)
+    async def initialize(self):
+        """Initialize all integrated systems"""
+        # Initialize relationship systems
+        self.relationship_manager = OptimizedRelationshipManager(
+            self.user_id, self.conversation_id
+        )
+        self.relationship_integration = RelationshipIntegration(
+            self.user_id, self.conversation_id
+        )
+        
+        # Initialize event system
+        self.event_system = EventSystem(self.user_id, self.conversation_id)
+        await self.event_system.initialize()
+        
+        # Initialize addiction context
+        self.addiction_context = AddictionContext(self.user_id, self.conversation_id)
+        await self.addiction_context.initialize()
+        
+        # Initialize currency generator
+        self.currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
+        
+        # Load calendar names
+        self.calendar_names = await load_calendar_names(self.user_id, self.conversation_id)
+        
+        # Get current time
+        self.current_time = await get_current_time_model(self.user_id, self.conversation_id)
+        
+        # Get current vitals
+        self.current_vitals = await get_current_vitals(self.user_id, self.conversation_id)
+        
+        # Get addiction status
+        self.active_addictions = await get_addiction_status(
+            self.user_id, self.conversation_id, "Chase"
+        )
 
 # ===============================================================================
-# Core Narration Functions with GPT Generation
+# Enhanced Narration Functions with System Integration
 # ===============================================================================
 
 @function_tool
-async def narrate_slice_of_life_scene(
+async def narrate_scene_with_full_context(
     ctx: RunContextWrapper,
     scene: SliceOfLifeEvent,
-    world_state: WorldState,
-    player_action: Optional[str] = None
+    world_state: WorldState
 ) -> SliceOfLifeNarration:
-    """
-    Generate narration for a slice-of-life scene using GPT.
-    Focus on atmosphere and subtle dynamics rather than plot.
-    """
-    context = ctx.context
+    """Generate narration with full system integration"""
+    context: EnhancedNarratorContext = ctx.context
     
-    # Determine tone based on world mood and scene type
-    tone = _determine_narrative_tone(world_state.world_mood, scene.event_type)
+    # Get relationship contexts for all participants
+    relationship_contexts = {}
+    for npc_id in scene.participants:
+        state = await context.relationship_manager.get_relationship_state(
+            'npc', npc_id, 'player', context.user_id
+        )
+        
+        # Get narrative stage
+        stage = await get_npc_narrative_stage(
+            context.user_id, context.conversation_id, npc_id
+        )
+        
+        relationship_contexts[npc_id] = {
+            'dimensions': state.dimensions.to_dict(),
+            'patterns': list(state.history.active_patterns),
+            'archetypes': list(state.active_archetypes),
+            'narrative_stage': stage.name,
+            'momentum': state.momentum.get_magnitude(),
+            'stage_description': stage.description
+        }
     
-    # Determine focus based on what's happening
-    if scene.power_dynamic:
-        focus = SceneFocus.DYNAMICS
-    elif scene.participants:
-        focus = SceneFocus.DIALOGUE
-    else:
-        focus = SceneFocus.ATMOSPHERE
-    
-    # Generate scene description with GPT
-    scene_desc = await _generate_scene_description(
-        context, scene, world_state, tone, focus
+    # Determine tone based on multiple factors
+    tone = await _determine_integrated_tone(
+        context, world_state, relationship_contexts
     )
     
-    # Generate atmospheric details
-    atmosphere = await _generate_atmosphere(
+    # Generate scene description with full context
+    scene_desc = await _generate_contextual_scene_description(
+        context, scene, world_state, relationship_contexts
+    )
+    
+    # Generate atmosphere with vitals awareness
+    atmosphere = await _generate_vitals_aware_atmosphere(
         context, scene.location, world_state.world_mood
     )
     
-    # Generate power dynamic hints if present
-    power_hints = []
-    if scene.power_dynamic:
-        power_hints = await _generate_power_hints(
-            context, scene.power_dynamic, scene.participants
-        )
+    # Generate power hints based on relationships and addictions
+    power_hints = await _generate_integrated_power_hints(
+        context, scene, relationship_contexts
+    )
     
-    # Generate sensory details
-    sensory = await _generate_sensory_details(
+    # Generate sensory details with calendar awareness
+    sensory = await _generate_calendar_aware_sensory_details(
         context, world_state.current_time, scene.location
     )
     
-    # Generate NPC observations
+    # Generate NPC observations with progression awareness
     npc_obs = []
     for npc_id in scene.participants:
-        obs = await _generate_npc_observation(context, npc_id, scene)
+        obs = await _generate_progression_aware_npc_observation(
+            context, npc_id, scene, relationship_contexts.get(npc_id)
+        )
         if obs:
             npc_obs.append(obs)
     
-    # Generate internal monologue if tension is high
-    internal = None
-    if world_state.world_tension.power_tension > 0.6:
-        internal = await _generate_internal_monologue(
-            context, scene, world_state.relationship_dynamics
-        )
+    # Generate internal monologue based on vitals, addictions, and tensions
+    internal = await _generate_integrated_internal_monologue(
+        context, scene, world_state, relationship_contexts
+    )
+    
+    # Check for narrative events
+    await _check_and_queue_narrative_events(context, scene, relationship_contexts)
     
     narration = SliceOfLifeNarration(
         scene_description=scene_desc,
         atmosphere=atmosphere,
         tone=tone,
-        focus=focus,
+        focus=_determine_scene_focus(relationship_contexts, context.active_addictions),
         power_dynamic_hints=power_hints,
         sensory_details=sensory,
         npc_observations=npc_obs,
         internal_monologue=internal
     )
     
-    # Track recent narration
-    if hasattr(context, 'recent_narrations'):
-        context.recent_narrations.append(scene_desc)
-        if len(context.recent_narrations) > 10:
-            context.recent_narrations.pop(0)
+    # Track narration
+    context.recent_narrations.append(scene_desc)
+    if len(context.recent_narrations) > 10:
+        context.recent_narrations.pop(0)
     
     return narration
 
 @function_tool
-async def generate_npc_dialogue(
+async def generate_contextual_npc_dialogue(
     ctx: RunContextWrapper,
     npc_id: int,
     situation: str,
-    world_state: WorldState,
-    relationship_context: Optional[Dict] = None
+    world_state: WorldState
 ) -> NPCDialogue:
-    """
-    Generate contextual NPC dialogue for daily situations using GPT.
-    Focus on natural conversation with subtle power dynamics.
-    """
-    context = ctx.context
+    """Generate NPC dialogue with full system awareness"""
+    context: EnhancedNarratorContext = ctx.context
     
     # Get NPC data
     async with get_db_connection_context() as conn:
         npc = await conn.fetchrow("""
-            SELECT npc_name, dominance, personality_traits, current_location
+            SELECT npc_name, dominance, cruelty, personality_traits, current_location
             FROM NPCStats
             WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
         """, npc_id, context.user_id, context.conversation_id)
@@ -282,41 +232,49 @@ async def generate_npc_dialogue(
     if not npc:
         raise ValueError(f"NPC {npc_id} not found")
     
+    # Get relationship state
+    rel_state = await context.relationship_manager.get_relationship_state(
+        'npc', npc_id, 'player', context.user_id
+    )
+    
     # Get narrative stage
     stage = await get_npc_narrative_stage(
         context.user_id, context.conversation_id, npc_id
     )
     
-    # Get relationship state if not provided
-    if not relationship_context:
-        manager = OptimizedRelationshipManager(context.user_id, context.conversation_id)
-        rel_state = await manager.get_relationship_state(
-            'npc', npc_id, 'player', context.user_id
-        )
-        relationship_context = {
-            'trust': rel_state.dimensions.trust,
-            'influence': rel_state.dimensions.influence,
-            'patterns': list(rel_state.history.active_patterns)
-        }
-    
-    # Generate dialogue with GPT
-    dialogue = await _generate_contextual_dialogue(
-        context, npc, stage.name, situation, relationship_context
+    # Check for relevant addictions
+    relevant_addictions = await _get_relevant_addictions_for_npc(
+        context, npc_id
     )
     
-    # Generate tone, subtext, and body language with GPT
-    tone = await _determine_npc_tone(context, npc, stage.name, dialogue)
-    subtext = await _generate_dialogue_subtext(
-        context, dialogue, npc['dominance'], stage.name
-    )
-    body_language = await _generate_body_language(
-        context, npc['dominance'], tone, stage.name
+    # Generate dialogue with full context
+    dialogue = await _generate_fully_contextual_dialogue(
+        context, npc, stage, situation, rel_state, relevant_addictions
     )
     
-    # Determine if power dynamic is present
-    power_dynamic = None
-    if npc['dominance'] > 60 and stage.name != "Innocent Beginning":
-        power_dynamic = _select_dialogue_power_dynamic(situation, npc['dominance'])
+    # Include currency references if appropriate
+    if "payment" in situation.lower() or "cost" in situation.lower():
+        dialogue = await _add_currency_reference(context, dialogue)
+    
+    # Generate tone based on stage and relationship
+    tone = await _determine_dialogue_tone(
+        context, npc, stage, rel_state.dimensions
+    )
+    
+    # Generate subtext with addiction awareness
+    subtext = await _generate_addiction_aware_subtext(
+        context, dialogue, npc['dominance'], stage.name, relevant_addictions
+    )
+    
+    # Generate body language
+    body_language = await _generate_stage_appropriate_body_language(
+        context, npc['dominance'], tone, stage.name, rel_state.dimensions
+    )
+    
+    # Determine power dynamic
+    power_dynamic = _determine_power_dynamic_from_context(
+        stage.name, rel_state.dimensions, relevant_addictions
+    )
     
     return NPCDialogue(
         npc_id=npc_id,
@@ -326,22 +284,19 @@ async def generate_npc_dialogue(
         subtext=subtext,
         body_language=body_language,
         power_dynamic=power_dynamic,
-        requires_response=random.random() > 0.5
+        requires_response=_should_require_response(rel_state.dimensions, stage.name)
     )
 
 @function_tool
-async def narrate_power_exchange(
+async def narrate_power_exchange_with_context(
     ctx: RunContextWrapper,
     exchange: PowerExchange,
     world_state: WorldState
 ) -> PowerMomentNarration:
-    """
-    Generate narration for a power exchange moment using GPT.
-    Make it feel natural and integrated into daily life.
-    """
-    context = ctx.context
+    """Generate power exchange narration with full system context"""
+    context: EnhancedNarratorContext = ctx.context
     
-    # Get NPC details
+    # Get NPC details and relationship
     async with get_db_connection_context() as conn:
         npc = await conn.fetchrow("""
             SELECT npc_name, dominance, personality_traits
@@ -349,21 +304,49 @@ async def narrate_power_exchange(
             WHERE npc_id = $1
         """, exchange.initiator_npc_id)
     
-    # Generate all components with GPT
-    setup = await _generate_power_moment_setup(
-        context, exchange, npc, world_state
+    rel_state = await context.relationship_manager.get_relationship_state(
+        'npc', exchange.initiator_npc_id, 'player', context.user_id
     )
-    moment = await _generate_power_moment_description(
-        context, exchange, npc
+    
+    stage = await get_npc_narrative_stage(
+        context.user_id, context.conversation_id, exchange.initiator_npc_id
     )
-    aftermath = await _generate_power_moment_aftermath(
-        context, exchange, world_state.relationship_dynamics
+    
+    # Check if vitals make player more susceptible
+    susceptibility = _calculate_susceptibility(context.current_vitals, context.active_addictions)
+    
+    # Generate components with context
+    setup = await _generate_contextual_power_setup(
+        context, exchange, npc, stage, rel_state, susceptibility
     )
-    feelings = await _generate_player_feelings(
-        context, exchange, world_state.relationship_dynamics
+    
+    moment = await _generate_progression_aware_power_moment(
+        context, exchange, npc, stage
     )
-    options = await _present_response_options(
-        context, exchange.player_response_options
+    
+    aftermath = await _generate_vitals_influenced_aftermath(
+        context, exchange, rel_state, context.current_vitals
+    )
+    
+    feelings = await _generate_addiction_influenced_feelings(
+        context, exchange, rel_state, context.active_addictions
+    )
+    
+    # Present options based on player's state
+    options = await _present_state_aware_options(
+        context, exchange.player_response_options, susceptibility
+    )
+    
+    # Queue relationship event
+    await context.event_system.create_event(
+        "relationship_event",
+        {
+            "type": "power_exchange",
+            "npc_id": exchange.initiator_npc_id,
+            "exchange_type": exchange.exchange_type.value,
+            "intensity": exchange.intensity
+        },
+        priority=7
     )
     
     return PowerMomentNarration(
@@ -375,40 +358,50 @@ async def narrate_power_exchange(
     )
 
 @function_tool
-async def narrate_daily_routine(
+async def narrate_with_addiction_awareness(
     ctx: RunContextWrapper,
     activity: str,
-    time_period: TimeOfDay,
     involved_npcs: List[int],
     world_state: WorldState
 ) -> DailyActivityNarration:
-    """
-    Generate narration for routine daily activities using GPT.
-    Weave power dynamics naturally into everyday tasks.
-    """
-    context = ctx.context
+    """Narrate daily activities with addiction system integration"""
+    context: EnhancedNarratorContext = ctx.context
     
-    # Generate basic activity description
-    description = await _generate_activity_description(
-        context, activity, time_period
+    # Get addiction effects for narration
+    addiction_effects = []
+    if context.active_addictions.get("has_addictions"):
+        for addiction_type, data in context.active_addictions.get("addictions", {}).items():
+            if data.get("level", 0) >= 2:  # Moderate or higher
+                effect_desc = await _generate_addiction_effect_description(
+                    context, addiction_type, data.get("level"), activity
+                )
+                if effect_desc:
+                    addiction_effects.append(effect_desc)
+    
+    # Generate base activity description
+    description = await _generate_activity_with_vitals(
+        context, activity, context.current_vitals
     )
     
-    # Add power dynamics to routine
-    routine_with_dynamics = await _generate_routine_with_dynamics(
-        context, activity, involved_npcs, world_state.relationship_dynamics
+    # Add addiction coloring to routine
+    routine_with_dynamics = await _generate_addiction_colored_routine(
+        context, activity, involved_npcs, addiction_effects
     )
     
-    # Generate NPC involvement
+    # Generate NPC involvement with relationship awareness
     npc_involvement = []
     for npc_id in involved_npcs:
-        involvement = await _generate_npc_routine_involvement(
-            context, npc_id, activity
+        rel_state = await context.relationship_manager.get_relationship_state(
+            'npc', npc_id, 'player', context.user_id
+        )
+        involvement = await _generate_relationship_aware_involvement(
+            context, npc_id, activity, rel_state
         )
         if involvement:
             npc_involvement.append(involvement)
     
-    # Generate subtle control elements
-    control_elements = await _generate_subtle_control_elements(
+    # Add subtle control elements from addictions
+    control_elements = addiction_effects + await _generate_subtle_control_elements(
         context, activity, world_state.relationship_dynamics
     )
     
@@ -417,152 +410,159 @@ async def narrate_daily_routine(
         description=description,
         routine_with_dynamics=routine_with_dynamics,
         npc_involvement=npc_involvement,
-        subtle_control_elements=control_elements
+        subtle_control_elements=control_elements[:5]  # Limit to 5
     )
 
 @function_tool
-async def generate_ambient_narration(
+async def generate_time_aware_ambient_narration(
     ctx: RunContextWrapper,
     focus: str,
     world_state: WorldState
 ) -> AmbientNarration:
-    """
-    Generate ambient narration for atmosphere and world-building.
-    """
-    context = ctx.context
+    """Generate ambient narration with calendar and time system awareness"""
+    context: EnhancedNarratorContext = ctx.context
     
-    # Generate description based on focus
+    # Update current time
+    context.current_time = await get_current_time_model(
+        context.user_id, context.conversation_id
+    )
+    
+    # Generate description based on focus with calendar names
     if focus == "time_passage":
-        description = await _narrate_time_passage(context, world_state.current_time)
+        description = await _narrate_calendar_time_passage(
+            context, context.current_time, context.calendar_names
+        )
     elif focus == "mood_shift":
-        description = await _narrate_mood_shift(context, world_state.world_mood)
+        description = await _narrate_mood_with_vitals(
+            context, world_state.world_mood, context.current_vitals
+        )
     elif focus == "tension_building":
-        description = await _narrate_tension(context, world_state.world_tension)
+        description = await _narrate_tension_with_relationships(
+            context, world_state.world_tension
+        )
+    elif focus == "addiction_hint":
+        description = await _narrate_addiction_presence(
+            context, context.active_addictions
+        )
     else:
-        description = await _narrate_ambient_detail(context, world_state)
+        description = await _narrate_world_with_currency(
+            context, world_state
+        )
     
-    # Determine intensity based on world tension
-    dominant_tension, level = world_state.world_tension.get_dominant_tension()
-    intensity = min(1.0, level * 0.8)
+    # Check for relationship events
+    rel_event = await event_generator.get_next_event(timeout=0.1)
+    if rel_event:
+        description += f" {await _weave_relationship_event(context, rel_event)}"
+    
+    # Determine intensity based on multiple factors
+    intensity = _calculate_ambient_intensity(
+        world_state.world_tension,
+        context.current_vitals,
+        context.active_addictions
+    )
     
     return AmbientNarration(
         description=description,
         focus=focus,
         intensity=intensity,
-        affects_mood=focus == "mood_shift"
+        affects_mood=focus in ["mood_shift", "addiction_hint"]
     )
 
-@function_tool
-async def narrate_player_action(
-    ctx: RunContextWrapper,
-    action: str,
+# ===============================================================================
+# System-Aware Helper Functions
+# ===============================================================================
+
+async def _determine_integrated_tone(
+    context: EnhancedNarratorContext,
     world_state: WorldState,
-    affected_npcs: List[int] = None
-) -> Dict[str, Any]:
-    """
-    Narrate the results of a player action in the world.
-    """
-    context = ctx.context
+    relationship_contexts: Dict[int, Dict]
+) -> NarrativeTone:
+    """Determine tone based on all systems"""
     
-    # Generate action acknowledgment
-    acknowledgment = await _acknowledge_player_action(context, action)
+    # Base tone from world mood
+    base_tone = _determine_narrative_tone(world_state.world_mood, ActivityType.ROUTINE)
     
-    # Generate world reaction
-    world_reaction = await _generate_world_reaction(
-        context, action, world_state
-    )
+    # Adjust for vitals
+    if context.current_vitals.fatigue > 80:
+        return NarrativeTone.OBSERVATIONAL  # Too tired for complex emotions
+    elif context.current_vitals.hunger < 20:
+        return NarrativeTone.COMMANDING  # Desperation makes control easier
     
-    # Generate NPC reactions if any
-    npc_reactions = []
-    if affected_npcs:
-        for npc_id in affected_npcs:
-            reaction = await _generate_npc_reaction(
-                context, npc_id, action, world_state
-            )
-            if reaction:
-                npc_reactions.append(reaction)
+    # Adjust for relationships
+    avg_submission = sum(
+        rc.get('dimensions', {}).get('influence', 0) 
+        for rc in relationship_contexts.values()
+    ) / max(len(relationship_contexts), 1)
     
-    # Determine if this shifts any dynamics
-    dynamic_shift = None
-    if world_state.relationship_dynamics.player_submission_level > 0.5:
-        dynamic_shift = await _check_for_dynamic_shift(
-            context, action, world_state.relationship_dynamics
-        )
+    if avg_submission > 50:
+        return NarrativeTone.SUBTLE
+    elif avg_submission > 30:
+        return NarrativeTone.TEASING
     
-    return {
-        "acknowledgment": acknowledgment,
-        "world_reaction": world_reaction,
-        "npc_reactions": npc_reactions,
-        "dynamic_shift": dynamic_shift,
-        "maintains_atmosphere": True
-    }
+    # Adjust for addictions
+    if context.active_addictions.get("has_addictions"):
+        addiction_count = len(context.active_addictions.get("addictions", {}))
+        if addiction_count >= 3:
+            return NarrativeTone.SENSUAL
+    
+    return base_tone
 
-# ===============================================================================
-# GPT-Powered Helper Functions
-# ===============================================================================
-
-def _determine_narrative_tone(mood: WorldMood, event_type: ActivityType) -> NarrativeTone:
-    """Determine appropriate narrative tone based on mood and activity"""
-    tone_map = {
-        (WorldMood.INTIMATE, ActivityType.INTIMATE): NarrativeTone.SENSUAL,
-        (WorldMood.PLAYFUL, ActivityType.SOCIAL): NarrativeTone.TEASING,
-        (WorldMood.OPPRESSIVE, ActivityType.ROUTINE): NarrativeTone.COMMANDING,
-        (WorldMood.MYSTERIOUS, ActivityType.SPECIAL): NarrativeTone.OBSERVATIONAL,
-        (WorldMood.RELAXED, ActivityType.LEISURE): NarrativeTone.CASUAL,
-    }
-    
-    key = (mood, event_type)
-    return tone_map.get(key, NarrativeTone.SUBTLE)
-
-def _select_dialogue_power_dynamic(situation: str, dominance: int) -> PowerDynamicType:
-    """Select appropriate power dynamic for dialogue based on context"""
-    situation_lower = situation.lower()
-    
-    if dominance > 80:
-        if "private" in situation_lower or "alone" in situation_lower:
-            return PowerDynamicType.INTIMATE_COMMAND
-        else:
-            return PowerDynamicType.CASUAL_DOMINANCE
-    elif dominance > 60:
-        if "decision" in situation_lower:
-            return PowerDynamicType.CASUAL_DOMINANCE
-        elif "help" in situation_lower:
-            return PowerDynamicType.PROTECTIVE_CONTROL
-        else:
-            return PowerDynamicType.SUBTLE_CONTROL
-    else:
-        return PowerDynamicType.PLAYFUL_TEASING
-
-async def _generate_scene_description(
-    context: NarratorContext,
+async def _generate_contextual_scene_description(
+    context: EnhancedNarratorContext,
     scene: SliceOfLifeEvent,
     world_state: WorldState,
-    tone: NarrativeTone,
-    focus: SceneFocus
+    relationship_contexts: Dict[int, Dict]
 ) -> str:
-    """Generate scene description using GPT"""
+    """Generate scene description with full context"""
     
-    system_prompt = """You are narrating a slice-of-life scene in a femdom setting.
-    Focus on atmosphere and subtle power dynamics woven into everyday life.
-    Use second-person perspective ('you'). Be immersive but not melodramatic.
-    The power dynamics should feel natural, not forced or explicit."""
+    # Build calendar-aware time reference
+    calendar = context.calendar_names
+    time_desc = f"{calendar['days'][context.current_time.day % 7]} of {calendar['months'][context.current_time.month - 1]}"
+    
+    # Build relationship prompts
+    rel_prompts = []
+    for npc_id, rel_context in relationship_contexts.items():
+        stage = rel_context['narrative_stage']
+        patterns = rel_context.get('patterns', [])
+        
+        if stage == 'Full Revelation':
+            rel_prompts.append(f"Complete openness about control dynamics")
+        elif stage == 'Veil Thinning':
+            rel_prompts.append(f"Control barely hidden beneath pleasantries")
+        elif stage == 'Creeping Realization':
+            rel_prompts.append(f"Patterns becoming visible through repetition")
+        
+        if 'push_pull' in patterns:
+            rel_prompts.append(f"The familiar dance of closeness and distance")
+        if 'toxic_bond' in patterns:
+            rel_prompts.append(f"An unhealthy attachment pulsing beneath")
+    
+    # Build vitals prompt
+    vitals_prompt = ""
+    if context.current_vitals.fatigue > 60:
+        vitals_prompt = "Exhaustion weighs on every movement."
+    if context.current_vitals.hunger < 40:
+        vitals_prompt += " Hunger gnaws as a constant distraction."
+    
+    system_prompt = """You are narrating a slice-of-life scene with deep context awareness.
+    Weave in relationship dynamics, time references, and physical state naturally.
+    Use second-person perspective. Be immersive but not melodramatic."""
     
     user_prompt = f"""
     Generate a scene description for:
     Scene: {scene.title} - {scene.description}
     Location: {scene.location}
-    Activity Type: {scene.event_type.value}
-    Tone: {tone.value} - Make the narration feel {tone.value}
-    Focus: {focus.value} - Emphasize the {focus.value} aspect
+    Time: {time_desc} during {world_state.current_time.value}
+    
+    Relationship Context:
+    {chr(10).join(rel_prompts)}
+    
+    Physical State: {vitals_prompt}
+    
     World Mood: {world_state.world_mood.value}
     
-    NPCs Present: {len(scene.participants)} people
-    Power Dynamic: {scene.power_dynamic.value if scene.power_dynamic else 'none'}
-    
-    Recent narrations to avoid repetition:
-    {chr(10).join(context.recent_narrations[-3:]) if context.recent_narrations else 'None'}
-    
-    Write 2-3 sentences that set the scene naturally. Don't mention game mechanics.
+    Write 2-3 sentences that naturally incorporate these elements.
+    Don't explicitly state game mechanics.
     """
     
     description = await generate_text_completion(
@@ -575,23 +575,31 @@ async def _generate_scene_description(
     
     return description.strip()
 
-async def _generate_atmosphere(
-    context: NarratorContext,
+async def _generate_vitals_aware_atmosphere(
+    context: EnhancedNarratorContext,
     location: str,
     mood: WorldMood
 ) -> str:
-    """Generate atmospheric description using GPT"""
+    """Generate atmosphere influenced by vitals"""
     
-    system_prompt = """You create atmospheric descriptions for a slice-of-life simulation.
-    Focus on sensory details and emotional atmosphere. Keep it brief and evocative."""
+    vitals_influence = ""
+    if context.current_vitals.fatigue > 70:
+        vitals_influence = "Everything feels distant and dreamlike through exhaustion."
+    elif context.current_vitals.hunger < 30:
+        vitals_influence = "The world sharpens with desperate hunger."
+    elif context.current_vitals.thirst < 30:
+        vitals_influence = "Dryness pervades every sensation."
+    
+    system_prompt = """Create atmospheric descriptions that reflect physical state.
+    Show how vitals affect perception of the environment."""
     
     user_prompt = f"""
-    Create an atmospheric description for:
+    Create atmosphere for:
     Location: {location}
     Mood: {mood.value}
+    Physical influence: {vitals_influence}
     
-    In 1-2 sentences, describe how the {location} feels with a {mood.value} atmosphere.
-    Focus on subtle details that convey the mood without stating it directly.
+    In 1-2 sentences, show how the {location} feels through this lens.
     """
     
     atmosphere = await generate_text_completion(
@@ -604,29 +612,61 @@ async def _generate_atmosphere(
     
     return atmosphere.strip()
 
-async def _generate_power_hints(
-    context: NarratorContext,
-    power_dynamic: PowerDynamicType,
-    participants: List[int]
+async def _generate_integrated_power_hints(
+    context: EnhancedNarratorContext,
+    scene: SliceOfLifeEvent,
+    relationship_contexts: Dict[int, Dict]
 ) -> List[str]:
-    """Generate subtle hints about power dynamics using GPT"""
+    """Generate power hints from relationships and addictions"""
+    hints = []
     
-    system_prompt = """You write subtle hints about power dynamics in everyday situations.
-    Never be explicit about dominance/submission. Use subtext, body language, and atmosphere.
-    Make it feel like natural social dynamics with an undercurrent of control."""
+    # Relationship-based hints
+    for npc_id, rel_context in relationship_contexts.items():
+        patterns = rel_context.get('patterns', [])
+        archetypes = rel_context.get('archetypes', [])
+        
+        if 'push_pull' in patterns:
+            hints.append("The familiar rhythm of advance and retreat continues")
+        if 'slow_burn' in patterns:
+            hints.append("A gradual shift, almost imperceptible but constant")
+        if 'toxic_bond' in archetypes:
+            hints.append("The unhealthy dynamic thrums beneath every interaction")
+        if 'mentor_student' in archetypes:
+            hints.append("Guidance that shapes more than just knowledge")
+    
+    # Addiction-based hints
+    if context.active_addictions.get("has_addictions"):
+        for addiction_type, data in context.active_addictions.get("addictions", {}).items():
+            if data.get("level", 0) >= 3:  # Heavy or extreme
+                if "feet" in addiction_type:
+                    hints.append("Your gaze drops involuntarily, drawn downward")
+                elif "scent" in addiction_type:
+                    hints.append("Every breath carries meaning you can't ignore")
+                elif "humiliation" in addiction_type:
+                    hints.append("The familiar warmth of shame feels almost comfortable")
+    
+    return hints[:4]  # Limit to 4 hints
+
+async def _generate_calendar_aware_sensory_details(
+    context: EnhancedNarratorContext,
+    time: TimeOfDay,
+    location: str
+) -> List[str]:
+    """Generate sensory details with calendar awareness"""
+    
+    calendar = context.calendar_names
+    month_name = calendar['months'][context.current_time.month - 1]
+    
+    system_prompt = """Create sensory details that reference custom calendar names.
+    Make the world feel unique through its temporal references."""
     
     user_prompt = f"""
-    Generate 2-3 subtle hints for this power dynamic:
-    Type: {power_dynamic.value.replace('_', ' ')}
-    Number of NPCs: {len(participants)}
+    Generate sensory details for:
+    Time: {time.value} in the month of {month_name}
+    Location: {location}
+    Year Name: {calendar['year_name']}
     
-    Create brief, subtle observations that hint at the power dynamic without stating it.
-    Focus on:
-    - Body language
-    - Unspoken expectations
-    - Subtle shifts in atmosphere
-    - Natural social dynamics
-    
+    Create 2-3 sensory observations that subtly reference the custom calendar.
     Return as a JSON array of strings.
     """
     
@@ -634,45 +674,6 @@ async def _generate_power_hints(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=0.7,
-        max_tokens=150,
-        task_type="narrative"
-    )
-    
-    try:
-        hints = json.loads(response)
-        if isinstance(hints, list):
-            return hints[:3]
-    except:
-        # Fallback: split by newlines if not valid JSON
-        return [line.strip() for line in response.split('\n') if line.strip()][:3]
-    
-    return ["The dynamic shifts subtly"]
-
-async def _generate_sensory_details(
-    context: NarratorContext,
-    time: TimeOfDay,
-    location: str
-) -> List[str]:
-    """Generate sensory details using GPT"""
-    
-    system_prompt = """You create immersive sensory details for different times and places.
-    Focus on smell, sound, temperature, light, and texture. Be specific and evocative."""
-    
-    user_prompt = f"""
-    Generate 2-3 sensory details for:
-    Time: {time.value}
-    Location: {location}
-    
-    Create brief sensory observations appropriate for this time and place.
-    Make them specific and atmospheric.
-    
-    Return as a JSON array of strings.
-    """
-    
-    response = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.6,
         max_tokens=120,
         task_type="narrative"
     )
@@ -682,21 +683,27 @@ async def _generate_sensory_details(
         if isinstance(details, list):
             return details[:3]
     except:
-        return [line.strip() for line in response.split('\n') if line.strip()][:3]
+        return [f"The {month_name} air carries its own signature"]
     
-    return ["The world continues around you"]
+    return details
 
-async def _generate_npc_observation(
-    context: NarratorContext,
+async def _generate_progression_aware_npc_observation(
+    context: EnhancedNarratorContext,
     npc_id: int,
-    scene: SliceOfLifeEvent
+    scene: SliceOfLifeEvent,
+    rel_context: Optional[Dict]
 ) -> Optional[str]:
-    """Generate observation about an NPC using GPT"""
+    """Generate NPC observation based on narrative progression"""
     
-    # Get NPC data
+    if not rel_context:
+        return None
+    
+    stage = rel_context['narrative_stage']
+    stage_desc = rel_context.get('stage_description', '')
+    
     async with get_db_connection_context() as conn:
         npc = await conn.fetchrow("""
-            SELECT npc_name, dominance, cruelty, personality_traits
+            SELECT npc_name, dominance, personality_traits
             FROM NPCStats
             WHERE npc_id = $1
         """, npc_id)
@@ -704,17 +711,18 @@ async def _generate_npc_observation(
     if not npc:
         return None
     
-    system_prompt = """You write brief observations about NPCs in slice-of-life scenes.
-    Focus on body language, presence, and subtle character details.
-    Never explicitly state dominance levels - show through behavior."""
+    system_prompt = f"""Generate observations about NPCs at different narrative stages.
+    Current stage: {stage} - {stage_desc}
+    Show progression through subtle behavioral changes."""
     
     user_prompt = f"""
-    Write a brief observation about {npc['npc_name']}:
-    Dominance: {npc['dominance']}/100 (don't mention numbers)
+    Observe {npc['npc_name']} in this scene:
     Scene: {scene.title}
+    Dominance: {npc['dominance']}/100 (don't mention numbers)
+    Stage: {stage}
+    Active patterns: {', '.join(rel_context.get('patterns', [])[:2])}
     
-    In one sentence, describe what you notice about them in this moment.
-    Focus on their presence, body language, or a subtle detail.
+    Write one sentence showing their behavior at this stage.
     """
     
     observation = await generate_text_completion(
@@ -727,26 +735,53 @@ async def _generate_npc_observation(
     
     return observation.strip()
 
-async def _generate_internal_monologue(
-    context: NarratorContext,
+async def _generate_integrated_internal_monologue(
+    context: EnhancedNarratorContext,
     scene: SliceOfLifeEvent,
-    dynamics: Any
-) -> str:
-    """Generate player's internal thoughts using GPT"""
+    world_state: WorldState,
+    relationship_contexts: Dict[int, Dict]
+) -> Optional[str]:
+    """Generate internal monologue based on all systems"""
     
-    system_prompt = """You write internal monologues for a player in a femdom slice-of-life game.
-    The thoughts should reflect their growing awareness or acceptance of power dynamics.
-    Keep it subtle and psychological. Use second person ('you think', 'you realize')."""
+    # Check if we should have internal monologue
+    triggers = []
+    
+    # Vitals trigger
+    if context.current_vitals.fatigue > 70:
+        triggers.append("exhaustion")
+    if context.current_vitals.hunger < 30:
+        triggers.append("hunger")
+    
+    # Addiction trigger
+    if context.active_addictions.get("has_addictions"):
+        addiction_count = len(context.active_addictions.get("addictions", {}))
+        if addiction_count >= 2:
+            triggers.append("cravings")
+    
+    # Relationship trigger
+    for rel_context in relationship_contexts.values():
+        if rel_context['narrative_stage'] in ['Creeping Realization', 'Veil Thinning']:
+            triggers.append("realization")
+            break
+    
+    if not triggers:
+        return None
+    
+    system_prompt = """Generate internal monologue reflecting multiple influences.
+    Show how physical state, psychological dependencies, and growing awareness interact.
+    Use second person perspective."""
     
     user_prompt = f"""
-    Generate an internal thought for the player:
+    Generate internal thoughts influenced by:
+    Triggers: {', '.join(triggers)}
     Scene: {scene.title}
-    Submission Level: {dynamics.player_submission_level:.1%} (don't mention numbers)
-    Acceptance Level: {dynamics.acceptance_level:.1%}
-    Resistance Level: {dynamics.resistance_level:.1%}
+    Submission Level: {world_state.relationship_dynamics.player_submission_level:.0%}
     
-    Write 1-2 sentences of internal monologue that reflects their psychological state.
-    Show their awareness/acceptance/resistance to the power dynamics naturally.
+    Physical State:
+    - Fatigue: {context.current_vitals.fatigue}/100
+    - Hunger: {context.current_vitals.hunger}/100
+    
+    Write 1-2 sentences of internal monologue showing these influences.
     """
     
     monologue = await generate_text_completion(
@@ -759,38 +794,119 @@ async def _generate_internal_monologue(
     
     return monologue.strip()
 
-async def _generate_contextual_dialogue(
-    context: NarratorContext,
+async def _check_and_queue_narrative_events(
+    context: EnhancedNarratorContext,
+    scene: SliceOfLifeEvent,
+    relationship_contexts: Dict[int, Dict]
+) -> None:
+    """Check for and queue narrative events based on current state"""
+    
+    # Check if enough time has passed since last check
+    now = datetime.now()
+    if context.last_revelation_check and (now - context.last_revelation_check).seconds < 300:
+        return
+    
+    context.last_revelation_check = now
+    
+    # Check for personal revelations
+    revelation = await check_for_personal_revelations(
+        context.user_id, context.conversation_id
+    )
+    if revelation:
+        await context.event_system.create_event(
+            "narrative_event",
+            {
+                "type": "personal_revelation",
+                "data": revelation
+            },
+            priority=8
+        )
+    
+    # Check for narrative moments
+    moment = await check_for_narrative_moments(
+        context.user_id, context.conversation_id
+    )
+    if moment:
+        await context.event_system.create_event(
+            "narrative_event",
+            {
+                "type": "narrative_moment",
+                "data": moment
+            },
+            priority=7
+        )
+    
+    # Check for dream sequences if tired
+    if context.current_vitals.fatigue > 80:
+        dream = await add_dream_sequence(
+            context.user_id, context.conversation_id
+        )
+        if dream:
+            await context.event_system.create_event(
+                "narrative_event",
+                {
+                    "type": "dream_sequence",
+                    "data": dream
+                },
+                priority=6
+            )
+
+async def _get_relevant_addictions_for_npc(
+    context: EnhancedNarratorContext,
+    npc_id: int
+) -> Dict[str, Any]:
+    """Get addictions relevant to a specific NPC"""
+    
+    relevant = {}
+    if not context.active_addictions.get("has_addictions"):
+        return relevant
+    
+    for addiction_key, data in context.active_addictions.get("addictions", {}).items():
+        # Check if this is an NPC-specific addiction
+        if data.get("type") == "npc_specific" and data.get("npc_id") == npc_id:
+            relevant[addiction_key] = data
+        # Or if it's a general addiction that might apply
+        elif data.get("type") == "general" and data.get("level", 0) >= 2:
+            relevant[addiction_key] = data
+    
+    return relevant
+
+async def _generate_fully_contextual_dialogue(
+    context: EnhancedNarratorContext,
     npc: Any,
-    stage: str,
+    stage: NPCNarrativeStage,
     situation: str,
-    relationship_context: Dict
+    rel_state: Any,
+    relevant_addictions: Dict[str, Any]
 ) -> str:
-    """Generate NPC dialogue using GPT"""
+    """Generate dialogue with full context awareness"""
     
-    system_prompt = f"""You write natural dialogue for NPCs in a femdom slice-of-life setting.
-    Character: {npc['npc_name']}
-    Personality traits: {npc['personality_traits']}
-    Narrative Stage: {stage}
+    # Build addiction context
+    addiction_prompts = []
+    for addiction_type, data in relevant_addictions.items():
+        level = data.get("level", 0)
+        if level >= 3:
+            addiction_prompts.append(f"Player has strong {addiction_type} addiction")
     
-    Guidelines for {stage}:
-    - Innocent Beginning: Friendly, no obvious control
-    - First Doubts: Occasional 'helpful' suggestions
-    - Creeping Realization: Regular gentle steering
-    - Veil Thinning: Open but caring control
-    - Full Revelation: Complete, casual dominance
+    system_prompt = f"""Generate natural dialogue for {npc['npc_name']}.
+    Narrative Stage: {stage.name} - {stage.description}
+    Personality: {npc['personality_traits']}
     
-    Make dialogue feel natural and conversational. Power dynamics through subtext only."""
+    The dialogue should reflect the current stage and any relevant addictions.
+    Power dynamics through subtext only."""
     
     user_prompt = f"""
-    Generate dialogue for this situation:
+    Generate dialogue for:
     Situation: {situation}
     Dominance: {npc['dominance']}/100
-    Trust: {relationship_context['trust']}/100
-    Influence: {relationship_context['influence']}/100
-    Patterns: {', '.join(relationship_context['patterns'][:3]) if relationship_context['patterns'] else 'none'}
+    Trust: {rel_state.dimensions.trust:.0f}/100
+    Influence: {rel_state.dimensions.influence:.0f}/100
+    Patterns: {', '.join(list(rel_state.history.active_patterns)[:3])}
     
-    Write 1-2 sentences of natural dialogue appropriate for the stage and situation.
+    Relevant context:
+    {chr(10).join(addiction_prompts)}
+    
+    Write 1-2 sentences of natural dialogue.
     """
     
     dialogue = await generate_text_completion(
@@ -803,468 +919,152 @@ async def _generate_contextual_dialogue(
     
     return dialogue.strip()
 
-async def _determine_npc_tone(
-    context: NarratorContext,
-    npc: Any,
-    stage: str,
+async def _add_currency_reference(
+    context: EnhancedNarratorContext,
     dialogue: str
 ) -> str:
-    """Determine tone of NPC dialogue using GPT"""
+    """Add currency references to dialogue"""
     
-    system_prompt = """You analyze dialogue tone in a slice-of-life context.
-    Identify the emotional tone and delivery style of the dialogue."""
+    currency_system = await context.currency_generator.get_currency_system()
     
-    user_prompt = f"""
-    Analyze the tone of this dialogue:
-    Speaker: {npc['npc_name']}
-    Dominance: {npc['dominance']}/100
-    Stage: {stage}
-    Dialogue: "{dialogue}"
+    # Simple replacement of generic money references
+    dialogue = dialogue.replace("dollars", currency_system.get("currency_plural", "coins"))
+    dialogue = dialogue.replace("dollar", currency_system.get("currency_name", "coin"))
+    dialogue = dialogue.replace("$", currency_system.get("currency_symbol", ""))
     
-    In 1-3 words, describe HOW this is said (e.g., "warmly commanding", "playfully firm", "casually assertive").
-    """
-    
-    tone = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.5,
-        max_tokens=20,
-        task_type="analysis"
-    )
-    
-    return tone.strip()
+    return dialogue
 
-async def _generate_dialogue_subtext(
-    context: NarratorContext,
-    dialogue: str,
-    dominance: int,
-    stage: str
-) -> str:
-    """Generate subtext for dialogue using GPT"""
+def _calculate_susceptibility(
+    vitals: Dict[str, int],
+    addictions: Dict[str, Any]
+) -> float:
+    """Calculate player susceptibility to control"""
     
-    system_prompt = """You reveal the hidden meaning behind dialogue in a power dynamic context.
-    The subtext should hint at control, influence, or expectations without being explicit."""
+    susceptibility = 0.5  # Base
     
-    user_prompt = f"""
-    What's the subtext of this dialogue?
-    Dialogue: "{dialogue}"
-    Speaker Dominance: {dominance}/100
-    Relationship Stage: {stage}
+    # Vitals effects
+    if vitals.get("fatigue", 0) > 70:
+        susceptibility += 0.2
+    if vitals.get("hunger", 100) < 30:
+        susceptibility += 0.15
+    if vitals.get("thirst", 100) < 30:
+        susceptibility += 0.1
     
-    In one brief sentence, explain what they really mean or want.
-    Focus on hidden expectations, subtle control, or unspoken dynamics.
-    """
+    # Addiction effects
+    if addictions.get("has_addictions"):
+        addiction_count = len(addictions.get("addictions", {}))
+        susceptibility += min(0.3, addiction_count * 0.1)
     
-    subtext = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.6,
-        max_tokens=60,
-        task_type="analysis"
-    )
-    
-    return subtext.strip()
+    return min(1.0, susceptibility)
 
-async def _generate_body_language(
-    context: NarratorContext,
-    dominance: int,
-    tone: str,
-    stage: str
-) -> str:
-    """Generate body language description using GPT"""
+def _determine_power_dynamic_from_context(
+    stage: str,
+    dimensions: Any,
+    addictions: Dict[str, Any]
+) -> Optional[PowerDynamicType]:
+    """Determine power dynamic from full context"""
     
-    system_prompt = """You describe subtle body language that conveys power dynamics.
-    Focus on posture, eye contact, gestures, and spatial positioning.
-    Never explicitly state dominance - show it through physical presence."""
+    if stage == "Full Revelation":
+        return PowerDynamicType.COMPLETE_CONTROL
+    elif stage == "Veil Thinning":
+        if dimensions.influence > 60:
+            return PowerDynamicType.INTIMATE_COMMAND
+        else:
+            return PowerDynamicType.CASUAL_DOMINANCE
+    elif stage == "Creeping Realization":
+        if addictions:
+            return PowerDynamicType.PROTECTIVE_CONTROL
+        else:
+            return PowerDynamicType.SUBTLE_CONTROL
+    elif stage == "First Doubts":
+        return PowerDynamicType.PLAYFUL_TEASING
     
-    user_prompt = f"""
-    Describe body language for:
-    Dominance Level: {dominance}/100 (don't mention numbers)
-    Tone: {tone}
-    Stage: {stage}
-    
-    In one sentence, describe their physical presence and body language.
-    Make it subtle and natural.
-    """
-    
-    body_language = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=60,
-        task_type="narrative"
-    )
-    
-    return body_language.strip()
+    return None
 
-async def _generate_power_moment_setup(
-    context: NarratorContext,
-    exchange: PowerExchange,
-    npc: Any,
-    world_state: WorldState
-) -> str:
-    """Generate setup for power moment using GPT"""
+def _should_require_response(dimensions: Any, stage: str) -> bool:
+    """Determine if dialogue requires response based on context"""
     
-    system_prompt = """You narrate the build-up to subtle power exchange moments.
-    Create tension and anticipation without being explicit about what's coming.
-    Focus on atmosphere, body language, and subtle shifts in dynamic."""
-    
-    user_prompt = f"""
-    Set up this power exchange:
-    Type: {exchange.exchange_type.value.replace('_', ' ')}
-    Initiator: {npc['npc_name']}
-    Intensity: {exchange.intensity:.1%}
-    Setting: {world_state.world_mood.value} mood
-    
-    Write 2-3 sentences that build toward the moment without revealing it.
-    Focus on subtle changes in atmosphere or behavior.
-    """
-    
-    setup = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=120,
-        task_type="narrative"
-    )
-    
-    return setup.strip()
+    if stage in ["Full Revelation", "Veil Thinning"]:
+        return dimensions.influence > 50
+    elif stage == "Creeping Realization":
+        return dimensions.trust > 60
+    else:
+        return random.random() > 0.6
 
-async def _generate_power_moment_description(
-    context: NarratorContext,
-    exchange: PowerExchange,
-    npc: Any
-) -> str:
-    """Generate the moment itself using GPT"""
+def _determine_scene_focus(
+    relationship_contexts: Dict[int, Dict],
+    addictions: Dict[str, Any]
+) -> SceneFocus:
+    """Determine scene focus based on active elements"""
     
-    system_prompt = """You narrate subtle power exchanges in everyday situations.
-    Make it feel natural and integrated into normal interaction.
-    The control should feel inevitable rather than forced."""
+    # Check for high-intensity patterns
+    for rel_context in relationship_contexts.values():
+        if 'toxic_bond' in rel_context.get('archetypes', []):
+            return SceneFocus.TENSION
+        if rel_context.get('momentum', 0) > 5:
+            return SceneFocus.DYNAMICS
     
-    user_prompt = f"""
-    Narrate this power exchange:
-    Type: {exchange.exchange_type.value.replace('_', ' ')}
-    Description: {exchange.description}
-    Character: {npc['npc_name']}
-    Intensity: {exchange.intensity:.1%}
-    Public: {exchange.is_public}
-    
-    Write 2-3 sentences describing the moment itself.
-    Make it feel like a natural part of daily interaction.
-    """
-    
-    moment = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=120,
-        task_type="narrative"
-    )
-    
-    return moment.strip()
-
-async def _generate_power_moment_aftermath(
-    context: NarratorContext,
-    exchange: PowerExchange,
-    dynamics: Any
-) -> str:
-    """Generate aftermath description using GPT"""
-    
-    system_prompt = """You describe the immediate aftermath of power exchanges.
-    Focus on lingering atmosphere, unspoken understanding, and subtle shifts.
-    Show how the dynamic has subtly changed without stating it."""
-    
-    user_prompt = f"""
-    Describe the aftermath of:
-    Exchange Type: {exchange.exchange_type.value}
-    Player Submission: {dynamics.player_submission_level:.1%} (don't mention numbers)
-    
-    Write 1-2 sentences about what lingers after the moment.
-    Focus on atmosphere and unspoken changes.
-    """
-    
-    aftermath = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=80,
-        task_type="narrative"
-    )
-    
-    return aftermath.strip()
-
-async def _generate_player_feelings(
-    context: NarratorContext,
-    exchange: PowerExchange,
-    dynamics: Any
-) -> str:
-    """Generate player's internal reaction using GPT"""
-    
-    system_prompt = """You describe internal emotional reactions to power dynamics.
-    Focus on complex, conflicting feelings. Show gradual acceptance or resistance.
-    Use second person perspective."""
-    
-    user_prompt = f"""
-    Describe the player's internal reaction to:
-    Exchange: {exchange.exchange_type.value}
-    Intensity: {exchange.intensity:.1%}
-    Acceptance Level: {dynamics.acceptance_level:.1%}
-    Resistance Level: {dynamics.resistance_level:.1%}
-    
-    Write 1-2 sentences about what they feel internally.
-    Show complexity and ambivalence.
-    """
-    
-    feelings = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=80,
-        task_type="introspection"
-    )
-    
-    return feelings.strip()
-
-async def _present_response_options(
-    context: NarratorContext,
-    options: List[str]
-) -> List[str]:
-    """Present response options naturally using GPT"""
-    
-    system_prompt = """You present choices in a narrative way for a slice-of-life game.
-    Make options feel like natural impulses or thoughts rather than menu items.
-    Use second person perspective."""
-    
-    presented_options = []
-    for option in options[:4]:  # Limit to 4 options
-        user_prompt = f"""
-        Present this choice naturally:
-        Option: {option}
-        
-        Write a brief sentence that presents this as a natural impulse or thought.
-        Start with "You could..." or "Part of you wants to..." or similar.
-        """
-        
-        presented = await generate_text_completion(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=0.6,
-            max_tokens=40,
-            task_type="narrative"
+    # Check for addiction influence
+    if addictions.get("has_addictions"):
+        max_level = max(
+            data.get("level", 0) 
+            for data in addictions.get("addictions", {}).values()
         )
-        
-        presented_options.append(presented.strip())
+        if max_level >= 3:
+            return SceneFocus.INTERNAL
     
-    return presented_options
+    # Default based on participants
+    if len(relationship_contexts) > 1:
+        return SceneFocus.DIALOGUE
+    elif relationship_contexts:
+        return SceneFocus.DYNAMICS
+    else:
+        return SceneFocus.ATMOSPHERE
 
-async def _acknowledge_player_action(context: NarratorContext, action: str) -> str:
-    """Acknowledge player action using GPT"""
+def _calculate_ambient_intensity(
+    tension: WorldTension,
+    vitals: Dict[str, int],
+    addictions: Dict[str, Any]
+) -> float:
+    """Calculate ambient narration intensity"""
     
-    system_prompt = """You acknowledge player actions in a slice-of-life simulation.
-    Be brief and natural. Don't judge or evaluate, just acknowledge what they're doing."""
+    # Base from tension
+    dominant_tension, level = tension.get_dominant_tension()
+    intensity = level * 0.5
     
-    user_prompt = f"""
-    Acknowledge this player action:
-    "{action}"
+    # Modify for vitals
+    if vitals.get("fatigue", 0) > 80:
+        intensity += 0.2
+    if vitals.get("hunger", 100) < 20:
+        intensity += 0.15
     
-    Write 1-2 sentences acknowledging what they're doing.
-    Use second person perspective.
-    """
+    # Modify for addictions
+    if addictions.get("has_addictions"):
+        intensity += 0.1
     
-    acknowledgment = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.6,
-        max_tokens=60,
-        task_type="narrative"
-    )
-    
-    return acknowledgment.strip()
+    return min(1.0, intensity)
 
-async def _generate_world_reaction(
-    context: NarratorContext,
-    action: str,
-    world_state: WorldState
+# Additional helper functions for specific integrations...
+
+async def _narrate_calendar_time_passage(
+    context: EnhancedNarratorContext,
+    current_time: CurrentTimeData,
+    calendar: Dict[str, Any]
 ) -> str:
-    """Generate world's reaction to player action using GPT"""
+    """Narrate time passage with calendar names"""
     
-    system_prompt = """You describe how the world responds to player actions.
-    Focus on environmental and atmospheric changes. Keep it subtle and natural."""
+    day_name = calendar['days'][current_time.day % 7]
+    month_name = calendar['months'][current_time.month - 1]
     
-    user_prompt = f"""
-    Describe the world's reaction to:
-    Action: "{action}"
-    Current Mood: {world_state.world_mood.value}
-    Time: {world_state.current_time.value}
-    
-    Write 1-2 sentences about how the environment or atmosphere responds.
-    """
-    
-    reaction = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=80,
-        task_type="narrative"
-    )
-    
-    return reaction.strip()
-
-async def _generate_activity_description(
-    context: NarratorContext,
-    activity: str,
-    time_period: TimeOfDay
-) -> str:
-    """Generate description of a daily activity using GPT"""
-    
-    system_prompt = """You describe routine daily activities in a slice-of-life setting.
-    Make mundane activities feel atmospheric and meaningful."""
+    system_prompt = """Narrate time transitions using custom calendar names.
+    Make the passage of time feel unique to this world."""
     
     user_prompt = f"""
-    Describe this activity:
-    Activity: {activity}
-    Time: {time_period.value}
+    Narrate transition to:
+    {current_time.time_of_day} on {day_name} of {month_name}
+    Year: {calendar['year_name']}
     
-    Write 1-2 sentences describing the activity naturally.
-    Use second person perspective.
-    """
-    
-    description = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=80,
-        task_type="narrative"
-    )
-    
-    return description.strip()
-
-async def _generate_routine_with_dynamics(
-    context: NarratorContext,
-    activity: str,
-    involved_npcs: List[int],
-    dynamics: Any
-) -> str:
-    """Generate routine colored by power dynamics using GPT"""
-    
-    system_prompt = """You describe how power dynamics subtly color routine activities.
-    The control should feel woven into everyday life, not forced or explicit."""
-    
-    user_prompt = f"""
-    Show how power dynamics affect this routine:
-    Activity: {activity}
-    NPCs Involved: {len(involved_npcs)} people
-    Player Submission: {dynamics.player_submission_level:.1%} (don't mention numbers)
-    
-    Write 2-3 sentences showing how the activity is subtly different due to dynamics.
-    Focus on small details and unspoken expectations.
-    """
-    
-    routine = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=120,
-        task_type="narrative"
-    )
-    
-    return routine.strip()
-
-async def _generate_npc_routine_involvement(
-    context: NarratorContext,
-    npc_id: int,
-    activity: str
-) -> Optional[str]:
-    """Generate how an NPC is involved in routine using GPT"""
-    
-    # Get NPC data
-    async with get_db_connection_context() as conn:
-        npc = await conn.fetchrow("""
-            SELECT npc_name, dominance, personality_traits
-            FROM NPCStats
-            WHERE npc_id = $1
-        """, npc_id)
-    
-    if not npc:
-        return None
-    
-    system_prompt = """You describe how NPCs participate in daily activities.
-    Show their personality and dominance through their involvement."""
-    
-    user_prompt = f"""
-    How is {npc['npc_name']} involved in:
-    Activity: {activity}
-    Dominance: {npc['dominance']}/100 (don't mention numbers)
-    Personality: {npc['personality_traits']}
-    
-    Write one sentence about their involvement.
-    Show character through action.
-    """
-    
-    involvement = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=60,
-        task_type="narrative"
-    )
-    
-    return involvement.strip()
-
-async def _generate_subtle_control_elements(
-    context: NarratorContext,
-    activity: str,
-    dynamics: Any
-) -> List[str]:
-    """Generate subtle control elements in routine using GPT"""
-    
-    system_prompt = """You identify subtle control elements in everyday activities.
-    Focus on small details that show power dynamics without stating them."""
-    
-    user_prompt = f"""
-    Find subtle control elements in:
-    Activity: {activity}
-    Submission Level: {dynamics.player_submission_level:.1%} (don't mention numbers)
-    
-    List 2-3 small details that show control woven into the routine.
-    Focus on:
-    - Unspoken rules
-    - Small permissions
-    - Assumed expectations
-    - Natural deference
-    
-    Return as a JSON array of strings.
-    """
-    
-    response = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=150,
-        task_type="narrative"
-    )
-    
-    try:
-        elements = json.loads(response)
-        if isinstance(elements, list):
-            return elements[:3]
-    except:
-        return [line.strip() for line in response.split('\n') if line.strip()][:3]
-    
-    return []
-
-async def _narrate_time_passage(context: NarratorContext, current_time: TimeOfDay) -> str:
-    """Narrate the passage of time using GPT"""
-    
-    system_prompt = """You narrate time transitions in a slice-of-life simulation.
-    Focus on how the changing time affects atmosphere and daily rhythms.
-    Be brief and evocative."""
-    
-    user_prompt = f"""
-    Narrate a transition to {current_time.value}.
-    
-    Write 1-2 sentences about time passing and the new period beginning.
-    Focus on sensory and atmospheric changes.
+    Write 1-2 sentences about time passing in this world.
     """
     
     narration = await generate_text_completion(
@@ -1277,16 +1077,35 @@ async def _narrate_time_passage(context: NarratorContext, current_time: TimeOfDa
     
     return narration.strip()
 
-async def _narrate_mood_shift(context: NarratorContext, new_mood: WorldMood) -> str:
-    """Narrate a shift in world mood using GPT"""
+async def _narrate_addiction_presence(
+    context: EnhancedNarratorContext,
+    addictions: Dict[str, Any]
+) -> str:
+    """Narrate subtle hints of active addictions"""
     
-    system_prompt = """You narrate subtle shifts in emotional atmosphere.
-    Show mood changes through environmental and social cues, not explicit statements."""
+    if not addictions.get("has_addictions"):
+        return "The world continues its subtle influence."
+    
+    # Get the strongest addiction
+    strongest = max(
+        addictions.get("addictions", {}).items(),
+        key=lambda x: x[1].get("level", 0),
+        default=(None, {"level": 0})
+    )
+    
+    if not strongest[0]:
+        return "Familiar cravings pulse at the edge of awareness."
+    
+    addiction_type = strongest[0]
+    level = strongest[1].get("level", 0)
+    
+    system_prompt = """Narrate subtle hints of psychological addiction.
+    Never explicitly state the addiction, only its effects on perception."""
     
     user_prompt = f"""
-    Narrate a shift to a {new_mood.value} mood.
+    Hint at a {addiction_type} addiction at level {level}/4.
     
-    Write 1-2 sentences showing how the atmosphere is changing.
+    Write 1-2 sentences showing how this colors perception.
     Be subtle and atmospheric.
     """
     
@@ -1300,296 +1119,238 @@ async def _narrate_mood_shift(context: NarratorContext, new_mood: WorldMood) -> 
     
     return narration.strip()
 
-async def _narrate_tension(context: NarratorContext, tension: WorldTension) -> str:
-    """Narrate building tension using GPT"""
+async def _weave_relationship_event(
+    context: EnhancedNarratorContext,
+    event: Dict[str, Any]
+) -> str:
+    """Weave a relationship event into ambient narration"""
     
-    dominant_tension, level = tension.get_dominant_tension()
+    event_type = event.get('event', {}).get('type', 'unknown')
     
-    system_prompt = """You narrate subtle tension building in a slice-of-life setting.
-    Focus on unspoken dynamics and atmospheric pressure."""
+    system_prompt = """Weave relationship events into ambient narration.
+    Make them feel like natural observations, not game announcements."""
     
     user_prompt = f"""
-    Narrate {dominant_tension} tension at {level:.0%} intensity.
-    Power: {tension.power_tension:.0%}
-    Sexual: {tension.sexual_tension:.0%}
-    Social: {tension.social_tension:.0%}
+    Naturally mention this relationship event:
+    Type: {event_type}
     
-    Write 1-2 sentences showing this tension subtly.
-    Don't mention the type of tension explicitly.
+    Write one sentence that hints at this development.
     """
     
     narration = await generate_text_completion(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=0.7,
-        max_tokens=80,
+        max_tokens=60,
         task_type="narrative"
     )
     
     return narration.strip()
 
-async def _narrate_ambient_detail(context: NarratorContext, world_state: WorldState) -> str:
-    """Generate ambient world detail using GPT"""
-    
-    system_prompt = """You create ambient details for a living world.
-    Focus on small, atmospheric observations that make the world feel real."""
-    
-    user_prompt = f"""
-    Create an ambient detail for:
-    Time: {world_state.current_time.value}
-    Mood: {world_state.world_mood.value}
-    Activity Level: {len(world_state.ongoing_events)} events happening
-    
-    Write 1-2 sentences of atmospheric detail.
-    Focus on something small but evocative.
-    """
-    
-    detail = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.8,
-        max_tokens=80,
-        task_type="narrative"
-    )
-    
-    return detail.strip()
-
-async def _generate_npc_reaction(
-    context: NarratorContext,
-    npc_id: int,
-    action: str,
-    world_state: WorldState
-) -> Optional[str]:
-    """Generate NPC reaction to player action using GPT"""
-    
-    # Get NPC data
-    async with get_db_connection_context() as conn:
-        npc = await conn.fetchrow("""
-            SELECT npc_name, dominance, personality_traits
-            FROM NPCStats
-            WHERE npc_id = $1
-        """, npc_id)
-    
-    if not npc:
-        return None
-    
-    system_prompt = """You describe how NPCs react to player actions.
-    Reactions should be subtle and character-appropriate.
-    Show personality through response."""
-    
-    user_prompt = f"""
-    How does {npc['npc_name']} react to:
-    Player Action: "{action}"
-    Character Dominance: {npc['dominance']}/100
-    Personality: {npc['personality_traits']}
-    Current Mood: {world_state.world_mood.value}
-    
-    Write 1-2 sentences showing their reaction.
-    Focus on behavior and body language.
-    """
-    
-    reaction = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.7,
-        max_tokens=80,
-        task_type="narrative"
-    )
-    
-    return reaction.strip()
-
-async def _check_for_dynamic_shift(
-    context: NarratorContext,
-    action: str,
-    dynamics: Any
-) -> Optional[str]:
-    """Check if action causes a dynamic shift using GPT"""
-    
-    system_prompt = """You identify subtle shifts in power dynamics.
-    Determine if a player action changes the relationship dynamic."""
-    
-    user_prompt = f"""
-    Does this action shift the power dynamic?
-    Action: "{action}"
-    Current Submission: {dynamics.player_submission_level:.0%}
-    Current Acceptance: {dynamics.acceptance_level:.0%}
-    
-    If yes, write 1 sentence about the subtle shift.
-    If no, return "None".
-    """
-    
-    shift = await generate_text_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=0.6,
-        max_tokens=60,
-        task_type="analysis"
-    )
-    
-    shift_text = shift.strip()
-    return shift_text if shift_text.lower() != "none" else None
-
 # ===============================================================================
-# Main Narrator Agent
+# Enhanced Slice-of-Life Narrator Class
 # ===============================================================================
 
-class SliceOfLifeNarrator:
+class EnhancedSliceOfLifeNarrator:
     """
-    The narrative voice for the open-world simulation.
-    Works with the World Director to provide immersive narration.
+    Enhanced narrator with full system integration.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.context = NarratorContext(
+        self.context = EnhancedNarratorContext(
             user_id=user_id,
             conversation_id=conversation_id
         )
+        self.initialized = False
         
-        # Sub-agents for specialized narration
+        # Create integrated sub-agents
         self.scene_narrator = Agent(
-            name="SceneNarrator",
+            name="IntegratedSceneNarrator",
             instructions="""
-            You narrate slice-of-life scenes in a femdom setting.
-            Focus on atmosphere, subtle power dynamics, and everyday moments.
-            Your tone should be immersive but not overly dramatic.
-            Make the power dynamics feel natural and woven into daily life.
+            You narrate slice-of-life scenes with awareness of:
+            - Relationship dynamics and progression stages
+            - Player vitals and physical state
+            - Active addictions and their effects
+            - Custom calendar and currency
+            - Ongoing narrative patterns
+            
+            Weave these elements naturally into atmospheric narration.
             """,
             model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model_settings=ModelSettings(temperature=0.7),
+            tools=[
+                narrate_scene_with_full_context,
+                generate_time_aware_ambient_narration
+            ]
         )
         
         self.dialogue_writer = Agent(
-            name="DialogueWriter",
+            name="ContextualDialogueWriter",
             instructions="""
-            You write natural dialogue for NPCs in daily situations.
-            Power dynamics should be shown through subtext, not explicit statements.
-            Early stages: Friendly, no obvious control
-            Late stages: Casual commands, assumed obedience
-            Always maintain character voice and personality.
+            You write NPC dialogue with awareness of:
+            - Narrative progression stages
+            - Relationship patterns and archetypes
+            - Player addictions and susceptibilities
+            - Current physical and mental state
+            
+            Show control through subtext appropriate to the stage.
             """,
             model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.8)
+            model_settings=ModelSettings(temperature=0.8),
+            tools=[
+                generate_contextual_npc_dialogue
+            ]
         )
         
-        self.initialized = False
+        self.power_narrator = Agent(
+            name="IntegratedPowerNarrator",
+            instructions="""
+            You narrate power exchanges with awareness of:
+            - Player susceptibility from vitals and addictions
+            - Relationship progression and patterns
+            - Narrative timing and pacing
+            
+            Make power dynamics feel inevitable rather than forced.
+            """,
+            model="gpt-4.1-nano",
+            model_settings=ModelSettings(temperature=0.7),
+            tools=[
+                narrate_power_exchange_with_context,
+                narrate_with_addiction_awareness
+            ]
+        )
     
     async def initialize(self):
-        """Initialize the narrator with world director"""
+        """Initialize all integrated systems"""
         if not self.initialized:
-            # Initialize world director
-            self.context.world_director = WorldDirector(
-                self.user_id, 
-                self.conversation_id
-            )
-            await self.context.world_director.initialize()
-            
-            # Initialize context components
-            self.context.context_service = await get_context_service(
-                self.user_id, 
-                self.conversation_id
-            )
-            self.context.memory_manager = await get_memory_manager(
-                self.user_id, 
-                self.conversation_id
-            )
-            
+            await self.context.initialize()
             self.initialized = True
     
-    async def narrate_world_state(self) -> str:
-        """Provide narration for current world state"""
+    async def narrate_current_scene(self, scene: SliceOfLifeEvent, world_state: WorldState) -> str:
+        """Narrate a scene with full context"""
         await self.initialize()
         
-        # Get world state
-        world_state = await self.context.world_director.get_world_state()
+        result = await Runner.run(
+            self.scene_narrator,
+            messages=[{
+                "role": "user",
+                "content": f"Narrate this scene: {scene.title}"
+            }],
+            context=self.context,
+            tool_calls=[{
+                "tool": narrate_scene_with_full_context,
+                "kwargs": {
+                    "scene": scene,
+                    "world_state": world_state
+                }
+            }]
+        )
+        
+        narration = result.data if hasattr(result, 'data') else result
+        return narration.scene_description
+    
+    async def generate_npc_speech(
+        self, 
+        npc_id: int, 
+        situation: str, 
+        world_state: WorldState
+    ) -> NPCDialogue:
+        """Generate contextual NPC dialogue"""
+        await self.initialize()
+        
+        result = await Runner.run(
+            self.dialogue_writer,
+            messages=[{
+                "role": "user",
+                "content": f"Generate dialogue for NPC {npc_id} in: {situation}"
+            }],
+            context=self.context,
+            tool_calls=[{
+                "tool": generate_contextual_npc_dialogue,
+                "kwargs": {
+                    "npc_id": npc_id,
+                    "situation": situation,
+                    "world_state": world_state
+                }
+            }]
+        )
+        
+        return result.data if hasattr(result, 'data') else result
+    
+    async def process_with_integration(self, user_input: str, world_state: WorldState) -> Dict[str, Any]:
+        """Process input with all systems integrated"""
+        await self.initialize()
+        
+        # Update vitals and time
+        self.context.current_vitals = await get_current_vitals(
+            self.user_id, self.conversation_id
+        )
+        self.context.current_time = await get_current_time_model(
+            self.user_id, self.conversation_id
+        )
+        
+        # Check for and process any pending events
+        pending_events = await self.context.event_system.get_active_events()
         
         # Generate appropriate narration
-        if world_state.ongoing_events:
-            # Narrate the most important event
-            event = max(world_state.ongoing_events, key=lambda e: e.priority)
-            narration = await narrate_slice_of_life_scene(
-                RunContextWrapper(self.context),
-                event,
-                world_state
-            )
-            return narration.scene_description
+        if pending_events:
+            # Narrate the highest priority event
+            event = max(pending_events, key=lambda e: e.get('priority', 0))
+            narration = await self._narrate_event(event, world_state)
         else:
             # Generate ambient narration
-            ambient = await generate_ambient_narration(
+            narration = await generate_time_aware_ambient_narration(
                 RunContextWrapper(self.context),
                 "atmosphere",
                 world_state
             )
-            return ambient.description
-    
-    async def process_player_input(self, user_input: str) -> Dict[str, Any]:
-        """Process player input and generate appropriate narration"""
-        await self.initialize()
         
-        # Let world director process the action
-        world_response = await self.context.world_director.process_player_action(
-            user_input
-        )
-        
-        # Get updated world state
-        world_state = await self.context.world_director.get_world_state()
-        
-        # Generate narration for the action
-        narration = await narrate_player_action(
-            RunContextWrapper(self.context),
-            user_input,
-            world_state
-        )
-        
-        # Combine responses
         return {
-            "narration": narration["acknowledgment"],
-            "world_reaction": narration["world_reaction"],
-            "npc_reactions": narration["npc_reactions"],
-            "world_update": world_response,
-            "current_mood": world_state.world_mood.value,
-            "tensions": {
-                "power": world_state.world_tension.power_tension,
-                "sexual": world_state.world_tension.sexual_tension,
-                "social": world_state.world_tension.social_tension
-            }
+            "narration": narration,
+            "vitals": self.context.current_vitals.to_dict(),
+            "time": {
+                "day": self.context.calendar_names['days'][self.context.current_time.day % 7],
+                "month": self.context.calendar_names['months'][self.context.current_time.month - 1],
+                "time_of_day": self.context.current_time.time_of_day
+            },
+            "active_events": len(pending_events),
+            "addictions_active": self.context.active_addictions.get("has_addictions", False)
         }
     
-    async def generate_scene_transition(self) -> str:
-        """Generate narration for time/scene transitions"""
-        await self.initialize()
+    async def _narrate_event(self, event: Dict[str, Any], world_state: WorldState) -> str:
+        """Narrate a specific event"""
+        event_type = event.get('type', 'unknown')
         
-        # Simulate world tick
-        tick_result = await self.context.world_director.simulate_world_tick()
+        if event_type == "narrative_event":
+            data = event.get('data', {})
+            sub_type = data.get('type', 'unknown')
+            
+            if sub_type == "personal_revelation":
+                return data.get('inner_monologue', 'A realization strikes you.')
+            elif sub_type == "narrative_moment":
+                return data.get('scene_text', 'A significant moment unfolds.')
+            elif sub_type == "dream_sequence":
+                return data.get('text', 'Strange dreams fill your mind.')
         
-        # Get new world state
-        world_state = await self.context.world_director.get_world_state()
-        
-        # Generate transition narration
-        ambient = await generate_ambient_narration(
-            RunContextWrapper(self.context),
-            "time_passage",
-            world_state
-        )
-        
-        return ambient.description
+        # Default narration
+        return f"Something significant happens in your world."
 
 # ===============================================================================
-# Export the refactored system
+# Export Enhanced System
 # ===============================================================================
 
-def create_slice_of_life_narrator(user_id: int, conversation_id: int) -> SliceOfLifeNarrator:
-    """Create a narrator for the slice-of-life simulation"""
-    return SliceOfLifeNarrator(user_id, conversation_id)
+def create_enhanced_narrator(user_id: int, conversation_id: int) -> EnhancedSliceOfLifeNarrator:
+    """Create an enhanced narrator with full system integration"""
+    return EnhancedSliceOfLifeNarrator(user_id, conversation_id)
 
 __all__ = [
-    'SliceOfLifeNarrator',
-    'create_slice_of_life_narrator',
-    'narrate_slice_of_life_scene',
-    'generate_npc_dialogue',
-    'narrate_power_exchange',
-    'narrate_daily_routine',
-    'generate_ambient_narration',
-    'narrate_player_action'
+    'EnhancedSliceOfLifeNarrator',
+    'create_enhanced_narrator',
+    'narrate_scene_with_full_context',
+    'generate_contextual_npc_dialogue',
+    'narrate_power_exchange_with_context',
+    'narrate_with_addiction_awareness',
+    'generate_time_aware_ambient_narration'
 ]
