@@ -1043,9 +1043,9 @@ Output as JSON with choices and consequences."""
             
             event['system_result'] = craving_result
                 
-                event['system_result'] = craving_result
+            event['system_result'] = craving_result
             
-            return event
+        return event
             
         except (json.JSONDecodeError, TypeError) as e:
             logger.error(f"Error parsing addiction event JSON: {e}")
