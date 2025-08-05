@@ -4,8 +4,10 @@
 Integration module for Nyx's central governance system.
 
 This module provides a unified central governance system that controls all aspects of the game,
-including story generation, NPCs, memory systems, user modeling, and more. All agent modules
+including world simulation, NPCs, memory systems, user modeling, and more. All agent modules
 are coordinated through this central authority, ensuring Nyx maintains consistent control.
+
+REFACTORED: Adapted for open-world slice-of-life simulation instead of linear story progression.
 """
 
 import logging
@@ -26,12 +28,81 @@ from lore.validation import ValidationManager
 
 import asyncpg
 
-# Import story components
-from story_agent.agent_interaction import (
-    orchestrate_conflict_analysis_and_narrative,
-    generate_comprehensive_story_beat
+# ===============================================================================
+# WORLD SIMULATION IMPORTS (replacing old story imports)
+# ===============================================================================
+
+# Core world simulation
+from story_agent.world_director_agent import (
+    CompleteWorldDirector,
+    CompleteWorldState,
+    WorldMood,
+    TimeOfDay,
+    ActivityType,
+    PowerDynamicType,
+    CompleteWorldDirectorContext
 )
-from story_agent.story_director_agent import initialize_story_director
+
+# Slice-of-life narration
+from story_agent.slice_of_life_narrator import (
+    SliceOfLifeNarrator,
+    create_slice_of_life_narrator,
+    SliceOfLifeNarration,
+    NPCDialogue,
+    PowerMomentNarration,
+    DailyActivityNarration,
+    AmbientNarration,
+    NarrativeTone,
+    SceneFocus
+)
+
+# Activity and task generation
+from story_agent.activity_recommender import (
+    recommend_activities,
+    get_quick_activity_suggestion,
+    get_npc_initiated_activity,
+    ActivityContext,
+    RecommendedActivity,
+    ActivityPriority
+)
+from story_agent.daily_task_generator import (
+    DailyTaskGenerator,
+    DailyTask,
+    TaskContext,
+    DailyTaskType,
+    TaskComplexity
+)
+
+# World simulation agents
+from story_agent.world_simulation_agents import (
+    initialize_world_simulation_agents,
+    SliceOfLifeContext,
+    coordinate_slice_of_life_scene,
+    detect_emergent_patterns
+)
+
+# Agent interaction and coordination
+from story_agent.agent_interaction import (
+    orchestrate_daily_scene,
+    process_power_exchange_with_agents,
+    generate_ambient_world_details,
+    coordinate_agent_handoff,
+    get_agent_analysis,
+    simulate_autonomous_world,
+    AgentCoordinationContext
+)
+
+# Balance and memory systems
+from story_agent.emergent_balance_manager import (
+    EmergentBalanceManager,
+    SimulationBalance,
+    BalanceAxis
+)
+from story_agent.world_memory_system import (
+    WorldMemorySystem,
+    DailyRoutineMemory,
+    RelationshipMemory
+)
 
 # Import agent processing components for full integration
 from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
@@ -76,6 +147,10 @@ _governance_instances: Dict[str, Any] = {}
 _governance_locks: Dict[str, asyncio.Lock] = {}
 _initialization_in_progress: Dict[str, bool] = {}
 _global_lock = asyncio.Lock()  # Global lock for creating per-instance locks
+
+# ===============================================================================
+# CORE GOVERNANCE FUNCTIONS (preserved)
+# ===============================================================================
 
 async def get_central_governance(user_id: int, conversation_id: int) -> Any:
     """
@@ -174,7 +249,522 @@ def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optio
         _initialization_in_progress.clear()
         logger.info("Cleared all governance caches")
 
+# ===============================================================================
+# WORLD SIMULATION INTEGRATION (replacing old story functions)
+# ===============================================================================
 
+async def initialize_world_simulation(
+    user_id: int,
+    conversation_id: int
+) -> CompleteWorldDirector:
+    """
+    Initialize the world simulation with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Initialized CompleteWorldDirector instance
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Create and initialize world director
+    world_director = CompleteWorldDirector(user_id, conversation_id)
+    await world_director.initialize()
+    
+    # Register with governance
+    await governance.register_subsystem(
+        system_id="world_director",
+        system_type=AgentType.WORLD_BUILDER,
+        capabilities=["world_state", "event_generation", "time_management", "npc_autonomy"]
+    )
+    
+    logger.info(f"World simulation initialized for user {user_id}, conversation {conversation_id}")
+    return world_director
+
+
+async def get_world_director(user_id: int, conversation_id: int) -> CompleteWorldDirector:
+    """
+    Get or create the world director for a user/conversation.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        CompleteWorldDirector instance
+    """
+    # Check if we have a cached instance
+    key = f"world_director_{user_id}_{conversation_id}"
+    if key in _governance_instances:
+        return _governance_instances[key]
+    
+    # Create new instance
+    director = await initialize_world_simulation(user_id, conversation_id)
+    _governance_instances[key] = director
+    return director
+
+
+async def generate_slice_of_life_moment(
+    user_id: int,
+    conversation_id: int,
+    context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Generate the next moment in the slice-of-life simulation with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        context: Optional context for generation
+        
+    Returns:
+        Generated moment with world state
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    world_director = await get_world_director(user_id, conversation_id)
+    
+    # Check governance permission
+    permission = await governance.check_action_permission(
+        agent_type=AgentType.WORLD_BUILDER,
+        agent_id="world_director",
+        action_type="generate_moment",
+        action_details=context or {}
+    )
+    
+    if not permission["approved"]:
+        logger.warning(f"Moment generation not approved: {permission['reasoning']}")
+        return {
+            "error": f"Generation not approved: {permission['reasoning']}",
+            "approved": False
+        }
+    
+    # Generate the moment
+    moment = await world_director.generate_next_moment()
+    
+    # Report to governance
+    await governance.process_agent_action_report(
+        agent_type=AgentType.WORLD_BUILDER,
+        agent_id="world_director",
+        action={
+            "type": "generate_moment",
+            "description": "Generated slice-of-life moment"
+        },
+        result=moment
+    )
+    
+    return moment
+
+
+async def orchestrate_scene_with_governance(
+    user_id: int,
+    conversation_id: int,
+    scene_focus: str = "routine",
+    involved_npcs: Optional[List[int]] = None
+) -> Dict[str, Any]:
+    """
+    Orchestrate a complete scene using multiple agents with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        scene_focus: Type of scene to generate
+        involved_npcs: Optional list of NPCs to involve
+        
+    Returns:
+        Complete orchestrated scene
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Check permission
+    permission = await governance.check_action_permission(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_id="scene_orchestrator",
+        action_type="orchestrate_scene",
+        action_details={"focus": scene_focus, "npcs": involved_npcs}
+    )
+    
+    if not permission["approved"]:
+        return {
+            "error": f"Scene orchestration not approved: {permission['reasoning']}",
+            "approved": False
+        }
+    
+    # Orchestrate the scene
+    scene = await orchestrate_daily_scene(
+        user_id, conversation_id,
+        scene_focus=scene_focus,
+        involved_npcs=involved_npcs
+    )
+    
+    # Report to governance
+    await governance.process_agent_action_report(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_id="scene_orchestrator",
+        action={
+            "type": "orchestrate_scene",
+            "description": f"Orchestrated {scene_focus} scene"
+        },
+        result={
+            "scene_type": scene_focus,
+            "npcs_involved": len(involved_npcs) if involved_npcs else 0,
+            "execution_time": scene.get("execution_time", 0)
+        }
+    )
+    
+    return scene
+
+
+async def recommend_activities_with_governance(
+    user_id: int,
+    conversation_id: int,
+    context: Optional[ActivityContext] = None,
+    num_recommendations: int = 4
+) -> Dict[str, Any]:
+    """
+    Get activity recommendations with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        context: Optional activity context
+        num_recommendations: Number of activities to recommend
+        
+    Returns:
+        Activity recommendations
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Get recommendations
+    recommendations = await recommend_activities(
+        user_id, conversation_id,
+        context=context,
+        num_recommendations=num_recommendations
+    )
+    
+    # Filter through governance
+    approved_activities = []
+    for activity in recommendations.recommendations:
+        check = await governance.check_content_appropriateness(
+            content_type="activity",
+            content={
+                "activity_type": activity.activity_type.value,
+                "power_dynamic": activity.power_dynamic.value if activity.power_dynamic else None,
+                "intensity": activity.intensity
+            }
+        )
+        
+        if check.get("approved", True):
+            approved_activities.append(activity)
+    
+    recommendations.recommendations = approved_activities
+    return {
+        "recommendations": recommendations,
+        "governance_filtered": len(recommendations.recommendations) != num_recommendations
+    }
+
+
+async def generate_daily_task_with_governance(
+    user_id: int,
+    conversation_id: int,
+    task_type: Optional[DailyTaskType] = None
+) -> DailyTask:
+    """
+    Generate a daily task with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        task_type: Optional specific task type
+        
+    Returns:
+        Generated daily task
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Initialize task generator
+    from agents import Runner
+    task_prompt = f"Generate a daily task{f' of type {task_type.value}' if task_type else ''}"
+    
+    result = await Runner.run(DailyTaskGenerator, task_prompt)
+    task = result.final_output if result else None
+    
+    if task:
+        # Check with governance
+        check = await governance.check_content_appropriateness(
+            content_type="task",
+            content={
+                "task_type": task.task_type.value,
+                "power_dynamic": task.power_dynamic.value if task.power_dynamic else None,
+                "submission_required": task.submission_required
+            }
+        )
+        
+        if not check.get("approved", True):
+            task.governance_approved = False
+            task.governance_notes = check.get("reasoning")
+        else:
+            task.governance_approved = True
+    
+    return task
+
+# ===============================================================================
+# NARRATION INTEGRATION (new)
+# ===============================================================================
+
+async def create_narrator_with_governance(
+    user_id: int,
+    conversation_id: int
+) -> SliceOfLifeNarrator:
+    """
+    Create a slice-of-life narrator with governance integration.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Initialized SliceOfLifeNarrator
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Create narrator
+    narrator = create_slice_of_life_narrator(user_id, conversation_id)
+    await narrator.initialize()
+    
+    # Register with governance
+    await governance.register_subsystem(
+        system_id="narrator",
+        system_type=AgentType.NARRATIVE_CRAFTER,
+        capabilities=["scene_narration", "dialogue_generation", "power_narration", "ambient_narration"]
+    )
+    
+    return narrator
+
+
+async def narrate_world_state_with_governance(
+    user_id: int,
+    conversation_id: int
+) -> str:
+    """
+    Get narration for the current world state with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Narration text
+    """
+    narrator = await create_narrator_with_governance(user_id, conversation_id)
+    narration = await narrator.narrate_world_state()
+    
+    # Log with governance
+    governance = await get_central_governance(user_id, conversation_id)
+    await governance.log_narrative_output(
+        output_type="world_narration",
+        content=narration
+    )
+    
+    return narration
+
+# ===============================================================================
+# BALANCE MANAGEMENT (new)
+# ===============================================================================
+
+async def check_simulation_balance(
+    user_id: int,
+    conversation_id: int
+) -> Dict[str, Any]:
+    """
+    Check and adjust simulation balance with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Balance report and adjustments
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    world_director = await get_world_director(user_id, conversation_id)
+    
+    # Get world state
+    world_state = await world_director.context.current_world_state
+    
+    # Initialize balance manager
+    balance_manager = EmergentBalanceManager(user_id, conversation_id)
+    
+    # Get recent events
+    recent_events = []  # Would fetch from event system
+    active_narratives = []  # Would fetch from narrative tracking
+    
+    # Evaluate balance
+    current_balance = await balance_manager.evaluate_current_balance(
+        world_state, recent_events, active_narratives
+    )
+    
+    # Get adjustment suggestions
+    adjustments = await balance_manager.suggest_balance_adjustments()
+    
+    # Report to governance
+    await governance.process_system_metric(
+        metric_type="simulation_balance",
+        values={
+            "agency_level": current_balance.agency_level,
+            "routine_level": current_balance.routine_level,
+            "subtlety_level": current_balance.subtlety_level,
+            "emergence_level": current_balance.emergence_level
+        }
+    )
+    
+    return {
+        "current_balance": current_balance,
+        "adjustments": adjustments,
+        "report": balance_manager.get_balance_report()
+    }
+
+# ===============================================================================
+# WORLD MEMORY INTEGRATION (new)
+# ===============================================================================
+
+async def initialize_world_memory(
+    user_id: int,
+    conversation_id: int
+) -> WorldMemorySystem:
+    """
+    Initialize world memory system with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Initialized WorldMemorySystem
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Create memory system
+    memory_system = WorldMemorySystem(user_id, conversation_id)
+    await memory_system.initialize()
+    
+    # Register with governance
+    await governance.register_subsystem(
+        system_id="world_memory",
+        system_type=AgentType.MEMORY_KEEPER,
+        capabilities=["routine_tracking", "relationship_memory", "pattern_detection", "consolidation"]
+    )
+    
+    return memory_system
+
+
+async def record_world_activity(
+    user_id: int,
+    conversation_id: int,
+    time_period: str,
+    activity: str,
+    involved_npcs: List[int],
+    power_dynamic: Optional[str] = None,
+    mood: Optional[str] = None
+) -> None:
+    """
+    Record a world activity in memory with governance tracking.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        time_period: Time of day
+        activity: Activity description
+        involved_npcs: List of NPC IDs
+        power_dynamic: Optional power dynamic type
+        mood: Optional mood
+    """
+    memory_system = await initialize_world_memory(user_id, conversation_id)
+    
+    # Record the activity
+    await memory_system.record_daily_activity(
+        time_period, activity, involved_npcs, power_dynamic, mood
+    )
+    
+    # Also record in governance tracking
+    governance = await get_central_governance(user_id, conversation_id)
+    await governance.track_world_event(
+        event_type="daily_activity",
+        details={
+            "time_period": time_period,
+            "activity": activity,
+            "npcs": involved_npcs,
+            "power_dynamic": power_dynamic,
+            "mood": mood
+        }
+    )
+
+# ===============================================================================
+# PROCESS MESSAGE WITH WORLD SIMULATION (replacing old story processing)
+# ===============================================================================
+
+async def process_message_with_governance(
+    user_id: int,
+    conversation_id: int,
+    user_message: str,
+    context_data: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Process a user message through the world simulation with governance.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        user_message: User's message text
+        context_data: Optional additional context
+        
+    Returns:
+        Complete response including narration, world updates, etc.
+    """
+    # Get governance and world systems
+    governance = await get_central_governance(user_id, conversation_id)
+    world_director = await get_world_director(user_id, conversation_id)
+    narrator = await create_narrator_with_governance(user_id, conversation_id)
+    
+    # Process through world director
+    world_response = await world_director.process_player_action(user_message)
+    
+    # Process through narrator
+    narrator_response = await narrator.process_player_input(user_message)
+    
+    # Get activity recommendations
+    recommendations = await recommend_activities_with_governance(
+        user_id, conversation_id, num_recommendations=3
+    )
+    
+    # Check simulation balance
+    balance = await check_simulation_balance(user_id, conversation_id)
+    
+    # Record in world memory
+    await record_world_activity(
+        user_id, conversation_id,
+        time_period=world_director.context.current_world_state.current_time.value,
+        activity="player_action",
+        involved_npcs=[],
+        mood=narrator_response.get("current_mood")
+    )
+    
+    # Compile response
+    return {
+        "narration": narrator_response.get("narration", ""),
+        "world_update": world_response,
+        "npc_reactions": narrator_response.get("npc_reactions", []),
+        "recommendations": recommendations.get("recommendations", []),
+        "balance_adjustments": balance.get("adjustments", {}),
+        "governance_active": True,
+        "world_mood": narrator_response.get("current_mood", "relaxed"),
+        "tensions": narrator_response.get("tensions", {})
+    }
+
+# ===============================================================================
+# LORE INTEGRATION (preserved)
+# ===============================================================================
 
 async def generate_lore_with_governance(
     user_id: int,
@@ -252,6 +842,9 @@ async def generate_scene_with_lore(
     governance = await get_central_governance(user_id, conversation_id)
     return await governance.generate_scene_with_lore(location)
 
+# ===============================================================================
+# PRESERVED CLASSES AND FUNCTIONS (all non-story functionality)
+# ===============================================================================
 
 class JointMemoryGraph:
     """
@@ -417,6 +1010,7 @@ class JointMemoryGraph:
 class GameEventManager:
     """
     Manager for game events with governance integration.
+    Now adapted for open-world simulation events.
     """
     
     def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor = None):
@@ -1102,6 +1696,7 @@ class GameEventManager:
         except Exception as e:
             logger.error(f"Unexpected error getting NPC info for {npc_id}: {e}", exc_info=True)
             return None
+    
     async def _execute_npc_directive(self, npc_id: int, directive: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a directive for a specific NPC.
@@ -1332,6 +1927,10 @@ class GameEventManager:
                     })
             return results
 
+# ===============================================================================
+# PRESERVED UNIVERSAL UPDATER INTEGRATION
+# ===============================================================================
+
 async def process_universal_update_with_governance(
     user_id: int,
     conversation_id: int,
@@ -1374,6 +1973,10 @@ async def register_universal_updater(user_id: int, conversation_id: int):
     
     # Register with governance
     await register_updater(user_id, conversation_id)
+
+# ===============================================================================
+# PRESERVED MEMORY FUNCTIONS
+# ===============================================================================
 
 async def add_joint_memory_with_governance(
     user_id: int,
@@ -1472,31 +2075,9 @@ async def recall_with_governance(
         limit=limit
     )
 
-async def process_message_with_governance(
-    user_id: int,
-    conversation_id: int,
-    user_message: str,
-    context_data: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    """
-    Process a user message through the central governance system.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        user_message: User's message text
-        context_data: Optional additional context
-        
-    Returns:
-        Complete response including message, scene updates, etc.
-    """
-    # Get the central governance
-    governance = await get_central_governance(user_id, conversation_id)
-    
-    # Process the message
-    return await governance.process_user_message(user_message, context_data)
-
-# Add this class to nyx/integrate.py
+# ===============================================================================
+# LORE INTEGRATION CLASS (preserved)
+# ===============================================================================
 
 class LoreIntegration:
     """
