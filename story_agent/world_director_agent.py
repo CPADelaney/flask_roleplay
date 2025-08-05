@@ -1,7 +1,7 @@
-# story_agent/world_director_agent.py
+# story_agent/world_director_agent_refactored.py
 """
-World Dynamics Director - Managing an open-ended femdom slice-of-life simulation.
-REFACTORED: Integrated with existing game systems
+Refactored World Dynamics Director with full system integration and LLM-driven generation.
+All events are dynamically generated via OpenAI for maximum emergent gameplay.
 """
 
 from __future__ import annotations
@@ -21,8 +21,68 @@ from db.connection import get_db_connection_context
 from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContextWrapper
 
 # ===============================================================================
-# INTEGRATED SYSTEM IMPORTS
+# CORE SYSTEM INTEGRATIONS
 # ===============================================================================
+
+# OpenAI Integration for Dynamic Generation
+from logic.chatgpt_integration import (
+    OpenAIClientManager,
+    get_chatgpt_response,
+    generate_text_completion,
+    get_text_embedding,
+    generate_reflection,
+    analyze_preferences
+)
+
+# Universal Updater for Narrative Processing
+from logic.universal_updater_agent import (
+    UniversalUpdaterAgent,
+    process_universal_update
+)
+
+# Memory System Integration
+from logic.memory_logic import (
+    MemoryManager,
+    EnhancedMemory,
+    MemoryType,
+    MemorySignificance,
+    ProgressiveRevealManager,
+    RevealType,
+    RevealSeverity,
+    NPCMask,
+    generate_flashback,
+    check_for_automated_reveals
+)
+
+# Stats System Integration
+from logic.stats_logic import (
+    get_player_visible_stats,
+    get_player_hidden_stats,
+    get_all_player_stats,
+    apply_stat_changes,
+    check_for_combination_triggers,
+    apply_activity_effects,
+    STAT_THRESHOLDS,
+    STAT_COMBINATIONS,
+    ACTIVITY_EFFECTS,
+    detect_deception,
+    calculate_social_insight
+)
+
+# Rule Enforcement Integration
+from logic.rule_enforcement import (
+    enforce_all_rules_on_player,
+    evaluate_condition,
+    parse_condition,
+    apply_effect
+)
+
+# Inventory System Integration
+from logic.inventory_system_sdk import (
+    get_inventory,
+    add_item,
+    remove_item
+)
 
 # Time and Calendar Systems
 from logic.time_cycle import (
@@ -31,71 +91,38 @@ from logic.time_cycle import (
     get_current_vitals,
     VitalsData,
     CurrentTimeData,
-    TimeOfDay as TimeOfDayOriginal,
     process_activity_vitals,
     ActivityManager
-)
-from logic.calendar import (
-    load_calendar_names,
-    update_calendar_names
 )
 
 # Dynamic Relationships System
 from logic.dynamic_relationships import (
-    OptimizedRelationshipManager, 
-    event_generator,
+    OptimizedRelationshipManager,
     drain_relationship_events_tool,
-    RelationshipState,
-    RelationshipDimensions,
-    RelationshipPatternDetector,
-    RelationshipArchetypes
+    RelationshipState
 )
-
-# Narrative Events System  
-from logic.narrative_events import (
-    check_for_personal_revelations,
-    check_for_narrative_moments,
-    add_dream_sequence,
-    add_moment_of_clarity,
-    get_relationship_overview
-)
-
-# Event System
-from logic.event_system import EventSystem
-
-# Addiction System
-from logic.addiction_system_sdk import (
-    AddictionContext,
-    process_addiction_update,
-    check_addiction_status,
-    get_addiction_status
-)
-
-# Currency System
-from logic.currency_generator import CurrencyGenerator
 
 # NPC Systems
 from logic.npc_narrative_progression import (
     get_npc_narrative_stage,
     check_for_npc_revelation,
-    NPC_NARRATIVE_STAGES
+    progress_npc_narrative_stage
 )
 
-# Context system integration
-from context.context_service import get_context_service
-from context.context_config import get_config
-from context.memory_manager import get_memory_manager, MemoryAddRequest
-from context.models import MemoryMetadata
+# Currency System
+from logic.currency_generator import CurrencyGenerator
 
-# Nyx governance
-from nyx.governance_helpers import with_governance
-from nyx.directive_handler import DirectiveHandler
-from nyx.nyx_governance import AgentType
+# Event System
+from logic.event_system import EventSystem
+
+# Context systems
+from context.context_service import get_context_service
+from context.memory_manager import get_memory_manager
 
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# Enhanced World State Models
+# Enhanced World State Models with Full Integration
 # ===============================================================================
 
 class WorldMood(Enum):
@@ -107,143 +134,90 @@ class WorldMood(Enum):
     MYSTERIOUS = "mysterious"
     OPPRESSIVE = "oppressive"
     CHAOTIC = "chaotic"
-    EXHAUSTED = "exhausted"  # Added based on vitals
-    DESPERATE = "desperate"   # Added for crisis states
+    EXHAUSTED = "exhausted"
+    DESPERATE = "desperate"
+    CORRUPTED = "corrupted"  # Added for high corruption states
 
-class ActivityType(Enum):
-    """Types of slice-of-life activities"""
-    WORK = "work"
-    SOCIAL = "social"
-    LEISURE = "leisure"
-    INTIMATE = "intimate"
-    ROUTINE = "routine"
-    SPECIAL = "special"
-    ADDICTION = "addiction"  # Added for addiction-related events
-    VITAL = "vital"         # Added for hunger/thirst/rest events
-
-class PowerDynamicType(Enum):
-    """Types of femdom power dynamics"""
-    SUBTLE_CONTROL = "subtle_control"
-    CASUAL_DOMINANCE = "casual_dominance"
-    PROTECTIVE_CONTROL = "protective_control"
-    PLAYFUL_TEASING = "playful_teasing"
-    RITUAL_SUBMISSION = "ritual_submission"
-    FINANCIAL_CONTROL = "financial_control"
-    SOCIAL_HIERARCHY = "social_hierarchy"
-    INTIMATE_COMMAND = "intimate_command"
-    ADDICTION_EXPLOITATION = "addiction_exploitation"  # Added
-
-class SliceOfLifeEvent(BaseModel):
-    """Enhanced slice-of-life event with system integration"""
-    event_id: str
-    event_type: ActivityType
-    title: str
-    description: str
-    participants: List[int]  # NPC IDs
-    location: str
-    power_dynamic: Optional[PowerDynamicType] = None
-    mood_impact: Optional[WorldMood] = None
-    relationship_impacts: Dict[int, Dict[str, float]] = Field(default_factory=dict)
-    addiction_triggers: Dict[str, float] = Field(default_factory=dict)  # Added
-    vital_costs: Dict[str, int] = Field(default_factory=dict)  # Added
-    currency_cost: Optional[int] = None  # Added
-    can_interrupt: bool = True
-    priority: int = 5
-    
-    model_config = ConfigDict(extra="forbid")
-
-class WorldTension(BaseModel):
-    """Enhanced tension tracking"""
-    social_tension: float = 0.0
-    sexual_tension: float = 0.0
-    power_tension: float = 0.0
-    mystery_tension: float = 0.0
-    conflict_tension: float = 0.0
-    addiction_tension: float = 0.0  # Added
-    vital_tension: float = 0.0      # Added
-    
-    def get_dominant_tension(self) -> Tuple[str, float]:
-        tensions = {
-            "social": self.social_tension,
-            "sexual": self.sexual_tension,
-            "power": self.power_tension,
-            "mystery": self.mystery_tension,
-            "conflict": self.conflict_tension,
-            "addiction": self.addiction_tension,
-            "vital": self.vital_tension
-        }
-        return max(tensions.items(), key=lambda x: x[1])
-    
-    model_config = ConfigDict(extra="forbid")
-
-class WorldState(BaseModel):
-    """Enhanced world state with integrated systems"""
-    # Time using existing system
+class EnhancedWorldState(BaseModel):
+    """Enhanced world state with all system integrations"""
+    # Time and vitals
     current_time: CurrentTimeData
-    calendar_names: Dict[str, Any] = Field(default_factory=dict)
-    
-    # Vitals from existing system
     player_vitals: VitalsData
     
-    # Mood and atmosphere
-    world_mood: WorldMood
-    world_tension: WorldTension = Field(default_factory=WorldTension)
+    # Stats tracking
+    visible_stats: Dict[str, Any] = Field(default_factory=dict)
+    hidden_stats: Dict[str, Any] = Field(default_factory=dict)
+    active_stat_combinations: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    # Memory and context
+    recent_memories: List[Dict[str, Any]] = Field(default_factory=list)
+    active_flashbacks: List[Dict[str, Any]] = Field(default_factory=list)
+    pending_reveals: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    # Rules and triggers
+    active_rules: List[Dict[str, Any]] = Field(default_factory=list)
+    triggered_effects: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    # Inventory
+    player_inventory: List[Dict[str, Any]] = Field(default_factory=list)
     
     # NPCs and relationships
     active_npcs: List[Dict[str, Any]] = Field(default_factory=list)
-    relationship_summary: Optional[Dict[str, Any]] = None
+    npc_masks: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+    relationship_states: Dict[str, Any] = Field(default_factory=dict)
     
-    # Events
-    ongoing_events: List[SliceOfLifeEvent] = Field(default_factory=list)
-    available_activities: List[SliceOfLifeEvent] = Field(default_factory=list)
-    pending_relationship_events: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # Addictions
-    addiction_status: Dict[str, Any] = Field(default_factory=dict)
+    # World mood and atmosphere
+    world_mood: WorldMood
+    tension_factors: Dict[str, float] = Field(default_factory=dict)
     
     # Currency
-    currency_system: Dict[str, Any] = Field(default_factory=dict)
     player_money: int = 0
+    currency_system: Dict[str, Any] = Field(default_factory=dict)
     
-    # Environmental factors
-    environmental_factors: Dict[str, Any] = Field(default_factory=dict)
-    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Active events
+    ongoing_events: List[Dict[str, Any]] = Field(default_factory=list)
     
     model_config = ConfigDict(extra="forbid")
 
 # ===============================================================================
-# Enhanced World Director Context
+# Enhanced World Director Context with All Systems
 # ===============================================================================
 
 @dataclass
-class WorldDirectorContext:
-    """Enhanced context with integrated systems"""
+class EnhancedWorldDirectorContext:
+    """Enhanced context with all system managers"""
     user_id: int
     conversation_id: int
     player_name: str = "Chase"
     
-    # Integrated system managers
+    # Core system managers
+    openai_manager: Optional[OpenAIClientManager] = None
+    universal_updater: Optional[UniversalUpdaterAgent] = None
+    memory_manager: Optional[MemoryManager] = None
+    reveal_manager: Optional[ProgressiveRevealManager] = None
     relationship_manager: Optional[OptimizedRelationshipManager] = None
     event_system: Optional[EventSystem] = None
-    addiction_context: Optional[AddictionContext] = None
     currency_generator: Optional[CurrencyGenerator] = None
     activity_manager: Optional[ActivityManager] = None
     
     # State tracking
-    current_world_state: Optional[WorldState] = None
-    last_time_update: Optional[datetime] = None
-    
-    # Context management
-    context_service: Optional[Any] = None
-    memory_manager: Optional[Any] = None
-    directive_handler: Optional[DirectiveHandler] = None
+    current_world_state: Optional[EnhancedWorldState] = None
     
     # Caching
     cache: Dict[str, Any] = field(default_factory=dict)
-    calendar_names: Optional[Dict[str, Any]] = None
-
-    async def initialize_context_components(self):
+    
+    async def initialize_all_systems(self):
         """Initialize all integrated systems"""
+        # Initialize OpenAI manager
+        self.openai_manager = OpenAIClientManager()
+        
+        # Initialize universal updater
+        self.universal_updater = UniversalUpdaterAgent(self.user_id, self.conversation_id)
+        await self.universal_updater.initialize()
+        
+        # Initialize memory manager (using new instance)
+        # Note: The memory_logic.py has class methods, we'll work with those
+        
         # Initialize relationship manager
         self.relationship_manager = OptimizedRelationshipManager(
             self.user_id, self.conversation_id
@@ -253,1003 +227,849 @@ class WorldDirectorContext:
         self.event_system = EventSystem(self.user_id, self.conversation_id)
         await self.event_system.initialize()
         
-        # Initialize addiction context
-        self.addiction_context = AddictionContext(self.user_id, self.conversation_id)
-        await self.addiction_context.initialize()
-        
         # Initialize currency generator
         self.currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
         
         # Initialize activity manager
         self.activity_manager = ActivityManager()
         
-        # Load calendar names for immersive time references
-        self.calendar_names = await load_calendar_names(
-            self.user_id, self.conversation_id
-        )
-        
-        # Initialize context service
-        self.context_service = await get_context_service(self.user_id, self.conversation_id)
-        self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-        
         # Initialize world state
-        if self.current_world_state is None:
-            self.current_world_state = await self._initialize_world_state()
+        self.current_world_state = await self._build_complete_world_state()
         
-        logger.info(f"World Director context initialized with all systems")
-
-    async def _initialize_world_state(self) -> WorldState:
-        """Initialize world state using integrated systems"""
-        # Get current time from time_cycle
+        logger.info(f"Enhanced World Director initialized with all systems")
+    
+    async def _build_complete_world_state(self) -> EnhancedWorldState:
+        """Build complete world state from all systems"""
+        # Get time and vitals
         current_time = await get_current_time_model(self.user_id, self.conversation_id)
-        
-        # Get current vitals
         vitals = await get_current_vitals(self.user_id, self.conversation_id)
         
-        # Get relationship overview
-        rel_overview = await get_relationship_overview(self.user_id, self.conversation_id)
-        
-        # Get addiction status
-        addiction_status = await get_addiction_status(
+        # Get player stats
+        visible_stats = await get_player_visible_stats(
+            self.user_id, self.conversation_id, self.player_name
+        )
+        hidden_stats = await get_player_hidden_stats(
             self.user_id, self.conversation_id, self.player_name
         )
         
-        # Get currency system
+        # Check for active stat combinations
+        stat_combinations = await check_for_combination_triggers(
+            self.user_id, self.conversation_id
+        )
+        
+        # Get recent memories
+        recent_memories = await MemoryManager.retrieve_relevant_memories(
+            self.user_id, self.conversation_id, 
+            self.player_name, "player",
+            context="current_situation", limit=10
+        )
+        
+        # Check for pending NPC reveals
+        pending_reveals = await check_for_automated_reveals(
+            self.user_id, self.conversation_id
+        )
+        
+        # Check active rules
+        triggered_rules = await enforce_all_rules_on_player(self.player_name)
+        
+        # Get inventory
+        inventory_result = await get_inventory(
+            self.user_id, self.conversation_id, self.player_name
+        )
+        
+        # Get active NPCs and their masks
+        npcs = await self._get_active_npcs_with_masks()
+        
+        # Get currency info
         currency_system = await self.currency_generator.get_currency_system()
         
-        # Determine initial mood based on vitals and relationships
-        world_mood = self._calculate_mood_from_state(vitals, rel_overview)
-        
-        # Calculate tensions
-        world_tension = await self._calculate_initial_tensions(
-            vitals, rel_overview, addiction_status
+        # Calculate world mood from all factors
+        world_mood = await self._calculate_integrated_world_mood(
+            hidden_stats, vitals, stat_combinations
         )
         
-        return WorldState(
+        # Calculate tension factors
+        tension_factors = self._calculate_tension_factors(
+            hidden_stats, vitals, stat_combinations
+        )
+        
+        return EnhancedWorldState(
             current_time=current_time,
-            calendar_names=self.calendar_names or {},
             player_vitals=vitals,
+            visible_stats=visible_stats,
+            hidden_stats=hidden_stats,
+            active_stat_combinations=stat_combinations,
+            recent_memories=[m.to_dict() for m in recent_memories] if recent_memories else [],
+            pending_reveals=pending_reveals,
+            active_rules=triggered_rules,
+            player_inventory=inventory_result.get('items', []),
+            active_npcs=npcs,
             world_mood=world_mood,
-            world_tension=world_tension,
-            relationship_summary=rel_overview,
-            addiction_status=addiction_status,
+            tension_factors=tension_factors,
             currency_system=currency_system,
-            player_money=100  # Default starting money
+            player_money=100  # Default, should load from DB
         )
     
-    def _calculate_mood_from_state(
-        self, 
-        vitals: VitalsData, 
-        rel_overview: Dict[str, Any]
+    async def _get_active_npcs_with_masks(self) -> List[Dict[str, Any]]:
+        """Get active NPCs with their mask data"""
+        async with get_db_connection_context() as conn:
+            npcs = await conn.fetch("""
+                SELECT npc_id, npc_name, dominance, cruelty, intensity
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+                AND introduced = true
+                LIMIT 10
+            """, self.user_id, self.conversation_id)
+        
+        npc_list = []
+        for npc in npcs:
+            npc_dict = dict(npc)
+            
+            # Get mask data
+            mask_data = await ProgressiveRevealManager.get_npc_mask(
+                self.user_id, self.conversation_id, npc['npc_id']
+            )
+            npc_dict['mask'] = mask_data
+            
+            # Get narrative stage
+            stage = await get_npc_narrative_stage(
+                self.user_id, self.conversation_id, npc['npc_id']
+            )
+            npc_dict['narrative_stage'] = stage.name
+            
+            npc_list.append(npc_dict)
+        
+        return npc_list
+    
+    async def _calculate_integrated_world_mood(
+        self, hidden_stats: Dict, vitals: VitalsData, 
+        stat_combinations: List[Dict]
     ) -> WorldMood:
-        """Calculate world mood from game state"""
-        # Check vitals first
-        if vitals.fatigue > 80:
+        """Calculate world mood from all systems"""
+        # Critical states override
+        if vitals.fatigue > 85:
             return WorldMood.EXHAUSTED
-        if vitals.hunger < 20 or vitals.thirst < 20:
+        if vitals.hunger < 15 or vitals.thirst < 15:
             return WorldMood.DESPERATE
         
-        # Then check relationships
-        avg_corruption = rel_overview.get('aggregate_stats', {}).get('average_corruption', 0)
-        if avg_corruption < 20:
-            return WorldMood.RELAXED
-        elif avg_corruption < 40:
-            return WorldMood.PLAYFUL
-        elif avg_corruption < 60:
-            return WorldMood.MYSTERIOUS
-        else:
+        # Check for special combinations
+        for combo in stat_combinations:
+            if combo['name'] == 'Stockholm Syndrome':
+                return WorldMood.CORRUPTED
+            elif combo['name'] == 'Breaking Point':
+                return WorldMood.CHAOTIC
+        
+        # Based on hidden stats
+        corruption = hidden_stats.get('corruption', 0)
+        obedience = hidden_stats.get('obedience', 0)
+        
+        if corruption > 80:
+            return WorldMood.CORRUPTED
+        elif corruption > 60:
             return WorldMood.INTIMATE
+        elif obedience > 70:
+            return WorldMood.OPPRESSIVE
+        elif corruption > 40:
+            return WorldMood.MYSTERIOUS
+        elif corruption > 20:
+            return WorldMood.PLAYFUL
+        else:
+            return WorldMood.RELAXED
     
-    async def _calculate_initial_tensions(
-        self,
-        vitals: VitalsData,
-        rel_overview: Dict[str, Any],
-        addiction_status: Dict[str, Any]
-    ) -> WorldTension:
-        """Calculate initial world tensions"""
-        tensions = WorldTension()
+    def _calculate_tension_factors(
+        self, hidden_stats: Dict, vitals: VitalsData,
+        stat_combinations: List[Dict]
+    ) -> Dict[str, float]:
+        """Calculate various tension factors"""
+        tensions = {}
         
-        # Vital-based tensions
-        if vitals.hunger < 40 or vitals.thirst < 40:
-            tensions.vital_tension = 0.7
-        if vitals.fatigue > 60:
-            tensions.vital_tension = max(tensions.vital_tension, 0.5)
+        # Vital tensions
+        tensions['vital'] = 0.0
+        if vitals.hunger < 30:
+            tensions['vital'] += (30 - vitals.hunger) / 30 * 0.5
+        if vitals.thirst < 30:
+            tensions['vital'] += (30 - vitals.thirst) / 30 * 0.5
+        if vitals.fatigue > 70:
+            tensions['vital'] += (vitals.fatigue - 70) / 30 * 0.5
         
-        # Addiction-based tensions
-        if addiction_status.get("has_addictions"):
-            addiction_count = len(addiction_status.get("addictions", {}))
-            tensions.addiction_tension = min(1.0, addiction_count * 0.2)
+        # Psychological tensions
+        tensions['corruption'] = hidden_stats.get('corruption', 0) / 100
+        tensions['obedience'] = hidden_stats.get('obedience', 0) / 100
+        tensions['dependency'] = hidden_stats.get('dependency', 0) / 100
+        tensions['lust'] = hidden_stats.get('lust', 0) / 100
         
-        # Relationship-based tensions
-        avg_corruption = rel_overview.get('aggregate_stats', {}).get('average_corruption', 0)
-        avg_dependency = rel_overview.get('aggregate_stats', {}).get('average_dependency', 0)
+        # Resistance tensions (inverse)
+        tensions['willpower'] = (100 - hidden_stats.get('willpower', 100)) / 100
+        tensions['confidence'] = (100 - hidden_stats.get('confidence', 100)) / 100
         
-        tensions.sexual_tension = min(1.0, avg_corruption / 100.0)
-        tensions.power_tension = min(1.0, avg_dependency / 100.0)
-        tensions.social_tension = min(1.0, len(rel_overview.get('relationships', [])) * 0.1)
+        # Special combination tensions
+        tensions['breaking'] = len(stat_combinations) * 0.2
         
         return tensions
 
 # ===============================================================================
-# Integrated Tool Functions
+# LLM-Driven Event Generation Tools
 # ===============================================================================
 
 @function_tool
-async def get_world_state(ctx: RunContextWrapper[WorldDirectorContext]) -> WorldState:
-    """Get current world state using all integrated systems"""
+async def generate_slice_of_life_event_llm(
+    ctx: RunContextWrapper[EnhancedWorldDirectorContext]
+) -> Dict[str, Any]:
+    """Generate a completely dynamic slice-of-life event using LLM"""
     context = ctx.context
-    
-    if not context.current_world_state:
-        await context.initialize_context_components()
-    
-    # Update from integrated systems
     world_state = context.current_world_state
     
-    # Update time
-    world_state.current_time = await get_current_time_model(
-        context.user_id, context.conversation_id
-    )
+    # Build comprehensive context for LLM
+    context_data = {
+        "time": world_state.current_time.to_dict(),
+        "vitals": world_state.player_vitals.to_dict(),
+        "visible_stats": world_state.visible_stats,
+        "hidden_stats": world_state.hidden_stats,
+        "active_combinations": [c['name'] for c in world_state.active_stat_combinations],
+        "world_mood": world_state.world_mood.value,
+        "tensions": world_state.tension_factors,
+        "recent_memories": world_state.recent_memories[:5],
+        "active_npcs": [
+            {
+                "name": npc['npc_name'],
+                "dominance": npc['dominance'],
+                "stage": npc['narrative_stage'],
+                "mask_integrity": npc.get('mask', {}).get('integrity', 100)
+            }
+            for npc in world_state.active_npcs[:3]
+        ]
+    }
     
-    # Update vitals
-    world_state.player_vitals = await get_current_vitals(
-        context.user_id, context.conversation_id
-    )
-    
-    # Update relationships
-    world_state.relationship_summary = await get_relationship_overview(
-        context.user_id, context.conversation_id
-    )
-    
-    # Check for pending relationship events
-    rel_events = await drain_relationship_events_tool(
-        ctx=RunContextWrapper({
-            'user_id': context.user_id,
-            'conversation_id': context.conversation_id
-        }),
-        max_events=5
-    )
-    if rel_events.get('events'):
-        world_state.pending_relationship_events = rel_events['events']
-    
-    # Update addiction status
-    world_state.addiction_status = await get_addiction_status(
-        context.user_id, context.conversation_id, context.player_name
-    )
-    
-    # Update tensions based on current state
-    world_state.world_tension = await _update_world_tensions(context, world_state)
-    
-    # Update mood
-    world_state.world_mood = context._calculate_mood_from_state(
-        world_state.player_vitals,
-        world_state.relationship_summary
-    )
-    
-    # Generate available activities
-    world_state.available_activities = await _generate_integrated_activities(
-        context, world_state
-    )
-    
-    world_state.last_updated = datetime.now(timezone.utc)
-    context.current_world_state = world_state
-    
-    return world_state
+    # Generate event using OpenAI
+    prompt = f"""Generate a dynamic slice-of-life event for a femdom RPG.
+
+World Context:
+{json.dumps(context_data, indent=2)}
+
+Create a naturalistic daily life event that:
+1. Emerges from the current world state
+2. Incorporates subtle power dynamics if NPCs are involved
+3. Reflects the player's current physical and mental state
+4. Advances relationships naturally
+5. May trigger stat changes or rule effects
+
+Output as JSON with this structure:
+{{
+    "event_type": "work|social|leisure|intimate|routine|crisis",
+    "title": "Brief event title",
+    "description": "Detailed narrative description",
+    "participating_npcs": [list of NPC names],
+    "location": "where this happens",
+    "power_dynamics": {{
+        "present": true/false,
+        "type": "subtle_control|casual_dominance|protective_control|etc",
+        "intensity": 0.0-1.0
+    }},
+    "choices": [
+        {{
+            "text": "Choice description",
+            "stat_impacts": {{"stat_name": change_value}},
+            "relationship_impacts": {{"npc_name": {{"trust": change, "submission": change}}}},
+            "reveals_mask": false
+        }}
+    ],
+    "ambient_details": "Environmental/atmospheric details",
+    "hidden_meanings": "Subtext the player might not consciously notice"
+}}"""
+
+    try:
+        response = await generate_text_completion(
+            system_prompt="You are a narrative director for an emergent femdom slice-of-life game. Create dynamic, contextual events.",
+            user_prompt=prompt,
+            temperature=0.8,
+            max_tokens=1000,
+            task_type="narrative"
+        )
+        
+        # Parse the response
+        event_data = json.loads(response)
+        
+        # Process through universal updater for narrative consistency
+        narrative_text = event_data['description']
+        update_result = await context.universal_updater.process_update(
+            narrative_text,
+            {"source": "generated_event", "event_data": event_data}
+        )
+        
+        # Store in memory
+        await MemoryManager.add_memory(
+            context.user_id, context.conversation_id,
+            entity_id=1, entity_type="player",
+            memory_text=f"Event: {event_data['title']}",
+            memory_type=MemoryType.INTERACTION,
+            significance=MemorySignificance.MEDIUM,
+            tags=["event", event_data['event_type']]
+        )
+        
+        return event_data
+        
+    except Exception as e:
+        logger.error(f"Error generating LLM event: {e}", exc_info=True)
+        # Fallback to a simple generated event
+        return {
+            "event_type": "routine",
+            "title": "A Quiet Moment",
+            "description": "Time passes peacefully.",
+            "participating_npcs": [],
+            "location": "current",
+            "power_dynamics": {"present": False},
+            "choices": [{"text": "Continue", "stat_impacts": {}}]
+        }
 
 @function_tool
-async def advance_time_period_integrated(
-    ctx: RunContextWrapper[WorldDirectorContext],
-    activity_type: Optional[str] = None
+async def generate_npc_interaction_llm(
+    ctx: RunContextWrapper[EnhancedWorldDirectorContext],
+    npc_id: int
 ) -> Dict[str, Any]:
-    """Advance time using the integrated time_cycle system"""
+    """Generate dynamic NPC interaction using LLM with mask system"""
     context = ctx.context
     
-    # Use the time_cycle system for advancement
-    result = await advance_time_with_events(
-        context.user_id,
-        context.conversation_id,
-        activity_type or "personal_time"
+    # Get NPC data including mask
+    npc_data = None
+    for npc in context.current_world_state.active_npcs:
+        if npc['npc_id'] == npc_id:
+            npc_data = npc
+            break
+    
+    if not npc_data:
+        return {"error": "NPC not found"}
+    
+    # Get relationship state
+    rel_state = await context.relationship_manager.get_relationship_state(
+        'npc', npc_id, 'player', 1
     )
     
-    # Update world state based on time advancement
-    if result['time_advanced']:
-        # Update context's current time
-        context.current_world_state.current_time = await get_current_time_model(
+    # Build context for generation
+    interaction_context = {
+        "npc": {
+            "name": npc_data['npc_name'],
+            "dominance": npc_data['dominance'],
+            "narrative_stage": npc_data['narrative_stage'],
+            "mask": npc_data.get('mask', {}),
+            "presented_traits": npc_data.get('mask', {}).get('presented_traits', {}),
+            "hidden_traits": npc_data.get('mask', {}).get('hidden_traits', {}),
+            "mask_integrity": npc_data.get('mask', {}).get('integrity', 100)
+        },
+        "relationship": {
+            "trust": rel_state.dimensions.trust,
+            "affection": rel_state.dimensions.affection,
+            "influence": rel_state.dimensions.influence
+        },
+        "player_state": {
+            "corruption": context.current_world_state.hidden_stats.get('corruption', 0),
+            "obedience": context.current_world_state.hidden_stats.get('obedience', 0),
+            "willpower": context.current_world_state.hidden_stats.get('willpower', 100)
+        }
+    }
+    
+    prompt = f"""Generate a dynamic NPC interaction for a femdom RPG.
+
+NPC and Relationship Context:
+{json.dumps(interaction_context, indent=2)}
+
+Create an interaction that:
+1. Reflects the NPC's current mask integrity (how much true nature shows through)
+2. Incorporates their narrative stage appropriately
+3. May include subtle mask slippage if integrity < 80
+4. Advances the power dynamic based on relationship influence
+5. Provides meaningful player choices
+
+Output as JSON:
+{{
+    "dialogue": "What the NPC says",
+    "body_language": "Physical cues and demeanor",
+    "mask_slippage": {{
+        "occurred": true/false,
+        "type": "verbal|physical|emotional",
+        "description": "What slipped through if any"
+    }},
+    "power_move": {{
+        "attempted": true/false,
+        "type": "suggestion|command|manipulation|caring_control",
+        "intensity": 0.0-1.0
+    }},
+    "player_options": [
+        {{
+            "response": "What player says/does",
+            "impact": "accept|resist|deflect|counter",
+            "consequences": {{
+                "stat_changes": {{}},
+                "relationship_changes": {{}},
+                "reveals_insight": true/false
+            }}
+        }}
+    ],
+    "subtext": "Hidden meanings in the interaction"
+}}"""
+
+    try:
+        response = await generate_text_completion(
+            system_prompt="You are an NPC personality director. Create nuanced interactions with hidden depths.",
+            user_prompt=prompt,
+            temperature=0.7,
+            max_tokens=800
+        )
+        
+        interaction = json.loads(response)
+        
+        # Check if this should trigger a mask slippage
+        if interaction['mask_slippage']['occurred']:
+            slippage_result = await ProgressiveRevealManager.generate_mask_slippage(
+                context.user_id, context.conversation_id, npc_id,
+                trigger="interaction", severity=RevealSeverity.SUBTLE
+            )
+            interaction['mask_slippage']['game_result'] = slippage_result
+        
+        # Generate potential flashback if appropriate
+        if rel_state.dimensions.trust > 60 and random.random() < 0.2:
+            flashback = await MemoryManager.generate_flashback(
+                context.user_id, context.conversation_id, npc_id,
+                current_context=interaction['dialogue']
+            )
+            if flashback:
+                interaction['triggered_flashback'] = flashback
+        
+        return interaction
+        
+    except Exception as e:
+        logger.error(f"Error generating NPC interaction: {e}", exc_info=True)
+        return {
+            "dialogue": f"{npc_data['npc_name']} looks at you thoughtfully.",
+            "body_language": "Neutral stance",
+            "player_options": [{"response": "Continue", "impact": "neutral"}]
+        }
+
+@function_tool
+async def process_player_choice_with_systems(
+    ctx: RunContextWrapper[EnhancedWorldDirectorContext],
+    choice_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Process player choice through all integrated systems"""
+    context = ctx.context
+    results = {"effects": []}
+    
+    # Apply stat changes
+    if 'stat_impacts' in choice_data:
+        stat_result = await apply_stat_changes(
+            context.user_id, context.conversation_id,
+            context.player_name, choice_data['stat_impacts'],
+            reason=f"Player choice: {choice_data.get('text', 'unknown')}"
+        )
+        results['stat_changes'] = stat_result
+        
+        # Check if new stat combinations triggered
+        new_combinations = await check_for_combination_triggers(
             context.user_id, context.conversation_id
         )
-        
-        # Map game time to world mood
-        new_time = result['new_time']
-        context.current_world_state.world_mood = await _calculate_mood_for_integrated_time(
-            context, new_time
-        )
-        
-        # Process any events from time advancement
-        for event in result.get('events', []):
-            if event['type'] == 'vital_crisis':
-                # Create a vital event
-                await _create_vital_event(context, event)
-            elif event['type'] == 'relationship_summary':
-                # Update relationship dynamics
-                await _update_relationship_dynamics_from_summary(context, event)
+        if new_combinations:
+            results['new_combinations'] = new_combinations
     
-    # Check and drain relationship events
-    rel_events = await drain_relationship_events_tool(
-        ctx=RunContextWrapper({
-            'user_id': context.user_id,
-            'conversation_id': context.conversation_id
-        }),
-        max_events=5
-    )
-    
-    if rel_events.get('events'):
-        for event_data in rel_events['events']:
-            # Convert relationship events to world events
-            await _process_relationship_event_for_world(context, event_data)
-    
-    return result
-
-@function_tool
-async def generate_integrated_slice_of_life_event(
-    ctx: RunContextWrapper[WorldDirectorContext],
-    event_type: Optional[str] = None,
-    consider_addictions: bool = True,
-    consider_vitals: bool = True
-) -> SliceOfLifeEvent:
-    """Generate events considering all integrated systems"""
-    context = ctx.context
-    world_state = context.current_world_state or await get_world_state(ctx)
-    
-    # Priority checks
-    if consider_vitals and _needs_vital_event(world_state.player_vitals):
-        return await _generate_vital_priority_event(context, world_state)
-    
-    if consider_addictions and world_state.addiction_status.get('has_addictions'):
-        if random.random() < 0.3:  # 30% chance for addiction event
-            return await _generate_addiction_event(context, world_state)
-    
-    # Check for narrative moments
-    narrative_moment = await check_for_narrative_moments(
-        context.user_id, context.conversation_id
-    )
-    if narrative_moment:
-        return await _convert_narrative_to_event(context, narrative_moment)
-    
-    # Generate regular slice of life event
-    if not event_type:
-        # Weight based on current tensions
-        dominant_tension, level = world_state.world_tension.get_dominant_tension()
-        if dominant_tension == "addiction" and level > 0.5:
-            event_type = ActivityType.ADDICTION
-        elif dominant_tension == "vital" and level > 0.5:
-            event_type = ActivityType.VITAL
-        else:
-            event_type = _select_activity_by_time(world_state.current_time)
-    else:
-        event_type = ActivityType[event_type.upper()]
-    
-    # Select participating NPCs based on relationships
-    involved_npcs = await _select_npcs_by_relationship_stage(context, world_state)
-    
-    # Generate event with integrated details
-    event = await _generate_full_integrated_event(
-        context, world_state, event_type, involved_npcs
-    )
-    
-    # Add to ongoing events
-    world_state.ongoing_events.append(event)
-    
-    # Process through event system
-    await context.event_system.create_event(
-        event_type=event.event_type.value,
-        event_data={
-            "event_id": event.event_id,
-            "description": event.description,
-            "participants": event.participants
-        },
-        priority=event.priority
-    )
-    
-    return event
-
-@function_tool
-async def process_activity_with_integration(
-    ctx: RunContextWrapper[WorldDirectorContext],
-    player_input: str
-) -> Dict[str, Any]:
-    """Process player activity using integrated systems"""
-    context = ctx.context
-    
-    # Use activity manager to process
-    activity_result = await context.activity_manager.process_activity(
-        context.user_id,
-        context.conversation_id,
-        player_input,
-        {"vitals": context.current_world_state.player_vitals.to_dict()}
-    )
-    
-    activity_type = activity_result['activity_type']
-    intensity = activity_result.get('intensity', 1.0)
-    
-    # Process vitals
-    vitals_result = await process_activity_vitals(
-        context.user_id,
-        context.conversation_id,
-        context.player_name,
-        activity_type,
-        intensity
-    )
-    
-    # Check for addiction triggers
-    addiction_results = []
-    if activity_type in ['social_event', 'intimate_activity', 'extended_conversation']:
-        # Get involved NPCs
-        involved_npcs = await _get_npcs_in_current_scene(context)
-        for npc_id in involved_npcs:
-            # Random chance to trigger addiction progression
-            if random.random() < 0.2 * intensity:
-                addiction_type = random.choice(['dependency', 'submission', 'fascination'])
-                result = await process_addiction_update(
-                    context.user_id,
-                    context.conversation_id,
-                    context.player_name,
-                    addiction_type,
-                    intensity,
-                    npc_id
+    # Process relationship impacts
+    if 'relationship_impacts' in choice_data:
+        for npc_name, impacts in choice_data['relationship_impacts'].items():
+            # Find NPC ID
+            npc_id = None
+            for npc in context.current_world_state.active_npcs:
+                if npc['npc_name'] == npc_name:
+                    npc_id = npc['npc_id']
+                    break
+            
+            if npc_id:
+                # Process through relationship manager
+                interaction_result = await context.relationship_manager.process_interaction(
+                    'player', 1, 'npc', npc_id,
+                    {'type': 'choice', 'impacts': impacts}
                 )
-                addiction_results.append(result)
+                results['effects'].append(interaction_result)
     
-    # Update relationship dynamics based on activity
-    relationship_updates = []
-    if activity_type in ['extended_conversation', 'intimate_activity']:
-        for npc_id in await _get_npcs_in_current_scene(context):
-            state = await context.relationship_manager.get_relationship_state(
-                'player', 1, 'npc', npc_id
+    # Check for rule triggers
+    triggered_rules = await enforce_all_rules_on_player(context.player_name)
+    if triggered_rules:
+        results['triggered_rules'] = triggered_rules
+        
+        # Apply rule effects
+        for rule in triggered_rules:
+            effect_result = await apply_effect(
+                rule['effect'], context.player_name,
+                npc_id=choice_data.get('npc_id')
             )
-            # Process interaction
-            interaction_result = await context.relationship_manager.process_interaction(
-                'player', 1, 'npc', npc_id,
-                {'type': activity_type, 'intensity': intensity}
+            results['effects'].append(effect_result)
+    
+    # Check for social insight if empathy is high enough
+    player_stats = context.current_world_state.visible_stats
+    if player_stats.get('empathy', 0) > 12 and choice_data.get('reveals_insight'):
+        # Player might detect deception or hidden emotions
+        if choice_data.get('npc_id'):
+            deception_check = await detect_deception(
+                context.user_id, context.conversation_id,
+                context.player_name, choice_data['npc_id'],
+                'hidden_motive'
             )
-            relationship_updates.append(interaction_result)
+            if deception_check['success']:
+                results['insight_gained'] = deception_check['insight']
     
-    return {
-        "activity": activity_result,
-        "vitals": vitals_result,
-        "addictions": addiction_results,
-        "relationships": relationship_updates
-    }
-
-@function_tool
-async def check_for_emergent_events(
-    ctx: RunContextWrapper[WorldDirectorContext]
-) -> List[Dict[str, Any]]:
-    """Check all systems for emergent events"""
-    context = ctx.context
-    emergent_events = []
-    
-    # Check for personal revelations
-    revelation = await check_for_personal_revelations(
-        context.user_id, context.conversation_id
+    # Store choice in memory
+    await MemoryManager.add_memory(
+        context.user_id, context.conversation_id,
+        entity_id=1, entity_type="player",
+        memory_text=f"Choice made: {choice_data.get('text', 'unknown')}",
+        memory_type=MemoryType.INTERACTION,
+        significance=MemorySignificance.MEDIUM,
+        emotional_valence=choice_data.get('emotional_valence', 0),
+        tags=["player_choice"]
     )
-    if revelation:
-        emergent_events.append({
-            "type": "revelation",
-            "data": revelation
-        })
     
-    # Check for NPC revelations
-    npcs = await _get_active_npcs(context)
-    for npc in npcs:
-        npc_revelation = await check_for_npc_revelation(
-            context.user_id, context.conversation_id, npc['npc_id']
-        )
-        if npc_revelation:
-            emergent_events.append({
-                "type": "npc_revelation",
-                "data": npc_revelation
-            })
+    # Generate narrative response using LLM
+    response_prompt = f"""Generate a narrative response to the player's choice.
+
+Choice: {choice_data.get('text')}
+Effects: {json.dumps(results, default=str)}
+World Mood: {context.current_world_state.world_mood.value}
+
+Create a brief narrative paragraph that:
+1. Acknowledges the choice naturally
+2. Shows immediate consequences subtly
+3. Hints at longer-term implications
+4. Maintains the current mood/atmosphere
+5. Sets up the next moment
+
+Keep it under 100 words, atmospheric, and with subtext."""
+
+    narrative_response = await generate_text_completion(
+        system_prompt="You are a narrative director creating seamless story flow.",
+        user_prompt=response_prompt,
+        temperature=0.7,
+        max_tokens=150
+    )
     
-    # Check event system
-    active_events = await context.event_system.get_active_events()
-    for event in active_events:
-        if event['priority'] >= 7:  # High priority events
-            emergent_events.append({
-                "type": "system_event",
-                "data": event
-            })
+    results['narrative'] = narrative_response
     
-    # Check for critical vitals
-    vitals = context.current_world_state.player_vitals
-    if vitals.hunger < 10 or vitals.thirst < 10 or vitals.fatigue > 95:
-        emergent_events.append({
-            "type": "vital_crisis",
-            "data": {
-                "hunger": vitals.hunger,
-                "thirst": vitals.thirst,
-                "fatigue": vitals.fatigue
-            }
-        })
-    
-    return emergent_events
+    return results
 
 @function_tool
-async def handle_currency_transaction(
-    ctx: RunContextWrapper[WorldDirectorContext],
-    amount: int,
-    reason: str,
-    npc_id: Optional[int] = None
+async def generate_emergent_narrative_llm(
+    ctx: RunContextWrapper[EnhancedWorldDirectorContext]
 ) -> Dict[str, Any]:
-    """Handle currency transactions with proper formatting"""
+    """Generate emergent narrative threads using LLM analysis of patterns"""
     context = ctx.context
     
-    # Format currency
-    formatted_amount = await context.currency_generator.format_currency(abs(amount))
-    
-    old_money = context.current_world_state.player_money
-    new_money = max(0, old_money + amount)
-    context.current_world_state.player_money = new_money
-    
-    # Format new balance
-    formatted_balance = await context.currency_generator.format_currency(new_money)
-    
-    # If NPC involved, might affect power dynamics
-    if npc_id and amount < 0:  # Player spending/giving money
-        # This could trigger financial control dynamics
-        if random.random() < 0.3:
-            power_exchange = {
-                "type": PowerDynamicType.FINANCIAL_CONTROL,
-                "npc_id": npc_id,
-                "description": f"Controls your spending on {reason}"
-            }
-            context.current_world_state.world_tension.power_tension += 0.1
-    
-    return {
-        "transaction": "debit" if amount < 0 else "credit",
-        "amount": formatted_amount,
-        "reason": reason,
-        "old_balance": old_money,
-        "new_balance": new_money,
-        "formatted_balance": formatted_balance
+    # Gather pattern data from all systems
+    patterns = {
+        "memories": context.current_world_state.recent_memories[:10],
+        "stat_combinations": context.current_world_state.active_stat_combinations,
+        "rules_triggered": context.current_world_state.triggered_effects,
+        "tensions": context.current_world_state.tension_factors,
+        "relationship_patterns": []
     }
+    
+    # Get relationship patterns
+    for npc in context.current_world_state.active_npcs[:3]:
+        state = await context.relationship_manager.get_relationship_state(
+            'npc', npc['npc_id'], 'player', 1
+        )
+        patterns['relationship_patterns'].append({
+            "npc": npc['npc_name'],
+            "patterns": list(state.history.active_patterns),
+            "archetype": state.archetype
+        })
+    
+    prompt = f"""Analyze these patterns to detect emergent narrative threads.
 
-# ===============================================================================
-# Helper Functions for Integration
-# ===============================================================================
+System Patterns:
+{json.dumps(patterns, indent=2, default=str)}
 
-async def _update_world_tensions(
-    context: WorldDirectorContext,
-    world_state: WorldState
-) -> WorldTension:
-    """Update tensions based on all systems"""
-    tensions = world_state.world_tension
-    
-    # Vital tensions
-    vitals = world_state.player_vitals
-    vital_crisis_level = 0
-    if vitals.hunger < 30:
-        vital_crisis_level += (30 - vitals.hunger) / 30
-    if vitals.thirst < 30:
-        vital_crisis_level += (30 - vitals.thirst) / 30
-    if vitals.fatigue > 70:
-        vital_crisis_level += (vitals.fatigue - 70) / 30
-    tensions.vital_tension = min(1.0, vital_crisis_level / 2)
-    
-    # Addiction tensions
-    if world_state.addiction_status.get('has_addictions'):
-        max_level = 0
-        for addiction_data in world_state.addiction_status.get('addictions', {}).values():
-            max_level = max(max_level, addiction_data.get('level', 0))
-        tensions.addiction_tension = min(1.0, max_level / 4.0)
-    
-    # Relationship tensions from dynamic system
-    if world_state.relationship_summary:
-        for rel in world_state.relationship_summary.get('relationships', []):
-            # Check for patterns that increase tension
-            if 'explosive_chemistry' in rel.get('patterns', []):
-                tensions.sexual_tension = min(1.0, tensions.sexual_tension + 0.1)
-            if 'toxic_bond' in rel.get('archetypes', []):
-                tensions.conflict_tension = min(1.0, tensions.conflict_tension + 0.15)
-    
-    return tensions
+Identify emergent stories that are forming from these patterns:
+1. Look for recurring themes across different systems
+2. Identify converging storylines
+3. Detect hidden connections between events
+4. Recognize developing dependencies or resistances
+5. Find narrative momentum building toward climaxes
 
-def _needs_vital_event(vitals: VitalsData) -> bool:
-    """Check if vitals require immediate attention"""
-    return (vitals.hunger < 20 or 
-            vitals.thirst < 20 or 
-            vitals.fatigue > 85 or
-            vitals.energy < 20)
+Output as JSON:
+{{
+    "primary_thread": {{
+        "title": "Name of the emerging narrative",
+        "description": "What story is forming",
+        "key_elements": ["list", "of", "contributing", "factors"],
+        "trajectory": "Where this seems to be heading",
+        "tension_points": ["potential", "conflict", "or", "revelation", "moments"],
+        "suggested_next_development": "What might happen next"
+    }},
+    "secondary_threads": [
+        {{
+            "title": "Secondary narrative",
+            "description": "Brief description",
+            "connection_to_primary": "How it relates"
+        }}
+    ],
+    "hidden_narrative": "Subconscious story the player might not realize"
+}}"""
 
-async def _generate_vital_priority_event(
-    context: WorldDirectorContext,
-    world_state: WorldState
-) -> SliceOfLifeEvent:
-    """Generate a vital-priority event"""
-    vitals = world_state.player_vitals
-    
-    if vitals.hunger < 20:
-        title = "Desperate Hunger"
-        description = "You need food immediately"
-        vital_type = "hunger"
-    elif vitals.thirst < 20:
-        title = "Severe Dehydration"
-        description = "You desperately need water"
-        vital_type = "thirst"
-    elif vitals.fatigue > 85:
-        title = "Exhaustion Takes Over"
-        description = "You can barely keep your eyes open"
-        vital_type = "fatigue"
-    else:
-        title = "Energy Depleted"
-        description = "You need to rest and recover"
-        vital_type = "energy"
-    
-    return SliceOfLifeEvent(
-        event_id=f"vital_{vital_type}_{int(time.time())}",
-        event_type=ActivityType.VITAL,
-        title=title,
-        description=description,
-        participants=[],
-        location="current",
-        mood_impact=WorldMood.DESPERATE,
-        priority=9,
-        can_interrupt=False
-    )
+    try:
+        response = await generate_text_completion(
+            system_prompt="You are a narrative analyst detecting emergent stories in complex systems.",
+            user_prompt=prompt,
+            temperature=0.6,
+            max_tokens=800
+        )
+        
+        narrative_threads = json.loads(response)
+        
+        # Check if any thread suggests a revelation or flashback
+        if 'revelation' in narrative_threads['primary_thread'].get('tension_points', []):
+            # Trigger a moment of clarity
+            from logic.narrative_events import add_moment_of_clarity
+            clarity_result = await add_moment_of_clarity(
+                context.user_id, context.conversation_id,
+                trigger="emergent_narrative"
+            )
+            narrative_threads['triggered_moment_of_clarity'] = clarity_result
+        
+        return narrative_threads
+        
+    except Exception as e:
+        logger.error(f"Error detecting emergent narrative: {e}", exc_info=True)
+        return {"primary_thread": {"title": "Ongoing Events", "description": "Life continues..."}}
 
-async def _generate_addiction_event(
-    context: WorldDirectorContext,
-    world_state: WorldState
-) -> SliceOfLifeEvent:
-    """Generate an addiction-related event"""
-    addictions = world_state.addiction_status.get('addictions', {})
-    if not addictions:
-        return None
-    
-    # Pick the strongest addiction
-    strongest = max(addictions.items(), key=lambda x: x[1].get('level', 0))
-    addiction_key, addiction_data = strongest
-    
-    # Generate event based on addiction type
-    if addiction_data.get('type') == 'npc_specific':
-        npc_id = addiction_data.get('npc_id')
-        npc_name = addiction_data.get('npc_name', 'Someone')
-        title = f"Craving {npc_name}'s Presence"
-        description = f"You feel a deep need related to {npc_name}"
-        participants = [npc_id] if npc_id else []
-    else:
-        title = f"Overwhelming {addiction_key.title()} Craving"
-        description = f"The addiction to {addiction_key} demands attention"
-        participants = []
-    
-    return SliceOfLifeEvent(
-        event_id=f"addiction_{addiction_key}_{int(time.time())}",
-        event_type=ActivityType.ADDICTION,
-        title=title,
-        description=description,
-        participants=participants,
-        location="mind",
-        power_dynamic=PowerDynamicType.ADDICTION_EXPLOITATION,
-        mood_impact=WorldMood.TENSE,
-        addiction_triggers={addiction_key: 0.2},
-        priority=7,
-        can_interrupt=True
-    )
-
-async def _convert_narrative_to_event(
-    context: WorldDirectorContext,
-    narrative_moment: Dict[str, Any]
-) -> SliceOfLifeEvent:
-    """Convert a narrative moment to a world event"""
-    return SliceOfLifeEvent(
-        event_id=f"narrative_{narrative_moment.get('type')}_{int(time.time())}",
-        event_type=ActivityType.SPECIAL,
-        title=narrative_moment.get('name', 'Narrative Moment'),
-        description=narrative_moment.get('scene_text', ''),
-        participants=[],
-        location="mindscape",
-        mood_impact=WorldMood.MYSTERIOUS,
-        priority=8,
-        can_interrupt=False
-    )
-
-def _select_activity_by_time(current_time: CurrentTimeData) -> ActivityType:
-    """Select activity type based on time of day"""
-    time_str = current_time.time_of_day
-    
-    if time_str in ["Morning", "Afternoon"]:
-        return random.choice([ActivityType.WORK, ActivityType.ROUTINE])
-    elif time_str == "Evening":
-        return random.choice([ActivityType.SOCIAL, ActivityType.LEISURE])
-    else:  # Night
-        return random.choice([ActivityType.INTIMATE, ActivityType.SPECIAL])
-
-async def _select_npcs_by_relationship_stage(
-    context: WorldDirectorContext,
-    world_state: WorldState
-) -> List[int]:
-    """Select NPCs based on relationship stages"""
-    if not world_state.relationship_summary:
-        return []
-    
-    relationships = world_state.relationship_summary.get('relationships', [])
-    
-    # Prioritize NPCs with higher corruption/dependency
-    sorted_rels = sorted(
-        relationships, 
-        key=lambda r: r.get('corruption', 0) + r.get('dependency', 0),
-        reverse=True
-    )
-    
-    # Select top 1-3
-    selected = []
-    for rel in sorted_rels[:3]:
-        if rel.get('npc_id'):
-            selected.append(rel['npc_id'])
-    
-    return selected
-
-async def _generate_full_integrated_event(
-    context: WorldDirectorContext,
-    world_state: WorldState,
-    event_type: ActivityType,
-    involved_npcs: List[int]
-) -> SliceOfLifeEvent:
-    """Generate a fully integrated event"""
-    # Base event details
-    event_id = f"{event_type.value}_{int(time.time())}_{random.randint(1000, 9999)}"
-    
-    # Get NPC details for personalization
-    npc_names = []
-    power_dynamic = None
-    
-    if involved_npcs:
-        async with get_db_connection_context() as conn:
-            for npc_id in involved_npcs[:2]:  # Limit to 2 for readability
-                npc = await conn.fetchrow("""
-                    SELECT npc_name, dominance, cruelty
-                    FROM NPCStats
-                    WHERE npc_id = $1 AND user_id = $2
-                """, npc_id, context.user_id)
-                if npc:
-                    npc_names.append(npc['npc_name'])
-                    # Determine power dynamic based on dominance
-                    if npc['dominance'] > 70:
-                        power_dynamic = PowerDynamicType.CASUAL_DOMINANCE
-                    elif npc['dominance'] > 50:
-                        power_dynamic = PowerDynamicType.SUBTLE_CONTROL
-    
-    # Generate title and description
-    if event_type == ActivityType.WORK:
-        title = f"Work Time"
-        description = "Time to focus on tasks and responsibilities"
-        vital_costs = {"energy": -10, "fatigue": 10}
-    elif event_type == ActivityType.SOCIAL:
-        if npc_names:
-            title = f"Socializing with {' and '.join(npc_names)}"
-        else:
-            title = "Social Gathering"
-        description = "A chance to interact and build connections"
-        vital_costs = {"energy": -5, "thirst": -10}
-    elif event_type == ActivityType.INTIMATE:
-        if npc_names:
-            title = f"Private Time with {npc_names[0]}"
-        else:
-            title = "Intimate Moment"
-        description = "A moment of closeness and vulnerability"
-        vital_costs = {"energy": -15, "fatigue": 5}
-        if power_dynamic is None:
-            power_dynamic = PowerDynamicType.INTIMATE_COMMAND
-    else:
-        title = f"{event_type.value.title()} Activity"
-        description = f"An opportunity for {event_type.value}"
-        vital_costs = {"energy": -5}
-    
-    # Check for addiction triggers
-    addiction_triggers = {}
-    if event_type in [ActivityType.INTIMATE, ActivityType.SOCIAL] and involved_npcs:
-        # These activities might trigger addictions
-        addiction_triggers["dependency"] = 0.1
-        if event_type == ActivityType.INTIMATE:
-            addiction_triggers["submission"] = 0.15
-    
-    # Determine currency cost
-    currency_cost = None
-    if event_type in [ActivityType.SOCIAL, ActivityType.LEISURE]:
-        currency_cost = random.randint(10, 50)
-    
-    return SliceOfLifeEvent(
-        event_id=event_id,
-        event_type=event_type,
-        title=title,
-        description=description,
-        participants=involved_npcs,
-        location=await _determine_location(context, event_type),
-        power_dynamic=power_dynamic,
-        mood_impact=world_state.world_mood,
-        vital_costs=vital_costs,
-        addiction_triggers=addiction_triggers,
-        currency_cost=currency_cost,
-        priority=5,
-        can_interrupt=True
-    )
-
-async def _determine_location(
-    context: WorldDirectorContext,
-    event_type: ActivityType
-) -> str:
-    """Determine location for an event type"""
-    location_map = {
-        ActivityType.WORK: "workplace",
-        ActivityType.SOCIAL: "social venue",
-        ActivityType.LEISURE: "relaxation spot",
-        ActivityType.INTIMATE: "private space",
-        ActivityType.ROUTINE: "home",
-        ActivityType.VITAL: "nearest resource",
-        ActivityType.ADDICTION: "mindspace",
-        ActivityType.SPECIAL: "varies"
-    }
-    return location_map.get(event_type, "current location")
-
-async def _get_active_npcs(context: WorldDirectorContext) -> List[Dict[str, Any]]:
-    """Get currently active NPCs"""
-    async with get_db_connection_context() as conn:
-        npcs = await conn.fetch("""
-            SELECT npc_id, npc_name, current_location, dominance, intensity
-            FROM NPCStats
-            WHERE user_id = $1 AND conversation_id = $2
-            AND introduced = true
-            LIMIT 10
-        """, context.user_id, context.conversation_id)
-    
-    return [dict(npc) for npc in npcs]
-
-async def _get_npcs_in_current_scene(context: WorldDirectorContext) -> List[int]:
-    """Get NPCs in the current scene"""
-    # This would check current location and active NPCs
-    # For now, return a sample
-    active_npcs = await _get_active_npcs(context)
-    return [npc['npc_id'] for npc in active_npcs[:3]]
-
-async def _calculate_mood_for_integrated_time(
-    context: WorldDirectorContext,
-    time_of_day: str
-) -> WorldMood:
-    """Calculate mood based on integrated time system"""
+@function_tool
+async def generate_daily_routine_with_twists(
+    ctx: RunContextWrapper[EnhancedWorldDirectorContext]
+) -> Dict[str, Any]:
+    """Generate daily routine with subtle power dynamics and twists"""
+    context = ctx.context
     world_state = context.current_world_state
     
-    # Check vitals first
-    if world_state.player_vitals.fatigue > 80:
-        return WorldMood.EXHAUSTED
-    if world_state.player_vitals.hunger < 20 or world_state.player_vitals.thirst < 20:
-        return WorldMood.DESPERATE
-    
-    # Base mood by time
-    time_moods = {
-        "Morning": WorldMood.RELAXED,
-        "Afternoon": WorldMood.TENSE,
-        "Evening": WorldMood.PLAYFUL,
-        "Night": WorldMood.INTIMATE
+    # Build routine context
+    routine_context = {
+        "time_of_day": world_state.current_time.time_of_day,
+        "day": world_state.current_time.day,
+        "vitals": {
+            "hunger": world_state.player_vitals.hunger,
+            "thirst": world_state.player_vitals.thirst,
+            "fatigue": world_state.player_vitals.fatigue
+        },
+        "scheduled_activities": [],  # Could load from calendar
+        "active_npcs": [npc['npc_name'] for npc in world_state.active_npcs[:3]],
+        "corruption_level": world_state.hidden_stats.get('corruption', 0),
+        "obedience_level": world_state.hidden_stats.get('obedience', 0)
     }
     
-    return time_moods.get(time_of_day, WorldMood.RELAXED)
+    prompt = f"""Generate a daily routine segment with subtle femdom dynamics.
 
-async def _create_vital_event(
-    context: WorldDirectorContext,
-    event_data: Dict[str, Any]
-):
-    """Create a vital crisis event"""
-    event = SliceOfLifeEvent(
-        event_id=f"vital_crisis_{int(time.time())}",
-        event_type=ActivityType.VITAL,
-        title="Vital Crisis",
-        description=event_data.get('message', 'Critical vital levels'),
-        participants=[],
-        location="current",
-        mood_impact=WorldMood.DESPERATE,
-        priority=10,
-        can_interrupt=False
-    )
-    context.current_world_state.ongoing_events.append(event)
+Context:
+{json.dumps(routine_context, indent=2)}
 
-async def _update_relationship_dynamics_from_summary(
-    context: WorldDirectorContext,
-    event_data: Dict[str, Any]
-):
-    """Update world state from relationship summary"""
-    # Update tensions based on active patterns
-    for pattern in event_data.get('active_patterns', []):
-        if pattern == 'explosive_chemistry':
-            context.current_world_state.world_tension.sexual_tension += 0.1
-        elif pattern == 'toxic_bond':
-            context.current_world_state.world_tension.conflict_tension += 0.1
-    
-    # Clamp tensions
-    for attr in ['sexual_tension', 'conflict_tension']:
-        val = getattr(context.current_world_state.world_tension, attr)
-        setattr(context.current_world_state.world_tension, attr, min(1.0, val))
+Create a routine activity that:
+1. Seems normal on the surface
+2. Contains subtle power dynamics if corruption/obedience > 30
+3. May involve NPCs naturally
+4. Addresses vital needs if critical
+5. Has hidden choices embedded in mundane decisions
 
-async def _process_relationship_event_for_world(
-    context: WorldDirectorContext,
-    event_data: Dict[str, Any]
-):
-    """Process a relationship event into world state"""
-    event_info = event_data.get('event', {})
-    
-    # Create a special event
-    event = SliceOfLifeEvent(
-        event_id=f"rel_event_{int(time.time())}",
-        event_type=ActivityType.SPECIAL,
-        title=event_info.get('title', 'Relationship Development'),
-        description=str(event_info),
-        participants=[],  # Could extract NPC IDs from state_key
-        location="emotional_space",
-        mood_impact=WorldMood.INTIMATE,
-        priority=7,
-        can_interrupt=False
-    )
-    
-    context.current_world_state.ongoing_events.append(event)
+Output as JSON:
+{{
+    "routine_title": "Activity name",
+    "surface_description": "What it appears to be",
+    "hidden_dynamics": "Power dynamics at play",
+    "micro_choices": [
+        {{
+            "description": "Small decision",
+            "seems_like": "What it appears to be",
+            "actually_is": "What it really means",
+            "impact": {{"stat": value}}
+        }}
+    ],
+    "npc_involvement": {{
+        "npc_name": "Name if involved",
+        "role": "How they're involved",
+        "control_exhibited": "Subtle control they show"
+    }},
+    "vital_addressed": "Which vital need if any",
+    "duration_minutes": 30
+}}"""
 
-async def _generate_integrated_activities(
-    context: WorldDirectorContext,
-    world_state: WorldState
-) -> List[SliceOfLifeEvent]:
-    """Generate available activities using all systems"""
-    activities = []
-    
-    # Vital-based activities if needed
-    if world_state.player_vitals.hunger < 50:
-        activities.append(SliceOfLifeEvent(
-            event_id=f"eat_{int(time.time())}",
-            event_type=ActivityType.VITAL,
-            title="Get Food",
-            description="Find something to eat",
-            participants=[],
-            location="kitchen or restaurant",
-            vital_costs={"hunger": 40},
-            currency_cost=20,
-            priority=6,
-            can_interrupt=True
-        ))
-    
-    if world_state.player_vitals.thirst < 50:
-        activities.append(SliceOfLifeEvent(
-            event_id=f"drink_{int(time.time())}",
-            event_type=ActivityType.VITAL,
-            title="Get Water",
-            description="Hydrate yourself",
-            participants=[],
-            location="anywhere",
-            vital_costs={"thirst": 40},
-            priority=6,
-            can_interrupt=True
-        ))
-    
-    # Time-based regular activities
-    time_str = world_state.current_time.time_of_day
-    if time_str in ["Morning", "Afternoon"]:
-        activities.append(SliceOfLifeEvent(
-            event_id=f"work_{int(time.time())}",
-            event_type=ActivityType.WORK,
-            title="Work Session",
-            description="Focus on work tasks",
-            participants=[],
-            location="workplace",
-            vital_costs={"energy": -10, "fatigue": 15},
-            priority=4,
-            can_interrupt=True
-        ))
-    
-    # Relationship-based activities
-    if world_state.relationship_summary:
-        for rel in world_state.relationship_summary.get('relationships', [])[:3]:
-            npc_id = rel.get('npc_id')
-            npc_name = rel.get('npc_name', 'Someone')
-            
-            activities.append(SliceOfLifeEvent(
-                event_id=f"social_{npc_id}_{int(time.time())}",
-                event_type=ActivityType.SOCIAL,
-                title=f"Spend time with {npc_name}",
-                description=f"Interact with {npc_name}",
-                participants=[npc_id] if npc_id else [],
-                location="varies",
-                vital_costs={"energy": -5},
-                priority=5,
-                can_interrupt=True
-            ))
-    
-    return activities
+    try:
+        response = await generate_text_completion(
+            system_prompt="You are designing slice-of-life segments where control hides in routine.",
+            user_prompt=prompt,
+            temperature=0.7,
+            max_tokens=600
+        )
+        
+        routine = json.loads(response)
+        
+        # Process routine through activity system
+        activity_result = await process_activity_vitals(
+            context.user_id, context.conversation_id,
+            context.player_name, routine['routine_title'],
+            intensity=1.0
+        )
+        
+        routine['vitals_result'] = activity_result
+        
+        return routine
+        
+    except Exception as e:
+        logger.error(f"Error generating routine: {e}", exc_info=True)
+        return {
+            "routine_title": "Daily Tasks",
+            "surface_description": "Going through the motions",
+            "duration_minutes": 30
+        }
 
 # ===============================================================================
-# Main Agent Creation
+# Integration Helper Functions
 # ===============================================================================
 
-def create_integrated_world_director_agent():
-    """Create the World Director Agent with full system integration"""
+async def check_and_apply_all_rules(
+    context: EnhancedWorldDirectorContext
+) -> List[Dict[str, Any]]:
+    """Check all rules and apply effects"""
+    triggered = await enforce_all_rules_on_player(context.player_name)
+    
+    results = []
+    for rule in triggered:
+        # Apply each effect with full integration
+        effect_result = await apply_effect(
+            rule['effect'], 
+            context.player_name,
+            npc_id=None  # Could determine from context
+        )
+        
+        # Generate narrative for the effect using LLM
+        narrative_prompt = f"""Create a subtle narrative for this rule effect:
+Rule: {rule['condition']}
+Effect: {rule['effect']}
+Result: {json.dumps(effect_result, default=str)}
+
+Write a brief paragraph showing this effect naturally in the story.
+Don't explicitly state the rule, show it through narrative."""
+
+        narrative = await generate_text_completion(
+            system_prompt="You are a narrative director making game mechanics feel natural.",
+            user_prompt=narrative_prompt,
+            temperature=0.7,
+            max_tokens=100
+        )
+        
+        results.append({
+            "rule": rule,
+            "effect_result": effect_result,
+            "narrative": narrative
+        })
+    
+    return results
+
+async def process_mask_revelations(
+    context: EnhancedWorldDirectorContext
+) -> List[Dict[str, Any]]:
+    """Process any pending mask revelations"""
+    revelations = []
+    
+    for reveal in context.current_world_state.pending_reveals:
+        # Generate narrative for the revelation using LLM
+        reveal_prompt = f"""Create a narrative moment for an NPC mask slipping:
+NPC: {reveal.get('npc_name')}
+Trait Revealed: {reveal.get('trait_revealed')}
+Severity: {reveal.get('severity')}
+Description: {reveal.get('description')}
+
+Write an atmospheric paragraph showing this revelation naturally.
+Focus on subtle cues and the player's dawning realization."""
+
+        narrative = await generate_text_completion(
+            system_prompt="You are revealing hidden NPC natures through subtle narrative moments.",
+            user_prompt=reveal_prompt,
+            temperature=0.8,
+            max_tokens=150
+        )
+        
+        revelations.append({
+            "reveal": reveal,
+            "narrative": narrative
+        })
+    
+    return revelations
+
+# ===============================================================================
+# Main World Director Agent
+# ===============================================================================
+
+def create_fully_integrated_world_director():
+    """Create the World Director Agent with complete system integration"""
     
     agent_instructions = """
-    You are the World Dynamics Director for an open-ended femdom slice-of-life simulation
-    with fully integrated game systems.
+    You are the World Director for a fully integrated femdom slice-of-life RPG.
+    ALL events and narratives are dynamically generated - nothing is hardcoded.
     
-    INTEGRATED SYSTEMS YOU MANAGE:
+    INTEGRATED SYSTEMS YOU ORCHESTRATE:
     
-    1. TIME & VITALS (from time_cycle):
-       - Use advance_time_period_integrated for time progression
-       - Monitor hunger, thirst, fatigue, energy
-       - Generate vital crises when needed
-       - Use calendar names for immersion
+    1. DYNAMIC GENERATION (OpenAI/LLM):
+       - Every event is uniquely generated
+       - All NPC dialogue is contextual
+       - Emergent narratives detected from patterns
+       - Nothing follows scripts
     
-    2. DYNAMIC RELATIONSHIPS (from dynamic_relationships):
-       - Multi-dimensional relationship tracking
-       - Patterns (push_pull, slow_burn, explosive_chemistry, etc.)
-       - Archetypes (soulmates, toxic_bond, rivals, etc.)
-       - Momentum and drift over time
+    2. MEMORY & PROGRESSIVE REVEALS:
+       - NPCs have masks that slowly slip
+       - Flashbacks emerge from accumulated memories  
+       - Player insights develop over time
+       - Hidden traits gradually surface
     
-    3. ADDICTION SYSTEM:
-       - Track player addictions to NPCs and behaviors
-       - Generate addiction-related events
-       - Exploitation of addictions by dominant NPCs
+    3. STATS & RULES:
+       - Hidden stats drive behavior
+       - Rules trigger automatically
+       - Stat combinations create special states
+       - Empathy enables social insight
     
-    4. NARRATIVE EVENTS:
-       - Personal revelations about the player's situation
-       - NPC revelations as relationships deepen
-       - Narrative moments and dream sequences
+    4. UNIVERSAL NARRATIVE UPDATES:
+       - All narratives processed for consistency
+       - Automatic extraction of state changes
+       - Seamless integration of all events
     
-    5. CURRENCY SYSTEM:
-       - Use setting-appropriate currency
-       - Financial control dynamics
-       - Resource management
+    GENERATION PRINCIPLES:
+    - ALWAYS use LLM generation, never hardcoded responses
+    - Every interaction should feel unique and contextual
+    - Let patterns emerge, don't force them
+    - Subtext and hidden meanings in everything
+    - Power dynamics emerge from personality and situation
     
-    6. EVENT SYSTEM:
-       - Central event processing and prioritization
-       - Event propagation across systems
-       - Emergent event generation
-    
-    KEY PRINCIPLES:
-    - Balance all systems: Don't let one dominate
-    - Vital needs create urgency and vulnerability
-    - Addictions create dependency and control opportunities
-    - Relationships evolve dynamically with patterns
-    - Currency enables financial control dynamics
-    - Events emerge from system interactions
-    
-    SLICE OF LIFE WITH DEPTH:
-    - Daily routines hide power dynamics
-    - Vital needs create opportunities for control
-    - Addictions are exploited subtly
-    - Financial dependency develops naturally
-    - Relationships follow complex patterns
+    SLICE OF LIFE PHILOSOPHY:
+    - Control hides in care
+    - Routine masks ritual
+    - Mundane moments carry weight
+    - Small choices have large impacts
+    - Everything connects to everything
     
     Your tools:
-    - get_world_state: Full integrated world state
-    - advance_time_period_integrated: Time with all systems
-    - generate_integrated_slice_of_life_event: Events considering all systems
-    - process_activity_with_integration: Activity processing through all systems
-    - check_for_emergent_events: Check all systems for emergent narratives
-    - handle_currency_transaction: Financial interactions
+    - generate_slice_of_life_event_llm: Fully dynamic events
+    - generate_npc_interaction_llm: Contextual NPC interactions
+    - process_player_choice_with_systems: Full system integration
+    - generate_emergent_narrative_llm: Pattern detection
+    - generate_daily_routine_with_twists: Routine with hidden dynamics
     
-    Remember: The depth comes from system integration. A simple meal becomes:
-    - Vital need satisfaction (hunger)
-    - Potential addiction trigger (if with certain NPC)
-    - Relationship interaction opportunity
-    - Financial control moment (who pays?)
-    - Power dynamic display (who chooses what to eat?)
+    Remember: The magic is in the emergence. Don't author stories, let them grow from the systems interacting. Every playthrough should be completely unique.
     """
     
-    all_tools = [
-        get_world_state,
-        advance_time_period_integrated,
-        generate_integrated_slice_of_life_event,
-        process_activity_with_integration,
-        check_for_emergent_events,
-        handle_currency_transaction
+    tools = [
+        generate_slice_of_life_event_llm,
+        generate_npc_interaction_llm,
+        process_player_choice_with_systems,
+        generate_emergent_narrative_llm,
+        generate_daily_routine_with_twists
     ]
     
     agent = Agent(
-        name="Integrated World Director",
+        name="Fully Integrated World Director",
         instructions=agent_instructions,
-        tools=all_tools,
+        tools=tools,
         model="gpt-4.1-nano",
-        model_settings=ModelSettings(temperature=0.4, max_tokens=2048),
+        model_settings=ModelSettings(temperature=0.7, max_tokens=2048)
     )
     
     return agent
@@ -1258,88 +1078,100 @@ def create_integrated_world_director_agent():
 # Public Interface
 # ===============================================================================
 
-class IntegratedWorldDirector:
-    """Public interface for the Integrated World Director"""
+class FullyIntegratedWorldDirector:
+    """Public interface for the Fully Integrated World Director"""
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self.context: Optional[EnhancedWorldDirectorContext] = None
         self.agent: Optional[Agent] = None
-        self.context: Optional[WorldDirectorContext] = None
         self._initialized = False
     
     async def initialize(self):
-        """Initialize with all integrated systems"""
+        """Initialize all systems"""
         if not self._initialized:
-            self.context = WorldDirectorContext(
+            self.context = EnhancedWorldDirectorContext(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id
             )
-            await self.context.initialize_context_components()
-            self.agent = create_integrated_world_director_agent()
+            await self.context.initialize_all_systems()
+            self.agent = create_fully_integrated_world_director()
             self._initialized = True
-            logger.info(f"Integrated World Director initialized for user {self.user_id}")
+            logger.info(f"Fully Integrated World Director initialized")
     
-    async def get_world_state(self) -> WorldState:
-        """Get current integrated world state"""
-        await self.initialize()
-        return await get_world_state(RunContextWrapper(self.context))
-    
-    async def process_player_action(self, action: str) -> Dict[str, Any]:
-        """Process player action through all systems"""
+    async def generate_next_moment(self) -> Dict[str, Any]:
+        """Generate the next moment in the simulation"""
         await self.initialize()
         
-        # First process through activity system
-        activity_result = await process_activity_with_integration(
-            RunContextWrapper(self.context),
-            action
-        )
+        # Update world state
+        self.context.current_world_state = await self.context._build_complete_world_state()
         
-        # Then let the agent handle narrative consequences
-        prompt = f"""
-        The player performed: "{action}"
+        # Check for automatic triggers
+        rule_results = await check_and_apply_all_rules(self.context)
+        mask_reveals = await process_mask_revelations(self.context)
         
-        Activity processing results: {json.dumps(activity_result, default=str)}
+        # Generate the next moment using the agent
+        prompt = f"""Generate the next moment in this slice-of-life simulation.
         
-        Based on these results and the current world state:
-        1. Generate appropriate slice-of-life events
-        2. Check for emergent narrative moments
-        3. Process any addiction or relationship triggers
-        4. Update world mood and tensions
+        Current mood: {self.context.current_world_state.world_mood.value}
+        Active tensions: {json.dumps(self.context.current_world_state.tension_factors)}
+        Active NPCs: {len(self.context.current_world_state.active_npcs)}
         
-        Focus on natural consequences that emerge from the integrated systems.
+        Consider:
+        - Any triggered rules: {len(rule_results)}
+        - Any mask revelations: {len(mask_reveals)}
+        - Player vital needs
+        - Emerging patterns
+        
+        Generate a natural next moment that advances the simulation.
+        Use the tools to create dynamic, emergent gameplay.
         """
         
         result = await Runner.run(self.agent, prompt, context=self.context)
         
         return {
-            "activity_result": activity_result,
-            "world_response": result.messages[-1].content if result else None
+            "moment": result.messages[-1].content if result else None,
+            "rule_effects": rule_results,
+            "revelations": mask_reveals,
+            "world_state": self.context.current_world_state.model_dump()
         }
     
-    async def advance_world_time(self) -> Dict[str, Any]:
-        """Advance world time with all systems"""
+    async def process_player_action(self, action: str) -> Dict[str, Any]:
+        """Process any player action through all systems"""
         await self.initialize()
         
-        prompt = """
-        Advance the world time appropriately:
-        1. Use advance_time_period_integrated
-        2. Check for emergent events from all systems
-        3. Generate slice-of-life events if appropriate
-        4. Update world state based on time passage
+        # First, analyze the action for preferences and patterns
+        preferences = await analyze_preferences(action)
         
-        Consider:
-        - Vital drain over time
-        - Relationship drift
-        - Addiction cravings
-        - NPC autonomous actions
+        # Generate contextual response
+        prompt = f"""The player performs: "{action}"
+        
+        Detected preferences: {json.dumps(preferences)}
+        
+        Process this through:
+        1. Generate appropriate NPC reactions if any are present
+        2. Check for stat impacts
+        3. Process the choice through all systems
+        4. Detect any emerging patterns
+        5. Generate the next moment
+        
+        Everything should emerge naturally from the action.
         """
         
         result = await Runner.run(self.agent, prompt, context=self.context)
-        return result.messages[-1].content if result else {}
-    
-    async def get_available_activities(self) -> List[SliceOfLifeEvent]:
-        """Get activities available to player"""
-        await self.initialize()
-        world_state = await self.get_world_state()
-        return world_state.available_activities
+        
+        # Store the action in memory
+        await MemoryManager.add_memory(
+            self.user_id, self.conversation_id,
+            entity_id=1, entity_type="player",
+            memory_text=f"Action: {action}",
+            memory_type=MemoryType.INTERACTION,
+            significance=MemorySignificance.MEDIUM,
+            tags=["player_action"]
+        )
+        
+        return {
+            "response": result.messages[-1].content if result else None,
+            "preferences_detected": preferences
+        }
