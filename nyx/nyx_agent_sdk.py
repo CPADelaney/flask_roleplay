@@ -218,7 +218,7 @@ class ScoredOption(BaseModel):
 
 # ===== Pydantic Models for Structured Outputs =====
 
-class NarrativeResponse(BaseModel):
+class NarrativeResponse(StrictBaseModel):
     """Structured output for Nyx's narrative responses"""
     
     
@@ -230,7 +230,7 @@ class NarrativeResponse(BaseModel):
     time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
     universal_updates: Optional[KVList] = Field(None, description="Universal updates extracted from narrative")
 
-class MemoryReflection(BaseModel):
+class MemoryReflection(StrictBaseModel):
     """Structured output for memory reflections"""
     
     
@@ -256,7 +256,7 @@ class EmotionalStateUpdate(BaseModel):
     primary_emotion: str = Field(..., description="Primary emotion label")
     reasoning: str = Field(..., description="Why the emotional state changed")
 
-class ScenarioDecision(BaseModel):
+class ScenarioDecision(StrictBaseModel):
     """Structured output for scenario management decisions"""
     
     
@@ -282,7 +282,7 @@ class ActivityRecommendation(BaseModel):
     recommended_activities: List[ActivityRec] = Field(..., description="List of recommended activities")
     reasoning: str = Field(..., description="Why these activities are recommended")
 
-class ImageGenerationDecision(BaseModel):
+class ImageGenerationDecision(StrictBaseModel):
     """Decision about whether to generate an image"""
     
     
