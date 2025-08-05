@@ -97,15 +97,13 @@ if TYPE_CHECKING:
     from logic.chatgpt_integration import generate_text_completion
     from new_game_agent import NewGameAgent
     from agents import Runner
-
-# Import agent processing components for full integration
-from nyx.nyx_enhanced_system import NyxEnhancedSystem
-from nyx.response_filter import ResponseFilter
-from nyx.nyx_planner import NyxPlanner
-from nyx.nyx_task_integration import NyxTaskIntegration
-from memory.memory_integration import MemoryIntegration
-from nyx.scene_manager_sdk import SceneContext
-from nyx.user_model_sdk import UserModelContext, UserModelManager
+    from nyx.nyx_enhanced_system import NyxEnhancedSystem
+    from nyx.response_filter import ResponseFilter
+    from nyx.nyx_planner import NyxPlanner
+    from nyx.nyx_task_integration import NyxTaskIntegration
+    from memory.memory_integration import MemoryIntegration
+    from nyx.scene_manager_sdk import SceneContext
+    from nyx.user_model_sdk import UserModelContext, UserModelManager
 
 from lore.core.lore_system import LoreSystem
 from lore.lore_generator import DynamicLoreGenerator
