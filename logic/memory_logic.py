@@ -11,7 +11,6 @@ import asyncio # Added (potentially needed for to_thread if OpenAI client is syn
 from quart import Blueprint, request, jsonify, session
 from contextlib import asynccontextmanager # Added just in case, though not used directly here
 from db.connection import get_db_connection_context
-from logic.chatgpt_integration import get_openai_client # Ensure this provides an ASYNC client or use asyncio.to_thread
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__) # Use module-specific logger
@@ -379,6 +378,7 @@ async def get_shared_memory(user_id: int, conversation_id: int, relationship: di
     Returns:
         JSON string containing generated memories, or None if generation fails
     """
+    from logic.chatgpt_integration import get_openai_client
     logger.info(f"Starting get_shared_memory for NPC '{npc_name}' with relationship: {relationship}")
 
     mega_description = "an undefined setting"
