@@ -24,9 +24,11 @@ from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContex
 # COMPLETE SYSTEM INTEGRATIONS - NOTHING DROPPED
 # ===============================================================================
 
+if TYPE_CHECKING:
+    from logic.chatgpt_integration import OpenAIClientManager
+
 # OpenAI Integration for Dynamic Generation
 from logic.chatgpt_integration import (
-    OpenAIClientManager,
     get_chatgpt_response,
     generate_text_completion,
     get_text_embedding,
@@ -300,7 +302,7 @@ class CompleteWorldDirectorContext:
     player_name: str = "Chase"
     
     # Core system managers
-    openai_manager: Optional[OpenAIClientManager] = None
+    openai_manager: Optional[Any] = None
     universal_updater: Optional[UniversalUpdaterAgent] = None
     
     # Memory and reveals
@@ -343,6 +345,9 @@ class CompleteWorldDirectorContext:
         logger.info(f"Initializing Complete World Director for user {self.user_id}")
         
         try:
+            # Lazy load OpenAIClientManager here
+            from logic.chatgpt_integration import OpenAIClientManager
+            
             # Initialize OpenAI manager
             self.openai_manager = OpenAIClientManager()
             
