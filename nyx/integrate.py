@@ -91,7 +91,7 @@ if TYPE_CHECKING:
         RelationshipMemory
     )
     from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
-    from nyx.nyx_agent_sdk import process_user_input, generate_reflection
+    from nyx.nyx_agent_sdk import process_user_input, generate_reflection, AgentContext
     from nyx.user_model_sdk import process_user_input_for_model, get_response_guidance_for_user
     from nyx.scene_manager_sdk import process_scene_input, generate_npc_response
     from logic.chatgpt_integration import generate_text_completion
@@ -99,7 +99,6 @@ if TYPE_CHECKING:
     from agents import Runner
 
 # Import agent processing components for full integration
-from nyx.nyx_agent_sdk import AgentContext
 from nyx.nyx_enhanced_system import NyxEnhancedSystem
 from nyx.response_filter import ResponseFilter
 from nyx.nyx_planner import NyxPlanner
