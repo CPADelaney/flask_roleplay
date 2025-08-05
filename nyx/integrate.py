@@ -90,7 +90,6 @@ if TYPE_CHECKING:
         DailyRoutineMemory,
         RelationshipMemory
     )
-    from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
     from nyx.nyx_agent_sdk import process_user_input, generate_reflection, AgentContext
     from nyx.user_model_sdk import process_user_input_for_model, get_response_guidance_for_user
     from nyx.scene_manager_sdk import process_scene_input, generate_npc_response
@@ -2281,7 +2280,7 @@ class LoreIntegration:
     """
     Integration for Lore System with governance oversight.
     """
-    
+    from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
     def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor):
         self.user_id = user_id
         self.conversation_id = conversation_id
