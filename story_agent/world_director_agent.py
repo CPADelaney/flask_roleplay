@@ -24,20 +24,6 @@ from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContex
 # COMPLETE SYSTEM INTEGRATIONS - NOTHING DROPPED
 # ===============================================================================
 
-if TYPE_CHECKING:
-    from logic.chatgpt_integration import OpenAIClientManager
-
-# OpenAI Integration for Dynamic Generation
-from logic.chatgpt_integration import (
-    get_chatgpt_response,
-    generate_text_completion,
-    get_text_embedding,
-    generate_reflection,
-    analyze_preferences,
-    create_semantic_abstraction,
-    cosine_similarity
-)
-
 # Universal Updater for Narrative Processing
 from logic.universal_updater_agent import (
     UniversalUpdaterAgent,
@@ -192,6 +178,30 @@ logger = logging.getLogger(__name__)
 # COMPLETE World State Models with ALL Integrations
 # ===============================================================================
 
+def _get_chatgpt_functions():
+    """Lazy load all chatgpt_integration functions to avoid circular imports"""
+    from logic.chatgpt_integration import (
+        OpenAIClientManager,
+        get_chatgpt_response,
+        generate_text_completion,
+        get_text_embedding,
+        generate_reflection,
+        analyze_preferences,
+        create_semantic_abstraction,
+        cosine_similarity
+    )
+    return {
+        'OpenAIClientManager': OpenAIClientManager,
+        'get_chatgpt_response': get_chatgpt_response,
+        'generate_text_completion': generate_text_completion,
+        'get_text_embedding': get_text_embedding,
+        'generate_reflection': generate_reflection,
+        'analyze_preferences': analyze_preferences,
+        'create_semantic_abstraction': create_semantic_abstraction,
+        'cosine_similarity': cosine_similarity
+    }
+
+
 class WorldMood(Enum):
     """Overall mood/atmosphere of the world"""
     RELAXED = "relaxed"
@@ -345,20 +355,12 @@ class CompleteWorldDirectorContext:
         logger.info(f"Initializing Complete World Director for user {self.user_id}")
         
         try:
-            # Lazy load OpenAIClientManager here
-            from logic.chatgpt_integration import OpenAIClientManager
+            # Lazy load OpenAI manager
+            chatgpt_funcs = _get_chatgpt_functions()
+            OpenAIClientManager = chatgpt_funcs['OpenAIClientManager']
             
             # Initialize OpenAI manager
             self.openai_manager = OpenAIClientManager()
-            
-            # Initialize universal updater
-            self.universal_updater = UniversalUpdaterAgent(self.user_id, self.conversation_id)
-            await self.universal_updater.initialize()
-            
-            # Initialize relationship manager
-            self.relationship_manager = OptimizedRelationshipManager(
-                self.user_id, self.conversation_id
-            )
             
             # Initialize addiction context - IMPORTANT
             self.addiction_context = AddictionContext(self.user_id, self.conversation_id)
@@ -869,6 +871,11 @@ async def generate_complete_slice_of_life_event(
     context = ctx.context
     world_state = context.current_world_state
     
+    # Lazy load chatgpt functions
+    chatgpt_funcs = _get_chatgpt_functions()
+    get_chatgpt_response = chatgpt_funcs['get_chatgpt_response']
+    create_semantic_abstraction = chatgpt_funcs['create_semantic_abstraction']
+    
     try:
         # Check for priority events first
         
@@ -1010,6 +1017,10 @@ async def generate_addiction_craving_event(
 ) -> Dict[str, Any]:
     """Generate an addiction-craving event via LLM"""
     context = ctx.context
+    
+    # Lazy load
+    chatgpt_funcs = _get_chatgpt_functions()
+    generate_text_completion = chatgpt_funcs['generate_text_completion']
 
     try:
         prompt = f"""Generate an addiction craving event for a femdom RPG.
@@ -1069,6 +1080,11 @@ async def generate_dream_event(
     """Generate a dream sequence event"""
     context = ctx.context
     world_state = context.current_world_state
+    
+    # Lazy load
+    chatgpt_funcs = _get_chatgpt_functions()
+    generate_reflection = chatgpt_funcs['generate_reflection']
+    generate_text_completion = chatgpt_funcs['generate_text_completion']
     
     try:
         # Get memory context for dream
@@ -1153,6 +1169,10 @@ async def generate_revelation_event(
     """Generate a personal revelation event"""
     context = ctx.context
     
+    # Lazy load
+    chatgpt_funcs = _get_chatgpt_functions()
+    generate_text_completion = chatgpt_funcs['generate_text_completion']
+    
     try:
         # Generate inner monologue
         monologue = await generate_inner_monologue(
@@ -1221,6 +1241,11 @@ async def process_complete_player_choice(
     """Process player choice through ALL systems"""
     context = ctx.context
     results = {"effects": [], "narratives": [], "success": True}
+    
+    # Lazy load
+    chatgpt_funcs = _get_chatgpt_functions()
+    analyze_preferences = chatgpt_funcs['analyze_preferences']
+    generate_text_completion = chatgpt_funcs['generate_text_completion']
     
     try:
         # 1. Apply stat changes with thresholds check
@@ -1459,6 +1484,12 @@ async def check_all_emergent_patterns(
         "stat_patterns": [],
         "rule_patterns": []
     }
+    
+    # Lazy load
+    chatgpt_funcs = _get_chatgpt_functions()
+    get_text_embedding = chatgpt_funcs['get_text_embedding']
+    cosine_similarity = chatgpt_funcs['cosine_similarity']
+    generate_text_completion = chatgpt_funcs['generate_text_completion']
     
     try:
         # 1. Memory patterns using vector similarity
@@ -1796,6 +1827,10 @@ class CompleteWorldDirector:
             if not self.context:
                 return {"error": "Context not initialized"}
             
+            # Lazy load analyze_preferences
+            chatgpt_funcs = _get_chatgpt_functions()
+            analyze_preferences = chatgpt_funcs['analyze_preferences']
+                   
             # Analyze action
             preferences = await analyze_preferences(action)
             
