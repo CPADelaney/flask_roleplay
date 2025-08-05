@@ -117,6 +117,98 @@ async def get_relationship_overview(user_id: int, conversation_id: int) -> Dict[
             'relationships': []
         }
 
+# Add this function to logic/narrative_events.py
+
+async def generate_inner_monologue(
+    user_id: int, 
+    conversation_id: int,
+    topic: Optional[str] = None
+) -> str:
+    """
+    Generate an inner monologue for the player character.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID  
+        topic: Optional topic to focus the monologue on
+        
+    Returns:
+        Generated inner monologue text
+    """
+    from logic.chatgpt_integration import generate_text_completion
+    
+    try:
+        # Get current player state for context
+        async with get_db_connection_context() as conn:
+            # Get player stats
+            stats = await conn.fetchrow("""
+                SELECT corruption, dependency, confidence, willpower, obedience
+                FROM PlayerStats
+                WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
+                LIMIT 1
+            """, user_id, conversation_id)
+            
+            # Get recent NPCs
+            recent_npcs = await conn.fetch("""
+                SELECT DISTINCT ns.npc_name, np.narrative_stage
+                FROM NPCNarrativeProgression np
+                JOIN NPCStats ns ON np.npc_id = ns.npc_id
+                WHERE np.user_id = $1 AND np.conversation_id = $2
+                ORDER BY np.stage_updated_at DESC
+                LIMIT 3
+            """, user_id, conversation_id)
+        
+        # Build context
+        context_parts = []
+        if stats:
+            if stats['corruption'] > 50:
+                context_parts.append("feeling increasingly corrupted")
+            if stats['dependency'] > 50:
+                context_parts.append("growing dependent on others")
+            if stats['willpower'] < 30:
+                context_parts.append("struggling with weakened willpower")
+                
+        npcs_context = ""
+        if recent_npcs:
+            npc_names = [npc['npc_name'] for npc in recent_npcs]
+            npcs_context = f"Recent interactions with: {', '.join(npc_names)}"
+        
+        prompt = f"""Generate a brief inner monologue for Chase, a college student in a femdom game.
+
+Context: {', '.join(context_parts) if context_parts else 'Early in the experience'}
+{npcs_context}
+Topic: {topic or 'reflecting on recent events'}
+
+The monologue should:
+- Be 1-2 sentences of internal thought
+- Show genuine psychological state
+- Feel like authentic self-reflection
+- Avoid being overly dramatic
+
+Example: "Why do I keep thinking about what she said? It shouldn't matter this much to me."
+
+Generate the inner monologue:"""
+
+        monologue = await generate_text_completion(
+            system_prompt="You are generating authentic inner thoughts for a character gradually experiencing psychological changes.",
+            user_prompt=prompt,
+            temperature=0.7,
+            max_tokens=100,
+            task_type="reflection"
+        )
+        
+        return monologue.strip() if monologue else "What's happening to me?"
+        
+    except Exception as e:
+        logger.error(f"Error generating inner monologue: {e}")
+        # Return a fallback monologue
+        if topic and "dependency" in topic.lower():
+            return "When did I start needing their approval so much?"
+        elif topic and "control" in topic.lower():
+            return "I'm losing control of my own life, bit by bit."
+        else:
+            return "Something feels different, but I can't quite place what."
+
 
 async def check_for_personal_revelations(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
