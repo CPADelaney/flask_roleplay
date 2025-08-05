@@ -12,23 +12,25 @@ import json
 from datetime import datetime, timedelta
 import time
 from functools import wraps
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from quart import Blueprint, request, jsonify, session, current_app, g
 from werkzeug.exceptions import TooManyRequests
 import redis
 from utils.performance import timed_function
 from cachetools import TTLCache
 
-from story_agent.world_director_agent import (
-    WorldDirector,
-    WorldState,
-    SliceOfLifeEvent,
-    PowerExchange,
-    WorldMood,
-    TimeOfDay,
-    ActivityType,
-    PowerDynamicType
-)
+# Use TYPE_CHECKING to avoid circular imports
+if TYPE_CHECKING:
+    from story_agent.world_director_agent import (
+        WorldDirector,
+        WorldState,
+        SliceOfLifeEvent,
+        PowerExchange,
+        WorldMood,
+        TimeOfDay,
+        ActivityType,
+        PowerDynamicType
+    )
 
 world_simulation_bp = Blueprint("world_simulation_bp", __name__)
 logger = logging.getLogger(__name__)
@@ -36,6 +38,12 @@ logger = logging.getLogger(__name__)
 # Caches for world state
 WORLD_STATE_CACHE = TTLCache(maxsize=1000, ttl=30)  # 30 second TTL for dynamic world
 EVENT_CACHE = TTLCache(maxsize=500, ttl=60)  # 60 second TTL for events
+
+# Lazy loader for WorldDirector
+def _get_world_director():
+    """Lazy load WorldDirector to avoid circular imports"""
+    from story_agent.world_director_agent import WorldDirector
+    return WorldDirector
 
 # Rate limiting decorator (reused from original)
 def rate_limit(limit=10, period=60):
@@ -91,11 +99,20 @@ async def get_world_state_api():
         return jsonify(cached)
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         world_state = await director.get_world_state()
         
+        # Handle different response types
+        if hasattr(world_state, 'model_dump'):
+            state_dict = world_state.model_dump()
+        elif hasattr(world_state, 'dict'):
+            state_dict = world_state.dict()
+        else:
+            state_dict = dict(world_state) if world_state else {}
+        
         response = {
-            "world_state": world_state.model_dump(),
+            "world_state": state_dict,
             "timestamp": datetime.now().isoformat(),
             "from_cache": False
         }
@@ -121,6 +138,7 @@ async def simulate_world_tick_api():
         return jsonify({"error": "Missing conversation_id"}), 400
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         result = await director.simulate_world_tick()
         
@@ -157,6 +175,7 @@ async def generate_event_api():
     preferred_mood = data.get("preferred_mood")
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         await director.initialize()
         
@@ -168,8 +187,16 @@ async def generate_event_api():
             preferred_mood=preferred_mood
         )
         
+        # Handle different response types
+        if hasattr(event, 'model_dump'):
+            event_dict = event.model_dump()
+        elif hasattr(event, 'dict'):
+            event_dict = event.dict()
+        else:
+            event_dict = dict(event) if event else {}
+        
         return jsonify({
-            "event": event.model_dump(),
+            "event": event_dict,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
@@ -189,12 +216,36 @@ async def get_active_events_api():
         return jsonify({"error": "Missing conversation_id"}), 400
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         world_state = await director.get_world_state()
         
+        # Handle different attribute names
+        ongoing_events = []
+        available_activities = []
+        
+        if hasattr(world_state, 'ongoing_events'):
+            ongoing_events = world_state.ongoing_events
+        elif hasattr(world_state, 'events'):
+            ongoing_events = world_state.events
+        
+        if hasattr(world_state, 'available_activities'):
+            available_activities = world_state.available_activities
+        elif hasattr(world_state, 'activities'):
+            available_activities = world_state.activities
+        
+        # Convert to dict format
+        def to_dict(obj):
+            if hasattr(obj, 'model_dump'):
+                return obj.model_dump()
+            elif hasattr(obj, 'dict'):
+                return obj.dict()
+            else:
+                return dict(obj) if obj else {}
+        
         return jsonify({
-            "active_events": [e.model_dump() for e in world_state.ongoing_events],
-            "available_activities": [a.model_dump() for a in world_state.available_activities],
+            "active_events": [to_dict(e) for e in ongoing_events],
+            "available_activities": [to_dict(a) for a in available_activities],
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
@@ -223,6 +274,7 @@ async def trigger_power_exchange_api():
         return jsonify({"error": "Missing required parameters"}), 400
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         await director.initialize()
         
@@ -235,8 +287,16 @@ async def trigger_power_exchange_api():
             is_public=bool(is_public)
         )
         
+        # Handle different response types
+        if hasattr(exchange, 'model_dump'):
+            exchange_dict = exchange.model_dump()
+        elif hasattr(exchange, 'dict'):
+            exchange_dict = exchange.dict()
+        else:
+            exchange_dict = dict(exchange) if exchange else {}
+        
         return jsonify({
-            "exchange": exchange.model_dump(),
+            "exchange": exchange_dict,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
@@ -256,13 +316,36 @@ async def get_recent_power_exchanges_api():
         return jsonify({"error": "Missing conversation_id"}), 400
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         world_state = await director.get_world_state()
         
+        # Safely extract values with fallbacks
+        recent_exchanges = []
+        power_tension = 0.0
+        submission_level = 0.0
+        
+        if hasattr(world_state, 'recent_power_exchanges'):
+            recent_exchanges = world_state.recent_power_exchanges
+        
+        if hasattr(world_state, 'world_tension'):
+            tension_obj = world_state.world_tension
+            if hasattr(tension_obj, 'power_tension'):
+                power_tension = tension_obj.power_tension
+            elif isinstance(tension_obj, dict):
+                power_tension = tension_obj.get('power_tension', 0.0)
+        
+        if hasattr(world_state, 'relationship_dynamics'):
+            dynamics = world_state.relationship_dynamics
+            if hasattr(dynamics, 'player_submission_level'):
+                submission_level = dynamics.player_submission_level
+            elif isinstance(dynamics, dict):
+                submission_level = dynamics.get('player_submission_level', 0.0)
+        
         return jsonify({
-            "recent_exchanges": world_state.recent_power_exchanges,
-            "power_tension": world_state.world_tension.power_tension,
-            "submission_level": world_state.relationship_dynamics.player_submission_level,
+            "recent_exchanges": recent_exchanges,
+            "power_tension": power_tension,
+            "submission_level": submission_level,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
@@ -288,6 +371,7 @@ async def advance_time_api():
         return jsonify({"error": "Missing conversation_id"}), 400
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         await director.initialize()
         
@@ -326,6 +410,7 @@ async def adjust_world_mood_api():
         return jsonify({"error": "Missing conversation_id"}), 400
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         await director.initialize()
         
@@ -366,6 +451,7 @@ async def process_player_action_api():
         return jsonify({"error": "Action text too long"}), 400
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         result = await director.process_player_action(action)
         
@@ -400,6 +486,7 @@ async def simulate_npc_autonomy_api():
         return jsonify({"error": "Missing required parameters"}), 400
     
     try:
+        WorldDirector = _get_world_director()
         director = WorldDirector(user_id, int(conversation_id))
         await director.initialize()
         
