@@ -1,20 +1,21 @@
-# logic/universal_updater_sdk.py
+# logic/universal_updater_agent.py
 
 """
 Universal Updater SDK using OpenAI's Agents SDK with Nyx Governance integration.
 
 This module is responsible for analyzing narrative text and extracting appropriate 
-game state updates. It replaces the previous class-based approach in universal_updater_agent.py
-with a more agentic system that integrates with Nyx governance.
+game state updates. It uses the new array format for roleplay_updates, ChaseSchedule,
+character stats, and other fields that were previously dicts.
 
-REFACTORED: All direct database writes now go through canon or LoreSystem
+REFACTORED: Now handles array format for schema compliance while maintaining
+backward compatibility with database storage (which still expects dicts).
 """
 
 import logging
 import json
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Tuple
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -49,87 +50,131 @@ from nyx.integrate import get_central_governance
 
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------------------------------------
-# Pydantic Models for Structured Outputs (migrated from universal_updater_agent.py)
-# -------------------------------------------------------------------------------
+# ===============================================================================
+# Array Format Helper Functions
+# ===============================================================================
+
+def get_from_array(array_data: List[Dict[str, Any]], key: str, default: Any = None) -> Any:
+    """Get value from array of {key, value} pairs"""
+    if not isinstance(array_data, list):
+        return default
+    for item in array_data:
+        if isinstance(item, dict) and item.get("key") == key:
+            return item.get("value", default)
+    return default
+
+def set_in_array(array_data: List[Dict[str, Any]], key: str, value: Any) -> List[Dict[str, Any]]:
+    """Set or update value in array of {key, value} pairs"""
+    if not isinstance(array_data, list):
+        array_data = []
+    
+    # Update existing
+    for item in array_data:
+        if isinstance(item, dict) and item.get("key") == key:
+            item["value"] = value
+            return array_data
+    
+    # Add new
+    array_data.append({"key": key, "value": value})
+    return array_data
+
+def remove_from_array(array_data: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
+    """Remove entry from array of {key, value} pairs"""
+    if not isinstance(array_data, list):
+        return []
+    return [item for item in array_data if item.get("key") != key]
+
+def array_to_dict(array_data: List[Dict[str, Any]], key_name: str = "key", value_name: str = "value") -> Dict[str, Any]:
+    """Convert array of key-value pairs back to dict."""
+    if not isinstance(array_data, list):
+        return {}
+    result = {}
+    for item in array_data:
+        if isinstance(item, dict) and key_name in item and value_name in item:
+            result[item[key_name]] = item[value_name]
+    return result
+
+def dict_to_array(obj_data: Dict[str, Any], key_name: str = "key", value_name: str = "value") -> List[Dict[str, Any]]:
+    """Convert object/dict to array of key-value pairs."""
+    if not isinstance(obj_data, dict):
+        return []
+    return [
+        {key_name: k, value_name: v} 
+        for k, v in obj_data.items()
+    ]
+
+def ensure_array_format(data: Union[Dict, List]) -> List[Dict[str, Any]]:
+    """Ensure data is in array format"""
+    if isinstance(data, dict):
+        # It's still in dict format, convert it
+        return dict_to_array(data)
+    elif isinstance(data, list):
+        # Already in array format
+        return data
+    else:
+        return []
+
+def ensure_dict_format(data: Union[Dict, List]) -> Dict[str, Any]:
+    """Ensure data is in dict format (for database storage)"""
+    if isinstance(data, list):
+        # It's in array format, convert it
+        return array_to_dict(data)
+    elif isinstance(data, dict):
+        # Already in dict format
+        return data
+    else:
+        return {}
+
+# ===============================================================================
+# Pydantic Models for Structured Outputs (Updated for Array Format)
+# ===============================================================================
 
 class StrictBaseModel(BaseModel):
     """Base class enforcing a strict schema for OpenAI Agents"""
-
     model_config = ConfigDict(extra='forbid')
 
-# ADD NEW STRICT OUTPUT MODELS FOR TOOLS
-class NormalizedJson(StrictBaseModel):
-    """Strict model for normalized JSON tool output"""
-    ok: bool
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    message: Optional[str] = None
-    original: Optional[str] = None
+# Key-Value pair models for array format
+class KeyValuePair(StrictBaseModel):
+    """Generic key-value pair for array format"""
+    key: str
+    value: Any
 
-class PlayerStatsExtraction(StrictBaseModel):
-    """Strict model for player stats extraction tool output"""
-    player_name: str = "Chase"
-    stats: Dict[str, int] = Field(default_factory=dict)
+class KeyValueStr(StrictBaseModel):
+    """String key-value pair"""
+    key: str
+    value: str
 
-class NPCSimpleUpdate(StrictBaseModel):
-    """Strict model for NPC update tool output"""
-    npc_id: int
-    current_location: Optional[str] = None
-    npc_name: Optional[str] = None
+class KeyValueInt(StrictBaseModel):
+    """Integer key-value pair"""
+    key: str
+    value: int
 
-class RelationshipSimpleChange(StrictBaseModel):
-    """Strict model for relationship change tool output"""
-    entity1_type: str
-    entity1_id: int
-    entity2_type: str
-    entity2_id: int
-    level_change: Optional[int] = None
-    new_event: Optional[str] = None
-    group_context: Optional[str] = None
+class KeyValueDict(StrictBaseModel):
+    """Dict key-value pair (for nested structures like schedule)"""
+    key: str
+    value: Dict[str, Any]
 
-class ApplyUpdatesResult(StrictBaseModel):
-    """Strict model for apply updates tool output"""
-    success: bool
-    updates_applied: Optional[int] = None
-    details: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    reason: Optional[str] = None
-
-# ADD NEW TYPED MODELS FOR STRICT SCHEMA COMPLIANCE
-class NPCArchetype(StrictBaseModel):
-    """Typed model for NPC archetype entries"""
-    name: Optional[str] = None
-    traits: Dict[str, str] = Field(default_factory=dict)
-    weight: Optional[float] = None
-    notes: Optional[str] = None
+# Schedule models using array format
+class DaySchedule(StrictBaseModel):
+    """Schedule for a single day"""
+    Morning: Optional[str] = None
+    Afternoon: Optional[str] = None
+    Evening: Optional[str] = None
+    Night: Optional[str] = None
 
 class ScheduleEntry(StrictBaseModel):
-    """Typed model for schedule entries"""
-    when: str  # e.g., "Mon 9-5"
-    where: Optional[str] = None
-    activity: Optional[str] = None
+    """Single schedule entry in array format"""
+    key: str  # Day name (Monday, Tuesday, etc.)
+    value: DaySchedule
 
-class KeyedScheduleEntry(StrictBaseModel):
-    key: str
-    entry: ScheduleEntry
-
-class NPCSchedule(StrictBaseModel):
-    entries: List[KeyedScheduleEntry] = Field(default_factory=list)
-
-class ActivityPurpose(StrictBaseModel):
-    """Typed model for activity purpose"""
-    goal: Optional[str] = None
-    target_npc_id: Optional[int] = None
-    context: Optional[str] = None
-
-class StatIntegration(StrictBaseModel):
-    """Typed model for stat integration"""
-    stat: Optional[str] = None
-    delta: Optional[int] = None
-    rationale: Optional[str] = None
+# NPC models
+class NPCArchetype(StrictBaseModel):
+    """NPC archetype entry"""
+    id: Optional[int] = None
+    name: Optional[str] = None
 
 class NPCCreation(StrictBaseModel):
+    """NPC creation with array format for schedule"""
     npc_name: str
     introduced: bool = False
     sex: str = "female"
@@ -139,7 +184,7 @@ class NPCCreation(StrictBaseModel):
     trust: Optional[int] = None
     respect: Optional[int] = None
     intensity: Optional[int] = None
-    archetypes: List[NPCArchetype] = Field(default_factory=list)  # Changed from List[Dict[str, Any]]
+    archetypes: List[NPCArchetype] = Field(default_factory=list)
     archetype_summary: Optional[str] = None
     archetype_extras_summary: Optional[str] = None
     physical_description: Optional[str] = None
@@ -148,13 +193,14 @@ class NPCCreation(StrictBaseModel):
     likes: List[str] = Field(default_factory=list)
     dislikes: List[str] = Field(default_factory=list)
     affiliations: List[str] = Field(default_factory=list)
-    schedule: NPCSchedule = Field(default_factory=NPCSchedule)  # Changed from Dict[str, Any]
-    memory: List[str] = Field(default_factory=list)
+    schedule: List[ScheduleEntry] = Field(default_factory=list)  # Array format
+    memory: Union[str, List[str], None] = None
     monica_level: Optional[int] = None
     age: Optional[int] = None
     birthdate: Optional[str] = None
 
 class NPCUpdate(StrictBaseModel):
+    """NPC update with array format for schedule"""
     npc_id: int
     npc_name: Optional[str] = None
     introduced: Optional[bool] = None
@@ -172,29 +218,27 @@ class NPCUpdate(StrictBaseModel):
     likes: Optional[List[str]] = None
     dislikes: Optional[List[str]] = None
     sex: Optional[str] = None
-    memory: Optional[List[str]] = None
-    schedule: Optional[NPCSchedule] = None  # Changed from Dict[str, Any]
-    schedule_updates: Optional[NPCSchedule] = None  # Changed from Dict[str, Any]
+    memory: Union[str, List[str], None] = None
+    schedule: Optional[List[ScheduleEntry]] = None  # Array format
+    schedule_updates: Optional[List[ScheduleEntry]] = None  # Array format
     affiliations: Optional[List[str]] = None
     current_location: Optional[str] = None
 
 class NPCIntroduction(StrictBaseModel):
     npc_id: int
 
-class PlayerStats(StrictBaseModel):
-    corruption: Optional[int] = None
-    confidence: Optional[int] = None
-    willpower: Optional[int] = None
-    obedience: Optional[int] = None
-    dependency: Optional[int] = None
-    lust: Optional[int] = None
-    mental_resilience: Optional[int] = None
-    physical_endurance: Optional[int] = None
+# Character stats using array format
+class StatEntry(StrictBaseModel):
+    """Single stat entry in array format"""
+    key: str  # Stat name (corruption, confidence, etc.)
+    value: int
 
 class CharacterStatUpdates(StrictBaseModel):
+    """Character stat updates with array format"""
     player_name: str = "Chase"
-    stats: PlayerStats
+    stats: List[StatEntry] = Field(default_factory=list)  # Array format
 
+# Relationship models
 class RelationshipUpdate(StrictBaseModel):
     npc_id: int
     affiliations: List[str]
@@ -209,6 +253,7 @@ class SocialLink(StrictBaseModel):
     new_event: Optional[str] = None
     group_context: Optional[str] = None
 
+# Location and Event models
 class Location(StrictBaseModel):
     location_name: str
     description: Optional[str] = None
@@ -228,6 +273,7 @@ class Event(StrictBaseModel):
     override_location: Optional[str] = None
     fantasy_level: str = "realistic"
 
+# Quest model
 class Quest(StrictBaseModel):
     quest_id: Optional[int] = None
     quest_name: Optional[str] = None
@@ -236,6 +282,7 @@ class Quest(StrictBaseModel):
     quest_giver: Optional[str] = None
     reward: Optional[str] = None
 
+# Inventory models
 class InventoryItem(StrictBaseModel):
     item_name: str
     item_description: Optional[str] = None
@@ -244,28 +291,42 @@ class InventoryItem(StrictBaseModel):
 
 class InventoryUpdates(StrictBaseModel):
     player_name: str = "Chase"
-    added_items: List[InventoryItem] = Field(default_factory=list)
-    removed_items: List[str] = Field(default_factory=list) # Assuming you just need names to remove
+    added_items: List[Union[str, InventoryItem]] = Field(default_factory=list)
+    removed_items: List[Union[str, Dict[str, str]]] = Field(default_factory=list)
 
+# Perk model
 class Perk(StrictBaseModel):
     player_name: str = "Chase"
     perk_name: str
     perk_description: Optional[str] = None
     perk_effect: Optional[str] = None
 
+# Activity models with array format
+class ActivityPurpose(StrictBaseModel):
+    description: Optional[str] = None
+    fantasy_level: str = "realistic"
+
+class StatIntegrationEntry(StrictBaseModel):
+    """Single stat integration entry in array format"""
+    key: str
+    value: Any
+
 class Activity(StrictBaseModel):
+    """Activity with array format for stat_integration"""
     activity_name: str
-    purpose: Optional[ActivityPurpose] = None  # Changed from Dict[str, Any]
-    stat_integration: Optional[StatIntegration] = None  # Changed from Dict[str, Any]
+    purpose: Optional[ActivityPurpose] = None
+    stat_integration: List[StatIntegrationEntry] = Field(default_factory=list)  # Array format
     intensity_tier: Optional[int] = None
     setting_variant: Optional[str] = None
 
+# Journal model
 class JournalEntry(StrictBaseModel):
     entry_type: str
     entry_text: str
     fantasy_flag: bool = False
     intensity_level: Optional[int] = None
 
+# Image generation model
 class ImageGeneration(StrictBaseModel):
     generate: bool = False
     priority: str = "low"
@@ -273,16 +334,14 @@ class ImageGeneration(StrictBaseModel):
     framing: str = "medium_shot"
     reason: Optional[str] = None
 
-class KeyValueStr(StrictBaseModel):
-    key: str
-    value: str
-
+# Main update input model with array formats
 class UniversalUpdateInput(StrictBaseModel):
+    """Main input model using array formats where appropriate"""
     user_id: int
     conversation_id: int
     narrative: str
-    roleplay_updates: List[KeyValueStr] = Field(default_factory=list)
-    ChaseSchedule: Optional[List[KeyValueStr]] = None
+    roleplay_updates: List[KeyValuePair] = Field(default_factory=list)  # Array format
+    ChaseSchedule: List[ScheduleEntry] = Field(default_factory=list)  # Array format
     MainQuest: Optional[str] = None
     PlayerRole: Optional[str] = None
     npc_creations: List[NPCCreation] = Field(default_factory=list)
@@ -300,15 +359,47 @@ class UniversalUpdateInput(StrictBaseModel):
     journal_updates: List[JournalEntry] = Field(default_factory=list)
     image_generation: Optional[ImageGeneration] = None
 
+# Tool output models
+class NormalizedJson(StrictBaseModel):
+    ok: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+    original: Optional[str] = None
+
+class PlayerStatsExtraction(StrictBaseModel):
+    player_name: str = "Chase"
+    stats: Dict[str, int] = Field(default_factory=dict)
+
+class NPCSimpleUpdate(StrictBaseModel):
+    npc_id: int
+    current_location: Optional[str] = None
+    npc_name: Optional[str] = None
+
+class RelationshipSimpleChange(StrictBaseModel):
+    entity1_type: str
+    entity1_id: int
+    entity2_type: str
+    entity2_id: int
+    level_change: Optional[int] = None
+    new_event: Optional[str] = None
+    group_context: Optional[str] = None
+
+class ApplyUpdatesResult(StrictBaseModel):
+    success: bool
+    updates_applied: Optional[int] = None
+    details: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    reason: Optional[str] = None
+
 class ContentSafety(StrictBaseModel):
-    """Output for content moderation guardrail"""
     is_appropriate: bool = Field(..., description="Whether the content is appropriate")
     reasoning: str = Field(..., description="Reasoning for the decision")
     suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
 
-# -------------------------------------------------------------------------------
+# ===============================================================================
 # Agent Context
-# -------------------------------------------------------------------------------
+# ===============================================================================
 
 class UniversalUpdaterContext:
     """Context object for universal updater agents"""
@@ -323,30 +414,102 @@ class UniversalUpdaterContext:
         self.governor = await get_central_governance(self.user_id, self.conversation_id)
         self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
 
-# -------------------------------------------------------------------------------
-# Function Tools (UPDATED TO RETURN STRICT MODELS)
-# -------------------------------------------------------------------------------
+# ===============================================================================
+# Conversion Functions for Database Storage
+# ===============================================================================
+
+def convert_updates_for_database(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert array formats back to dicts for database storage.
+    The database still expects dict format for backward compatibility.
+    """
+    db_updates = updates.copy()
+    
+    # Convert roleplay_updates from array to dict
+    if "roleplay_updates" in db_updates and isinstance(db_updates["roleplay_updates"], list):
+        db_updates["roleplay_updates"] = array_to_dict(db_updates["roleplay_updates"])
+    
+    # Convert ChaseSchedule from array to dict
+    if "ChaseSchedule" in db_updates and isinstance(db_updates["ChaseSchedule"], list):
+        db_updates["ChaseSchedule"] = array_to_dict(db_updates["ChaseSchedule"])
+    
+    # Convert character stats from array to dict
+    if "character_stat_updates" in db_updates and db_updates["character_stat_updates"]:
+        stats = db_updates["character_stat_updates"].get("stats", [])
+        if isinstance(stats, list):
+            db_updates["character_stat_updates"]["stats"] = array_to_dict(stats)
+    
+    # Convert NPC schedules from array to dict
+    for npc in db_updates.get("npc_creations", []):
+        if "schedule" in npc and isinstance(npc["schedule"], list):
+            npc["schedule"] = array_to_dict(npc["schedule"])
+    
+    for npc in db_updates.get("npc_updates", []):
+        if "schedule" in npc and isinstance(npc["schedule"], list):
+            npc["schedule"] = array_to_dict(npc["schedule"])
+        if "schedule_updates" in npc and isinstance(npc["schedule_updates"], list):
+            npc["schedule_updates"] = array_to_dict(npc["schedule_updates"])
+    
+    # Convert activity stat_integration from array to dict
+    for activity in db_updates.get("activity_updates", []):
+        if "stat_integration" in activity and isinstance(activity["stat_integration"], list):
+            activity["stat_integration"] = array_to_dict(activity["stat_integration"])
+    
+    return db_updates
+
+def convert_from_database_format(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert database dict format to array format for schema compliance.
+    """
+    result = data.copy()
+    
+    # Convert roleplay_updates to array
+    if "roleplay_updates" in result and isinstance(result["roleplay_updates"], dict):
+        result["roleplay_updates"] = dict_to_array(result["roleplay_updates"])
+    
+    # Convert ChaseSchedule to array
+    if "ChaseSchedule" in result and isinstance(result["ChaseSchedule"], dict):
+        result["ChaseSchedule"] = dict_to_array(result["ChaseSchedule"])
+    
+    # Convert character stats to array
+    if "character_stat_updates" in result and result["character_stat_updates"]:
+        stats = result["character_stat_updates"].get("stats", {})
+        if isinstance(stats, dict):
+            result["character_stat_updates"]["stats"] = dict_to_array(stats)
+    
+    # Convert NPC schedules to array
+    for npc in result.get("npc_creations", []):
+        if "schedule" in npc and isinstance(npc["schedule"], dict):
+            npc["schedule"] = dict_to_array(npc["schedule"])
+    
+    for npc in result.get("npc_updates", []):
+        if "schedule" in npc and isinstance(npc["schedule"], dict):
+            npc["schedule"] = dict_to_array(npc["schedule"])
+        if "schedule_updates" in npc and isinstance(npc["schedule_updates"], dict):
+            npc["schedule_updates"] = dict_to_array(npc["schedule_updates"])
+    
+    # Convert activity stat_integration to array
+    for activity in result.get("activity_updates", []):
+        if "stat_integration" in activity and isinstance(activity["stat_integration"], dict):
+            activity["stat_integration"] = dict_to_array(activity["stat_integration"])
+    
+    return result
+
+# ===============================================================================
+# Function Tools
+# ===============================================================================
 
 @function_tool
 async def normalize_json(ctx, json_str: str) -> NormalizedJson:
     """
-    Normalize JSON string, fixing common errors:
-    - Replace curly quotes with straight quotes
-    - Add missing quotes around keys
-    - Fix trailing commas
-    
-    Args:
-        json_str: A potentially malformed JSON string
-        
-    Returns:
-        NormalizedJson with parsed data or error info
+    Normalize JSON string, fixing common errors.
     """
     try:
         # Try to parse as-is first
         data = json.loads(json_str)
         return NormalizedJson(ok=True, data=data)
     except json.JSONDecodeError:
-        # Simple normalization - replace curly quotes using unicode escapes
+        # Simple normalization - replace curly quotes
         normalized = (json_str
             .replace("\u201c", '"').replace("\u201d", '"')  # Curly double quotes
             .replace("\u2018", "'").replace("\u2019", "'")  # Curly single quotes
@@ -357,7 +520,6 @@ async def normalize_json(ctx, json_str: str) -> NormalizedJson:
             return NormalizedJson(ok=True, data=data)
         except json.JSONDecodeError as e:
             logging.error(f"Failed to normalize JSON: {e}")
-            # Return structured failure info
             return NormalizedJson(
                 ok=False,
                 error="Failed to parse JSON",
@@ -367,15 +529,7 @@ async def normalize_json(ctx, json_str: str) -> NormalizedJson:
 
 @function_tool
 async def check_npc_exists(ctx, npc_id: int) -> bool:
-    """
-    Check if an NPC with the given ID exists in the database.
-    
-    Args:
-        npc_id: NPC ID to check
-        
-    Returns:
-        Boolean indicating if the NPC exists
-    """
+    """Check if an NPC with the given ID exists in the database."""
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     
@@ -415,22 +569,13 @@ async def check_npc_exists(ctx, npc_id: int) -> bool:
 
 @function_tool
 async def extract_player_stats(ctx, narrative: str) -> PlayerStatsExtraction:
-    """
-    Extract player stat changes from narrative text.
-    
-    Args:
-        narrative: The narrative text to analyze
-        
-    Returns:
-        PlayerStatsExtraction with player stat changes
-    """
-    # The stats to look for
+    """Extract player stat changes from narrative text."""
     stats = ["corruption", "confidence", "willpower", "obedience", 
             "dependency", "lust", "mental_resilience", "physical_endurance"]
     
     governor = ctx.context.governor
     
-    # Check permission with governance system
+    # Check permission
     permission = await governor.check_action_permission(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="universal_updater",
@@ -443,15 +588,14 @@ async def extract_player_stats(ctx, narrative: str) -> PlayerStatsExtraction:
     
     changes = {}
     
-    # Extract explicit mentions of stats increasing or decreasing
+    # Extract explicit mentions of stats
     for stat in stats:
-        # Look for patterns like "confidence increased", "willpower drops", etc.
-        if f"{stat} increase" in narrative.lower() or f"{stat} rose" in narrative.lower() or f"{stat} grows" in narrative.lower():
-            changes[stat] = 5  # Default modest increase
-        elif f"{stat} decrease" in narrative.lower() or f"{stat} drop" in narrative.lower() or f"{stat} falls" in narrative.lower():
-            changes[stat] = -5  # Default modest decrease
+        if f"{stat} increase" in narrative.lower() or f"{stat} rose" in narrative.lower():
+            changes[stat] = 5
+        elif f"{stat} decrease" in narrative.lower() or f"{stat} drop" in narrative.lower():
+            changes[stat] = -5
     
-    # Report action to governance
+    # Report action
     await governor.process_agent_action_report(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="universal_updater",
@@ -462,180 +606,74 @@ async def extract_player_stats(ctx, narrative: str) -> PlayerStatsExtraction:
     return PlayerStatsExtraction(player_name="Chase", stats=changes)
 
 @function_tool
-async def extract_npc_changes(ctx, narrative: str) -> List[NPCSimpleUpdate]:
+async def apply_universal_updates(ctx, updates_json: str) -> ApplyUpdatesResult:
     """
-    Extract NPC changes from narrative text.
+    Apply universal updates to the database.
+    Handles conversion between array format (schema) and dict format (database).
+    """
+    # Parse the JSON string
+    try:
+        updates = json.loads(updates_json)
+    except json.JSONDecodeError:
+        normalized = await normalize_json(ctx, updates_json)
+        if normalized.ok and normalized.data:
+            updates = normalized.data
+        else:
+            return ApplyUpdatesResult(
+                success=False, 
+                error=f"Invalid JSON: {normalized.error or 'Unknown error'}"
+            )
     
-    Args:
-        narrative: The narrative text to analyze
-        
-    Returns:
-        List of NPCSimpleUpdate models
-    """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
     
-    # Check permission with governance system
+    # Check permission
     permission = await governor.check_action_permission(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="universal_updater",
-        action_type="extract_npc_changes",
-        action_details={"narrative_length": len(narrative)}
+        action_type="apply_updates",
+        action_details={"update_count": sum(len(updates.get(k, [])) for k in updates if isinstance(updates.get(k), list))}
     )
     
     if not permission["approved"]:
-        return []
+        return ApplyUpdatesResult(success=False, reason=permission["reasoning"])
     
-    # Get existing NPCs
     try:
+        # Convert array formats to dict formats for database storage
+        db_updates = convert_updates_for_database(updates)
+        
+        # Set user_id and conversation_id
+        db_updates["user_id"] = user_id
+        db_updates["conversation_id"] = conversation_id
+        
         async with get_db_connection_context() as conn:
-            rows = await conn.fetch("""
-                SELECT npc_id, npc_name, current_location
-                FROM NPCStats
-                WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
+            # Apply updates
+            result = await apply_universal_updates_async(
+                ctx.context,
+                user_id,
+                conversation_id,
+                db_updates,
+                conn
+            )
             
-            npcs = {row["npc_name"]: {"npc_id": row["npc_id"], "current_location": row["current_location"]} 
-                   for row in rows}
-        
-        updates = []
-        
-        # Check each NPC for mentions and changes
-        for npc_name, npc_data in npcs.items():
-            # Skip NPCs not mentioned in the narrative
-            if npc_name not in narrative:
-                continue
+            # Report action
+            await governor.process_agent_action_report(
+                agent_type=AgentType.UNIVERSAL_UPDATER,
+                agent_id="universal_updater",
+                action={"type": "apply_updates"},
+                result={"success": True, "updates_applied": result.get("updates_applied", 0)}
+            )
             
-            npc_update = {"npc_id": npc_data["npc_id"]}
-            
-            # Check for location changes
-            location_indicators = ["moved to", "arrived at", "entered", "stood in", "was at"]
-            for indicator in location_indicators:
-                if f"{npc_name} {indicator}" in narrative:
-                    # Extract location after the indicator
-                    idx = narrative.find(f"{npc_name} {indicator}") + len(f"{npc_name} {indicator}")
-                    end_idx = narrative.find(".", idx)
-                    if end_idx != -1:
-                        location_text = narrative[idx:end_idx].strip()
-                        # Extract just the location name - use a simple approach
-                        for word in ["the", "a", "an"]:
-                            if location_text.startswith(word + " "):
-                                location_text = location_text[len(word) + 1:]
-                        npc_update["current_location"] = location_text.strip()
-                        break
-            
-            # Only add the update if we found changes
-            if len(npc_update) > 1:  # More than just npc_id
-                updates.append(NPCSimpleUpdate(**npc_update))
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="universal_updater",
-            action={"type": "extract_npc_changes"},
-            result={"npc_updates": len(updates)}
-        )
-        
-        return updates
+            return ApplyUpdatesResult(**result)
     except Exception as e:
-        logging.error(f"Error extracting NPC changes: {e}")
-        return []
+        logging.error(f"Error applying universal updates: {e}")
+        return ApplyUpdatesResult(success=False, error=str(e))
 
-@function_tool
-async def extract_relationship_changes(ctx, narrative: str) -> List[RelationshipSimpleChange]:
-    """
-    Extract relationship changes from narrative text.
-    
-    Args:
-        narrative: The narrative text to analyze
-        
-    Returns:
-        List of RelationshipSimpleChange models
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="universal_updater",
-        action_type="extract_relationship_changes",
-        action_details={"narrative_length": len(narrative)}
-    )
-    
-    if not permission["approved"]:
-        return []
-    
-    # Get existing NPCs
-    try:
-        async with get_db_connection_context() as conn:
-            rows = await conn.fetch("""
-                SELECT npc_id, npc_name
-                FROM NPCStats
-                WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
-            
-            npcs = {row["npc_name"]: row["npc_id"] for row in rows}
-        
-        changes = []
-        
-        # Check for relationship indicators between player and NPCs
-        for npc_name, npc_id in npcs.items():
-            # Skip NPCs not mentioned in the narrative
-            if npc_name not in narrative:
-                continue
-            
-            # Look for relationship indicators
-            positive_indicators = ["smiled at you", "touched your", "praised you", "thanked you"]
-            negative_indicators = ["frowned at you", "scolded you", "ignored you", "dismissed you"]
-            
-            # Check for specific relationship changes
-            relationship_change = None
-            
-            for indicator in positive_indicators:
-                if f"{npc_name} {indicator}" in narrative:
-                    relationship_change = RelationshipSimpleChange(
-                        entity1_type="player",
-                        entity1_id=0,  # Player ID
-                        entity2_type="npc",
-                        entity2_id=npc_id,
-                        level_change=5,  # Modest increase
-                        new_event=f"{npc_name} {indicator}"
-                    )
-                    break
-            
-            if not relationship_change:
-                for indicator in negative_indicators:
-                    if f"{npc_name} {indicator}" in narrative:
-                        relationship_change = RelationshipSimpleChange(
-                            entity1_type="player",
-                            entity1_id=0,  # Player ID
-                            entity2_type="npc",
-                            entity2_id=npc_id,
-                            level_change=-5,  # Modest decrease
-                            new_event=f"{npc_name} {indicator}"
-                        )
-                        break
-            
-            if relationship_change:
-                changes.append(relationship_change)
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="universal_updater",
-            action={"type": "extract_relationship_changes"},
-            result={"relationship_changes": len(changes)}
-        )
-        
-        return changes
-    except Exception as e:
-        logging.error(f"Error extracting relationship changes: {e}")
-        return []
+# ===============================================================================
+# Database Processing Functions (Updated for Array/Dict Conversion)
+# ===============================================================================
 
-# REFACTORED: Now uses canon and LoreSystem instead of direct database operations
 async def apply_universal_updates_async(
     ctx: UniversalUpdaterContext,
     user_id: int,
@@ -645,19 +683,9 @@ async def apply_universal_updates_async(
 ) -> Dict[str, Any]:
     """
     Apply universal updates using canon and LoreSystem.
-    
-    Args:
-        ctx: UniversalUpdaterContext with lore_system
-        user_id: User ID
-        conversation_id: Conversation ID
-        updates: Dictionary containing all the updates to apply
-        conn: Database connection (passed by LoreSystem)
-        
-    Returns:
-        Dictionary with update results
+    Expects updates in dict format (after conversion from array format).
     """
     try:
-        # Initialize counters and results
         results = {
             "success": True,
             "updates_applied": 0,
@@ -704,13 +732,10 @@ async def apply_universal_updates_async(
             results["details"]["roleplay_updates"] = roleplay_update_count
             results["updates_applied"] += roleplay_update_count
         
-        # Return results
         return results
     except Exception as e:
         logger.error(f"Error applying universal updates: {e}")
         return {"success": False, "error": str(e)}
-
-# REFACTORED: Helper functions now use canon
 
 async def process_npc_creations_canonical(
     ctx: UniversalUpdaterContext,
@@ -719,7 +744,7 @@ async def process_npc_creations_canonical(
     npc_creations: List[Dict[str, Any]],
     conn: asyncpg.Connection
 ) -> int:
-    """Process NPC creations using canon."""
+    """Process NPC creations using canon. Expects dict format for database."""
     count = 0
     canon_ctx = RunContextWrapper(context={
         'user_id': user_id,
@@ -727,34 +752,17 @@ async def process_npc_creations_canonical(
     })
     
     for npc in npc_creations:
-        # Convert archetypes to JSON format for storage
-        archetypes_json = None
-        if npc.get('archetypes'):
-            # Handle typed NPCArchetype objects
-            archetypes_list = []
-            for arch in npc['archetypes']:
-                if isinstance(arch, dict):
-                    # If it's already a dict, use it
-                    archetypes_list.append(arch)
-                else:
-                    # If it's an NPCArchetype object, convert to dict
-                    archetypes_list.append(arch.model_dump() if hasattr(arch, 'model_dump') else arch.dict())
-            archetypes_json = json.dumps(archetypes_list)
+        # Prepare JSON fields
+        archetypes_json = json.dumps(npc.get('archetypes', [])) if npc.get('archetypes') else None
+        schedule_json = json.dumps(npc.get('schedule', {})) if npc.get('schedule') else None
+        hobbies_json = json.dumps(npc.get('hobbies', [])) if npc.get('hobbies') else None
+        personality_json = json.dumps(npc.get('personality_traits', [])) if npc.get('personality_traits') else None
+        likes_json = json.dumps(npc.get('likes', [])) if npc.get('likes') else None
+        dislikes_json = json.dumps(npc.get('dislikes', [])) if npc.get('dislikes') else None
+        affiliations_json = json.dumps(npc.get('affiliations', [])) if npc.get('affiliations') else None
+        memory_json = json.dumps(npc.get('memory')) if npc.get('memory') else None
         
-        # Convert schedule to JSON format for storage
-        schedule_json = None
-        if npc.get('schedule'):
-            if isinstance(npc['schedule'], NPCSchedule):
-                # Convert NPCSchedule to dict format
-                schedule_dict = {}
-                for key, entry in npc['schedule'].entries.items():
-                    schedule_dict[key] = entry.model_dump() if hasattr(entry, 'model_dump') else entry.dict()
-                schedule_json = json.dumps(schedule_dict)
-            elif isinstance(npc['schedule'], dict):
-                # If it's already a dict, just serialize it
-                schedule_json = json.dumps(npc['schedule'])
-        
-        # Prepare NPC data package
+        # Prepare NPC data
         npc_data = {
             'npc_name': npc['npc_name'],
             'introduced': npc.get('introduced', False),
@@ -769,13 +777,13 @@ async def process_npc_creations_canonical(
             'archetype_summary': npc.get('archetype_summary'),
             'archetype_extras_summary': npc.get('archetype_extras_summary'),
             'physical_description': npc.get('physical_description'),
-            'hobbies': json.dumps(npc.get('hobbies', [])) if npc.get('hobbies') else None,
-            'personality_traits': json.dumps(npc.get('personality_traits', [])) if npc.get('personality_traits') else None,
-            'likes': json.dumps(npc.get('likes', [])) if npc.get('likes') else None,
-            'dislikes': json.dumps(npc.get('dislikes', [])) if npc.get('dislikes') else None,
-            'affiliations': json.dumps(npc.get('affiliations', [])) if npc.get('affiliations') else None,
+            'hobbies': hobbies_json,
+            'personality_traits': personality_json,
+            'likes': likes_json,
+            'dislikes': dislikes_json,
+            'affiliations': affiliations_json,
             'schedule': schedule_json,
-            'memory': json.dumps(npc.get('memory')) if npc.get('memory') else None,
+            'memory': memory_json,
             'monica_level': npc.get('monica_level'),
             'age': npc.get('age'),
             'birthdate': npc.get('birthdate')
@@ -798,11 +806,10 @@ async def process_npc_updates_canonical(
     npc_updates: List[Dict[str, Any]],
     conn: asyncpg.Connection
 ) -> int:
-    """Process NPC updates using LoreSystem."""
+    """Process NPC updates using LoreSystem. Expects dict format for database."""
     count = 0
     
     for npc in npc_updates:
-        # Skip if no npc_id
         if "npc_id" not in npc:
             continue
         
@@ -820,37 +827,14 @@ async def process_npc_updates_canonical(
             if field in npc and npc[field] is not None:
                 updates[field] = npc[field]
         
-        # JSON fields (excluding schedule which needs special handling)
+        # JSON fields
         json_fields = ["hobbies", "personality_traits", "likes", "dislikes", 
-                       "affiliations", "memory"]
+                       "affiliations", "memory", "schedule", "schedule_updates"]
         
         for field in json_fields:
             if field in npc and npc[field] is not None:
                 updates[field] = json.dumps(npc[field]) if isinstance(npc[field], (list, dict)) else npc[field]
         
-        # Handle schedule specially
-        if "schedule" in npc and npc["schedule"] is not None:
-            if isinstance(npc["schedule"], NPCSchedule):
-                # Convert NPCSchedule to dict format
-                schedule_dict = {}
-                for key, entry in npc["schedule"].entries.items():
-                    schedule_dict[key] = entry.model_dump() if hasattr(entry, 'model_dump') else entry.dict()
-                updates["schedule"] = json.dumps(schedule_dict)
-            elif isinstance(npc["schedule"], dict):
-                updates["schedule"] = json.dumps(npc["schedule"])
-        
-        # Handle schedule_updates similarly
-        if "schedule_updates" in npc and npc["schedule_updates"] is not None:
-            if isinstance(npc["schedule_updates"], NPCSchedule):
-                # Convert NPCSchedule to dict format
-                schedule_dict = {}
-                for key, entry in npc["schedule_updates"].entries.items():
-                    schedule_dict[key] = entry.model_dump() if hasattr(entry, 'model_dump') else entry.dict()
-                updates["schedule"] = json.dumps(schedule_dict)  # Note: maps to schedule field
-            elif isinstance(npc["schedule_updates"], dict):
-                updates["schedule"] = json.dumps(npc["schedule_updates"])
-        
-        # Skip if no fields to update
         if not updates:
             continue
         
@@ -875,15 +859,15 @@ async def process_character_stats_canonical(
     stat_updates: Dict[str, Any],
     conn: asyncpg.Connection
 ) -> int:
-    """Process character stat updates using canon and LoreSystem."""
+    """Process character stat updates. Expects dict format for stats."""
     if not stat_updates or "stats" not in stat_updates:
         return 0
     
     player_name = stat_updates.get("player_name", "Chase")
     stats = stat_updates["stats"]
     
-    # Skip if no stats to update
-    if not stats:
+    # Stats should be in dict format after conversion
+    if not stats or not isinstance(stats, dict):
         return 0
     
     # First, check if player exists
@@ -898,13 +882,12 @@ async def process_character_stats_canonical(
             'user_id': user_id,
             'conversation_id': conversation_id
         })
-        await canon.find_or_create_player_stats(
+        await find_or_create_player_stats(
             canon_ctx, conn, player_name,
             corruption=0, confidence=0, willpower=0, obedience=0,
             dependency=0, lust=0, mental_resilience=0, physical_endurance=0
         )
     
-    # Count updates actually made
     update_count = 0
     
     # Update each stat
@@ -917,7 +900,7 @@ async def process_character_stats_canonical(
             """, user_id, conversation_id, player_name)
             
             if current_value is not None:
-                # Calculate new value (ensuring it stays within 0-100 range)
+                # Calculate new value
                 new_value = max(0, min(100, current_value + value))
                 
                 # Use LoreSystem to update
@@ -934,10 +917,9 @@ async def process_character_stats_canonical(
                 )
                 
                 if result.get("status") in ["committed", "conflict_generated"]:
-                    # Log stat change in history using canon
-                    canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
-                    await canon.log_stat_change(
-                        canon_ctx, conn, player_name, stat,
+                    # Log stat change
+                    await log_stat_change(
+                        ctx, conn, player_name, stat,
                         current_value, new_value, "Narrative update"
                     )
                     update_count += 1
@@ -958,10 +940,9 @@ async def process_social_links_canonical(
     manager = OptimizedRelationshipManager(user_id, conversation_id)
     
     for link in social_links:
-        # Convert old social link format to new interaction format
+        # Map link events to interaction types
         interaction_type = None
         
-        # Map link events to interaction types
         if link.get('new_event'):
             event_text = link['new_event'].lower()
             if 'help' in event_text or 'support' in event_text:
@@ -992,7 +973,6 @@ async def process_social_links_canonical(
         
         # Handle direct level changes
         elif link.get('level_change'):
-            # Map old level change to dimension changes
             level_change = link['level_change']
             dimension_changes = {
                 'affection': level_change * 0.5,
@@ -1026,19 +1006,22 @@ async def process_roleplay_updates_canonical(
     ctx: UniversalUpdaterContext,
     user_id: int,
     conversation_id: int,
-    roleplay_updates: Dict[str, Any],
+    roleplay_updates: Union[Dict[str, Any], List[Dict[str, Any]]],
     conn: asyncpg.Connection
 ) -> int:
-    """Process roleplay updates using canon."""
+    """Process roleplay updates. Can handle both dict and array format."""
     count = 0
     canon_ctx = RunContextWrapper(context={
         'user_id': user_id,
         'conversation_id': conversation_id
     })
     
+    # Convert to dict format if needed
+    if isinstance(roleplay_updates, list):
+        roleplay_updates = array_to_dict(roleplay_updates)
+    
     for key, value in roleplay_updates.items():
         if value is not None:
-            # Use canon to update current roleplay
             await canon.update_current_roleplay(
                 canon_ctx, conn, user_id, conversation_id, key, str(value)
             )
@@ -1046,104 +1029,43 @@ async def process_roleplay_updates_canonical(
     
     return count
 
-async def process_roleplay_updates_canonical(
-    ctx: UniversalUpdaterContext,
-    user_id: int,
-    conversation_id: int,
-    roleplay_updates: List[Dict[str, str]] | List[KeyValueStr],
-    conn: asyncpg.Connection
-) -> int:
-    count = 0
-    canon_ctx = RunContextWrapper(context={'user_id': user_id, 'conversation_id': conversation_id})
-    
-    if not roleplay_updates:
-        return 0
-    
-    for kv in roleplay_updates:
-        if isinstance(kv, KeyValueStr):
-            k, v = kv.key, kv.value
-        else:
-            k = kv.get('key')
-            v = kv.get('value')
-        
-        if k and v is not None:
-            await canon.update_current_roleplay(canon_ctx, conn, user_id, conversation_id, k, str(v))
-            count += 1
-    
-    return count
+# ===============================================================================
+# Helper Functions for Canon Integration
+# ===============================================================================
 
-@function_tool
-async def apply_universal_updates(ctx, updates_json: str) -> ApplyUpdatesResult:
-    """
-    Apply universal updates to the database.
-    
-    Args:
-        updates_json: JSON string containing all the updates to apply
-        
-    Returns:
-        ApplyUpdatesResult with update results
-    """
-    # Parse the JSON string - handle NormalizedJson if needed
-    try:
-        # First try direct parsing
-        updates = json.loads(updates_json)
-    except json.JSONDecodeError:
-        # If it fails, try normalizing with our tool
-        normalized = await normalize_json(ctx, updates_json)
-        if normalized.ok and normalized.data:
-            updates = normalized.data
-        else:
-            return ApplyUpdatesResult(
-                success=False, 
-                error=f"Invalid JSON: {normalized.error or 'Unknown error'}"
-            )
-    
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="universal_updater",
-        action_type="apply_updates",
-        action_details={"update_count": sum(len(updates.get(k, [])) for k in updates if isinstance(updates.get(k), list))}
-    )
-    
-    if not permission["approved"]:
-        return ApplyUpdatesResult(success=False, reason=permission["reasoning"])
-    
-    try:
-        # Ensure user_id and conversation_id are set in updates
-        updates["user_id"] = user_id
-        updates["conversation_id"] = conversation_id
-        
-        async with get_db_connection_context() as conn:
-            # Apply updates using the canonical function
-            result = await apply_universal_updates_async(
-                ctx.context,
-                user_id,
-                conversation_id,
-                updates,
-                conn
-            )
-            
-            # Report action to governance
-            await governor.process_agent_action_report(
-                agent_type=AgentType.UNIVERSAL_UPDATER,
-                agent_id="universal_updater",
-                action={"type": "apply_updates"},
-                result={"success": True, "updates_applied": result.get("updates_applied", 0)}
-            )
-            
-            return ApplyUpdatesResult(**result)
-    except Exception as e:
-        logging.error(f"Error applying universal updates: {e}")
-        return ApplyUpdatesResult(success=False, error=str(e))
+async def find_or_create_player_stats(ctx, conn, player_name: str, **kwargs) -> None:
+    """Helper function to create player stats if they don't exist."""
+    await conn.execute("""
+        INSERT INTO PlayerStats (
+            user_id, conversation_id, player_name,
+            corruption, confidence, willpower, obedience,
+            dependency, lust, mental_resilience, physical_endurance
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+    """, ctx.context.user_id if hasattr(ctx, 'context') else ctx.user_id,
+    ctx.context.conversation_id if hasattr(ctx, 'context') else ctx.conversation_id,
+    player_name,
+    kwargs.get('corruption', 0), kwargs.get('confidence', 0),
+    kwargs.get('willpower', 0), kwargs.get('obedience', 0),
+    kwargs.get('dependency', 0), kwargs.get('lust', 0),
+    kwargs.get('mental_resilience', 0), kwargs.get('physical_endurance', 0))
 
-# -------------------------------------------------------------------------------
+async def log_stat_change(ctx, conn, player_name: str, stat_name: str, old_value: int, new_value: int, cause: str) -> None:
+    """Helper function to log stat changes."""
+    user_id = ctx.context.user_id if hasattr(ctx, 'context') else ctx.user_id
+    conversation_id = ctx.context.conversation_id if hasattr(ctx, 'context') else ctx.conversation_id
+    
+    await conn.execute("""
+        INSERT INTO StatsHistory (
+            user_id, conversation_id, player_name, stat_name,
+            old_value, new_value, cause, changed_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    """, user_id, conversation_id, player_name, stat_name,
+    old_value, new_value, cause)
+
+# ===============================================================================
 # Guardrail Functions
-# -------------------------------------------------------------------------------
+# ===============================================================================
 
 async def content_safety_guardrail(ctx, agent, input_data):
     """Input guardrail for content moderation"""
@@ -1156,7 +1078,6 @@ async def content_safety_guardrail(ctx, agent, input_data):
             but flag anything that might be genuinely harmful or problematic.
             """,
             output_type=ContentSafety,
-              # Ensure strict output
         )
         
         result = await Runner.run(content_moderator, input_data, context=ctx.context)
@@ -1168,7 +1089,6 @@ async def content_safety_guardrail(ctx, agent, input_data):
         )
     except Exception as e:
         logging.error(f"Error in content safety guardrail: {str(e)}", exc_info=True)
-        # Return safe default on error
         return GuardrailFunctionOutput(
             output_info=ContentSafety(
                 is_appropriate=True,
@@ -1178,11 +1098,10 @@ async def content_safety_guardrail(ctx, agent, input_data):
             tripwire_triggered=False,
         )
 
-# -------------------------------------------------------------------------------
-# Agent Definitions (UPDATED WITH STRICT SCHEMAS)
-# -------------------------------------------------------------------------------
+# ===============================================================================
+# Agent Definitions
+# ===============================================================================
 
-# Extraction agent for initial analysis - now with output_type
 extraction_agent = Agent[UniversalUpdaterContext](
     name="StateExtractor",
     instructions="""
@@ -1202,15 +1121,12 @@ extraction_agent = Agent[UniversalUpdaterContext](
     """,
     tools=[
         extract_player_stats,
-        extract_npc_changes,
-        extract_relationship_changes
+        check_npc_exists,
     ],
-    output_type=str,  # Explicitly set as string output
-    # output_schema_strict=False,  # Optional: explicitly disable strict schema for text output
-    model_settings=ModelSettings(temperature=0.1)  # Low temperature for accuracy
+    output_type=str,
+    model_settings=ModelSettings(temperature=0.1)
 )
 
-# Main Universal Updater Agent
 universal_updater_agent = Agent[UniversalUpdaterContext](
     name="UniversalUpdater",
     instructions="""
@@ -1223,38 +1139,35 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
     4. Identify new locations, events, quests, and inventory items
     5. Organize all changes into a structured format
     
+    IMPORTANT: All list-based fields that were previously dicts are now arrays of key-value pairs:
+    - roleplay_updates: Array of {key, value} pairs
+    - ChaseSchedule: Array of {key: day_name, value: {Morning, Afternoon, Evening, Night}}
+    - character_stat_updates.stats: Array of {key: stat_name, value: stat_value}
+    - NPC schedule: Array of {key: day_name, value: day_schedule}
+    - Activity stat_integration: Array of {key, value} pairs
+    
     Focus on extracting concrete changes rather than inferring too much.
     Be subtle in handling femdom themes - identify power dynamics but keep them understated.
-    
-    IMPORTANT: Only include fields that are part of the UniversalUpdateInput schema.
-    Do not include any fields that are not defined in the schema.
-    
-    For NPC archetypes, use the NPCArchetype structure with name, traits, weight, and notes.
-    For NPC schedules, use the NPCSchedule structure with entries containing when, where, and activity.
-    For Activity purpose and stat_integration, use the provided typed structures.
     """,
     tools=[
         normalize_json,
         check_npc_exists,
         extract_player_stats,
-        extract_npc_changes,
-        extract_relationship_changes,
         apply_universal_updates
     ],
     handoffs=[
         handoff(extraction_agent, tool_name_override="extract_state_changes")
     ],
     output_type=UniversalUpdateInput,
-      # Explicitly enable strict schema
     input_guardrails=[
         InputGuardrail(guardrail_function=content_safety_guardrail),
     ],
-    model_settings=ModelSettings(temperature=0.2)  # Low temperature for precision
+    model_settings=ModelSettings(temperature=0.2)
 )
 
-# -------------------------------------------------------------------------------
+# ===============================================================================
 # Main Functions
-# -------------------------------------------------------------------------------
+# ===============================================================================
 
 async def process_universal_update(
     user_id: int, 
@@ -1264,30 +1177,17 @@ async def process_universal_update(
 ) -> Dict[str, Any]:
     """
     Process a universal update based on narrative text with governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        narrative: Narrative text to process
-        context: Additional context (optional)
-        
-    Returns:
-        Dictionary with update results
     """
     # Create and initialize the updater context
     updater_context = UniversalUpdaterContext(user_id, conversation_id)
     await updater_context.initialize()
     
-    # Set up context data
-    ctx_data = context or {}
-    
-    # Create trace for monitoring - Fix the trace ID format
+    # Create trace for monitoring
     with trace(
         workflow_name="Universal Update",
         trace_id=f"trace_universal_update_{conversation_id}_{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
-        # Create prompt for the agent
         prompt = f"""
         Analyze the following narrative text and extract appropriate game state updates.
         
@@ -1302,10 +1202,14 @@ async def process_universal_update(
         5. Journal entries or activity updates
         6. Whether an image should be generated for this scene
         
+        IMPORTANT: Use array format for these fields:
+        - roleplay_updates: Array of {{key, value}} pairs
+        - ChaseSchedule: Array of {{key: day_name, value: day_schedule}}
+        - character_stat_updates.stats: Array of {{key: stat_name, value: stat_change}}
+        - NPC schedule: Array format
+        - Activity stat_integration: Array format
+        
         Provide a structured output conforming to the UniversalUpdateInput schema.
-        Include the narrative text in the 'narrative' field and fill in other fields as appropriate.
-        Only include fields where you have identified changes or updates.
-        Do not include any additional fields not defined in the schema.
         """
         
         try:
@@ -1329,25 +1233,17 @@ async def process_universal_update(
                 wrapped_ctx = RunContextWrapper(updater_context)
                 update_result = await apply_universal_updates(wrapped_ctx, update_json)
                 
-                # Convert ApplyUpdatesResult back to dict for backward compatibility
+                # Convert ApplyUpdatesResult back to dict
                 return update_result.model_dump()
             else:
                 return {"success": False, "error": "No updates extracted"}
                 
         except Exception as e:
             logging.error(f"Error in universal updater agent execution: {str(e)}", exc_info=True)
-            logging.error(f"Agent: universal_updater_agent, Context: user_id={user_id}, conversation_id={conversation_id}")
             return {"success": False, "error": f"Agent execution error: {str(e)}"}
 
 async def register_with_governance(user_id: int, conversation_id: int):
-    """
-    Register universal updater agents with Nyx governance system.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-    """
-    # Get governor
+    """Register universal updater agents with Nyx governance system."""
     governor = await get_central_governance(user_id, conversation_id)
     
     # Register main agent
@@ -1357,7 +1253,7 @@ async def register_with_governance(user_id: int, conversation_id: int):
         agent_id="universal_updater"
     )
     
-    # Issue directive for universal updating
+    # Issue directive
     await governor.issue_directive(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="universal_updater",
@@ -1367,28 +1263,19 @@ async def register_with_governance(user_id: int, conversation_id: int):
             "scope": "game"
         },
         priority=DirectivePriority.MEDIUM,
-        duration_minutes=24*60  # 24 hours
+        duration_minutes=24*60
     )
     
     logging.info("Universal Updater registered with Nyx governance")
 
 async def initialize_universal_updater(user_id: int, conversation_id: int) -> Dict[str, Any]:
-    """
-    Initialize the Universal Updater system and register with governance.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        
-    Returns:
-        Dictionary containing initialized context and status
-    """
+    """Initialize the Universal Updater system and register with governance."""
     try:
-        # Create the wrapper agent class for governance compatibility
+        # Create the wrapper agent class
         updater_agent = UniversalUpdaterAgent(user_id, conversation_id)
         await updater_agent.initialize()
         
-        # Register with governance system
+        # Register with governance
         await register_with_governance(user_id, conversation_id)
         
         logging.info(f"Universal Updater initialized for user {user_id}, conversation {conversation_id}")
@@ -1404,13 +1291,14 @@ async def initialize_universal_updater(user_id: int, conversation_id: int) -> Di
             "error": str(e),
             "status": "failed"
         }
-        
-# Add this class to provide compatibility with existing governance code
+
+# ===============================================================================
+# Compatibility Wrapper Class
+# ===============================================================================
+
 class UniversalUpdaterAgent:
     """
     Compatibility wrapper for the OpenAI Agents SDK implementation of Universal Updater.
-    This class serves as an adapter between the SDK implementation and the
-    governance system which expects a class-based approach.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
@@ -1423,7 +1311,6 @@ class UniversalUpdaterAgent:
     async def initialize(self):
         """Initialize the updater agent and context."""
         if not self.initialized:
-            # Create and initialize the updater context
             self.context = UniversalUpdaterContext(self.user_id, self.conversation_id)
             await self.context.initialize()
             self.initialized = True
@@ -1431,11 +1318,9 @@ class UniversalUpdaterAgent:
     
     async def process_update(self, narrative: str, context: Dict[str, Any] = None):
         """Process a universal update based on narrative text."""
-        # Ensure initialization
         if not self.initialized:
             await self.initialize()
             
-        # Use the SDK-based function for processing
         return await process_universal_update(
             self.user_id, 
             self.conversation_id, 
@@ -1445,11 +1330,9 @@ class UniversalUpdaterAgent:
     
     async def handle_directive(self, directive: Dict[str, Any]) -> Dict[str, Any]:
         """Handle a directive from the governance system."""
-        # Ensure initialization
         if not self.initialized:
             await self.initialize()
             
-        # Process different directive types
         directive_type = directive.get("type")
         directive_data = directive.get("data", {})
         
@@ -1466,46 +1349,22 @@ class UniversalUpdaterAgent:
     
     async def get_capabilities(self) -> List[str]:
         """Return agent capabilities for coordination."""
-        return ["narrative_analysis", "state_extraction", "state_updating"]
+        return ["narrative_analysis", "state_extraction", "state_updating", "array_format_handling"]
     
     async def get_performance_metrics(self) -> Dict[str, Any]:
         """Return performance metrics for the agent."""
         return {
-            "updates_processed": 0,  # You would track this in a real implementation
+            "updates_processed": 0,
             "success_rate": 0.0,
             "average_processing_time": 0.0,
-            "strategies": {}
+            "strategies": {},
+            "array_format_support": True
         }
     
     async def get_learning_state(self) -> Dict[str, Any]:
         """Return learning state for the agent."""
         return {
             "patterns": {},
-            "adaptations": []
+            "adaptations": [],
+            "format_version": "array_v2"
         }
-
-# Add these helper functions that were missing from canon
-async def find_or_create_player_stats(ctx, conn, player_name: str, **kwargs) -> None:
-    """Helper function to create player stats if they don't exist."""
-    await conn.execute("""
-        INSERT INTO PlayerStats (
-            user_id, conversation_id, player_name,
-            corruption, confidence, willpower, obedience,
-            dependency, lust, mental_resilience, physical_endurance
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-    """, ctx.user_id, ctx.conversation_id, player_name,
-    kwargs.get('corruption', 0), kwargs.get('confidence', 0),
-    kwargs.get('willpower', 0), kwargs.get('obedience', 0),
-    kwargs.get('dependency', 0), kwargs.get('lust', 0),
-    kwargs.get('mental_resilience', 0), kwargs.get('physical_endurance', 0))
-
-async def log_stat_change(ctx, conn, player_name: str, stat_name: str, old_value: int, new_value: int, cause: str) -> None:
-    """Helper function to log stat changes."""
-    await conn.execute("""
-        INSERT INTO StatsHistory (
-            user_id, conversation_id, player_name, stat_name,
-            old_value, new_value, cause
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-    """, ctx.user_id, ctx.conversation_id, player_name, stat_name,
-    old_value, new_value, cause)
