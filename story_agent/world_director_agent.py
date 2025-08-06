@@ -225,6 +225,36 @@ class ActivityType(Enum):
     DREAM = "dream"           # Added for dream sequences
     REVELATION = "revelation" # Added for narrative moments
 
+class AddictionCravingData(BaseModel):
+    """Data describing an addiction craving"""
+    addiction_type: Optional[str] = None
+    intensity: float = 1.0
+
+
+class DreamData(BaseModel):
+    """Data describing a dream trigger"""
+    pass
+
+
+class RevelationData(BaseModel):
+    """Data describing a personal revelation"""
+    topic: Optional[str] = None
+
+
+class ChoiceData(BaseModel):
+    """Comprehensive player choice information"""
+    text: Optional[str] = None
+    stat_impacts: Optional[Dict[str, float]] = None
+    addiction_impacts: Optional[Dict[str, float]] = None
+    npc_id: Optional[int] = None
+    relationship_impacts: Optional[Dict[str, Dict[str, float]]] = None
+    activity_type: Optional[str] = None
+    intensity: Optional[float] = None
+    inventory_changes: Optional[List[Dict[str, Any]]] = None
+    currency_change: Optional[float] = None
+    time_passed: Optional[float] = None
+    emotional_valence: Optional[float] = None
+
 class CompleteWorldState(BaseModel):
     """Complete world state with ALL system integrations"""
     # Time and Calendar
@@ -1008,11 +1038,12 @@ Output as JSON with complete detail for emergent gameplay."""
 @function_tool
 async def generate_addiction_craving_event(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
-    craving_data: Dict[str, Any]
+    craving_data: AddictionCravingData
 ) -> Dict[str, Any]:
     """Generate an addiction-craving event via LLM"""
     context = ctx.context
-    
+    data = craving_data.model_dump(exclude_none=True)
+
     # Lazy load
     chatgpt_funcs = _get_chatgpt_functions()
     generate_text_completion = chatgpt_funcs['generate_text_completion']
@@ -1021,7 +1052,7 @@ async def generate_addiction_craving_event(
         prompt = f"""Generate an addiction craving event for a femdom RPG.
 
 Craving Data:
-{json.dumps(craving_data, indent=2, default=str)}
+{json.dumps(data, indent=2, default=str)}
 
 Create an event that:
 1. Shows the psychological pull of the addiction
@@ -1052,8 +1083,8 @@ Output as JSON with choices and consequences."""
         # attach system-side result once
         event["system_result"] = {
             "triggered": True,
-            "addiction_type": craving_data.get("addiction_type"),
-            "intensity": craving_data.get("intensity", 1.0),
+            "addiction_type": craving_data.addiction_type,
+            "intensity": craving_data.intensity,
         }
         return event
 
@@ -1070,17 +1101,18 @@ Output as JSON with choices and consequences."""
 @function_tool
 async def generate_dream_event(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
-    dream_data: Dict[str, Any]
+    dream_data: DreamData
 ) -> Dict[str, Any]:
     """Generate a dream sequence event"""
     context = ctx.context
     world_state = context.current_world_state
-    
+    data = dream_data.model_dump(exclude_none=True)
+
     # Lazy load
     chatgpt_funcs = _get_chatgpt_functions()
     generate_reflection = chatgpt_funcs['generate_reflection']
     generate_text_completion = chatgpt_funcs['generate_text_completion']
-    
+
     try:
         # Get memory context for dream
         relevant_memories = await MemoryManager.retrieve_relevant_memories(
@@ -1089,11 +1121,11 @@ async def generate_dream_event(
             context="dream", tags=["emotional", "traumatic"],
             limit=5
         )
-        
+
         dream_context = {
-            "dream_trigger": dream_data,
+            "dream_trigger": data,
             "recent_memories": [
-                m.to_dict() if hasattr(m, 'to_dict') else m 
+                m.to_dict() if hasattr(m, 'to_dict') else m
                 for m in (relevant_memories or [])
             ],
             "hidden_stats": world_state.hidden_stats,
@@ -1159,26 +1191,27 @@ Output as JSON with symbolic imagery and potential insights gained."""
 @function_tool
 async def generate_revelation_event(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
-    revelation_data: Dict[str, Any]
+    revelation_data: RevelationData
 ) -> Dict[str, Any]:
     """Generate a personal revelation event"""
     context = ctx.context
-    
+    data = revelation_data.model_dump(exclude_none=True)
+
     # Lazy load
     chatgpt_funcs = _get_chatgpt_functions()
     generate_text_completion = chatgpt_funcs['generate_text_completion']
-    
+
     try:
         # Generate inner monologue
         monologue = await generate_inner_monologue(
             context.user_id, context.conversation_id,
-            topic=revelation_data.get('topic', 'current situation')
+            topic=revelation_data.topic or 'current situation'
         )
-        
+
         prompt = f"""Generate a moment of personal revelation for a femdom RPG.
 
 Revelation:
-{json.dumps(revelation_data, indent=2, default=str)}
+{json.dumps(data, indent=2, default=str)}
 
 Inner Monologue:
 {monologue}
@@ -1231,57 +1264,58 @@ Output as JSON with introspective narrative."""
 @function_tool
 async def process_complete_player_choice(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
-    choice_data: Dict[str, Any]
+    choice_data: ChoiceData
 ) -> Dict[str, Any]:
     """Process player choice through ALL systems"""
     context = ctx.context
     results = {"effects": [], "narratives": [], "success": True}
-    
+    choice = choice_data.model_dump(exclude_none=True)
+
     # Lazy load
     chatgpt_funcs = _get_chatgpt_functions()
     analyze_preferences = chatgpt_funcs['analyze_preferences']
     generate_text_completion = chatgpt_funcs['generate_text_completion']
-    
+
     try:
         # 1. Apply stat changes with thresholds check
-        if 'stat_impacts' in choice_data:
+        if 'stat_impacts' in choice:
             try:
                 stat_result = await apply_stat_changes(
                     context.user_id, context.conversation_id,
-                    context.player_name, choice_data['stat_impacts'],
-                    reason=f"Choice: {choice_data.get('text', 'unknown')}"
+                    context.player_name, choice['stat_impacts'],
+                    reason=f"Choice: {choice.get('text', 'unknown')}"
                 )
                 results['stat_changes'] = stat_result
-                
+
                 # Check for new thresholds
                 new_hidden_stats = await get_player_hidden_stats(
                     context.user_id, context.conversation_id, context.player_name
                 )
                 new_thresholds = context._check_stat_thresholds(new_hidden_stats)
-                
+
                 if new_thresholds != context.current_world_state.stat_thresholds_active:
                     results['new_thresholds'] = new_thresholds
             except Exception as e:
                 logger.error(f"Error applying stat changes: {e}")
                 results['effects'].append({"error": f"Stat change failed: {e}"})
-        
+
         # 2. Process addiction impacts
-        if 'addiction_impacts' in choice_data:
-            for addiction_type, intensity in choice_data['addiction_impacts'].items():
+        if 'addiction_impacts' in choice:
+            for addiction_type, intensity in choice['addiction_impacts'].items():
                 try:
                     addiction_result = await process_addiction_update(
                         context.user_id, context.conversation_id,
                         context.player_name, addiction_type, intensity,
-                        choice_data.get('npc_id')
+                        choice.get('npc_id')
                     )
                     results['effects'].append(addiction_result)
                 except Exception as e:
                     logger.error(f"Error processing addiction impact: {e}")
                     results['effects'].append({"error": f"Addiction update failed: {e}"})
-        
+
         # 3. Process relationship impacts
-        if 'relationship_impacts' in choice_data:
-            for npc_name, impacts in choice_data['relationship_impacts'].items():
+        if 'relationship_impacts' in choice:
+            for npc_name, impacts in choice['relationship_impacts'].items():
                 try:
                     # Find NPC
                     npc_id = None
@@ -1289,7 +1323,7 @@ async def process_complete_player_choice(
                         if npc.get('npc_name') == npc_name:
                             npc_id = npc.get('npc_id')
                             break
-                    
+
                     if npc_id:
                         # Process interaction
                         interaction_result = await process_relationship_interaction_tool(
@@ -1306,7 +1340,7 @@ async def process_complete_player_choice(
                             check_for_event=True
                         )
                         results['effects'].append(interaction_result)
-                        
+
                         # Check for narrative progression
                         if impacts.get('trust', 0) > 5 or impacts.get('submission', 0) > 5:
                             progression = await progress_npc_narrative_stage(
@@ -1321,50 +1355,50 @@ async def process_complete_player_choice(
                 except Exception as e:
                     logger.error(f"Error processing relationship impact: {e}")
                     results['effects'].append({"error": f"Relationship update failed: {e}"})
-        
+
         # 4. Activity processing
-        if 'activity_type' in choice_data:
+        if 'activity_type' in choice:
             try:
                 activity_result = await process_activity_vitals(
                     context.user_id, context.conversation_id,
-                    context.player_name, choice_data['activity_type'],
-                    choice_data.get('intensity', 1.0)
+                    context.player_name, choice['activity_type'],
+                    choice.get('intensity', 1.0)
                 )
                 results['activity_result'] = activity_result
-                
+
                 # Apply activity effects on stats
-                if choice_data['activity_type'] in ACTIVITY_EFFECTS:
+                if choice['activity_type'] in ACTIVITY_EFFECTS:
                     effect_result = await apply_activity_effects(
                         context.user_id, context.conversation_id,
-                        choice_data['activity_type'],
-                        choice_data.get('intensity', 1.0)
+                        choice['activity_type'],
+                        choice.get('intensity', 1.0)
                     )
                     results['effects'].append(effect_result)
             except Exception as e:
                 logger.error(f"Error processing activity: {e}")
                 results['effects'].append({"error": f"Activity processing failed: {e}"})
-        
+
         # 5. Check for triggered rules
         try:
             triggered_rules = await enforce_all_rules_on_player(context.player_name)
             if triggered_rules:
                 results['triggered_rules'] = triggered_rules
-                
+
                 for rule in triggered_rules:
                     try:
                         effect_result = await apply_effect(
                             rule['effect'], context.player_name,
-                            npc_id=choice_data.get('npc_id')
+                            npc_id=choice.get('npc_id')
                         )
                         results['effects'].append(effect_result)
                     except Exception as e:
                         logger.error(f"Error applying rule effect: {e}")
         except Exception as e:
             logger.error(f"Error checking rules: {e}")
-        
+
         # 6. Inventory changes
-        if 'inventory_changes' in choice_data:
-            for change in choice_data['inventory_changes']:
+        if 'inventory_changes' in choice:
+            for change in choice['inventory_changes']:
                 try:
                     if change.get('action') == 'add':
                         inv_result = await add_item(
@@ -1381,11 +1415,11 @@ async def process_complete_player_choice(
                 except Exception as e:
                     logger.error(f"Error with inventory change: {e}")
                     results['effects'].append({"error": f"Inventory change failed: {e}"})
-        
+
         # 7. Currency changes
-        if 'currency_change' in choice_data:
+        if 'currency_change' in choice:
             try:
-                amount = choice_data['currency_change']
+                amount = choice['currency_change']
                 formatted = await context.currency_generator.format_currency(abs(amount))
                 context.current_world_state.player_money += amount
                 results['currency'] = {
@@ -1394,20 +1428,20 @@ async def process_complete_player_choice(
                 }
             except Exception as e:
                 logger.error(f"Error processing currency: {e}")
-        
+
         # 8. Check for hunger/thirst over time
-        if choice_data.get('time_passed', 0) > 0:
+        if choice.get('time_passed', 0) > 0:
             try:
                 hunger_result = await update_hunger_from_time(
                     context.user_id, context.conversation_id,
-                    context.player_name, choice_data['time_passed']
+                    context.player_name, choice['time_passed']
                 )
                 results['hunger_update'] = hunger_result
             except Exception as e:
                 logger.error(f"Error updating hunger: {e}")
-        
+
         # 9. Store in memory with analysis
-        memory_text = f"Choice: {choice_data.get('text', 'Unknown choice')}"
+        memory_text = f"Choice: {choice.get('text', 'Unknown choice')}"
         
         try:
             # Analyze preferences in the choice
@@ -1419,7 +1453,7 @@ async def process_complete_player_choice(
                 memory_text=memory_text,
                 memory_type=MemoryType.INTERACTION,
                 significance=MemorySignificance.HIGH if results.get('triggered_rules') else MemorySignificance.MEDIUM,
-                emotional_valence=choice_data.get('emotional_valence', 0),
+                emotional_valence=choice.get('emotional_valence', 0),
                 tags=["player_choice"] + list(preferences.get('explicit_preferences', []))
             )
             
@@ -1430,7 +1464,7 @@ async def process_complete_player_choice(
         # 10. Generate comprehensive narrative
         narrative_prompt = f"""Generate a narrative response to the player's choice.
 
-Choice: {choice_data.get('text')}
+Choice: {choice.get('text')}
 All Effects: {json.dumps(results, default=str)}
 
 Create a seamless narrative that:
