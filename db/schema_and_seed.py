@@ -2507,9 +2507,16 @@ async def create_all_tables():
                 CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw ON unified_memories USING hnsw (embedding vector_cosine_ops);
                 ''',
                 '''
-                ALTER TABLE Factions 
+                ALTER TABLE Factions
                 ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 0,
                 ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
+                ''',
+                '''
+                -- Remove factions referencing conversations that do not exist
+                DELETE FROM Factions f
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM conversations c WHERE c.id = f.conversation_id
+                );
                 ''',
                 '''
                 DO $$
@@ -2585,9 +2592,16 @@ async def create_all_tables():
                     ALTER COLUMN event_time TYPE TIMESTAMP;
                 ''',
                 '''
-                ALTER TABLE CulturalElements 
+                ALTER TABLE CulturalElements
                 ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 0,
                 ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
+                ''',
+                '''
+                -- Clean up cultural elements with invalid conversation references
+                DELETE FROM CulturalElements ce
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM conversations c WHERE c.id = ce.conversation_id
+                );
                 ''',
                 '''
                 DO $$
@@ -2611,9 +2625,16 @@ async def create_all_tables():
                 END $$;
                 ''',
                 '''
-                ALTER TABLE LocalHistories 
+                ALTER TABLE LocalHistories
                 ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 0,
                 ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
+                ''',
+                '''
+                -- Remove local histories that point to missing conversations
+                DELETE FROM LocalHistories lh
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM conversations c WHERE c.id = lh.conversation_id
+                );
                 ''',
                 '''
                 DO $$
@@ -3062,14 +3083,21 @@ async def create_all_tables():
                 '''
                 DO $$
                 BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint
-                        WHERE conname = 'playerstats_user_conversation_player_unique'
-                        OR conname = 'playerstats_user_id_conversation_id_player_name_key'
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'playerstats' AND column_name = 'player_name'
                     ) THEN
-                        ALTER TABLE PlayerStats
-                        ADD CONSTRAINT playerstats_user_conversation_player_unique
-                        UNIQUE (user_id, conversation_id, player_name);
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'playerstats_user_conversation_player_unique'
+                                OR conname = 'playerstats_user_id_conversation_id_player_name_key'
+                        ) THEN
+                            ALTER TABLE PlayerStats
+                            ADD CONSTRAINT playerstats_user_conversation_player_unique
+                            UNIQUE (user_id, conversation_id, player_name);
+                        END IF;
+                    ELSE
+                        RAISE WARNING 'player_name column missing in PlayerStats; constraint not created';
                     END IF;
                 END $$;
                 ''',
