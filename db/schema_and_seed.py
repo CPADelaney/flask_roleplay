@@ -1046,7 +1046,7 @@ async def create_all_tables():
                     source_type VARCHAR(50) NOT NULL,
                     source_id INTEGER NOT NULL,
                     significance INTEGER DEFAULT 5,
-                    tags JSONB DEFAULT '[]',::jsonb,
+                    tags JSONB DEFAULT '[]'::jsonb,
                     metadata JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -1889,7 +1889,7 @@ async def create_all_tables():
                     source_type VARCHAR(50) NOT NULL,
                     source_id INTEGER NOT NULL,
                     significance INTEGER DEFAULT 5,
-                    tags JSONB DEFAULT '[]',::jsonb,
+                    tags JSONB DEFAULT '[]'::jsonb,
                     metadata JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -2512,22 +2512,38 @@ async def create_all_tables():
                 ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
                 ''',
                 '''
-                ALTER TABLE Factions 
-                ADD CONSTRAINT fk_factions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                ADD CONSTRAINT fk_factions_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'fk_factions_user'
+                              AND table_name = 'factions'
+                    ) THEN
+                        ALTER TABLE Factions
+                        ADD CONSTRAINT fk_factions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'fk_factions_conversation'
+                              AND table_name = 'factions'
+                    ) THEN
+                        ALTER TABLE Factions
+                        ADD CONSTRAINT fk_factions_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                    END IF;
+                END $$;
                 ''',
                 '''
                 CREATE INDEX IF NOT EXISTS idx_factions_name
                 ON Factions(user_id, conversation_id, lower(name));
                 ''',
                 '''
-                ALTER TABLE NPCStats ADD COLUMN trauma_triggers JSONB;
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS trauma_triggers JSONB;
                 ''',
                 '''
                 ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS personality_patterns JSONB DEFAULT '[]'::jsonb;
                 ''',
                 '''
-                ALTER TABLE NPCStats ADD COLUMN flashback_triggers JSONB;
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS flashback_triggers JSONB;
                 ''',
                 '''
                 ALTER TABLE NPCStats 
@@ -2536,7 +2552,7 @@ async def create_all_tables():
                 DEFAULT 0;
                 ''',
                 '''
-                ALTER TABLE NPCStats ADD COLUMN revelation_plan JSONB;
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS revelation_plan JSONB;
                 ''',
                 '''
                 ALTER TABLE NyxAgentDirectives 
@@ -2574,9 +2590,25 @@ async def create_all_tables():
                 ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
                 ''',
                 '''
-                ALTER TABLE CulturalElements 
-                ADD CONSTRAINT fk_culturalelements_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                ADD CONSTRAINT fk_culturalelements_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'fk_culturalelements_user'
+                              AND table_name = 'culturalelements'
+                    ) THEN
+                        ALTER TABLE CulturalElements
+                        ADD CONSTRAINT fk_culturalelements_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'fk_culturalelements_conversation'
+                              AND table_name = 'culturalelements'
+                    ) THEN
+                        ALTER TABLE CulturalElements
+                        ADD CONSTRAINT fk_culturalelements_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                    END IF;
+                END $$;
                 ''',
                 '''
                 ALTER TABLE LocalHistories 
@@ -2584,16 +2616,58 @@ async def create_all_tables():
                 ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
                 ''',
                 '''
-                ALTER TABLE LocalHistories 
-                ADD CONSTRAINT fk_localhistories_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                ADD CONSTRAINT fk_localhistories_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'fk_localhistories_user'
+                              AND table_name = 'localhistories'
+                    ) THEN
+                        ALTER TABLE LocalHistories
+                        ADD CONSTRAINT fk_localhistories_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'fk_localhistories_conversation'
+                              AND table_name = 'localhistories'
+                    ) THEN
+                        ALTER TABLE LocalHistories
+                        ADD CONSTRAINT fk_localhistories_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                    END IF;
+                END $$;
                 ''',
                 '''
-                ALTER TABLE Locations 
-                    ALTER COLUMN notable_features TYPE JSONB USING to_jsonb(notable_features),
-                    ALTER COLUMN hidden_aspects TYPE JSONB USING to_jsonb(hidden_aspects),
-                    ALTER COLUMN access_restrictions TYPE JSONB USING to_jsonb(access_restrictions),
-                    ALTER COLUMN local_customs TYPE JSONB USING to_jsonb(local_customs);
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'locations' AND column_name = 'notable_features' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE Locations
+                            ALTER COLUMN notable_features DROP DEFAULT,
+                            ALTER COLUMN notable_features TYPE JSONB USING to_jsonb(notable_features),
+                            ALTER COLUMN notable_features SET DEFAULT '[]'::jsonb;
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'locations' AND column_name = 'hidden_aspects' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE Locations
+                            ALTER COLUMN hidden_aspects DROP DEFAULT,
+                            ALTER COLUMN hidden_aspects TYPE JSONB USING to_jsonb(hidden_aspects),
+                            ALTER COLUMN hidden_aspects SET DEFAULT '[]'::jsonb;
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'locations' AND column_name = 'access_restrictions' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE Locations
+                            ALTER COLUMN access_restrictions DROP DEFAULT,
+                            ALTER COLUMN access_restrictions TYPE JSONB USING to_jsonb(access_restrictions),
+                            ALTER COLUMN access_restrictions SET DEFAULT '[]'::jsonb;
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'locations' AND column_name = 'local_customs' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE Locations
+                            ALTER COLUMN local_customs DROP DEFAULT,
+                            ALTER COLUMN local_customs TYPE JSONB USING to_jsonb(local_customs),
+                            ALTER COLUMN local_customs SET DEFAULT '[]'::jsonb;
+                    END IF;
+                END $$;
                 ''',
                 '''
                 ALTER TABLE Factions 
@@ -2606,11 +2680,37 @@ async def create_all_tables():
                     ALTER COLUMN recruitment_methods TYPE JSONB USING to_jsonb(recruitment_methods);
                 ''',
                 '''
-                ALTER TABLE Nations 
-                    ALTER COLUMN major_resources TYPE JSONB USING to_jsonb(major_resources),
-                    ALTER COLUMN major_cities TYPE JSONB USING to_jsonb(major_cities),
-                    ALTER COLUMN cultural_traits TYPE JSONB USING to_jsonb(cultural_traits),
-                    ALTER COLUMN neighboring_nations TYPE JSONB USING to_jsonb(neighboring_nations);
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'nations' AND column_name = 'major_resources' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE Nations
+                            ALTER COLUMN major_resources DROP DEFAULT,
+                            ALTER COLUMN major_resources TYPE JSONB USING to_jsonb(major_resources),
+                            ALTER COLUMN major_resources SET DEFAULT '[]'::jsonb;
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'nations' AND column_name = 'major_cities' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE Nations
+                            ALTER COLUMN major_cities DROP DEFAULT,
+                            ALTER COLUMN major_cities TYPE JSONB USING to_jsonb(major_cities),
+                            ALTER COLUMN major_cities SET DEFAULT '[]'::jsonb;
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'nations' AND column_name = 'cultural_traits' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE Nations
+                            ALTER COLUMN cultural_traits DROP DEFAULT,
+                            ALTER COLUMN cultural_traits TYPE JSONB USING to_jsonb(cultural_traits),
+                            ALTER COLUMN cultural_traits SET DEFAULT '[]'::jsonb;
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'nations' AND column_name = 'neighboring_nations' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE Nations
+                            ALTER COLUMN neighboring_nations DROP DEFAULT,
+                            ALTER COLUMN neighboring_nations TYPE JSONB USING to_jsonb(neighboring_nations),
+                            ALTER COLUMN neighboring_nations SET DEFAULT '[]'::jsonb;
+                    END IF;
+                END $$;
                 ''',
                 '''
                 ALTER TABLE NationalConflicts 
@@ -2683,8 +2783,16 @@ async def create_all_tables():
                     ALTER COLUMN relationships TYPE JSONB USING to_jsonb(relationships);
                 ''',
                 '''
-                ALTER TABLE CanonicalEvents 
-                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'canonicalevents' AND column_name = 'tags' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE CanonicalEvents
+                            ALTER COLUMN tags DROP DEFAULT,
+                            ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags),
+                            ALTER COLUMN tags SET DEFAULT '[]'::jsonb;
+                    END IF;
+                END $$;
                 ''',
                 '''
                 ALTER TABLE nyx_brain_checkpoints 
@@ -2695,25 +2803,44 @@ async def create_all_tables():
                     ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
                 ''',
                 '''
-                ALTER TABLE unified_memories 
-                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'unified_memories' AND column_name = 'tags' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE unified_memories
+                            ALTER COLUMN tags DROP DEFAULT,
+                            ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags),
+                            ALTER COLUMN tags SET DEFAULT '[]'::jsonb;
+                    END IF;
+                END $$;
                 ''',
                 '''
-                ALTER TABLE NPCMemories 
-                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                DROP VIEW IF EXISTS npc_memories;
+                ALTER TABLE NPCMemories
+                    ALTER COLUMN tags DROP DEFAULT,
+                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags),
+                    ALTER COLUMN tags SET DEFAULT '[]'::jsonb;
                 ''',
                 '''
-                ALTER TABLE WorldLore 
-                    ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags);
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'worldlore' AND column_name = 'tags' AND data_type <> 'jsonb') THEN
+                        ALTER TABLE WorldLore
+                            ALTER COLUMN tags DROP DEFAULT,
+                            ALTER COLUMN tags TYPE JSONB USING to_jsonb(tags),
+                            ALTER COLUMN tags SET DEFAULT '[]'::jsonb;
+                    END IF;
+                END $$;
                 ''',
                 '''
                 ALTER TABLE Quests
-                    ALTER COLUMN reward TYPE JSONB USING to_jsonb(tags);
+                    ALTER COLUMN reward TYPE JSONB USING to_jsonb(reward);
                 ''',
                 '''
                 ALTER TABLE Factions
-                    ADD COLUMN IF NOT EXISTS hierarchy_type TEXT DEFAULT 'informal';
-                    ADD COLUMN IF NOT EXISTS resources TYPE JSONB USING to_jsonb(tags);
+                    ADD COLUMN IF NOT EXISTS hierarchy_type TEXT DEFAULT 'informal',
+                    ADD COLUMN IF NOT EXISTS resources JSONB DEFAULT '[]'::jsonb;
                 ''',
                 '''
                 ALTER TABLE unified_memories 
@@ -2930,15 +3057,18 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                DO $$ 
+                ALTER TABLE PlayerStats ADD COLUMN IF NOT EXISTS player_name TEXT NOT NULL DEFAULT 'Chase';
+                ''',
+                '''
+                DO $$
                 BEGIN
                     IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint 
+                        SELECT 1 FROM pg_constraint
                         WHERE conname = 'playerstats_user_conversation_player_unique'
                         OR conname = 'playerstats_user_id_conversation_id_player_name_key'
                     ) THEN
-                        ALTER TABLE PlayerStats 
-                        ADD CONSTRAINT playerstats_user_conversation_player_unique 
+                        ALTER TABLE PlayerStats
+                        ADD CONSTRAINT playerstats_user_conversation_player_unique
                         UNIQUE (user_id, conversation_id, player_name);
                     END IF;
                 END $$;
@@ -3040,7 +3170,11 @@ async def create_all_tables():
                 ALTER TABLE Quests ALTER COLUMN embedding TYPE vector(1536);
                 ''',
                 '''
+                DROP VIEW IF EXISTS npc_memories;
                 ALTER TABLE NPCMemories ALTER COLUMN embedding TYPE vector(1536);
+                ''',
+                '''
+                CREATE OR REPLACE VIEW npc_memories AS SELECT * FROM NPCMemories;
                 ''',
                 '''
                 ALTER TABLE unified_memories ALTER COLUMN embedding TYPE vector(1536);
@@ -3396,12 +3530,7 @@ async def create_all_tables():
                         ALTER TABLE Quests ALTER COLUMN embedding TYPE vector(1536);
                     END IF;
                     
-                    IF EXISTS (SELECT 1 FROM information_schema.columns 
-                               WHERE table_name = 'npcmemories' AND column_name = 'embedding') THEN
-                        ALTER TABLE NPCMemories ALTER COLUMN embedding TYPE vector(1536);
-                    END IF;
-                    
-                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
                                WHERE table_name = 'unified_memories' AND column_name = 'embedding') THEN
                         ALTER TABLE unified_memories ALTER COLUMN embedding TYPE vector(1536);
                     END IF;
