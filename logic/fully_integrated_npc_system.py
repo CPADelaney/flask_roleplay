@@ -50,19 +50,30 @@ from logic.dynamic_relationships import (
     drain_relationship_events_tool
 )
 
-# Import agent-based architecture components
-from npcs.npc_agent import NPCAgent
-from npcs.npc_agent_system import NPCAgentSystem
-from npcs.npc_coordinator import NPCAgentCoordinator
-from npcs.npc_decisions import NPCDecisionEngine
-from npcs.npc_relationship import NPCRelationshipManager
-from npcs.npc_memory import MemoryContext, NPCMemoryManager
+# Import agent-based architecture components lazily to avoid circular imports
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from npcs.npc_agent import NPCAgent
+    from npcs.npc_agent_system import NPCAgentSystem
 
 from npcs.belief_system_integration import NPCBeliefSystemIntegration, enhance_npc_with_belief_system
 from npcs.lore_context_manager import LoreContextManager
 from npcs.npc_behavior import BehaviorEvolution, NPCBehavior
 from npcs.npc_learning_adaptation import NPCLearningAdaptation, NPCLearningManager
 from npcs.npc_perception import EnvironmentPerception, PerceptionContext
+
+
+def _get_agent_system_class():
+    """Lazily import and return the NPCAgentSystem class."""
+    from npcs.npc_agent_system import NPCAgentSystem as _NPCAgentSystem
+    return _NPCAgentSystem
+
+
+def _create_npc_agent(npc_id: int, user_id: int, conversation_id: int):
+    """Lazily create an NPCAgent instance."""
+    from npcs.npc_agent import NPCAgent as _NPCAgent
+    return _NPCAgent(npc_id, user_id, conversation_id)
 
 # Import for memory system
 try:
@@ -163,7 +174,8 @@ class IntegratedNPCSystem:
         self.activity_manager = ActivityManager()
         
         # Initialize the agent system - core component for NPC agentic behavior
-        self.agent_system = NPCAgentSystem(user_id, conversation_id, connection_pool)
+        AgentSystem = _get_agent_system_class()
+        self.agent_system = AgentSystem(user_id, conversation_id, connection_pool)
         
         # Initialize the NPC creation handler from the new system
         self.npc_creation_handler = NPCCreationHandler()
@@ -540,7 +552,7 @@ class IntegratedNPCSystem:
         try:
             # Initialize NPC agent as before
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             
@@ -642,7 +654,7 @@ class IntegratedNPCSystem:
         """
         # Get or create NPC agent
         if npc_id not in self.agent_system.npc_agents:
-            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
         
         agent = self.agent_system.npc_agents[npc_id]
         
@@ -789,7 +801,7 @@ class IntegratedNPCSystem:
         try:
             # Create agent if it doesn't exist
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             
@@ -1033,7 +1045,7 @@ class IntegratedNPCSystem:
         
         # Get or create NPC agent
         if npc_id not in self.agent_system.npc_agents:
-            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
         
         agent = self.agent_system.npc_agents[npc_id]
         
@@ -1212,7 +1224,7 @@ class IntegratedNPCSystem:
         """
         # Get or create the NPC agent
         if npc_id not in self.agent_system.npc_agents:
-            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
         
         agent = self.agent_system.npc_agents[npc_id]
         
@@ -1350,7 +1362,7 @@ class IntegratedNPCSystem:
             if entity1_type == "npc":
                 # Get or create NPC agent
                 if entity1_id not in self.agent_system.npc_agents:
-                    self.agent_system.npc_agents[entity1_id] = NPCAgent(entity1_id, self.user_id, self.conversation_id)
+                    self.agent_system.npc_agents[entity1_id] = _create_npc_agent(entity1_id, self.user_id, self.conversation_id)
                 
                 # Create memory of this link
                 agent = self.agent_system.npc_agents[entity1_id]
@@ -1447,7 +1459,7 @@ class IntegratedNPCSystem:
             if entity1_type == "npc":
                 # Get or create NPC agent
                 if entity1_id not in self.agent_system.npc_agents:
-                    self.agent_system.npc_agents[entity1_id] = NPCAgent(entity1_id, self.user_id, self.conversation_id)
+                    self.agent_system.npc_agents[entity1_id] = _create_npc_agent(entity1_id, self.user_id, self.conversation_id)
                 
                 agent = self.agent_system.npc_agents[entity1_id]
                 memory_system = await agent._get_memory_system()
@@ -1545,7 +1557,7 @@ class IntegratedNPCSystem:
             if entity1_type == "npc":
                 # Get or create NPC agent
                 if entity1_id not in self.agent_system.npc_agents:
-                    self.agent_system.npc_agents[entity1_id] = NPCAgent(entity1_id, self.user_id, self.conversation_id)
+                    self.agent_system.npc_agents[entity1_id] = _create_npc_agent(entity1_id, self.user_id, self.conversation_id)
                 
                 agent = self.agent_system.npc_agents[entity1_id]
                 memory_system = await agent._get_memory_system()
@@ -1600,7 +1612,7 @@ class IntegratedNPCSystem:
         try:
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             
@@ -2181,7 +2193,7 @@ class IntegratedNPCSystem:
             first_npc = npc_ids[0]
             agent1 = self.agent_system.npc_agents.get(first_npc)
             if not agent1:
-                self.agent_system.npc_agents[first_npc] = NPCAgent(first_npc, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[first_npc] = _create_npc_agent(first_npc, self.user_id, self.conversation_id)
                 agent1 = self.agent_system.npc_agents[first_npc]
             
             first_perception = await agent1.perceive_environment(context)
@@ -2199,7 +2211,7 @@ class IntegratedNPCSystem:
             for npc_id in npc_ids[1:]:
                 agent = self.agent_system.npc_agents.get(npc_id)
                 if not agent:
-                    self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                    self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
                     agent = self.agent_system.npc_agents[npc_id]
                 
                 # Add the previous statement to context
@@ -2339,7 +2351,7 @@ class IntegratedNPCSystem:
         try:
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             memory_system = await agent._get_memory_system()
@@ -2589,7 +2601,7 @@ class IntegratedNPCSystem:
             
             # Get or create source NPC agent
             if source_npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[source_npc_id] = NPCAgent(source_npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[source_npc_id] = _create_npc_agent(source_npc_id, self.user_id, self.conversation_id)
             
             # Find related NPCs using the new relationship system
             related_npcs = []
@@ -2723,7 +2735,7 @@ class IntegratedNPCSystem:
         try:
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             mask_manager = await agent._get_mask_manager()
@@ -2759,7 +2771,7 @@ class IntegratedNPCSystem:
         try:
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             memory_system = await agent._get_memory_system()
@@ -2799,7 +2811,7 @@ class IntegratedNPCSystem:
         try:
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             memory_system = await agent._get_memory_system()
@@ -2834,7 +2846,7 @@ class IntegratedNPCSystem:
         try:
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             memory_system = await agent._get_memory_system()
@@ -3023,7 +3035,7 @@ class IntegratedNPCSystem:
                         
                         # Get or create agent
                         if npc_id not in self.agent_system.npc_agents:
-                            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                            self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
                         
                         agent = self.agent_system.npc_agents[npc_id]
                         
@@ -3289,7 +3301,7 @@ class IntegratedNPCSystem:
                 try:
                     # Get or create NPC agent
                     if npc_id not in self.agent_system.npc_agents:
-                        self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                        self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
                     
                     agent = self.agent_system.npc_agents[npc_id]
                     
@@ -3550,7 +3562,7 @@ class IntegratedNPCSystem:
         try:
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             
@@ -3857,7 +3869,7 @@ class IntegratedNPCSystem:
         try:
             # Get or create NPC agent
             if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = _create_npc_agent(npc_id, self.user_id, self.conversation_id)
             
             agent = self.agent_system.npc_agents[npc_id]
             
