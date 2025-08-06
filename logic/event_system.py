@@ -21,7 +21,7 @@ from nyx.governance_helpers import with_governance
 
 from db.connection import get_db_connection_context  # Updated to use context manager
 
-from logic.relationship_manager import OptimizedRelationshipManager
+from logic.dynamic_relationships import OptimizedRelationshipManager
 from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
 from logic.artifact_system.artifact_manager import ArtifactManager
 from logic.lore.core.system import LoreSystem
@@ -690,4 +690,5 @@ class EventSystem:
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
             return {"error": str(e)}
+
 
