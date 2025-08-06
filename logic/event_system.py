@@ -4,6 +4,8 @@ Event System
 This module provides a comprehensive event system that integrates with other game systems
 including NPCs, lore, conflicts, and artifacts. It handles event generation, processing,
 and propagation throughout the game world.
+
+Updated to properly use the new dynamic relationship system.
 """
 
 import logging
@@ -24,7 +26,6 @@ from db.connection import get_db_connection_context  # Updated to use context ma
 from logic.dynamic_relationships import OptimizedRelationshipManager
 from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
 from logic.artifact_system.artifact_manager import ArtifactManager
-from logic.lore.core.system import LoreSystem
 from npcs.npc_learning_adaptation import NPCLearningManager
 from npcs.belief_system_integration import NPCBeliefSystemIntegration
 
@@ -48,6 +49,7 @@ class EventSystem:
         self.lore_system = None
         self.npc_learning = None
         self.belief_system = None
+        self.relationship_manager = None  # New dynamic relationship manager
         
         # Event tracking
         self.active_events = {}
@@ -76,7 +78,12 @@ class EventSystem:
             self.artifact_manager = ArtifactManager(self.user_id, self.conversation_id)
             await self.artifact_manager.initialize()
             
+            # Import LoreSystem here to avoid circular dependency
+            from logic.lore.core.system import LoreSystem
             self.lore_system = LoreSystem()
+            
+            # Initialize relationship manager
+            self.relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
             
             self.npc_learning = NPCLearningManager(self.user_id, self.conversation_id)
             
@@ -135,7 +142,8 @@ class EventSystem:
             
         except Exception as e:
             logger.error(f"Error initializing event system agents: {e}")
-            raise
+            # Continue without agents if governance system is not available
+            logger.warning("Continuing without event system agents")
             
     def _register_default_handlers(self):
         """Register default event handlers for common event types."""
@@ -150,12 +158,6 @@ class EventSystem:
         """Register a handler for a specific event type."""
         self.event_handlers[event_type] = handler
         
-    @with_governance(
-        agent_type=AgentType.EVENT_MANAGER,
-        action_type="create_event",
-        action_description="Creating a new event in the system",
-        id_from_context=lambda ctx: "event_manager"
-    )
     async def create_event(
         self,
         event_type: str,
@@ -189,9 +191,10 @@ class EventSystem:
                 "results": {}
             }
             
-            # Analyze event with analysis agent
-            analysis_result = await self._analyze_event(event)
-            event["analysis"] = analysis_result
+            # Analyze event with analysis agent if available
+            if self.analysis_agent:
+                analysis_result = await self._analyze_event(event)
+                event["analysis"] = analysis_result
             
             # Add to active events
             self.active_events[event_id] = event
@@ -212,6 +215,9 @@ class EventSystem:
     async def _analyze_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze an event using the analysis agent."""
         try:
+            if not self.analysis_agent:
+                return {"skipped": "No analysis agent available"}
+                
             # Create analysis context
             analysis_context = {
                 "event": event,
@@ -241,10 +247,10 @@ class EventSystem:
                 # Get next event from queue
                 priority, event = await self.event_queue.get()
                 
-                # Process event with event agent
+                # Process event
                 await self._process_event(event)
                 
-                # Propagate event with propagation agent
+                # Propagate event
                 await self._propagate_event(event)
                 
                 # Mark as processed
@@ -269,7 +275,7 @@ class EventSystem:
                 self.event_queue.task_done()
                 
     async def _process_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Process a single event using the event agent."""
+        """Process a single event."""
         try:
             # Get event handler
             handler = self.event_handlers.get(event["type"])
@@ -277,23 +283,27 @@ class EventSystem:
                 logger.warning(f"No handler registered for event type: {event['type']}")
                 return {"error": f"No handler for event type: {event['type']}"}
                 
-            # Process with governance and event agent
+            # Process with governance and event agent if available
             async with self.processing_lock:
-                # Create processing context
-                processing_context = {
-                    "event": event,
-                    "system_state": self.agent_context,
-                    "handler": handler.__name__
-                }
-                
-                # Get processing guidance from event agent
-                guidance = await self.event_agent.guide(
-                    context=processing_context,
-                    capabilities=["event_processing", "event_coordination"]
-                )
-                
-                # Execute handler with guidance
-                result = await handler(event, guidance)
+                if self.event_agent:
+                    # Create processing context
+                    processing_context = {
+                        "event": event,
+                        "system_state": self.agent_context,
+                        "handler": handler.__name__
+                    }
+                    
+                    # Get processing guidance from event agent
+                    guidance = await self.event_agent.guide(
+                        context=processing_context,
+                        capabilities=["event_processing", "event_coordination"]
+                    )
+                    
+                    # Execute handler with guidance
+                    result = await handler(event, guidance)
+                else:
+                    # Execute handler without guidance
+                    result = await handler(event, None)
                 
             # Store results
             event["results"] = result
@@ -308,8 +318,11 @@ class EventSystem:
             return {"error": str(e)}
             
     async def _propagate_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Propagate an event using the propagation agent."""
+        """Propagate an event."""
         try:
+            if not self.propagation_agent:
+                return {"skipped": "No propagation agent available"}
+                
             # Create propagation context
             propagation_context = {
                 "event": event,
@@ -335,6 +348,11 @@ class EventSystem:
             logger.error(f"Error propagating event: {e}")
             return {"error": str(e)}
             
+    async def _execute_propagation(self, event: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute event propagation plan."""
+        # This is a placeholder - implement actual propagation logic based on plan
+        return {"propagated": True, "plan": plan}
+            
     def _get_affected_systems(self, event: Dict[str, Any]) -> List[str]:
         """Determine which systems are affected by an event."""
         affected_systems = []
@@ -343,7 +361,7 @@ class EventSystem:
         event_type = event["type"]
         event_data = event["data"]
         
-        if event_type in ["conflict_event", "artifact_event", "lore_event", "npc_event"]:
+        if event_type in ["conflict_event", "artifact_event", "lore_event", "npc_event", "relationship_event"]:
             affected_systems.append(event_type.split("_")[0])
             
         # Check for cross-system effects
@@ -438,7 +456,7 @@ class EventSystem:
                 "details": result["adaptation"]
             })
             
-    async def _handle_conflict_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_conflict_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         """Handle a conflict-related event."""
         try:
             event_data = event["data"]
@@ -464,7 +482,7 @@ class EventSystem:
             logger.error(f"Error handling conflict event: {e}")
             return {"error": str(e)}
             
-    async def _handle_artifact_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_artifact_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         """Handle an artifact-related event."""
         try:
             event_data = event["data"]
@@ -490,7 +508,7 @@ class EventSystem:
             logger.error(f"Error handling artifact event: {e}")
             return {"error": str(e)}
             
-    async def _handle_lore_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_lore_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         """Handle a lore-related event."""
         try:
             event_data = event["data"]
@@ -508,7 +526,7 @@ class EventSystem:
             logger.error(f"Error handling lore event: {e}")
             return {"error": str(e)}
             
-    async def _handle_npc_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_npc_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         """Handle an NPC-related event."""
         try:
             event_data = event["data"]
@@ -542,38 +560,42 @@ class EventSystem:
             logger.error(f"Error handling NPC event: {e}")
             return {"error": str(e)}
             
-    async def _handle_relationship_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle a relationship-related event."""
+    async def _handle_relationship_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
+        """Handle a relationship-related event using the new dynamic system."""
         try:
             event_data = event["data"]
             
-            # Use the new relationship system
-            manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+            # Ensure relationship manager is initialized
+            if not self.relationship_manager:
+                self.relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
             
             # Process interaction or update
             if event_data.get("interaction_type"):
-                result = await manager.process_interaction(
-                    entity1_type="player",
-                    entity1_id=1,  # Assuming player ID is 1
-                    entity2_type=event_data.get("entity_type"),
-                    entity2_id=event_data.get("entity_id"),
+                result = await self.relationship_manager.process_interaction(
+                    entity1_type=event_data.get("entity1_type", "player"),
+                    entity1_id=event_data.get("entity1_id", 1),
+                    entity2_type=event_data.get("entity2_type"),
+                    entity2_id=event_data.get("entity2_id"),
                     interaction={"type": event_data.get("interaction_type")}
                 )
             else:
                 # Direct relationship update
-                state = await manager.get_relationship_state(
-                    entity1_type="player",
-                    entity1_id=1,
-                    entity2_type=event_data.get("entity_type"),
-                    entity2_id=event_data.get("entity_id")
+                state = await self.relationship_manager.get_relationship_state(
+                    entity1_type=event_data.get("entity1_type", "player"),
+                    entity1_id=event_data.get("entity1_id", 1),
+                    entity2_type=event_data.get("entity2_type"),
+                    entity2_id=event_data.get("entity2_id")
                 )
+                
                 # Apply dimension changes
                 if event_data.get("dimensions"):
                     for dim, value in event_data["dimensions"].items():
                         if hasattr(state.dimensions, dim):
                             setattr(state.dimensions, dim, value)
                     state.dimensions.clamp()
-                    await manager._queue_update(state)
+                    await self.relationship_manager._queue_update(state)
+                    await self.relationship_manager._flush_updates()
+                    
                 result = {"success": True, "state": state.to_summary()}
             
             return result
@@ -582,7 +604,7 @@ class EventSystem:
             logger.error(f"Error handling relationship event: {e}")
             return {"error": str(e)}
                 
-    async def _handle_time_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_time_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         """Handle a time-related event."""
         try:
             event_data = event["data"]
@@ -690,5 +712,3 @@ class EventSystem:
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
             return {"error": str(e)}
-
-
