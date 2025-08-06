@@ -19,8 +19,23 @@ from logic.json_helpers import safe_json_loads
 logger = logging.getLogger(__name__)
 
 # Nyx system imports
-from nyx.nyx_agent_sdk import process_user_input as nyx_process_input
-from memory.memory_nyx_integration import get_memory_nyx_bridge
+# Import Nyx integrations lazily to avoid circular dependencies
+nyx_process_input = None
+
+
+def get_nyx_process_input():
+    """Lazily import and return Nyx's process_user_input function."""
+    global nyx_process_input
+    if nyx_process_input is None:
+        from nyx.nyx_agent_sdk import process_user_input as _process_user_input
+        nyx_process_input = _process_user_input
+    return nyx_process_input
+
+
+async def get_memory_nyx_bridge_lazy(user_id: int, conversation_id: int):
+    """Lazily import and return the memory bridge."""
+    from memory.memory_nyx_integration import get_memory_nyx_bridge as _get_memory_nyx_bridge
+    return await _get_memory_nyx_bridge(user_id, conversation_id)
 
 # Try to import prepare_context if available
 try:
@@ -1077,7 +1092,8 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
             context_data["preset_info"] = preset_info
             
             # Process through Nyx
-            nyx_result = await nyx_process_input(
+            nyx_process_input_fn = get_nyx_process_input()
+            nyx_result = await nyx_process_input_fn(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 user_input=user_input,
@@ -1273,7 +1289,7 @@ DO NOT produce user-facing text here; only the JSON.
 
         # Store reflection in memory system
         try:
-            memory_bridge = await get_memory_nyx_bridge(user_id, conversation_id)
+            memory_bridge = await get_memory_nyx_bridge_lazy(user_id, conversation_id)
             await memory_bridge.add_memory(
                 memory_text=f"Internal reflection: {reflection_notes}",
                 memory_type="reflection",
