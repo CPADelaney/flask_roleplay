@@ -21,8 +21,7 @@ from memory.wrapper import MemorySystem
 from memory.core import MemoryType, MemorySignificance
 from npcs.npc_behavior import BehaviorEvolution
 
-# Import centralized LLM functions
-from logic.chatgpt_integration import get_async_openai_client, get_chatgpt_response, TEMPERATURE_SETTINGS
+
 import openai
 
 logger = logging.getLogger(__name__)
@@ -190,6 +189,7 @@ async def generate_dynamic_actions_with_gpt(
     Returns:
         A list of action dicts
     """
+    from logic.chatgpt_integration import get_async_openai_client, get_chatgpt_response, TEMPERATURE_SETTINGS
     with function_span("generate_dynamic_actions_with_gpt"):
         # Get async OpenAI client
         client = get_async_openai_client()
@@ -1081,6 +1081,7 @@ async def generate_decision_narrative(
         npc_data: NPC stats
         perception: NPC perception
     """
+    from logic.chatgpt_integration import get_async_openai_client, get_chatgpt_response, TEMPERATURE_SETTINGS
     with function_span("generate_decision_narrative"):
         # Get async OpenAI client
         client = get_async_openai_client()
