@@ -13,9 +13,6 @@ from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field, validator
 
-# Import centralized integration
-from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
-
 # Import Agents SDK components
 from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
 from agents import RunContextWrapper
@@ -157,6 +154,7 @@ class ModerationCheck(BaseModel):
 # Fallback functions for when agents aren't available
 async def _fallback_moderation_check(text: str) -> ModerationCheck:
     """Fallback moderation check using async OpenAI client."""
+    from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
     try:
         if not text:
             return ModerationCheck(is_appropriate=True, reasoning="No text to check")
