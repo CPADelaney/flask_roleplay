@@ -18,9 +18,6 @@ from typing import List, Dict, Any, Optional, Tuple, Union, TypedDict, Set
 from collections import OrderedDict
 from pydantic import BaseModel, validator, Field
 
-# Import centralized integration functions
-from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
-
 # Import Agents SDK components
 from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff, ModelSettings
 from agents.tracing import custom_span, generation_span, function_span
@@ -93,6 +90,7 @@ else:
 # Fallback generation functions using async OpenAI client
 async def _fallback_generate_outcome(action_data: Dict[str, Any]) -> Dict[str, Any]:
     """Fallback outcome generation using async OpenAI client."""
+    from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
     try:
         client = get_async_openai_client()
         
@@ -149,6 +147,7 @@ async def _fallback_generate_interaction_details(
     location: str
 ) -> str:
     """Fallback interaction detail generation using async OpenAI client."""
+    from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
     try:
         client = get_async_openai_client()
         
@@ -192,6 +191,7 @@ async def _fallback_generate_activity(
     npc_name: str
 ) -> str:
     """Fallback activity generation using async OpenAI client."""
+    from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
     try:
         client = get_async_openai_client()
         
@@ -1202,6 +1202,7 @@ class NPCAgent:
             
     async def _fallback_make_decision(self, context: Dict[str, Any]) -> NPCAction:
         """Fallback decision making using async OpenAI client."""
+        from logic.chatgpt_integration import get_agents_openai_model, get_async_openai_client
         try:
             client = get_async_openai_client()
             
