@@ -149,11 +149,6 @@ class KeyValueInt(StrictBaseModel):
     key: str
     value: int
 
-class KeyValueDict(StrictBaseModel):
-    """Dict key-value pair (for nested structures like schedule)"""
-    key: str
-    value: Dict[str, Any]
-
 # Schedule models using array format
 class DaySchedule(StrictBaseModel):
     """Schedule for a single day"""
@@ -289,10 +284,14 @@ class InventoryItem(StrictBaseModel):
     item_effect: Optional[str] = None
     category: Optional[str] = None
 
+class InventoryRemovedItem(StrictBaseModel):
+    """Item removed from inventory"""
+    name: str
+
 class InventoryUpdates(StrictBaseModel):
     player_name: str = "Chase"
     added_items: List[Union[str, InventoryItem]] = Field(default_factory=list)
-    removed_items: List[Union[str, Dict[str, str]]] = Field(default_factory=list)
+    removed_items: List[Union[str, InventoryRemovedItem]] = Field(default_factory=list)
 
 # Perk model
 class Perk(StrictBaseModel):
@@ -362,14 +361,14 @@ class UniversalUpdateInput(StrictBaseModel):
 # Tool output models
 class NormalizedJson(StrictBaseModel):
     ok: bool
-    data: Optional[Dict[str, Any]] = None
+    data: List[KeyValuePair] = Field(default_factory=list)
     error: Optional[str] = None
     message: Optional[str] = None
     original: Optional[str] = None
 
 class PlayerStatsExtraction(StrictBaseModel):
     player_name: str = "Chase"
-    stats: Dict[str, int] = Field(default_factory=dict)
+    stats: List[StatEntry] = Field(default_factory=list)
 
 class NPCSimpleUpdate(StrictBaseModel):
     npc_id: int
@@ -388,7 +387,7 @@ class RelationshipSimpleChange(StrictBaseModel):
 class ApplyUpdatesResult(StrictBaseModel):
     success: bool
     updates_applied: Optional[int] = None
-    details: Optional[Dict[str, Any]] = None
+    details: Optional[List[KeyValuePair]] = None
     error: Optional[str] = None
     reason: Optional[str] = None
 
@@ -507,6 +506,10 @@ async def normalize_json(ctx, json_str: str) -> NormalizedJson:
     try:
         # Try to parse as-is first
         data = json.loads(json_str)
+        if isinstance(data, dict):
+            data = dict_to_array(data)
+        elif not isinstance(data, list):
+            data = []
         return NormalizedJson(ok=True, data=data)
     except json.JSONDecodeError:
         # Simple normalization - replace curly quotes
@@ -514,9 +517,13 @@ async def normalize_json(ctx, json_str: str) -> NormalizedJson:
             .replace("\u201c", '"').replace("\u201d", '"')  # Curly double quotes
             .replace("\u2018", "'").replace("\u2019", "'")  # Curly single quotes
         )
-        
+
         try:
             data = json.loads(normalized)
+            if isinstance(data, dict):
+                data = dict_to_array(data)
+            elif not isinstance(data, list):
+                data = []
             return NormalizedJson(ok=True, data=data)
         except json.JSONDecodeError as e:
             logging.error(f"Failed to normalize JSON: {e}")
@@ -582,9 +589,9 @@ async def extract_player_stats(ctx, narrative: str) -> PlayerStatsExtraction:
         action_type="extract_player_stats",
         action_details={"narrative_length": len(narrative)}
     )
-    
+
     if not permission["approved"]:
-        return PlayerStatsExtraction(player_name="Chase", stats={})
+        return PlayerStatsExtraction(player_name="Chase", stats=[])
     
     changes = {}
     
@@ -603,7 +610,10 @@ async def extract_player_stats(ctx, narrative: str) -> PlayerStatsExtraction:
         result={"stats_changed": len(changes)}
     )
     
-    return PlayerStatsExtraction(player_name="Chase", stats=changes)
+    return PlayerStatsExtraction(
+        player_name="Chase",
+        stats=[StatEntry(key=k, value=v) for k, v in changes.items()]
+    )
 
 @function_tool
 async def apply_universal_updates(ctx, updates_json: str) -> ApplyUpdatesResult:
@@ -617,10 +627,10 @@ async def apply_universal_updates(ctx, updates_json: str) -> ApplyUpdatesResult:
     except json.JSONDecodeError:
         normalized = await normalize_json(ctx, updates_json)
         if normalized.ok and normalized.data:
-            updates = normalized.data
+            updates = array_to_dict([item.model_dump() for item in normalized.data])
         else:
             return ApplyUpdatesResult(
-                success=False, 
+                success=False,
                 error=f"Invalid JSON: {normalized.error or 'Unknown error'}"
             )
     
@@ -664,7 +674,9 @@ async def apply_universal_updates(ctx, updates_json: str) -> ApplyUpdatesResult:
                 action={"type": "apply_updates"},
                 result={"success": True, "updates_applied": result.get("updates_applied", 0)}
             )
-            
+
+            if "details" in result and isinstance(result["details"], dict):
+                result["details"] = dict_to_array(result["details"])
             return ApplyUpdatesResult(**result)
     except Exception as e:
         logging.error(f"Error applying universal updates: {e}")
