@@ -20,7 +20,7 @@ from context.context_service import get_context_service
 from context.memory_manager import get_memory_manager
 
 # Import world simulation types
-from story_agent.world_director_agent import (
+from story_agent.world_simulation_models import (
     TimeOfDay, ActivityType, PowerDynamicType, WorldMood
 )
 
@@ -508,3 +508,4 @@ async def get_npc_initiated_activity(
     )
     
     return activity
+
