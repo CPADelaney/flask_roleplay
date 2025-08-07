@@ -270,18 +270,21 @@ class ContextConfig:
     def get_model_settings(self) -> ModelSettings:
         """
         Get model settings for Agents SDK.
-        
+
         Returns:
             ModelSettings object for the OpenAI Agents SDK
         """
         settings = self.get_section("agent_sdk").get("model_settings", {})
-        return ModelSettings(
-            temperature=settings.get("temperature", 0.1),
-            top_p=settings.get("top_p", 0.9),
-            max_tokens=settings.get("max_tokens", None),
-            presence_penalty=settings.get("presence_penalty", None),
-            frequency_penalty=settings.get("frequency_penalty", None),
-        )
+        kwargs = {
+            "top_p": settings.get("top_p", 0.9),
+            "max_tokens": settings.get("max_tokens", None),
+            "presence_penalty": settings.get("presence_penalty", None),
+            "frequency_penalty": settings.get("frequency_penalty", None),
+        }
+        temperature = settings.get("temperature")
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        return ModelSettings(**kwargs)
     
     def get_default_model(self) -> str:
         """

@@ -35,7 +35,7 @@ plot_hook_generator = Agent(
     Keep text intriguing. Do not wrap the JSON in markdown fences.
     """,
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.8))
+    model_settings=ModelSettings())
 
 class NPCMemoryManager(UnifiedMemoryManager):
     """

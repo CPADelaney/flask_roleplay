@@ -23,7 +23,6 @@ async def _summarise(text: str) -> str:
         model=DEFAULT_MODEL,
         instructions=SYSTEM_PROMPT,   # ← old “system” role
         input=text,                   # ← old “user” role
-        temperature=0.3,
         max_tokens=250,
         stream=True,
     )

@@ -2429,7 +2429,7 @@ Always maintain your dominant persona while being attentive to user needs and sy
     output_type=NarrativeResponse,
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.7)
+    model_settings=ModelSettings()
 )
 
 # ===== Main Functions (maintaining original signatures) =====
@@ -3052,7 +3052,7 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
         output_type=NarrativeResponse,
         input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
         model="gpt-5-nano",
-        model_settings=ModelSettings(temperature=0.7)
+        model_settings=ModelSettings()
     )
 
 async def create_preset_aware_nyx_agent(

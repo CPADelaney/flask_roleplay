@@ -517,7 +517,6 @@ class MemoryInterferenceManager:
                 model="gpt-5-nano",
                 instructions="You create blended false memories.",
                 input=prompt,
-                temperature=0.7
             )
             return resp.output_text.strip()
         except Exception as e:
@@ -550,7 +549,6 @@ class MemoryInterferenceManager:
                 model="gpt-5-nano",
                 instructions="You create temporally-confused false memories.",
                 input=prompt,
-                temperature=0.7
             )
             return resp.output_text.strip()
     
@@ -590,7 +588,6 @@ class MemoryInterferenceManager:
                 model="gpt-5-nano",
                 instructions="You craft emotionally weighted blended memories.",
                 input=prompt,
-                temperature=0.7
             )
             return resp.output_text.strip()
     
@@ -622,7 +619,6 @@ class MemoryInterferenceManager:
                 model="gpt-5-nano",
                 instructions="You produce generic blended false memories.",
                 input=prompt,
-                temperature=0.7
             )
             return resp.output_text.strip()
     

@@ -312,7 +312,6 @@ class EmotionalMemoryManager:
                     "Return ONLY the JSON object described—no extra text."
                 ),
                 input=prompt,
-                temperature=0.3,
             )
     
             # Parse and validate with Pydantic

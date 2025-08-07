@@ -178,7 +178,6 @@ class SemanticMemoryManager:
                     {"role": "system", "content": "You extract semantic abstractions from memories."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.4,
                 max_tokens=100
             )
             
@@ -358,7 +357,6 @@ class SemanticMemoryManager:
                     {"role": "system", "content": "You extract patterns from memory clusters."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,
                 max_tokens=300
             )
     
@@ -710,7 +708,6 @@ class SemanticMemoryManager:
                     {"role": "system", "content": "You generate counterfactual variations of memories."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
                 max_tokens=200
             )
             
@@ -882,10 +879,9 @@ class SemanticMemoryManager:
                 response = await client.chat.completions.create(
                     model="gpt-5-nano",
                     messages=[
-                        {"role": "system", "content": "You extract related topics from memory text."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.5,
+                    {"role": "system", "content": "You extract related topics from memory text."},
+                    {"role": "user", "content": prompt}
+                ],
                     max_tokens=100
                 )
                 
