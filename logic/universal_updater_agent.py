@@ -499,7 +499,7 @@ def convert_from_database_format(data: Dict[str, Any]) -> Dict[str, Any]:
 # ===============================================================================
 
 @function_tool
-async def normalize_json(ctx, json_str: str) -> NormalizedJson:
+async def normalize_json(ctx: RunContextWrapper, json_str: str) -> NormalizedJson:
     """
     Normalize JSON string, fixing common errors.
     """
@@ -535,7 +535,7 @@ async def normalize_json(ctx, json_str: str) -> NormalizedJson:
             )
 
 @function_tool
-async def check_npc_exists(ctx, npc_id: int) -> bool:
+async def check_npc_exists(ctx: RunContextWrapper, npc_id: int) -> bool:
     """Check if an NPC with the given ID exists in the database."""
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
@@ -575,7 +575,7 @@ async def check_npc_exists(ctx, npc_id: int) -> bool:
         return False
 
 @function_tool
-async def extract_player_stats(ctx, narrative: str) -> PlayerStatsExtraction:
+async def extract_player_stats(ctx: RunContextWrapper, narrative: str) -> PlayerStatsExtraction:
     """Extract player stat changes from narrative text."""
     stats = ["corruption", "confidence", "willpower", "obedience", 
             "dependency", "lust", "mental_resilience", "physical_endurance"]
@@ -616,7 +616,7 @@ async def extract_player_stats(ctx, narrative: str) -> PlayerStatsExtraction:
     )
 
 @function_tool
-async def apply_universal_updates(ctx, updates_json: str) -> ApplyUpdatesResult:
+async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> ApplyUpdatesResult:
     """
     Apply universal updates to the database.
     Handles conversion between array format (schema) and dict format (database).
