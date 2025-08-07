@@ -311,7 +311,7 @@ class ProceduralMemoryAgents:
             
             When explaining procedures, be concise but precise. Focus on key details rather than unnecessary explanations.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.2,  # Lower temperature for more consistent results
             ),
@@ -352,7 +352,7 @@ class ProceduralMemoryAgents:
             
             Be precise and focus on facts rather than unnecessary explanations.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.3,
             ),
@@ -393,7 +393,7 @@ class ProceduralMemoryAgents:
             
             Be concise and focus on key information.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.3,
             ),
@@ -436,7 +436,7 @@ class ProceduralMemoryAgents:
             
             Be concise and practical in your responses.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.2,
             ),
@@ -477,7 +477,7 @@ class ProceduralMemoryAgents:
             
             Be concise and provide practical advice.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.4,
             ),
@@ -517,7 +517,7 @@ class ProceduralMemoryAgents:
             
             Keep your responses concise and focused on helping the user accomplish their task.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.2,
             ),

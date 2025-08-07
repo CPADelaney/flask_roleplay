@@ -235,7 +235,7 @@ class ArtifactManager:
                     "Return structured JSON matching the GeneratedArtifact schema."
                 ),
                 model=OpenAIResponsesModel(
-                    model="gpt-4.1-nano",
+                    model="gpt-5-nano",
                     openai_client=get_async_openai_client()
                 ),
                 model_settings=ModelSettings(temperature=0.8),
@@ -253,7 +253,7 @@ class ArtifactManager:
                     "Return structured JSON matching the ArtifactAnalysisResult schema."
                 ),
                 model=OpenAIResponsesModel(
-                    model="gpt-4.1-nano",
+                    model="gpt-5-nano",
                     openai_client=get_async_openai_client()
                 ),
                 model_settings=ModelSettings(temperature=0.6),
@@ -270,7 +270,7 @@ class ArtifactManager:
                     "Return structured JSON matching the ArtifactIntegrationPlan schema."
                 ),
                 model=OpenAIResponsesModel(
-                    model="gpt-4.1-nano",
+                    model="gpt-5-nano",
                     openai_client=get_async_openai_client()
                 ),
                 model_settings=ModelSettings(temperature=0.7),

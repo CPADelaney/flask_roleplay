@@ -38,7 +38,7 @@ Return JSON **only** with:
   content          – a single sentence (≤ 160 chars) describing what Nyx does,
                      in her trademark sophisticated-dark style (PG-13).
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.8)
 )
 

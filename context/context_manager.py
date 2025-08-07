@@ -672,7 +672,7 @@ def create_context_manager_agent() -> Agent:
             apply_targeted_change_tool,
             prioritize_context_tool,
         ],
-        model="gpt-4.1-nano"
+        model="gpt-5-nano"
     )
     
     return agent

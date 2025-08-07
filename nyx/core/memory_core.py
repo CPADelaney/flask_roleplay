@@ -1822,7 +1822,7 @@ def create_memory_agent() -> Agent:
             get_memory_stats,
             run_maintenance
         ],
-        model="gpt-4.1-nano",
+        model="gpt-5-nano",
     )
 
 def create_retrieval_agent() -> Agent:
@@ -1846,7 +1846,7 @@ def create_retrieval_agent() -> Agent:
             retrieve_relevant_experiences,
             generate_conversational_recall
         ],
-        model="gpt-4.1-nano",
+        model="gpt-5-nano",
     )
 
 def create_reflection_agent() -> Agent:
@@ -1870,7 +1870,7 @@ def create_reflection_agent() -> Agent:
             detect_schema_from_memories,
             reflect_on_memories
         ],
-        model="gpt-4.1-nano",
+        model="gpt-5-nano",
     )
 
 # ==================== Main Memory Core Class ====================

@@ -12,7 +12,7 @@ class PipelineConfig:
     USE_REFLECTION = os.getenv("USE_REFLECTION", "false").lower() == "true"
     
     # Model settings
-    DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4.1-nano")
+    DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-5-nano")
     
     @classmethod
     def get_system_prompt(cls) -> str:

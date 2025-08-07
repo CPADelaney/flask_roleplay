@@ -135,7 +135,7 @@ async def get_chatgpt_response_no_function(
 
     # call the Responses API -----------------------------------------------
     response = await client.responses.create(
-        model="gpt-4.1-nano",   # or "gpt-4.1-nano" if you really need that tier
+        model="gpt-5-nano",   # or "gpt-5-nano" if you really need that tier
         input=messages         # Responses API uses the *single* `input` field
     )                          # Streaming? add stream=True and iterate.
 

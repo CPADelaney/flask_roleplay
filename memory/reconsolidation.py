@@ -413,7 +413,7 @@ class ReconsolidationManager:
         try:
             # Use chat completions instead of responses API
             response = await client.chat.completions.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You simulate human memory reconsolidation."},
                     {"role": "user", "content": prompt}

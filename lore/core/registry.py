@@ -147,7 +147,7 @@ class ManagerRegistry:
                 "and orchestrate handoffs between managers for complex tasks. "
                 "Always consider manager relationships and dependencies."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
         )
 
     def _register_default_managers(self) -> None:

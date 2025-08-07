@@ -4,7 +4,7 @@ import asyncio
 import datetime
 import openai
 
-DEFAULT_MODEL = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-4.1-nano")
+DEFAULT_MODEL = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-5-nano")
 
 from nyx.core.memory.memory_manager import MemoryManager
 

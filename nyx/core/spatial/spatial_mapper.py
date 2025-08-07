@@ -448,7 +448,7 @@ class SpatialMapper:
                 self.calculate_region_connections,
                 self.identify_landmarks
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_perception_agent(self) -> Agent:
@@ -473,7 +473,7 @@ class SpatialMapper:
                 self.estimate_distances,
                 self.reconcile_observations
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_navigator_agent(self) -> Agent:
@@ -499,7 +499,7 @@ class SpatialMapper:
                 self.get_nearest_landmarks,
                 self.update_route
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     @function_tool

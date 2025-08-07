@@ -615,7 +615,7 @@ class RelationshipReflectionSystem:
             
             Make each reflection unique and tailored to the specific relationship context.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7,
                 top_p=0.95,
@@ -647,7 +647,7 @@ class RelationshipReflectionSystem:
             similar to how a person might reflect on reaching an important point in
             a relationship with someone they care about.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7,
                 top_p=0.95,
@@ -676,7 +676,7 @@ class RelationshipReflectionSystem:
             Provide insightful pattern analyses that help Nyx understand
             the dynamics and trends within this relationship.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.4,
                 top_p=0.9,
@@ -1136,7 +1136,7 @@ class RelationshipReflectionSystem:
             Create an authentic, nuanced perspective similar to how a person
             might internally consider their feelings about a relationship.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.6,
                 top_p=0.9,

@@ -290,7 +290,7 @@ class MemorySchemaManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You detect patterns in memories to form schemas.",
                 input=prompt,
                 temperature=0.4,
@@ -821,7 +821,7 @@ class MemorySchemaManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You rate memory/schema relevance.",
                 input=prompt,
                 temperature=0.1
@@ -1005,7 +1005,7 @@ class MemorySchemaManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You interpret memories through cognitive schemas.",
                 input=prompt,
                 temperature=0.4
@@ -1174,7 +1174,7 @@ class MemorySchemaManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You calculate schema/memory conflict.",
                 input=prompt,
                 temperature=0.1
@@ -1211,7 +1211,7 @@ class MemorySchemaManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You explain memory/schema conflicts.",
                 input=prompt,
                 temperature=0.4
@@ -1357,7 +1357,7 @@ class MemorySchemaManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You evolve schemas to handle conflicts.",
                 input=prompt,
                 temperature=0.4,
@@ -1520,7 +1520,7 @@ class MemorySchemaManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You merge schemas.",
                 input=prompt,
                 temperature=0.4,
@@ -1725,7 +1725,7 @@ class MemorySchemaManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You rate schema similarity.",
                 input=prompt,
                 temperature=0.1,

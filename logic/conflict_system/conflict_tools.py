@@ -113,7 +113,7 @@ Return JSON with:
 
 Keep content suggestive but not explicit. Focus on power dynamics and psychological manipulation.
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.8)
 )
 
@@ -154,7 +154,7 @@ Return JSON:
   "femdom_elements": ["element1", "element2"]
 }
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.9)
 )
 
@@ -186,7 +186,7 @@ Return JSON:
   "potential_outcomes": ["outcome1", "outcome2", "outcome3"]
 }
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.85)
 )
 
@@ -230,7 +230,7 @@ Return JSON:
   ]
 }
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.9)
 )
 
@@ -256,7 +256,7 @@ Return JSON:
   }
 }
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.85)
 )
 
@@ -287,7 +287,7 @@ Return JSON:
 
 Be smart about titles vs names (e.g., "The Baron" vs "Baron Harwick").
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.3)
 )
 
@@ -315,7 +315,7 @@ Return JSON:
   "wild_cards": ["unpredictable elements"]
 }
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.6)
 )
 
@@ -349,7 +349,7 @@ Return JSON with 3-5 paths:
 
 Make each path feel distinct and tied to the specific conflict.
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.9)
 )
 
@@ -376,7 +376,7 @@ Return JSON:
 
 Secrets should feel personal and create future drama.
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.85)
 )
 
@@ -401,7 +401,7 @@ Return JSON:
 
 Keep descriptions concise but atmospheric. Reference the conflict origins when possible.
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.9)
 )
 
@@ -426,7 +426,7 @@ Return JSON:
 
 Write in active voice with vivid language. Make players feel the weight of events.
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.8)
 )
 
@@ -452,7 +452,7 @@ Return JSON:
 Examples: "Rumors spread through taverns...", "Tension crackles in the air as..."
 Keep it diegetic and immersive.
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.85)
 )
 
@@ -1762,7 +1762,7 @@ async def _internal_get_calendar_context_logic(ctx: RunContextWrapper) -> Dict[s
             "formatted_date": f"Day {await _internal_get_current_day_logic(ctx)}"
         }
 
-async def _gpt_json(system: str, user: str, *, model: str = "gpt-4.1-nano") -> Any:
+async def _gpt_json(system: str, user: str, *, model: str = "gpt-5-nano") -> Any:
     if get_openai_client is None:
         raise RuntimeError("OpenAI client unavailable – falling back")
 

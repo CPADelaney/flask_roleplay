@@ -2090,7 +2090,7 @@ def get_foundation_lore_agent():
             "before performing any actions."
         ),
         model=OpenAIResponsesModel(
-            model="gpt-4.1-nano", 
+            model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.4),
@@ -2132,7 +2132,7 @@ def get_factions_agent():
             "before performing any actions."
         ),
         model=OpenAIResponsesModel(
-            model="gpt-4.1-nano", 
+            model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.7),
@@ -2153,7 +2153,7 @@ def get_cultural_agent():
             "before performing any actions."
         ),
         model=OpenAIResponsesModel(
-            model="gpt-4.1-nano", 
+            model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.5),
@@ -2174,7 +2174,7 @@ def get_history_agent():
             "before performing any actions."
         ),
         model=OpenAIResponsesModel(
-            model="gpt-4.1-nano", 
+            model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.6),
@@ -2197,7 +2197,7 @@ def get_locations_agent():
             "before performing any actions."
         ),
         model=OpenAIResponsesModel(
-            model="gpt-4.1-nano", 
+            model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.7),
@@ -2219,7 +2219,7 @@ def get_quests_agent():
             "before performing any actions."
         ),
         model=OpenAIResponsesModel(
-            model="gpt-4.1-nano", 
+            model="gpt-5-nano", 
             openai_client=get_async_openai_client()
         ),
         model_settings=ModelSettings(temperature=0.7),

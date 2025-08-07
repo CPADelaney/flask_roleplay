@@ -274,7 +274,7 @@ class EmotionalMemoryManager:
         Detect the emotional fingerprint of *text* in one Responses-API call.
         Returns a dict matching the EmotionalAnalysis schema.
         """
-        model = model or getenv("EMOTION_ANALYSIS_MODEL", "gpt-4.1-nano")
+        model = model or getenv("EMOTION_ANALYSIS_MODEL", "gpt-5-nano")
     
         try:
             from logic.chatgpt_integration import get_openai_client

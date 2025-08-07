@@ -514,7 +514,7 @@ class MemoryInterferenceManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You create blended false memories.",
                 input=prompt,
                 temperature=0.7
@@ -547,7 +547,7 @@ class MemoryInterferenceManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You create temporally-confused false memories.",
                 input=prompt,
                 temperature=0.7
@@ -587,7 +587,7 @@ class MemoryInterferenceManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You craft emotionally weighted blended memories.",
                 input=prompt,
                 temperature=0.7
@@ -619,7 +619,7 @@ class MemoryInterferenceManager:
     
         try:
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="You produce generic blended false memories.",
                 input=prompt,
                 temperature=0.7

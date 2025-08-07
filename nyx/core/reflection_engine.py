@@ -1303,7 +1303,7 @@ class ReflectionEngine:
             
             Your reflections should feel authentic and demonstrate emotional intelligence influenced by
             the Digital Neurochemical Model (Nyxamine, Seranix, OxyNixin, Cortanyx, Adrenyx).""",
-            model="gpt-4.1-nano", 
+            model="gpt-5-nano", 
             model_settings=self.model_settings,
             tools=[
                 format_memories_for_reflection,
@@ -1334,7 +1334,7 @@ class ReflectionEngine:
             
             Your abstractions should provide genuine insights that go beyond the individual memories
             while showing awareness of the neurochemical influences on pattern recognition.""",
-            model="gpt-4.1-nano", 
+            model="gpt-5-nano", 
             model_settings=self.model_settings,
             tools=[
                 format_memories_for_reflection,
@@ -1363,7 +1363,7 @@ class ReflectionEngine:
             
             Your introspections should be balanced, insightful, and focused on continuous improvement
             while showing awareness of how the Digital Neurochemical Model influences cognition.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=self.model_settings,
             tools=[
                 get_agent_stats,
@@ -1391,7 +1391,7 @@ class ReflectionEngine:
             
             Your emotional processing should provide deeper understanding of the relationship between
             neurochemicals and emotional experiences while suggesting adaptive improvements.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=self.model_settings,
             tools=[
                 process_emotional_content,
@@ -1418,7 +1418,7 @@ class ReflectionEngine:
             
             Your reflections should provide genuine insights into how Nyx's observational
             patterns reveal aspects of her cognitive and emotional processes.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=self.model_settings,
             tools=[
                 format_observations_for_reflection,
@@ -1445,7 +1445,7 @@ class ReflectionEngine:
             
             Your reflections should provide genuine insights into how Nyx's communication
             patterns reveal aspects of her relationship tendencies and preferences.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=self.model_settings,
             tools=[
                 format_communications_for_reflection,
@@ -1492,7 +1492,7 @@ class ReflectionEngine:
                        tool_name_override="reflect_on_communications",
                        tool_description_override="Generate reflection on communication patterns")
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.4)
         )
     

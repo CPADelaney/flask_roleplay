@@ -318,7 +318,7 @@ Provide insightful recommendations that consider:
 Your recommendations should be specific, well-justified, and ranked by suitability.
 Explain the strengths and potential challenges of each recommended persona.
 """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.4
             ),
@@ -353,7 +353,7 @@ Consider:
 Ensure activations are appropriate and calibrated to the user's current state.
 Manage deactivations carefully to maintain psychological continuity.
 """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.3
             ),
@@ -386,7 +386,7 @@ Guidelines should be:
 
 Focus on creating a cohesive behavioral profile that authentically expresses the persona.
 """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.5
             ),
@@ -418,7 +418,7 @@ Consider:
 
 Generate original, varied, and authentic patterns that a dominatrix with this persona would actually use.
 """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             ),

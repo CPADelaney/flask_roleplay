@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # -- Initialize the centralized model --
 try:
-    openai_model = "gpt-4.1-nano"
+    openai_model = "gpt-5-nano"
 except Exception as e:
     logger.error(f"Failed to get OpenAI model from centralized integration: {e}")
     openai_model = None
@@ -114,7 +114,7 @@ Return a JSON object with:
         ]
         
         response = await client.chat.completions.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             messages=messages,
             temperature=0.7,
             max_tokens=300,
@@ -170,7 +170,7 @@ Make it vivid but appropriate for a narrative game (PG-13)."""
         ]
         
         response = await client.chat.completions.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             messages=messages,
             temperature=0.8,
             max_tokens=100,
@@ -209,7 +209,7 @@ Location: {location}"""
         ]
         
         response = await client.chat.completions.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             messages=messages,
             temperature=0.75,
             max_tokens=80,
@@ -1234,7 +1234,7 @@ Generate a single action as JSON with these fields:
             ]
             
             response = await client.chat.completions.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 messages=messages,
                 temperature=0.5,
                 max_tokens=200,

@@ -567,7 +567,7 @@ When working with causal models, help the user understand the implications of di
         reason_counterfactually,
         discover_causal_relations
     ],
-    model="gpt-4.1-nano"
+    model="gpt-5-nano"
 )
 
 # Define the Conceptual Reasoning Agent
@@ -591,7 +591,7 @@ When working with conceptual blends, highlight emergent structures and novel pro
         get_concept_space,
         create_blend
     ],
-    model="gpt-4.1-nano"
+    model="gpt-5-nano"
 )
 
 # Define the Integrated Reasoning Agent
@@ -621,7 +621,7 @@ Always explain how the integration of different reasoning approaches enhances un
         handoff(conceptual_reasoning_agent, 
                 tool_description_override="Transfer to the conceptual reasoning agent for conceptual space creation and blending")
     ],
-    model="gpt-4.1-nano"
+    model="gpt-5-nano"
 )
 
 # --------------------- Define Triage Agent and Guardrails ---------------------
@@ -667,7 +667,7 @@ Always help the user understand which type of reasoning would be most beneficial
     input_guardrails=[
         InputGuardrail(guardrail_function=homework_guardrail)
     ],
-    model="gpt-4.1-nano"
+    model="gpt-5-nano"
 )
 
 # --------------------- Main Entry Point ---------------------

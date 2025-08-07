@@ -329,7 +329,7 @@ class ContextService:
                 )
                 # We could add vector/narrative agent handoffs if needed
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     async def close(self):
@@ -1335,7 +1335,7 @@ def create_context_service_orchestrator() -> Agent[ServiceContext]:
             get_narrative_summaries_tool,
             trim_to_budget_tool
         ],
-        model="gpt-4.1-nano"
+        model="gpt-5-nano"
     )
     return agent
 

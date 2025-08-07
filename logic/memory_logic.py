@@ -497,7 +497,7 @@ Your response MUST be valid JSON with exactly this structure:
             
             # Call the OpenAI API asynchronously using the new Responses API
             resp = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 input=prompt,
                 temperature=0.7,
                 text={"format": {"type": "json_object"}},

@@ -26,7 +26,7 @@ class SerialProcessor(BaseProcessor):
         # Comprehensive analysis agent
         self._agents["analyzer"] = Agent(
             name="Serial Analyzer",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""Perform comprehensive analysis of user input:
             1. Analyze emotional content and impact
             2. Identify relevant context and implications

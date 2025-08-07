@@ -150,7 +150,7 @@ maintenance_agent = Agent(
         '  "message": "High cache miss rate detected"\n'
         "}"
     ),
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.0)
 )
 
@@ -341,7 +341,7 @@ class BaseLoreManager:
             self.agents["foundation"] = Agent(
                 name="FoundationAgent",
                 instructions="You are a general-purpose agent for lore management.",
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 model_settings=ModelSettings(temperature=0.7)
             )
             
@@ -1201,7 +1201,7 @@ class BaseLoreManager:
         self, 
         prompt: str, 
         agent_name: Optional[str] = None, 
-        model: str = "gpt-4.1-nano",
+        model: str = "gpt-5-nano",
         temperature: float = 0.7
     ) -> str:
         """

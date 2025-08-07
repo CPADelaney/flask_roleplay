@@ -880,7 +880,7 @@ class ReflexiveSystem:
                 generate_gaming_stimulus
             ],
             model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Pattern Optimization Agent
@@ -894,7 +894,7 @@ class ReflexiveSystem:
                 simplify_pattern
             ],
             model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Gaming Reflex Agent
@@ -908,7 +908,7 @@ class ReflexiveSystem:
                 fast_match
             ],
             model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Decision System Agent
@@ -918,7 +918,7 @@ class ReflexiveSystem:
             Your job is to decide when to use reflexes vs. deliberate thinking based on context.
             Focus on analyzing stimuli and contexts to make appropriate reflex usage decisions.""",
             model_settings=ModelSettings(temperature=0.5),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Main Reflexive Agent
@@ -942,7 +942,7 @@ class ReflexiveSystem:
                        tool_description_override="Decide whether to use reflexes or deliberate thinking")
             ],
             model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
 
     async def should_use_reflex(self, stimulus: Dict[str, Any], context: Dict[str, Any] = None, pattern: Any = None) -> Tuple[bool, float]:

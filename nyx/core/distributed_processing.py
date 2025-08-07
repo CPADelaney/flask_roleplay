@@ -828,7 +828,7 @@ class DistributedProcessingManager:
                 self._validate_resource_requirements
             ],
             output_type=TaskValidationResult,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_resource_allocator(self) -> Agent:
@@ -853,7 +853,7 @@ class DistributedProcessingManager:
                 self._get_system_load
             ],
             output_type=ResourceAllocationResult,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_dependency_analyzer(self) -> Agent:
@@ -878,7 +878,7 @@ class DistributedProcessingManager:
                 self._identify_bottlenecks
             ],
             output_type=DependencyAnalysisResult,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_performance_monitor(self) -> Agent:
@@ -902,7 +902,7 @@ class DistributedProcessingManager:
                 self._analyze_execution_trends,
                 self._identify_performance_bottlenecks
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_task_orchestrator(self) -> Agent:
@@ -946,7 +946,7 @@ class DistributedProcessingManager:
                 self._handle_task_failure
             ],
             output_type=TaskExecutionPlan,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     async def register_task(self, 

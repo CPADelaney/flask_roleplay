@@ -470,7 +470,7 @@ class BlendedInputProcessor:
             Be thorough in your analysis, but focus on clear indicators.
             Do not overinterpret ambiguous text.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
                 self._detect_patterns
@@ -494,7 +494,7 @@ class BlendedInputProcessor:
             Prioritize behaviors that are appropriate to the interaction and will 
             reinforce desired patterns while discouraging undesired ones.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
                 self._evaluate_behavior,
@@ -518,7 +518,7 @@ class BlendedInputProcessor:
             Modifications should be subtle but effective, maintaining the core message
             while adjusting tone, phrasing, and emphasis.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.4),
             output_type=str
         )
@@ -539,7 +539,7 @@ class BlendedInputProcessor:
             The blend should proportionally reflect all active modes in the mode distribution,
             with higher-weighted modes having more influence on the final result.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.4),
             tools=[
                 self._get_mode_preferences,

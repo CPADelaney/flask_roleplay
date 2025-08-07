@@ -1060,7 +1060,7 @@ class NyxUnifiedGovernor(
 
             sdk_defaults = {
                 "name": f"{agent_type}:{agent_id}",
-                "model": "gpt-4.1-nano",  # Match the default from conflict_agents.py
+                "model": "gpt-5-nano",  # Match the default from conflict_agents.py
                 "instructions": f"You are the {agent_type} agent.",
                 "tools": [],   # will be filled by kwargs or migration
             }

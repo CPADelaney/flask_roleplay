@@ -424,7 +424,7 @@ class RewardSignalProcessor:
                 Your inputs will include reward histories, action-value pairs, and performance metrics.
                 Focus on data-driven insights and concrete, implementable suggestions.
                 """,
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 model_settings=ModelSettings(temperature=0.3),
                 output_type=RewardAnalysisOutput,
                 tools=[
@@ -455,7 +455,7 @@ class RewardSignalProcessor:
                 Focus on creating a balanced reward system that encourages desired behaviors
                 while maintaining psychological realism in the reward mechanisms.
                 """,
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 model_settings=ModelSettings(temperature=0.2),
                 # Add relevant tools if this agent needs to call them
                 tools=[
@@ -1853,5 +1853,5 @@ def create_reward_agent() -> Agent:
             calculate_submission_value_tool
             # Add other tools if needed
         ],
-        model="gpt-4.1-nano"
+        model="gpt-5-nano"
     )

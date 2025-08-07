@@ -2710,7 +2710,7 @@ SocialLinksAgent = Agent(
         "check for rituals, and perform stat-based social interactions. "
         "Return helpful final text or JSON summarizing your result."
     ),
-    model = "gpt-4.1-nano",
+    model = "gpt-5-nano",
     model_settings=ModelSettings(temperature=0.5),
     tools=[
         get_social_link_tool,

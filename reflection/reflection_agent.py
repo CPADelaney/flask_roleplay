@@ -16,7 +16,7 @@ class ReflectionAgent(Agent):
             - Include "priority: [low/normal/high]" to indicate importance
             
             Keep insights under 100 words and focus on actionable observations.""",
-            model="gpt-4.1-nano",  # or whatever model you prefer
+            model="gpt-5-nano",  # or whatever model you prefer
             model_settings=ModelSettings(temperature=0.7, max_tokens=200)
         )
 

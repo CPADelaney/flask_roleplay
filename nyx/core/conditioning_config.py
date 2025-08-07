@@ -481,7 +481,7 @@ class ConditioningConfiguration:
                 reset_to_defaults
             ],
             model_settings=ModelSettings(temperature=0.1),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         self.personality_editor_agent = Agent(
@@ -500,7 +500,7 @@ class ConditioningConfiguration:
                 check_trait_balance
             ],
             model_settings=ModelSettings(temperature=0.2),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     # Public API methods

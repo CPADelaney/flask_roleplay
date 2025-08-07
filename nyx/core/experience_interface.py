@@ -331,7 +331,7 @@ class ExperienceInterface:
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._experience_request_guardrail)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             )
@@ -352,7 +352,7 @@ class ExperienceInterface:
                 self._get_emotional_context
             ],
             output_type=ReflectionOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             )
@@ -373,7 +373,7 @@ class ExperienceInterface:
                 self._get_timeframe_text
             ],
             output_type=NarrativeOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.8
             )
@@ -395,7 +395,7 @@ class ExperienceInterface:
                 self._get_confidence_marker
             ],
             output_type=ExperienceOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             )
@@ -417,7 +417,7 @@ class ExperienceInterface:
                 self._personalize_cross_user_experience
             ],
             output_type=ExperienceOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.6
             )
@@ -438,7 +438,7 @@ class ExperienceInterface:
                 self._get_identity_profile,
                 self._generate_identity_reflection
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.5
             )

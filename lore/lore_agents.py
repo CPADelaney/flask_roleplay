@@ -542,7 +542,7 @@ def create_lore_agent(
     return Agent(
         name=name,
         instructions=base_instructions,
-        model=OpenAIResponsesModel(model="gpt-4.1-nano"),
+        model=OpenAIResponsesModel(model="gpt-5-nano"),
         model_settings=ModelSettings(temperature=temperature),
         output_type=output_type,
     )

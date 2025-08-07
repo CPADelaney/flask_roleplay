@@ -700,8 +700,8 @@ class OpenAIClientManager:
             'base_url': os.getenv("OPENAI_BASE_URL"),
             'timeout': int(os.getenv("OPENAI_TIMEOUT", "600")),
             'max_retries': int(os.getenv("OPENAI_MAX_RETRIES", "2")),
-            'default_model': os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-nano"),
-            'default_responses_model': os.getenv("OPENAI_RESPONSES_MODEL", "gpt-4.1-nano")
+            'default_model': os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5-nano"),
+            'default_responses_model': os.getenv("OPENAI_RESPONSES_MODEL", "gpt-5-nano")
         }
         
         if not config['api_key']:
@@ -1182,7 +1182,7 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
         if messages and messages[0]['role'] == 'system':
             messages[0]['content'] = primary_system_prompt
 
-        model = "gpt-4.1-nano"
+        model = "gpt-5-nano"
         max_tokens = await _safe_max_tokens(client, model)
         
         response = await client.chat.completions.create(
@@ -1263,7 +1263,7 @@ DO NOT produce user-facing text here; only the JSON.
         ]
 
         reflection_response = await client.chat.completions.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             messages=reflection_messages,
             temperature=0.2,
             max_tokens=2500,
@@ -1318,7 +1318,7 @@ DO NOT produce user-facing text here; only the JSON.
             {"role": "user", "content": user_input}
         ]
 
-        model = "gpt-4.1-nano"
+        model = "gpt-5-nano"
         max_tokens = await _safe_max_tokens(client, model)
         
         final_response = await client.chat.completions.create(
@@ -1505,7 +1505,7 @@ async def generate_text_completion(
         extra_params = {"stop": stop_sequences} if stop_sequences else {}
         
         response = await client.chat.completions.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,

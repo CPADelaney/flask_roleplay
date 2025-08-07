@@ -521,7 +521,7 @@ class NoveltyEngine:
                       tool_description_override="Evaluate the novelty, usefulness, and feasibility of an idea")
             ],
             output_type=NoveltyIdea,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -547,7 +547,7 @@ class NoveltyEngine:
                 _find_connections
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -573,7 +573,7 @@ class NoveltyEngine:
                 _create_blended_space
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -600,7 +600,7 @@ class NoveltyEngine:
                 _explore_constraint_removal
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
     
@@ -626,7 +626,7 @@ class NoveltyEngine:
                 _force_connections
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
     
@@ -653,7 +653,7 @@ class NoveltyEngine:
                 _analyze_from_perspective
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -679,7 +679,7 @@ class NoveltyEngine:
                 _map_across_domains
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -706,7 +706,7 @@ class NoveltyEngine:
                 _assess_feasibility
             ],
             output_type=IdeaEvaluationOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
     
@@ -732,7 +732,7 @@ class NoveltyEngine:
                 _extract_novel_ideas_from_blend
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -759,7 +759,7 @@ class NoveltyEngine:
                 _reason_counterfactually
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -787,7 +787,7 @@ class NoveltyEngine:
                 _refine_idea_from_simulation
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
     
