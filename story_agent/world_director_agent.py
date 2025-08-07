@@ -244,16 +244,18 @@ class RevelationData(BaseModel):
 class ChoiceData(BaseModel):
     """Comprehensive player choice information"""
     text: Optional[str] = None
-    stat_impacts: Optional[Dict[str, float]] = None
-    addiction_impacts: Optional[Dict[str, float]] = None
+    stat_impacts: Optional[Any] = None
+    addiction_impacts: Optional[Any] = None
     npc_id: Optional[int] = None
-    relationship_impacts: Optional[Dict[str, Dict[str, float]]] = None
+    relationship_impacts: Optional[Any] = None
     activity_type: Optional[str] = None
     intensity: Optional[float] = None
-    inventory_changes: Optional[List[Dict[str, Any]]] = None
+    inventory_changes: Optional[List[Any]] = None
     currency_change: Optional[float] = None
     time_passed: Optional[float] = None
     emotional_valence: Optional[float] = None
+
+    model_config = ConfigDict(extra="forbid")
 
 class CompleteWorldState(BaseModel):
     """Complete world state with ALL system integrations"""
@@ -322,7 +324,26 @@ class CompleteWorldState(BaseModel):
     nyx_directives: List[Dict[str, Any]] = Field(default_factory=list)
     
     last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChoiceProcessingResult(BaseModel):
+    """Structured result for complete player choice processing."""
+    success: bool
+    effects: List[Any] = Field(default_factory=list)
+    narratives: List[Any] = Field(default_factory=list)
+    stat_changes: Optional[Any] = None
+    new_thresholds: Optional[Any] = None
+    npc_stage_change: Optional[Any] = None
+    activity_result: Optional[Any] = None
+    triggered_rules: Optional[Any] = None
+    currency: Optional[Any] = None
+    hunger_update: Optional[Any] = None
+    preferences_detected: Optional[Any] = None
+    narrative: Optional[str] = None
+    error: Optional[str] = None
+
     model_config = ConfigDict(extra="forbid")
 
 # ===============================================================================
@@ -1265,10 +1286,10 @@ Output as JSON with introspective narrative."""
 async def process_complete_player_choice(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
     choice_data: ChoiceData
-) -> Dict[str, Any]:
+) -> ChoiceProcessingResult:
     """Process player choice through ALL systems"""
     context = ctx.context
-    results = {"effects": [], "narratives": [], "success": True}
+    results = ChoiceProcessingResult(success=True)
     choice = choice_data.model_dump(exclude_none=True)
 
     # Lazy load
@@ -1285,7 +1306,7 @@ async def process_complete_player_choice(
                     context.player_name, choice['stat_impacts'],
                     reason=f"Choice: {choice.get('text', 'unknown')}"
                 )
-                results['stat_changes'] = stat_result
+                results.stat_changes = stat_result
 
                 # Check for new thresholds
                 new_hidden_stats = await get_player_hidden_stats(
@@ -1294,10 +1315,10 @@ async def process_complete_player_choice(
                 new_thresholds = context._check_stat_thresholds(new_hidden_stats)
 
                 if new_thresholds != context.current_world_state.stat_thresholds_active:
-                    results['new_thresholds'] = new_thresholds
+                    results.new_thresholds = new_thresholds
             except Exception as e:
                 logger.error(f"Error applying stat changes: {e}")
-                results['effects'].append({"error": f"Stat change failed: {e}"})
+                results.effects.append({"error": f"Stat change failed: {e}"})
 
         # 2. Process addiction impacts
         if 'addiction_impacts' in choice:
@@ -1308,10 +1329,10 @@ async def process_complete_player_choice(
                         context.player_name, addiction_type, intensity,
                         choice.get('npc_id')
                     )
-                    results['effects'].append(addiction_result)
+                    results.effects.append(addiction_result)
                 except Exception as e:
                     logger.error(f"Error processing addiction impact: {e}")
-                    results['effects'].append({"error": f"Addiction update failed: {e}"})
+                    results.effects.append({"error": f"Addiction update failed: {e}"})
 
         # 3. Process relationship impacts
         if 'relationship_impacts' in choice:
@@ -1339,7 +1360,7 @@ async def process_complete_player_choice(
                             context=json.dumps(impacts),
                             check_for_event=True
                         )
-                        results['effects'].append(interaction_result)
+                        results.effects.append(interaction_result)
 
                         # Check for narrative progression
                         if impacts.get('trust', 0) > 5 or impacts.get('submission', 0) > 5:
@@ -1351,10 +1372,10 @@ async def process_complete_player_choice(
                                 realization_change=impacts.get('realization', 0)
                             )
                             if progression.get('stage_changed'):
-                                results['npc_stage_change'] = progression
+                                results.npc_stage_change = progression
                 except Exception as e:
                     logger.error(f"Error processing relationship impact: {e}")
-                    results['effects'].append({"error": f"Relationship update failed: {e}"})
+                    results.effects.append({"error": f"Relationship update failed: {e}"})
 
         # 4. Activity processing
         if 'activity_type' in choice:
@@ -1364,7 +1385,7 @@ async def process_complete_player_choice(
                     context.player_name, choice['activity_type'],
                     choice.get('intensity', 1.0)
                 )
-                results['activity_result'] = activity_result
+                results.activity_result = activity_result
 
                 # Apply activity effects on stats
                 if choice['activity_type'] in ACTIVITY_EFFECTS:
@@ -1373,16 +1394,16 @@ async def process_complete_player_choice(
                         choice['activity_type'],
                         choice.get('intensity', 1.0)
                     )
-                    results['effects'].append(effect_result)
+                    results.effects.append(effect_result)
             except Exception as e:
                 logger.error(f"Error processing activity: {e}")
-                results['effects'].append({"error": f"Activity processing failed: {e}"})
+                results.effects.append({"error": f"Activity processing failed: {e}"})
 
         # 5. Check for triggered rules
         try:
             triggered_rules = await enforce_all_rules_on_player(context.player_name)
             if triggered_rules:
-                results['triggered_rules'] = triggered_rules
+                results.triggered_rules = triggered_rules
 
                 for rule in triggered_rules:
                     try:
@@ -1390,7 +1411,7 @@ async def process_complete_player_choice(
                             rule['effect'], context.player_name,
                             npc_id=choice.get('npc_id')
                         )
-                        results['effects'].append(effect_result)
+                        results.effects.append(effect_result)
                     except Exception as e:
                         logger.error(f"Error applying rule effect: {e}")
         except Exception as e:
@@ -1411,10 +1432,10 @@ async def process_complete_player_choice(
                             context.user_id, context.conversation_id,
                             context.player_name, change.get('item_name', 'unknown')
                         )
-                    results['effects'].append(inv_result)
+                    results.effects.append(inv_result)
                 except Exception as e:
                     logger.error(f"Error with inventory change: {e}")
-                    results['effects'].append({"error": f"Inventory change failed: {e}"})
+                    results.effects.append({"error": f"Inventory change failed: {e}"})
 
         # 7. Currency changes
         if 'currency_change' in choice:
@@ -1422,7 +1443,7 @@ async def process_complete_player_choice(
                 amount = choice['currency_change']
                 formatted = await context.currency_generator.format_currency(abs(amount))
                 context.current_world_state.player_money += amount
-                results['currency'] = {
+                results.currency = {
                     "change": formatted,
                     "new_balance": context.current_world_state.player_money
                 }
@@ -1436,7 +1457,7 @@ async def process_complete_player_choice(
                     context.user_id, context.conversation_id,
                     context.player_name, choice['time_passed']
                 )
-                results['hunger_update'] = hunger_result
+                results.hunger_update = hunger_result
             except Exception as e:
                 logger.error(f"Error updating hunger: {e}")
 
@@ -1452,12 +1473,12 @@ async def process_complete_player_choice(
                 entity_id=1, entity_type="player",
                 memory_text=memory_text,
                 memory_type=MemoryType.INTERACTION,
-                significance=MemorySignificance.HIGH if results.get('triggered_rules') else MemorySignificance.MEDIUM,
+                significance=MemorySignificance.HIGH if results.triggered_rules else MemorySignificance.MEDIUM,
                 emotional_valence=choice.get('emotional_valence', 0),
                 tags=["player_choice"] + list(preferences.get('explicit_preferences', []))
             )
             
-            results['preferences_detected'] = preferences
+            results.preferences_detected = preferences
         except Exception as e:
             logger.error(f"Error storing memory: {e}")
         
@@ -1484,21 +1505,20 @@ Keep it atmospheric with rich subtext."""
                 temperature=0.7,
                 max_tokens=200
             )
-            results['narrative'] = narrative
+            results.narrative = narrative
         except Exception as e:
             logger.error(f"Error generating narrative: {e}")
-            results['narrative'] = "Your choice has been made."
+            results.narrative = "Your choice has been made."
         
         return results
         
     except Exception as e:
         logger.error(f"Error processing player choice: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e),
-            "effects": [],
-            "narrative": "Your action has consequences..."
-        }
+        return ChoiceProcessingResult(
+            success=False,
+            error=str(e),
+            narrative="Your action has consequences..."
+        )
 
 @function_tool
 async def check_all_emergent_patterns(
