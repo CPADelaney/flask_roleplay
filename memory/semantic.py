@@ -173,7 +173,7 @@ class SemanticMemoryManager:
     
         try:
             response = await client.chat.completions.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You extract semantic abstractions from memories."},
                     {"role": "user", "content": prompt}
@@ -353,7 +353,7 @@ class SemanticMemoryManager:
     
         try:
             response = await client.chat.completions.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You extract patterns from memory clusters."},
                     {"role": "user", "content": prompt}
@@ -705,7 +705,7 @@ class SemanticMemoryManager:
     
         try:
             response = await client.chat.completions.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You generate counterfactual variations of memories."},
                     {"role": "user", "content": prompt}
@@ -880,7 +880,7 @@ class SemanticMemoryManager:
         for attempt in range(3):
             try:
                 response = await client.chat.completions.create(
-                    model="gpt-4.1-nano",
+                    model="gpt-5-nano",
                     messages=[
                         {"role": "system", "content": "You extract related topics from memory text."},
                         {"role": "user", "content": prompt}

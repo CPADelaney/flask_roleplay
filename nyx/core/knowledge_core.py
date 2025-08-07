@@ -2006,7 +2006,7 @@ Use your tools to perform these operations efficiently.
         load_knowledge,
         get_knowledge_statistics
     ],
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
 )
 
 curiosity_agent = Agent(
@@ -2027,7 +2027,7 @@ Use your tools to guide knowledge exploration efficiently.
         record_exploration,
         generate_questions
     ],
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
 )
 
 class KnowledgeCoreAgents:

@@ -258,7 +258,7 @@ class DistributedCheckpointMixin:
     
         try:
             resp = await client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions=merge_instr,
                 input=user_input,
                 temperature=0.1,

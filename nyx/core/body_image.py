@@ -265,7 +265,7 @@ class BodyImage:
                 self._update_body_image_state,
                 self._get_body_image_state_tool,   # read-only helper
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.1),
         )
 
@@ -353,7 +353,7 @@ class BodyImage:
                 self._analyze_visual_features,
                 self._extract_body_part_states,
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.20),
         )
 
@@ -377,7 +377,7 @@ class BodyImage:
                 self._extract_somatic_features,
                 self._calculate_somatic_confidence
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.1)
         )
     

@@ -861,7 +861,7 @@ NarrativeDirectorAgent = Agent(
     
     Score events from 0-1 based on narrative appropriateness.
     Prioritize character development and meaningful moments.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     tools=[recommend_events]
 )
 
@@ -879,7 +879,7 @@ VitalsNarrator = Agent(
     - Thirst: "Your parched throat makes you cough during Lily's lecture. She pauses, eyes narrowing. 'Disrupting my class? We'll discuss your punishment later.'"
     
     Keep descriptions concise but flavorful.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
 )
 
 # 5. EventWriterAgent - Dynamic conflict descriptions
@@ -891,7 +891,7 @@ EventWriterAgent = Agent(
     Reference past player choices, NPC relationships, and ongoing conflicts.
     
     Make each event feel consequential and tied to the larger narrative.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
 )
 
 @function_tool
@@ -953,7 +953,7 @@ PhaseRecapAgent = Agent(
     - Upcoming scheduled events
     
     Keep suggestions actionable and varied (mix practical/social/story).""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     tools=[generate_phase_recap]
 )
 
@@ -1008,7 +1008,7 @@ CombinedAnalyzer = Agent(
     Valid activity types: """ + ", ".join(ALL_ACTIVITY_TYPES) + """
     
     Return all analysis in a single response for efficiency.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     tools=[analyze_player_action]
 )
 
@@ -1087,7 +1087,7 @@ IntensityScorer = Agent(
     - Risk level for femdom activities
     
     Output intensity (0.5-1.5), mood, and risk level.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     tools=[score_intensity]
 )
 
@@ -1109,7 +1109,7 @@ EventContentAgent = Agent(
     - Crises should incorporate nearby NPCs when possible
     
     Keep content concise but evocative. Match the game's tone of gradual power dynamics shift.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     tools=[generate_event_content]
 )
 
@@ -3152,7 +3152,7 @@ Prioritize narrative cohesion and character development over random events.
 TimeCycleAgent = Agent[TimeCycleContext](
     name="TimeCycleAgent",
     instructions=TIMECYCLE_AGENT_INSTRUCTIONS,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     tools=[
         tool_classify_activity,
         tool_calculate_intensity,

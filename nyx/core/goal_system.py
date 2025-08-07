@@ -1106,7 +1106,7 @@ class GoalManager:
 
                 When the goal is associated with a specific need, ensure your plan includes steps that specifically address that need.
                 """,
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 model_settings=ModelSettings(temperature=0.1),
                 tools=[
                     self._get_available_actions,
@@ -1135,7 +1135,7 @@ class GoalManager:
             If the goal needs adjustment, provide specific feedback. 
             For priority adjustments, consider how important and urgent the goal appears.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 self._get_active_goals, 
                 self._check_goal_conflicts,
@@ -1164,7 +1164,7 @@ class GoalManager:
             
             Provide specific suggestions for improvement if issues are found.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 self.validate_action_sequence,
                 self.check_parameter_references,
@@ -1192,7 +1192,7 @@ class GoalManager:
             For dominance-related actions, ensure they meet safety and contextual appropriateness 
             requirements before executing.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 self._resolve_step_parameters_tool,
                 self._execute_action,
@@ -1243,7 +1243,7 @@ class GoalManager:
                 self._notify_systems,
                 self._check_concurrency_limits
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_conflict_resolution_agent(self) -> Agent:
@@ -1270,7 +1270,7 @@ class GoalManager:
             - MERGE: Goals can be combined into a single more efficient goal
             - USER_DECISION: Conflict is significant enough to require user input
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 self._analyze_goal_similarity,
                 self._analyze_resource_conflicts,
@@ -1297,7 +1297,7 @@ class GoalManager:
             - Finding alternative approaches
             - Splitting goals into stages
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 self._propose_goal_modifications,
                 self._evaluate_modification_impact,
@@ -1321,7 +1321,7 @@ class GoalManager:
             - The emotional motivations are properly combined
             - The merged plan is more efficient than two separate plans
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 self._get_goal_common_elements,
                 self._generate_merged_goal_description,

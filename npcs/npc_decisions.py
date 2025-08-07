@@ -249,7 +249,7 @@ Generate appropriate actions for this NPC."""
             
             response = await call_openai_with_retry(
                 client,
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 messages=messages,
                 temperature=temperature,
                 max_tokens=1000,
@@ -1117,7 +1117,7 @@ Write a brief internal narrative for this decision."""
             
             response = await call_openai_with_retry(
                 client,
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 messages=messages,
                 temperature=temperature + 0.1,  # Slightly higher for more creative narratives
                 max_tokens=150

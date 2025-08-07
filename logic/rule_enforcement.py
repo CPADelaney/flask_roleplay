@@ -354,7 +354,7 @@ async def apply_effect(effect_str, player_name, npc_id=None):
             
                     # Now call the ChatCompletion endpoint via client.chat.completions.create
                     gpt_resp = await client.chat.completions.create(
-                        model="gpt-4.1-nano",  # or whichever model you're using
+                        model="gpt-5-nano",  # or whichever model you're using
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": "Generate a unique punishment scenario."}

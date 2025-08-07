@@ -200,7 +200,7 @@ async def generate_mega_setting_logic() -> dict[str, Any]:
     try:
         gpt_client = get_openai_client()
         response   = gpt_client.chat.completions.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             messages=[{"role": "system", "content": fusion_prompt}],
             temperature=0.7,
             max_tokens=300,

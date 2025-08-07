@@ -25,8 +25,8 @@ MAX_RETRIES = 3
 RETRY_INTERVAL = 1.0  # seconds
 
 # Agent models configuration
-DEFAULT_MODEL = "gpt-4.1-nano"
-FAST_MODEL = "gpt-4.1-nano"  # You could use a faster model like "gpt-3.5-turbo" for less complex tasks
+DEFAULT_MODEL = "gpt-5-nano"
+FAST_MODEL = "gpt-5-nano"  # You could use a faster model like "gpt-3.5-turbo" for less complex tasks
 
 # ----- Agent Context -----
 
@@ -125,7 +125,7 @@ def create_dialogue_generator():
         name="Dialogue Generator",
         handoff_description="Specialist for quick conversational exchanges",
         instructions=instructions,
-        model="gpt-4.1-nano",
+        model="gpt-5-nano",
         model_settings=ModelSettings(
             temperature=0.6,  # Lower for consistency
             max_tokens=256    # Keep responses short

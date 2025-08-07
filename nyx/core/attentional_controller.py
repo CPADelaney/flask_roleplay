@@ -177,7 +177,7 @@ class AttentionalController:
             input_guardrails=[
                 self.input_validation  # This is already an InputGuardrail object
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.3,
             )
@@ -201,7 +201,7 @@ class AttentionalController:
                 self._calculate_emotional_impact,
                 self._calculate_goal_relevance
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_focus_agent(self) -> Agent[AttentionContext]:
@@ -222,7 +222,7 @@ class AttentionalController:
                 self._focus_attention,
                 self._maintain_attention
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_inhibition_agent(self) -> Agent[AttentionContext]:
@@ -241,7 +241,7 @@ class AttentionalController:
             tools=[
                 self._inhibit_attention
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     async def _input_validation(self, 

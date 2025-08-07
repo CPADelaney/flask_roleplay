@@ -465,7 +465,7 @@ Your job:
 Keep your responses in a strictly femdom context. 
 Ensure it remains in JSON format, with no extra commentary outside JSON.
 """,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     tools=[
         get_npc_data,
         get_scenario_context,

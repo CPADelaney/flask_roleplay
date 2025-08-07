@@ -60,12 +60,12 @@ logger = logging.getLogger(__name__)
 DB_DSN = os.getenv("DB_DSN")
 
 # Allow env overrides per-call
-_DEFAULT_NAME_MODEL = os.getenv("OPENAI_NAME_MODEL", "gpt-4.1-nano")
-_DEFAULT_DESC_MODEL = os.getenv("OPENAI_DESC_MODEL", "gpt-4.1-nano")
-_DEFAULT_SCHED_MODEL = os.getenv("OPENAI_SCHED_MODEL", "gpt-4.1-nano")
-_DEFAULT_PERS_MODEL = os.getenv("OPENAI_PERS_MODEL", "gpt-4.1-nano")
-_DEFAULT_STATS_MODEL = os.getenv("OPENAI_STATS_MODEL", "gpt-4.1-nano")
-_DEFAULT_ARCH_MODEL  = os.getenv("OPENAI_ARCH_MODEL", "gpt-4.1-nano")
+_DEFAULT_NAME_MODEL = os.getenv("OPENAI_NAME_MODEL", "gpt-5-nano")
+_DEFAULT_DESC_MODEL = os.getenv("OPENAI_DESC_MODEL", "gpt-5-nano")
+_DEFAULT_SCHED_MODEL = os.getenv("OPENAI_SCHED_MODEL", "gpt-5-nano")
+_DEFAULT_PERS_MODEL = os.getenv("OPENAI_PERS_MODEL", "gpt-5-nano")
+_DEFAULT_STATS_MODEL = os.getenv("OPENAI_STATS_MODEL", "gpt-5-nano")
+_DEFAULT_ARCH_MODEL  = os.getenv("OPENAI_ARCH_MODEL", "gpt-5-nano")
 
 
 async def _responses_json_call(
@@ -545,7 +545,7 @@ class NPCCreationHandler:
             These should be woven naturally into the personality.
             """,
             output_type=NPCPersonalityData,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
         )
         
         # Stats calibrator agent
@@ -568,7 +568,7 @@ class NPCCreationHandler:
             depending on personality (10-80).
             """,
             output_type=NPCStatsData,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
         )
         
         # Archetype synthesizer agent
@@ -589,7 +589,7 @@ class NPCCreationHandler:
             maintaining psychological realism and depth.
             """,
             output_type=NPCArchetypeData,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[function_tool(self.get_available_archetypes)]
         )
         
@@ -610,7 +610,7 @@ class NPCCreationHandler:
             while maintaining a balance between mundane everyday characteristics and subtle control dynamics.
             """,
             output_type=NPCCreationInput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 function_tool(self.suggest_archetypes),
                 function_tool(self.get_environment_details)
@@ -633,7 +633,7 @@ class NPCCreationHandler:
             The schedules should feel natural and mundane while creating opportunities for
             subtle power dynamics to emerge during player encounters.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 function_tool(self.get_locations),
                 function_tool(self.get_npc_details)
@@ -655,7 +655,7 @@ class NPCCreationHandler:
             
             Memories should feel authentic and provide insight into how the NPC views themselves and others.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 function_tool(self.get_npc_details),
                 function_tool(self.get_environment_details)
@@ -683,7 +683,7 @@ class NPCCreationHandler:
             into the character design without being heavy-handed or explicit.
             These elements should be woven naturally into the character's psychology.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 function_tool(self.generate_npc_name),
                 function_tool(self.generate_physical_description),
@@ -1429,7 +1429,7 @@ class NPCCreationHandler:
                 instructions=build_memory_system_prompt(),
                 output_type=NPCMemories,
                 model=OpenAIResponsesModel(
-                    model="gpt-4.1-nano",
+                    model="gpt-5-nano",
                     openai_client=get_async_openai_client(),
                     # optional structured-output hints (if wrapper supports)
                 ),
@@ -4338,7 +4338,7 @@ class NPCCreationHandler:
         relationship_type: str,
         reciprocal_type: str,
         *,
-        model: str = "gpt-4.1-nano",
+        model: str = "gpt-5-nano",
         temperature: float = 0.7,
         max_output_tokens: int = 200,
     ) -> Optional[str]:

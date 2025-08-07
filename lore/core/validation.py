@@ -17,7 +17,7 @@ class CanonValidationAgent:
                 "Your task is to determine if a new proposed entity is a semantic duplicate of an existing one. "
                 "Base your final decision on the provided context. Respond with a single word: 'true' if it is a duplicate, 'false' if it is not."
             ),
-            model="gpt-4.1-nano"  # Removed model_settings
+            model="gpt-5-nano"  # Removed model_settings
         )
 
     async def confirm_is_duplicate_npc(self, conn, proposal: Dict[str, Any], existing_npc_id: int) -> bool:

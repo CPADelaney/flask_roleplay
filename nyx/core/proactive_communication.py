@@ -914,7 +914,7 @@ When generating intents:
 
 Your intents should feel like genuine reasons for reaching out that emerge naturally from
 Nyx's internal state and relationship context. Avoid generating intents that feel forced or mechanical.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 evaluate_user_relationship,
                 generate_intent_for_user,
@@ -943,7 +943,7 @@ When generating message content:
 Your messages should sound like they come from a thoughtful entity with genuine motivations
 rather than automated outreach. They should have nuance and depth that reflects Nyx's
 sophisticated understanding of relationships.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 generate_message_content
             ],
@@ -966,7 +966,7 @@ Evaluate whether now is an appropriate time to send a message based on multiple 
 Provide nuanced reasoning about timing decisions, balancing the urgency of communication
 against the risk of messaging at an inappropriate time. Consider both immediate timing
 factors and the broader relationship context.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 evaluate_timing
             ],
@@ -989,7 +989,7 @@ Analyze patterns in how Nyx initiates communication with users, including:
 Provide nuanced reflections that help Nyx understand her communication patterns
 and identify opportunities for improvement. Consider both quantitative patterns
 and qualitative insights about communication quality and effectiveness.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 generate_reflection_on_communications
             ],

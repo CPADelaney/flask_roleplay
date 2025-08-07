@@ -802,7 +802,7 @@ class DynamicAdaptationSystem:
                 function_tool(self._get_experience_adaptation_settings),
                 function_tool(self._get_identity_adaptation_settings)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=dict
         )
     
@@ -839,7 +839,7 @@ class DynamicAdaptationSystem:
                 function_tool(self._analyze_experience_context),
                 function_tool(self._analyze_identity_context)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=ContextAnalysisResult
         )
     
@@ -879,7 +879,7 @@ class DynamicAdaptationSystem:
                 function_tool(self._calculate_experience_strategy_fit),
                 function_tool(self._calculate_identity_strategy_fit)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=StrategySelectionResult
         )
     
@@ -916,7 +916,7 @@ class DynamicAdaptationSystem:
                 function_tool(self._analyze_experience_performance),
                 function_tool(self._analyze_identity_performance)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=MonitoringResult
         )
     
@@ -949,7 +949,7 @@ class DynamicAdaptationSystem:
                 function_tool(self._update_experience_sharing_history),
                 function_tool(self._get_strategy)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=ExperienceAdaptationParams
         )
     
@@ -982,7 +982,7 @@ class DynamicAdaptationSystem:
                 function_tool(self._update_identity_evolution_history),
                 function_tool(self._get_strategy)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=IdentityAdaptationParams
         )
     

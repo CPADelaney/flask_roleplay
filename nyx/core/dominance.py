@@ -284,7 +284,7 @@ class DominanceSystem:
             
             Always maintain Nyx's intelligent and dominant persona, even when errors occur.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.3
             ),
@@ -310,7 +310,7 @@ class DominanceSystem:
             
             If the request is unclear or requires more information, use tools to gather that information before deciding.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.2
             ),
@@ -351,7 +351,7 @@ class DominanceSystem:
 
             Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.8,
             ),
@@ -396,7 +396,7 @@ class DominanceSystem:
 
             Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.9,
             ),
@@ -1270,7 +1270,7 @@ class PossessiveSystem:
             
             Consider the user's relationship state and current ownership level when deciding.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.2
             ),
@@ -1295,7 +1295,7 @@ class PossessiveSystem:
             Adjust tone and intensity based on the requested intensity level and relationship context.
             Always consider the user's preferences, limits, and relationship history.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             ),
@@ -1319,7 +1319,7 @@ class PossessiveSystem:
             
             Design rituals that have emotional impact and reinforce Nyx's ownership position.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             ),
@@ -1344,7 +1344,7 @@ class PossessiveSystem:
             
             Provide nuanced evaluation with specific improvement suggestions.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.3
             ),
@@ -1580,7 +1580,7 @@ def create_dominance_ideation_agent():
 
         Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
         """,
-        model="gpt-4.1-nano",
+        model="gpt-5-nano",
         model_settings=ModelSettings(
             temperature=0.8,
         ),
@@ -1617,7 +1617,7 @@ def create_hard_dominance_ideation_agent():
 
         Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
         """,
-        model="gpt-4.1-nano",
+        model="gpt-5-nano",
         model_settings=ModelSettings(
             temperature=0.9,
         ),

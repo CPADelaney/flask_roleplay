@@ -320,7 +320,7 @@ DailyLifeDirector = Agent(
     The more advanced an NPC's narrative stage, the more overt their control can be.
     
     Remember: This is slice-of-life. Most moments are mundane with subtle dynamics.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.7),
     tools=[generate_daily_scene]
 )
@@ -363,7 +363,7 @@ AmbientDialogueWriter = Agent(
     - Deflection (avoids the dynamic)
     
     Never be heavy-handed. Even dominant NPCs speak naturally.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.8),
     tools=[create_ambient_dialogue]
 )
@@ -412,7 +412,7 @@ PowerDynamicsOrchestrator = Agent(
     - Contextual authority (expertise, ownership, seniority)
     
     Avoid cartoon villainy. Even controlling NPCs believe they're being helpful/caring.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.6),
     tools=[identify_power_moment]
 )
@@ -454,7 +454,7 @@ EmergentNarrativeDetector = Agent(
     - Keep it grounded in daily life
     
     Remember: Emergent narratives should feel discovered, not authored.""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.7),
     tools=[detect_emergent_narrative]
 )
@@ -508,7 +508,7 @@ PlayerAgencyManager = Agent(
     - Behavioral conditioning
     - Emotional dependencies
     - Power dynamic escalation/reduction""",
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.7),
     tools=[generate_player_agency]
 )

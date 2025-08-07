@@ -176,7 +176,7 @@ class CurrencyGenerator:
             client = get_async_openai_client()
             
             response = await client.chat.completions.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You are a creative game world designer specializing in economic systems."},
                     {"role": "user", "content": prompt}

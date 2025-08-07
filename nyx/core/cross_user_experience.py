@@ -122,7 +122,7 @@ class CrossUserExperienceManager:
             - Overall compatibility between user preferences
             """,
             output_type=ExperiencePermission,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_relevance_agent(self) -> Agent:
@@ -145,7 +145,7 @@ class CrossUserExperienceManager:
             - The emotional context of the experience
             - Privacy implications of sharing the experience
             """,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_personalization_agent(self) -> Agent:
@@ -169,7 +169,7 @@ class CrossUserExperienceManager:
             - Privacy concerns and boundaries
             - Ensuring the experience remains coherent after adaptation
             """,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_search_orchestrator(self) -> Agent:
@@ -217,7 +217,7 @@ class CrossUserExperienceManager:
                 )
             ],
             output_type=CrossUserExperienceResult,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     # Tool functions for agents

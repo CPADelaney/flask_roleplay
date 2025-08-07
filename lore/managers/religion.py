@@ -262,7 +262,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You verify that all religious content maintains matriarchal themes. 
             You identify elements that might contradict a female-dominant religious structure.
             Focus on power dynamics, gender roles, and divine hierarchy.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.2),
             output_type=MatriarchalThemeValidation
         )
@@ -274,7 +274,7 @@ class ReligionManager(BaseLoreManager):
             Focus on feminine divine power structures with goddesses in positions of supreme authority.
             Male deities should exist but in supporting or specialized roles.
             Ensure the cosmic structure reinforces matriarchal principles.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=GeneratedPantheon,
             input_guardrails=[
@@ -288,7 +288,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You create religious practices that reinforce matriarchal dominance.
             Design rituals, ceremonies, and observances that emphasize feminine divine authority.
             Ensure practices reflect the power dynamics of the society.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=List[ReligiousPracticeParams]
         )
@@ -299,7 +299,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You design holy sites and temples for matriarchal religions.
             Focus on architecture and features that emphasize feminine divine power.
             Consider how the sites reinforce social hierarchies.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=List[HolySiteParams]
         )
@@ -310,7 +310,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You create religious texts and scriptures for matriarchal faiths.
             Ensure teachings emphasize feminine divine supremacy and proper gender roles.
             Create varied text types including scripture, commentary, and hymns.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=List[ReligiousTextParams]
         )
@@ -321,7 +321,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You establish religious orders for matriarchal faiths.
             Emphasize female leadership and gender-appropriate hierarchies.
             Design distinct orders with unique purposes and practices.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=List[ReligiousOrderParams]
         )
@@ -332,7 +332,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You create religious conflicts and schisms.
             Focus on theological disputes that don't threaten the matriarchal order.
             Design conflicts that add depth while maintaining core power structures.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=List[ReligiousConflictParams]
         )
@@ -343,7 +343,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You distribute religions across nations considering their matriarchy levels.
             Create realistic religious demographics and state religion policies.
             Ensure distribution reflects cultural and political realities.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7),
             output_type=NationReligionDistribution
         )
@@ -354,7 +354,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You are a senior religious authority who evaluates theological arguments.
             You maintain orthodoxy while allowing for legitimate theological diversity.
             Your judgments uphold the matriarchal religious order.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7),
             output_type=DisputeConclusion
         )
@@ -365,7 +365,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You simulate how religions evolve through cultural interaction over time.
             Maintain core matriarchal themes while allowing for organic development.
             Consider how local customs influence religious practice.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=ReligiousEvolution
         )
@@ -376,7 +376,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You create detailed religious rituals for matriarchal faiths.
             Focus on symbolism, required components, and theological significance.
             Design rituals that reinforce feminine divine authority.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=CompleteRitual
         )
@@ -387,7 +387,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You adapt religious practices to regional contexts.
             Consider how local culture influences religious expression.
             Maintain core theological principles while allowing variation.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=RegionalPracticeVariation
         )
@@ -398,7 +398,7 @@ class ReligionManager(BaseLoreManager):
             instructions="""You create religious sects and schisms.
             Design theological divisions that don't threaten matriarchal order.
             Focus on interpretive differences rather than fundamental challenges.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -1785,7 +1785,7 @@ class ReligionManager(BaseLoreManager):
                 Your core belief: {position['core_belief']}
                 Defend your interpretation using scripture and tradition.
                 Maintain respect for the matriarchal religious order.""",
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
             debate_agents.append({"agent": agent, "position": position})
@@ -1932,7 +1932,7 @@ class ReligionManager(BaseLoreManager):
             instructions=f"""You represent orthodox tradition of {pantheon_data['name']}.
             Value tradition, hierarchy, literal interpretation.
             Strongly matriarchal, preserving established order.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=SectarianPosition
         )
@@ -1942,7 +1942,7 @@ class ReligionManager(BaseLoreManager):
             instructions=f"""You represent reform movement in {pantheon_data['name']}.
             Seek adaptation while maintaining core beliefs.
             Still matriarchal but more flexible interpretation.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=SectarianPosition
         )
@@ -1952,7 +1952,7 @@ class ReligionManager(BaseLoreManager):
             instructions=f"""You represent mystic tradition in {pantheon_data['name']}.
             Focus on direct divine experience over dogma.
             Strongly feminine-focused spirituality.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=SectarianPosition
         )
@@ -2190,7 +2190,7 @@ class ReligionManager(BaseLoreManager):
         position_generator = Agent(
             name="TheologicalPositionGenerator",
             instructions="Generate diverse theological positions for religious disputes.",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=List[TheologicalPosition]
         )
         

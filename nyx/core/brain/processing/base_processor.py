@@ -62,7 +62,7 @@ class BaseProcessor:
         # Base emotional analysis agent
         self._agents["emotional_analyzer"] = Agent(
             name="Emotional Analyzer",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="Analyze the emotional content and sentiment of user input.",
             tools=[function_tool(self._analyze_emotion_tool)],
             output_type=Dict[str, float]
@@ -71,7 +71,7 @@ class BaseProcessor:
         # Memory retrieval agent
         self._agents["memory_retriever"] = Agent(
             name="Memory Retriever",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="Retrieve relevant memories based on user input and context.",
             tools=[function_tool(self._retrieve_memories_tool)],
             output_type=List[Dict[str, Any]]

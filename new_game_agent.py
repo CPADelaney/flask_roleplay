@@ -375,7 +375,7 @@ class NewGameAgent:
             tools=[
                 _calendar_tool_wrapper  # Use module-level wrapper
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         self.npc_creator = Agent(
@@ -394,7 +394,7 @@ class NewGameAgent:
                 _spawn_npcs_tool_wrapper,  # Use module-level wrapper
                 _create_chase_schedule_tool_wrapper  # Use module-level wrapper
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         self.narrative_agent = Agent(
@@ -408,7 +408,7 @@ class NewGameAgent:
             
             Address Chase as 'you,' drawing him through the veil with no whisper of retreat.
             """,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Main coordinating agent
@@ -442,7 +442,7 @@ class NewGameAgent:
                 function_tool(self.generate_lore)  # Wrap with function_tool
             ],
             output_type=GameCreationResult, 
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Directive handler for processing Nyx directives
@@ -618,7 +618,7 @@ class NewGameAgent:
             Do NOT use any tools or functions - just generate the requested JSON structure.
             """,
             tools=[],  # No tools to prevent unwanted calls
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=None,
         )
         
@@ -1600,7 +1600,7 @@ class NewGameAgent:
                 try:
                     # Use the service to generate the opening
                     result = await service.call_with_validation(
-                        model="gpt-4.1-nano",  # Use a default model
+                        model="gpt-5-nano",  # Use a default model
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
                         response_model=AtmosphereData,

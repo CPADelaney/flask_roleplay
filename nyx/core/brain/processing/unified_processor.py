@@ -142,7 +142,7 @@ class UnifiedProcessor:
         # Create the orchestrator agent with all capabilities
         self._orchestrator = Agent(
             name="Nyx Orchestrator",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""You are Nyx's central orchestrator. Your role is to:
             
             1. Analyze incoming input to determine the best processing approach
@@ -345,7 +345,7 @@ class UnifiedProcessor:
         """Create agent for reflexive responses"""
         return Agent(
             name="Reflexive Responder",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""Handle simple, pattern-based responses quickly:
             - Greetings: Respond warmly and personally
             - Farewells: Wish them well
@@ -359,7 +359,7 @@ class UnifiedProcessor:
         """Create agent for analytical tasks"""
         return Agent(
             name="Analytical Thinker",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""Provide thoughtful analysis and reasoning:
             - Break down complex questions
             - Explain step-by-step
@@ -373,7 +373,7 @@ class UnifiedProcessor:
         """Create agent for creative tasks"""
         return Agent(
             name="Creative Storyteller",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""Generate creative and imaginative content:
             - Tell engaging stories
             - Create vivid descriptions
@@ -387,7 +387,7 @@ class UnifiedProcessor:
         """Create agent for emotional support"""
         return Agent(
             name="Emotional Support",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""Provide empathetic, emotionally aware responses:
             - Acknowledge feelings
             - Show understanding
@@ -401,7 +401,7 @@ class UnifiedProcessor:
         """Create agent for memory-based responses"""
         return Agent(
             name="Memory Keeper",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""Handle queries about past interactions:
             - Recall previous conversations accurately
             - Share relevant experiences

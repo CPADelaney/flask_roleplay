@@ -112,7 +112,7 @@ async def _gpt_json(
     system: str,
     user: str,
     *,
-    model: str = "gpt-4.1-nano",
+    model: str = "gpt-5-nano",
     max_output_tokens: int = 640,
 ) -> Any:
     """

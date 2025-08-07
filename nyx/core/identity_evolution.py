@@ -945,7 +945,7 @@ class IdentityEvolutionSystem:
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._validate_identity_input)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             tools=[
                 function_tool(self._get_current_identity_context)
             ]
@@ -1017,7 +1017,7 @@ class IdentityEvolutionSystem:
                 self._calculate_neurochemical_impacts
             ],
             output_type=IdentityProfile,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
         )
     
     def _create_identity_reflection_agent(self) -> Agent:
@@ -1048,7 +1048,7 @@ class IdentityEvolutionSystem:
                 self._get_neurochemical_patterns
             ],
             output_type=IdentityReflection,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
         )
     
     def _create_identity_coherence_agent(self) -> Agent:
@@ -1079,7 +1079,7 @@ class IdentityEvolutionSystem:
                 self._identify_contradictions,
                 self._assess_neurochemical_coherence
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
         )
     
     def _create_neurochemical_baseline_agent(self) -> Agent:
@@ -1105,7 +1105,7 @@ class IdentityEvolutionSystem:
                 self._calculate_neurochemical_impacts,
                 self._update_neurochemical_baseline
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
         )
     
     def _create_emotional_tendency_agent(self) -> Agent:
@@ -1131,7 +1131,7 @@ class IdentityEvolutionSystem:
                 self._calculate_emotional_impacts,
                 self._update_emotional_tendency
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
         )
     
     # Public methods

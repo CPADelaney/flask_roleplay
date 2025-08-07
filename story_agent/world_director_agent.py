@@ -1770,7 +1770,7 @@ def create_complete_world_director():
             name="Complete World Director",
             instructions=agent_instructions,
             tools=all_tools,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7, max_tokens=2048)
         )
         return agent
@@ -1781,7 +1781,7 @@ def create_complete_world_director():
             name="Fallback Director",
             instructions="Basic world director",
             tools=[],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
 
 # ===============================================================================

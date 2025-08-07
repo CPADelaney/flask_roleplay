@@ -641,7 +641,7 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
                 {"role": "user", "content": "No function calls. Produce only a text narrative.\n\n" + opening_user_prompt}
             ]
             fallback_response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4.1-nano"),
+                model=os.getenv("OPENAI_MODEL", "gpt-5-nano"),
                 messages=forced_messages,
                 temperature=0.7,
             )

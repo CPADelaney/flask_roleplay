@@ -1153,7 +1153,7 @@ multimodal_agent = Agent(
         process_image,
         register_feature_extractor
     ],
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     model_settings=ModelSettings(temperature=0.2)
 )
 

@@ -433,7 +433,7 @@ Ensure tasks respect user limits while providing an appropriate challenge. Focus
 
 Output a JSON object with all the required task details.
 """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             ),
@@ -467,7 +467,7 @@ Provide detailed feedback explaining your assessment and decision. Be thorough b
 
 Output a JSON object with your verification result, rating, and feedback.
 """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.3,
             ),
@@ -500,7 +500,7 @@ Be considerate of user limits while maintaining firm expectations.
 
 Output your recommendations and task management decisions as a JSON object.
 """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.5,
             ),

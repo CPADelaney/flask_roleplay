@@ -482,7 +482,7 @@ Process dominance actions like processing dominance ideas and responding to viol
                 self._respond_to_violation,
                 self._amplify_dominance
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_protocol_agent(self):
@@ -501,7 +501,7 @@ Work with reward systems to reinforce protocol adherence.
                 self._record_violation,
                 self._assign_protocol
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_orgasm_control_agent(self):
@@ -517,7 +517,7 @@ integrate with reward systems for orgasm control.
                 self._process_permission_request,
                 self._start_denial_period
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_submission_agent(self):
@@ -534,7 +534,7 @@ update submission metrics, and integrate with theory of mind.
                 self._update_compliance,
                 self._update_submission_metric
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_persona_agent(self):
@@ -550,7 +550,7 @@ and recommend appropriate personas.
                 self._recommend_persona,
                 self._activate_persona
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_psychological_agent(self):
@@ -569,7 +569,7 @@ Integrate with theory of mind to understand user psychology.
                 self._amplify_dominance,
                 self._generate_mindfuck
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_reward_agent(self):
@@ -585,7 +585,7 @@ and manage reward signals.
                 self._process_submission_reward,
                 self._generate_reward_signal
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_body_service_agent(self):
@@ -599,7 +599,7 @@ Manage service tasks, rituals, and body-related activities.
             tools=[
                 self._assign_service_task
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     @function_tool

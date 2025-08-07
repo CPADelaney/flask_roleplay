@@ -64,7 +64,7 @@ class SpatialNavigatorAgent:
                 handoff(self.mapper_agent, 
                         tool_description_override="For map building, observation processing, and spatial environment understanding")
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_navigator_agent(self) -> Agent:
@@ -97,7 +97,7 @@ class SpatialNavigatorAgent:
             model_settings=ModelSettings(
                 temperature=0.2  # Lower temperature for more predictable navigation
             ),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     def _create_map_builder_agent(self) -> Agent:
@@ -132,7 +132,7 @@ class SpatialNavigatorAgent:
             model_settings=ModelSettings(
                 temperature=0.3
             ),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     @function_tool

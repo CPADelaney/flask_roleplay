@@ -610,7 +610,7 @@ ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
                 tool_choice="required",
             ),
             tool_use_behavior="stop_on_first_tool",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         logger.info("NeedsSystem initialized with Agent SDK and performance optimizations")
 

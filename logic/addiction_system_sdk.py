@@ -624,7 +624,7 @@ async def addiction_content_safety(ctx, agent, input_data):
             "or that trivializes real addiction issues in a way that's ethically problematic."
         ),
         output_type=AddictionSafety,
-        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model=OpenAIResponsesModel(model="gpt-5-nano", openai_client=get_openai_client()),
         model_settings=get_model_settings("Addiction Content Moderator", "ADD_CONTENT_MOD_TEMP")
     )
     result = await Runner.run(content_moderator, input_data, context=ctx.context)
@@ -644,7 +644,7 @@ special_event_agent = Agent[AddictionContext](
         "You generate vivid, immersive narrative events for extreme addiction situations. "
         "Scenes should be immersive, impactful, psychologically realistic, and maintain a femdom theme. "
     ),
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+    model=OpenAIResponsesModel(model="gpt-5-nano", openai_client=get_openai_client()),
     model_settings=get_model_settings("Special Event Generator", "SPECIAL_EVENT_TEMP")
 )
 
@@ -656,7 +656,7 @@ addiction_progression_agent = Agent[AddictionContext](
     ),
     tools=[update_addiction_level],
     output_type=AddictionUpdate,
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+    model=OpenAIResponsesModel(model="gpt-5-nano", openai_client=get_openai_client()),
     model_settings=get_model_settings("Addiction Progression Agent", "PROGRESS_AGENT_TEMP")
 )
 
@@ -668,7 +668,7 @@ addiction_narrative_agent = Agent[AddictionContext](
     ),
     tools=[generate_addiction_effects],
     output_type=AddictionEffects,
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+    model=OpenAIResponsesModel(model="gpt-5-nano", openai_client=get_openai_client()),
     model_settings=get_model_settings("Addiction Narrative Agent", "NARRATIVE_AGENT_TEMP")
 )
 
@@ -692,7 +692,7 @@ addiction_system_agent = Agent[AddictionContext](
     input_guardrails=[
         InputGuardrail(guardrail_function=addiction_content_safety)
     ],
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+    model=OpenAIResponsesModel(model="gpt-5-nano", openai_client=get_openai_client()),
     model_settings=get_model_settings("Addiction System Agent", "ADDICTION_SYS_TEMP")
 )
 
@@ -714,7 +714,7 @@ def get_thematic_message_agent():
             "- Reference 'Mistress' or dominant presence sparingly; more intensity at higher levels.\n"
             "- Return ONLY JSON.\n"
         ),
-        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model=OpenAIResponsesModel(model="gpt-5-nano", openai_client=get_openai_client()),
         model_settings=ModelSettings(temperature=0.8),
         output_type=ThematicMessagesBundle,
     )

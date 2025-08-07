@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # -- Initialize the centralized model --
 try:
-    openai_model = "gpt-4.1-nano"
+    openai_model = "gpt-5-nano"
 except Exception as e:
     logger.error(f"Failed to get OpenAI model from centralized integration: {e}")
     openai_model = None
@@ -177,7 +177,7 @@ Flag content with: explicit violence, sexual content, illegal activities, hate s
         ]
         
         response = await client.chat.completions.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             messages=messages,
             temperature=0.1,
             max_tokens=150,

@@ -791,7 +791,7 @@ class RegionalCultureSystem:
         language_agent = Agent(
             name="LanguageGenerationAgent",
             instructions="You create realistic languages for fantasy worlds with matriarchal power structures.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         languages = []
@@ -937,7 +937,7 @@ class RegionalCultureSystem:
         norm_agent = Agent(
             name="CulturalNormAgent",
             instructions="You create cultural norms for fantasy nations with matriarchal power structures.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Categories of norms to generate
@@ -1059,7 +1059,7 @@ class RegionalCultureSystem:
         etiquette_agent = Agent(
             name="EtiquetteAgent",
             instructions="You create etiquette systems for fantasy nations with matriarchal power structures.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Contexts for etiquette
@@ -1448,7 +1448,7 @@ class NationalConflictSystem:
         issue_agent = Agent(
             name="DomesticIssueAgent",
             instructions="You create realistic domestic political and social issues for fantasy nations with matriarchal power structures.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Determine issue types based on nation characteristics
@@ -1605,7 +1605,7 @@ class NationalConflictSystem:
         news_agent = Agent(
             name="DomesticNewsAgent",
             instructions="You create realistic news articles about domestic political issues in a matriarchal society.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Generate news articles from different perspectives
@@ -1700,7 +1700,7 @@ class NationalConflictSystem:
         conflict_agent = Agent(
             name="NationalConflictAgent",
             instructions="You create realistic international conflicts for a fantasy world with matriarchal power structures.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         for i in range(count):
@@ -1836,7 +1836,7 @@ class NationalConflictSystem:
         news_agent = Agent(
             name="ConflictNewsAgent",
             instructions="You create realistic news articles about international conflicts in a matriarchal world.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Generate one news article from each nation's perspective
@@ -2132,7 +2132,7 @@ class ReligiousDistributionSystem:
         distribution_agent = Agent(
             name="ReligiousDistributionAgent",
             instructions="You distribute religious pantheons across fantasy nations in a matriarchal world.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         distributions = []
@@ -2257,7 +2257,7 @@ class ReligiousDistributionSystem:
         practice_agent = Agent(
             name="RegionalPracticeAgent",
             instructions="You create regional variations of religious practices for a matriarchal society.",
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         for practice in practice_data:
@@ -3196,7 +3196,7 @@ class LoreUpdateSystem:
             )
             
             # Select appropriate model based on element importance
-            model_name = "o3-large" if hierarchy_position < 3 else "gpt-4.1-nano"
+            model_name = "o3-large" if hierarchy_position < 3 else "gpt-5-nano"
             
             # Create an advanced agent for sophisticated lore updates
             lore_update_agent = Agent(

@@ -110,7 +110,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Your output should be immersive, cohesive, and consistent with the premise that "
                 "women hold most or all power, and men occupy subordinate or service-based roles."
             ),
-            model="gpt-4.1-nano",  # Using valid model name
+            model="gpt-5-nano",  # Using valid model name
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -124,7 +124,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "You evaluate narratives for strength of matriarchal themes, narrative quality, "
                 "consistency, and engagement. Provide constructive feedback for improvements."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.5),
             output_type=NarrativeEvaluation
         )
@@ -139,7 +139,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Focus on governance, authority, and policy formation led by women, with men in advisory "
                 "or supportive roles only."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -151,7 +151,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Create matriarchal religious structures with goddesses as primary deities and "
                 "priestesses as the dominant religious authorities."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -163,7 +163,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Create customs, traditions, and social interactions that reinforce feminine authority "
                 "and masculine deference."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -569,7 +569,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Continue from the existing narrative, adding new developments, "
                 "conflicts, or revelations."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -580,7 +580,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Focus on character growth, relationships, and internal struggles, "
                 "while maintaining matriarchal power dynamics."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -591,7 +591,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Enrich the existing narrative with vivid locations, cultural details, "
                 "and environmental features that reinforce matriarchal themes."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         

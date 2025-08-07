@@ -19,7 +19,7 @@ class ParallelProcessor(BaseProcessor):
         # Quick response agent
         self._agents["quick_responder"] = Agent(
             name="Quick Responder",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="Generate quick, contextual responses to user input.",
             output_type=str
         )
@@ -27,7 +27,7 @@ class ParallelProcessor(BaseProcessor):
         # Deep analyzer agent  
         self._agents["deep_analyzer"] = Agent(
             name="Deep Analyzer",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="Perform deep analysis of user intent and context.",
             tools=[
                 function_tool(self._retrieve_memories_tool),
@@ -39,7 +39,7 @@ class ParallelProcessor(BaseProcessor):
         # Response synthesizer
         self._agents["synthesizer"] = Agent(
             name="Response Synthesizer",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="Synthesize multiple analyses into a coherent response.",
             output_type=str
         )

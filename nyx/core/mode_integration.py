@@ -336,7 +336,7 @@ class ModeIntegrationManager:
                 self._create_suggest_mode_adjustments_tool(),
                 self._create_calculate_feedback_reward_tool()
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=FeedbackOutput
         )
         
@@ -362,7 +362,7 @@ class ModeIntegrationManager:
                 self._create_get_conversation_style_tool(),
                 self._create_blend_guidance_elements_tool()
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=ModeGuidance
         )
         
@@ -387,7 +387,7 @@ class ModeIntegrationManager:
                 self._create_check_blend_coherence_tool(),
                 self._create_extract_blended_guidance_tool()
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=BlendedModeOutput
         )
         
@@ -457,7 +457,7 @@ class ModeIntegrationManager:
                        tool_description_override="Blend outputs from multiple mode systems")
             ],
             input_guardrails=[input_guardrail],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=ModeOutput
         )
         

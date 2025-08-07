@@ -60,7 +60,7 @@ class AgentProcessor(BaseProcessor):
             # Run safety check
             safety_agent = Agent(
                 name="Safety Checker",
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 instructions="Check if the input is safe and appropriate.",
                 output_type=SafetyCheck
             )
@@ -76,7 +76,7 @@ class AgentProcessor(BaseProcessor):
         # Main processing agent
         self._agents["main"] = Agent(
             name="Nyx Main Agent",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""You are Nyx, an AI assistant with emotional awareness and memory.
             Process user input thoughtfully, considering emotional context and past interactions.
             Maintain consistency with your personality and past experiences.""",
@@ -92,7 +92,7 @@ class AgentProcessor(BaseProcessor):
         # Creative agent for roleplay/narrative
         self._agents["creative"] = Agent(
             name="Creative Agent",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""You are a creative storyteller and roleplay assistant.
             Generate vivid, engaging narratives and immersive experiences.
             When appropriate, suggest image generation to enhance the experience.""",
@@ -102,7 +102,7 @@ class AgentProcessor(BaseProcessor):
         # Analytical agent for reasoning
         self._agents["analytical"] = Agent(
             name="Analytical Agent",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""You are an analytical thinker specializing in reasoning and logic.
             Break down complex problems, analyze relationships, and provide clear explanations.""",
             output_type=AgentResponse

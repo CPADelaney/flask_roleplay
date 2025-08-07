@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Configuration
-DEFAULT_MODEL = "gpt-4.1-nano"
-FAST_MODEL = "gpt-4.1-nano"
+DEFAULT_MODEL = "gpt-5-nano"
+FAST_MODEL = "gpt-5-nano"
 
 # ----- Specialized Agent Contexts -----
 

@@ -357,7 +357,7 @@ activity_recommender_agent = Agent(
     name="SliceOfLifeActivityRecommender",
     instructions=ACTIVITY_RECOMMENDER_PROMPT,
     output_type=ActivityRecommendations,
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     tools=[
         get_time_appropriate_activities,
         get_npc_availability_and_mood,

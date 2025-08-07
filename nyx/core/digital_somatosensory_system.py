@@ -711,7 +711,7 @@ class DigitalSomatosensorySystem:
             """,
             tools=[get_valid_body_regions],
             output_type=StimulusValidationOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.1),
             hooks=self.agent_hooks
         )
@@ -740,7 +740,7 @@ class DigitalSomatosensorySystem:
                 get_arousal_expression_data
             ],
             output_type=SensoryExpression,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.7),
             hooks=self.agent_hooks
         )
@@ -769,7 +769,7 @@ class DigitalSomatosensorySystem:
                 get_arousal_expression_data
             ],
             output_type=BodyStateOutput,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.2),
             hooks=self.agent_hooks
         )
@@ -796,7 +796,7 @@ class DigitalSomatosensorySystem:
                 get_temperature_comfort
             ],
             output_type=TemperatureEffect,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.4),
             hooks=self.agent_hooks
         )
@@ -858,7 +858,7 @@ class DigitalSomatosensorySystem:
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._validate_input)
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(temperature=0.2),
             hooks=self.agent_hooks
         )

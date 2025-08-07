@@ -274,7 +274,7 @@ class ExperienceConsolidationSystem:
                 self._update_consolidation_history,
                 self._get_consolidation_statistics
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._consolidation_request_guardrail)
             ],
@@ -305,7 +305,7 @@ class ExperienceConsolidationSystem:
                 self._find_common_theme,
                 self._sort_candidate_groups
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=List[ConsolidationCandidate]
         )
     
@@ -333,7 +333,7 @@ class ExperienceConsolidationSystem:
                 self._generate_consolidation_type,
                 self._calculate_significance_score
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=ConsolidationOutput
         )
     
@@ -361,7 +361,7 @@ class ExperienceConsolidationSystem:
                 self._calculate_coherence_score,
                 self._calculate_information_gain
             ],
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             output_type=ConsolidationEvaluation
         )
     

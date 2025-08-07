@@ -152,7 +152,7 @@ class EmotionalCore:
     - Optimized data sharing between agents
     """
     
-    def __init__(self, model: str = "gpt-4.1-nano"):
+    def __init__(self, model: str = "gpt-5-nano"):
         """
         Initialize the emotional core system
         
@@ -1422,7 +1422,7 @@ class EmotionalCore:
             ],
             output_type=NeurochemicalResponseDTO,
             model_settings=ModelSettings(temperature=0.3),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Create emotion derivation agent
@@ -1435,7 +1435,7 @@ class EmotionalCore:
             ],
             output_type=EmotionalStateMatrixDTO,
             model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Create reflection agent with the external analyze_emotional_patterns function
@@ -1450,7 +1450,7 @@ class EmotionalCore:
             ],
             model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
             output_type=InternalThoughtDTO,
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Create learning agent
@@ -1462,7 +1462,7 @@ class EmotionalCore:
                 self.learning_tools.apply_learned_adaptations
             ],
             model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Create orchestrator with handoffs
@@ -1480,7 +1480,7 @@ class EmotionalCore:
             output_type=EmotionalResponseDTO,
             # The handoffs configuration is now separated for clarity
             handoffs=self._configure_enhanced_handoffs(),
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
         
         # Configure handoffs after all agents are created

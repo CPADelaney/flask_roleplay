@@ -132,7 +132,7 @@ class NPCAgentCoordinator:
                             Ensure that actions align with each NPC's personality and maintain consistent
                             character behavior.
                         """,
-                        model="gpt-4.1-nano",
+                        model="gpt-5-nano",
                         tools=[
                             function_tool(self._get_npc_emotional_state),
                             function_tool(self._get_npc_mask),

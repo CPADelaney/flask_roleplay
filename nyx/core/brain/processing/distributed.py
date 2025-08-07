@@ -25,7 +25,7 @@ class DistributedProcessor(BaseProcessor):
         # Task coordinator agent
         self._agents["coordinator"] = Agent(
             name="Task Coordinator",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""Coordinate distributed processing tasks:
             1. Identify required subtasks
             2. Delegate to appropriate agents
@@ -38,7 +38,7 @@ class DistributedProcessor(BaseProcessor):
         # Specialized task agents
         self._agents["memory_processor"] = Agent(
             name="Memory Processor",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="Process and analyze memory-related tasks.",
             tools=[function_tool(self._retrieve_memories_tool)],
             output_type=TaskResult
@@ -46,7 +46,7 @@ class DistributedProcessor(BaseProcessor):
         
         self._agents["emotion_processor"] = Agent(
             name="Emotion Processor",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="Process emotional analysis tasks.",
             tools=[function_tool(self._analyze_emotion_tool)],
             output_type=TaskResult
@@ -54,7 +54,7 @@ class DistributedProcessor(BaseProcessor):
         
         self._agents["adaptation_processor"] = Agent(
             name="Adaptation Processor",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="Handle dynamic adaptation and context changes.",
             output_type=TaskResult
         )

@@ -397,7 +397,7 @@ class IssueTrackingSystem:
             
             Be thorough in your analysis, but focus on extracting practical, implementable insights.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.2,  # Keep it focused on accurate analysis
                 top_p=0.9,
@@ -428,7 +428,7 @@ class IssueTrackingSystem:
             Your goal is to create a reliable system of record for all issues and improvement ideas
             that the development team can use to enhance the AI bot.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=ModelSettings(
                 temperature=0.1,  # Keep it very factual and organized
                 top_p=0.9,

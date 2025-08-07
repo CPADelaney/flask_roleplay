@@ -1173,7 +1173,7 @@ class ImaginationSimulator:
             Be specific and detailed in your interpretations, translating vague descriptions
             into concrete simulation parameters. Use your creativity to elaborate on the
             basic scenario in meaningful ways.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=base_model_settings,
             tools=[
                 setup_simulation_from_description,
@@ -1199,7 +1199,7 @@ class ImaginationSimulator:
             Focus on extracting actionable insights that help Nyx understand potential
             outcomes and improve decision-making. Consider both the objective changes in
             variables and the subjective emotional responses.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=low_temp_settings,
             tools=[
                 analyze_simulation_result,
@@ -1232,7 +1232,7 @@ class ImaginationSimulator:
             You should ensure that simulations are both creative and grounded in causal reasoning,
             leveraging Nyx's reasoning core and reflection capabilities to provide meaningful
             insights about hypothetical scenarios.""",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             model_settings=low_temp_settings,
             handoffs=[
                 handoff(self.scenario_generation_agent,

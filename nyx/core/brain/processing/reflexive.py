@@ -24,7 +24,7 @@ class ReflexiveProcessor(BaseProcessor):
         # Pattern matcher agent
         self._agents["pattern_matcher"] = Agent(
             name="Pattern Matcher",
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             instructions="""Match input to known patterns and generate immediate responses:
             - Greetings: "hello", "hi", "hey" -> friendly greeting
             - Farewells: "bye", "goodbye", "see you" -> warm farewell  

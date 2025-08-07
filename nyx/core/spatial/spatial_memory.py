@@ -178,7 +178,7 @@ class SpatialMemoryIntegration:
                 self.get_episodic_landmarks,
                 self.get_environment_changes
             ],
-            model="gpt-4.1-nano"
+            model="gpt-5-nano"
         )
     
     @function_tool

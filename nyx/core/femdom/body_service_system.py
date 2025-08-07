@@ -324,7 +324,7 @@ def create_body_service_agent(context: AgentContext) -> Agent[AgentContext]:
         input_guardrails=[
             InputGuardrail(guardrail_function=user_id_validation),
         ],
-        model="gpt-4.1-nano"
+        model="gpt-5-nano"
     )
     
     return body_service_agent

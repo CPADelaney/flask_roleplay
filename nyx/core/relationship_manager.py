@@ -108,7 +108,7 @@ class RelationshipManager:
                 
                 Focus on evidence-based inference rather than stereotyping.
                 """,
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 model_settings=ModelSettings(
                     temperature=0.3,
                 ),
