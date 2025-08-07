@@ -205,6 +205,79 @@ class WorldStateContext(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
+
+class NPCInfo(BaseModel):
+    """Minimal information about an NPC needed for interactions"""
+    id: int
+    dominance: int
+    stage: str
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class PowerMomentData(BaseModel):
+    """Data describing a power dynamic moment"""
+    opportunity: Optional[str] = None
+    approach: Optional[str] = None
+    intensity: Optional[float] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class RelationshipImpacts(BaseModel):
+    """Changes to relationship dimensions"""
+    influence: Optional[int] = None
+    dependence: Optional[int] = None
+    trust: Optional[int] = None
+    volatility: Optional[int] = None
+    unresolved_conflict: Optional[int] = None
+    hidden_agendas: Optional[int] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class PlayerResponseResult(BaseModel):
+    """Result of processing a player response"""
+    response_type: Optional[str] = None
+    relationship_impacts: RelationshipImpacts = Field(default_factory=RelationshipImpacts)
+    narrative_flavor: Optional[str] = None
+    interaction_processed: bool = True
+    error: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class VitalRequirement(BaseModel):
+    """Requirements related to player vitals"""
+    fatigue_max: Optional[int] = None
+    hunger_min: Optional[int] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class DailyActivity(BaseModel):
+    """An available daily activity option"""
+    name: str
+    type: str
+    vital_requirement: Optional[VitalRequirement] = None
+    priority: Optional[str] = None
+    npc_id: Optional[int] = None
+    power_dynamic: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class TransitionResult(BaseModel):
+    """Result of transitioning to a new daily phase"""
+    old_phase: Optional[str] = None
+    new_phase: Optional[str] = None
+    transition_scene: Optional[str] = None
+    time_updated: bool = False
+    npcs_relocated: int = 0
+    error: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
 # ============= DYNAMIC AGENT SYSTEM =============
 
 # Agent for generating contextual daily life scenes
@@ -648,7 +721,7 @@ async def generate_daily_life_scene(
         # Generate ambient interactions
         for npc_info in npc_data:
             interaction = await generate_contextual_interaction(
-                ctx, npc_info, world_context
+                ctx, NPCInfo(**npc_info), world_context
             )
             if interaction:
                 scene.ambient_interactions.append(interaction)
@@ -747,19 +820,19 @@ async def generate_organic_power_moment(
         
         if not result.output:
             return None
-        
-        moment_data = json.loads(result.output)
-        
+
+        moment_data = PowerMomentData(**json.loads(result.output))
+
         # Generate player choices
         choices = await generate_player_choices_for_moment(
             ctx, moment_data, npc_id, stage.name
         )
-        
+
         return PowerDynamicMoment(
-            moment_type=moment_data.get("approach", "subtle_control"),
-            description=moment_data.get("opportunity", "A subtle shift in dynamics"),
+            moment_type=moment_data.approach or "subtle_control",
+            description=moment_data.opportunity or "A subtle shift in dynamics",
             npc_id=npc_id,
-            intensity=moment_data.get("intensity", 0.5),
+            intensity=moment_data.intensity or 0.5,
             context=world_context.current_phase.value,
             player_options=choices,
             acceptance_increases_dynamic=True,
@@ -773,7 +846,7 @@ async def generate_organic_power_moment(
 @function_tool
 async def generate_contextual_interaction(
     ctx: RunContextWrapper,
-    npc_info: Dict[str, Any],
+    npc_info: NPCInfo,
     world_context: WorldStateContext
 ) -> Optional[AmbientInteraction]:
     """
@@ -792,7 +865,7 @@ async def generate_contextual_interaction(
         # Get relationship dynamics
         manager = OptimizedRelationshipManager(context.user_id, context.conversation_id)
         rel_state = await manager.get_relationship_state(
-            'npc', npc_info["id"], 'player', context.user_id
+            'npc', npc_info.id, 'player', context.user_id
         )
         
         relationship_data = {
@@ -805,7 +878,7 @@ async def generate_contextual_interaction(
         
         # Determine if power dynamic should be present
         power_dynamic = None
-        if npc_info.get("dominance", 0) > 60 and npc_info.get("stage") != "Innocent Beginning":
+        if npc_info.dominance > 60 and npc_info.stage != "Innocent Beginning":
             if rel_state.dimensions.influence > 70:
                 power_dynamic = PowerDynamicType.INTIMATE_COMMAND.value
             elif rel_state.dimensions.influence > 50:
@@ -868,7 +941,7 @@ async def generate_contextual_interaction(
 @function_tool
 async def generate_player_choices_for_moment(
     ctx: RunContextWrapper,
-    moment_data: Dict[str, Any],
+    moment_data: PowerMomentData,
     npc_id: int,
     npc_stage: str
 ) -> List[str]:
@@ -915,8 +988,8 @@ async def generate_player_choices_for_moment(
             calls=[{
                 "name": "generate_player_agency",
                 "kwargs": {
-                    "current_situation": json.dumps(moment_data),
-                    "power_dynamic": moment_data.get("approach", "subtle"),
+                    "current_situation": moment_data.model_dump_json(),
+                    "power_dynamic": moment_data.approach or "subtle",
                     "relationship_context": json.dumps({
                         "stage": npc_stage,
                         "influence": rel_state.dimensions.influence,
@@ -1033,7 +1106,7 @@ async def process_player_response_to_interaction(
     ctx: RunContextWrapper,
     interaction: AmbientInteraction,
     player_response: str
-) -> Dict[str, Any]:
+) -> PlayerResponseResult:
     """
     Process how a player responds to an interaction and update relationships.
     
@@ -1111,16 +1184,16 @@ async def process_player_response_to_interaction(
         elif response_type == "deflect":
             flavor = "You navigate around the moment, maintaining your space."
         
-        return {
-            "response_type": response_type,
-            "relationship_impacts": impacts,
-            "narrative_flavor": flavor,
-            "interaction_processed": True
-        }
+        return PlayerResponseResult(
+            response_type=response_type,
+            relationship_impacts=RelationshipImpacts(**impacts) if impacts else RelationshipImpacts(),
+            narrative_flavor=flavor,
+            interaction_processed=True
+        )
         
     except Exception as e:
         logger.error(f"Error processing player response: {e}", exc_info=True)
-        return {"error": str(e), "interaction_processed": False}
+        return PlayerResponseResult(error=str(e), interaction_processed=False)
 
 @function_tool
 async def simulate_npc_daily_routine(
@@ -1231,7 +1304,7 @@ async def get_available_daily_activities(
     ctx: RunContextWrapper,
     include_npcs: bool = True,
     filter_by_vitals: bool = True
-) -> List[Dict[str, Any]]:
+) -> List[DailyActivity]:
     """
     Get available activities based on time, location, NPCs, and player state.
     
@@ -1251,7 +1324,7 @@ async def get_available_daily_activities(
         # Get player vitals
         vitals = await get_current_vitals(context.user_id, context.conversation_id)
         
-        activities = []
+        activities: List[DailyActivity] = []
         
         # Base activities for current phase
         phase_activities = {
@@ -1292,15 +1365,15 @@ async def get_available_daily_activities(
                     continue
                 if "hunger_min" in req and vitals.hunger < req["hunger_min"]:
                     continue
-            activities.append(activity)
+            activities.append(DailyActivity(**activity))
         
         # Add vital-critical activities
         if vitals.hunger < 30:
-            activities.insert(0, {"name": "Find food", "type": "vital", "priority": "high"})
+            activities.insert(0, DailyActivity(name="Find food", type="vital", priority="high"))
         if vitals.thirst < 30:
-            activities.insert(0, {"name": "Get water", "type": "vital", "priority": "high"})
+            activities.insert(0, DailyActivity(name="Get water", type="vital", priority="high"))
         if vitals.fatigue > 80:
-            activities.insert(0, {"name": "Rest urgently", "type": "vital", "priority": "high"})
+            activities.insert(0, DailyActivity(name="Rest urgently", type="vital", priority="high"))
         
         # Add NPC-initiated activities if present
         if include_npcs and world_context.present_npcs:
@@ -1311,28 +1384,30 @@ async def get_available_daily_activities(
                 if npc_schedule.power_tendency and npc_schedule.availability != "busy":
                     async with get_db_connection_context() as conn:
                         npc_name = await conn.fetchval(
-                            "SELECT npc_name FROM NPCStats WHERE npc_id=$1", 
+                            "SELECT npc_name FROM NPCStats WHERE npc_id=$1",
                             npc_id
                         )
-                    
-                    activities.append({
-                        "name": f"Spend time with {npc_name}",
-                        "type": "npc_initiated",
-                        "npc_id": npc_id,
-                        "power_dynamic": npc_schedule.power_tendency.value
-                    })
+
+                        activities.append(
+                            DailyActivity(
+                                name=f"Spend time with {npc_name}",
+                                type="npc_initiated",
+                                npc_id=npc_id,
+                                power_dynamic=npc_schedule.power_tendency.value
+                            )
+                        )
         
         return activities
         
     except Exception as e:
         logger.error(f"Error getting available activities: {e}", exc_info=True)
-        return [{"name": "Continue with routine", "type": "default"}]
+        return [DailyActivity(name="Continue with routine", type="default")]
 
 @function_tool
 async def transition_daily_phase(
     ctx: RunContextWrapper,
     skip_to: Optional[DailyRoutinePhase] = None
-) -> Dict[str, Any]:
+) -> TransitionResult:
     """
     Transition to the next daily phase with appropriate scene generation.
     
@@ -1398,17 +1473,17 @@ async def transition_daily_phase(
             tags=["daily_routine", new_phase.value]
         )
         
-        return {
-            "old_phase": old_phase.value,
-            "new_phase": new_phase.value,
-            "transition_scene": transition_scene,
-            "time_updated": True,
-            "npcs_relocated": len(npcs)
-        }
+        return TransitionResult(
+            old_phase=old_phase.value,
+            new_phase=new_phase.value,
+            transition_scene=transition_scene,
+            time_updated=True,
+            npcs_relocated=len(npcs)
+        )
         
     except Exception as e:
         logger.error(f"Error transitioning phase: {e}", exc_info=True)
-        return {"error": str(e), "time_updated": False}
+        return TransitionResult(error=str(e), time_updated=False)
 
 # ============= INTEGRATION FUNCTIONS =============
 
