@@ -450,7 +450,7 @@ class UnifiedMemoryManager:
             """,
             self.entity_type, self.entity_id, self.user_id, self.conversation_id,
             memory.text, memory.memory_type, memory.significance, memory.emotional_intensity,
-            memory.tags, embedding or memory.embedding, json.dumps(memory.metadata),
+            json.dumps(memory.tags), embedding or memory.embedding, json.dumps(memory.metadata),
             memory.timestamp, memory.times_recalled,
             memory.status.value if isinstance(memory.status, Enum) else memory.status,
             memory.is_consolidated
@@ -498,7 +498,7 @@ class UnifiedMemoryManager:
             """,
             self.entity_type, self.entity_id, self.user_id, self.conversation_id,
             semantic_memory.text, semantic_memory.memory_type.value, semantic_memory.significance,
-            semantic_memory.emotional_intensity, semantic_memory.tags, embedding,
+            semantic_memory.emotional_intensity, json.dumps(semantic_memory.tags), embedding,
             json.dumps(semantic_memory.metadata), semantic_memory.timestamp, 0,
             MemoryStatus.ACTIVE.value, False
         )
@@ -766,7 +766,7 @@ class UnifiedMemoryManager:
                 self.entity_type, self.entity_id, self.user_id, self.conversation_id,
                 consolidated_memory.text, consolidated_memory.memory_type.value,
                 consolidated_memory.significance, consolidated_memory.emotional_intensity,
-                consolidated_memory.tags, embedding, json.dumps(consolidated_memory.metadata),
+                json.dumps(consolidated_memory.tags), embedding, json.dumps(consolidated_memory.metadata),
                 consolidated_memory.timestamp, 0, MemoryStatus.ACTIVE.value, False
             )
             consolidated_ids.append(consolidated_id)
@@ -1016,7 +1016,7 @@ class UnifiedMemoryManager:
                     memory.text,
                     memory.memory_type.value if isinstance(memory.memory_type, Enum) else memory.memory_type,
                     memory.significance, memory.emotional_intensity,
-                    memory.tags, embeddings[i], json.dumps(memory.metadata),
+                    json.dumps(memory.tags), embeddings[i], json.dumps(memory.metadata),
                     memory.timestamp or datetime.now(), memory.times_recalled,
                     memory.status.value if isinstance(memory.status, Enum) else memory.status,
                     memory.is_consolidated
