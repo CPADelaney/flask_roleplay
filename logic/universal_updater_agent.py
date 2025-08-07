@@ -134,10 +134,18 @@ class StrictBaseModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 # Key-Value pair models for array format
+# NOTE: The OpenAI structured output schema requires every property to declare a
+# concrete type. Using ``Any`` results in a property without a ``type`` field,
+# which the API rejects with ``invalid_json_schema`` errors. To support flexible
+# values while still providing explicit types, we define a union of possible JSON
+# value types.
+JsonValue = Union[str, int, float, bool, Dict[str, Any], List[Any], None]
+
+
 class KeyValuePair(StrictBaseModel):
     """Generic key-value pair for array format"""
     key: str
-    value: Any
+    value: JsonValue
 
 class KeyValueStr(StrictBaseModel):
     """String key-value pair"""
