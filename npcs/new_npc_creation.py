@@ -4378,15 +4378,17 @@ class NPCCreationHandler:
         last_err = None
         for attempt in range(3):
             try:
-                resp = await client.responses.create(
-                    model=model,
-                    input=[
+                params = {
+                    "model": model,
+                    "input": [
                         {"role": "system", "content": system_msg},
                         {"role": "user", "content": user_msg},
                     ],
-                    temperature=temperature,
-                    max_output_tokens=max_output_tokens,
-                )
+                    "max_output_tokens": max_output_tokens,
+                }
+                if temperature is not None:
+                    params["temperature"] = temperature
+                resp = await client.responses.create(**params)
     
                 # Preferred convenience accessor (unifies across content parts).
                 text = (resp.output_text or "").strip()

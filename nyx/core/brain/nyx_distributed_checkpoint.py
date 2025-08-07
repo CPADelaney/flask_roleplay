@@ -257,14 +257,14 @@ class DistributedCheckpointMixin:
         )
     
         try:
-            resp = await client.responses.create(
-                model="gpt-5-nano",
-                instructions=merge_instr,
-                input=user_input,
-                temperature=0.1,
-                max_tokens=800,
-                text={"format": {"type": "json_object"}},   # force JSON mode
-            )
+            params = {
+                "model": "gpt-5-nano",
+                "instructions": merge_instr,
+                "input": user_input,
+                "max_tokens": 800,
+                "text": {"format": {"type": "json_object"}},  # force JSON mode
+            }
+            resp = await client.responses.create(**params)
             raw_json = json.loads(resp.output_text)
             merged = raw_json.get("merged_state")
             if not isinstance(merged, dict):

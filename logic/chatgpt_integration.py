@@ -1816,20 +1816,21 @@ async def _responses_json_call(
     system_prompt: str,
     user_prompt: str,
     max_output_tokens: int = 1024,
-    temperature: float = 0.7,
+    temperature: float | None = None,
 ) -> dict[str, Any]:
     """Call the *Responses* API and return parsed JSON (or raw text fallback)."""
     client = _client_manager.get_responses_client()
-
-    resp = await client.responses.create(
-        model=model,
-        input=[
+    params: dict[str, Any] = {
+        "model": model,
+        "input": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=temperature,
-        max_output_tokens=max_output_tokens,
-    )
+        "max_output_tokens": max_output_tokens,
+    }
+    if temperature is not None:
+        params["temperature"] = temperature
+    resp = await client.responses.create(**params)
 
     # Accept both new (`output_text`) and legacy (`output`) attributes.
     raw_text = getattr(resp, "output_text", None) or getattr(resp, "output", "")

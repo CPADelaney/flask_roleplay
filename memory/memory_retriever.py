@@ -126,14 +126,14 @@ class MemoryRetrieverAgent:
                 raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI")
             
             model_name = self.config.get("openai_model_name", "gpt-5-nano")
-            temperature = self.config.get("temperature", 0.0)  # Low temperature for factual responses
-            
+            temp = self.config.get("temperature")
+
             self.llm = await loop.run_in_executor(
                 None,
                 lambda: ChatOpenAI(
                     model_name=model_name,
-                    temperature=temperature,
-                    openai_api_key=openai_api_key
+                    openai_api_key=openai_api_key,
+                    **({"temperature": temp} if temp is not None else {})
                 )
             )
             
@@ -151,8 +151,8 @@ class MemoryRetrieverAgent:
                 lambda: HuggingFaceHub(
                     repo_id=model_name,
                     huggingfacehub_api_token=hf_token,
-                    model_kwargs={"temperature": 0.1, "max_length": 512}
-                )
+                    model_kwargs={"max_length": 512}
+            )
             )
             
         else:

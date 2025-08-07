@@ -499,7 +499,6 @@ Your response MUST be valid JSON with exactly this structure:
             resp = client.responses.create(
                 model="gpt-5-nano",
                 input=prompt,
-                temperature=0.7,
                 text={"format": {"type": "json_object"}},
             )
 

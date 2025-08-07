@@ -293,7 +293,6 @@ class MemorySchemaManager:
                 model="gpt-5-nano",
                 instructions="You detect patterns in memories to form schemas.",
                 input=prompt,
-                temperature=0.4,
                 text={"format": {"type": "json_object"}},
             )
             result = json.loads(resp.output_text)
@@ -824,7 +823,6 @@ class MemorySchemaManager:
                 model="gpt-5-nano",
                 instructions="You rate memory/schema relevance.",
                 input=prompt,
-                temperature=0.1
             )
             score = float(resp.output_text.strip())
             return max(0.0, min(1.0, score))
@@ -1008,7 +1006,6 @@ class MemorySchemaManager:
                 model="gpt-5-nano",
                 instructions="You interpret memories through cognitive schemas.",
                 input=prompt,
-                temperature=0.4
             )
             return resp.output_text.strip()
     
@@ -1177,7 +1174,6 @@ class MemorySchemaManager:
                 model="gpt-5-nano",
                 instructions="You calculate schema/memory conflict.",
                 input=prompt,
-                temperature=0.1
             )
             score = float(resp.output_text.strip())
             return max(0.0, min(1.0, score))
@@ -1214,7 +1210,6 @@ class MemorySchemaManager:
                 model="gpt-5-nano",
                 instructions="You explain memory/schema conflicts.",
                 input=prompt,
-                temperature=0.4
             )
             return resp.output_text.strip()
         except Exception as e:
@@ -1360,7 +1355,6 @@ class MemorySchemaManager:
                 model="gpt-5-nano",
                 instructions="You evolve schemas to handle conflicts.",
                 input=prompt,
-                temperature=0.4,
                 text={"format": {"type": "json_object"}},
             )
             return json.loads(resp.output_text)
@@ -1523,7 +1517,6 @@ class MemorySchemaManager:
                 model="gpt-5-nano",
                 instructions="You merge schemas.",
                 input=prompt,
-                temperature=0.4,
                 text={"format": {"type": "json_object"}},
             )
             return json.loads(resp.output_text)
@@ -1728,7 +1721,6 @@ class MemorySchemaManager:
                 model="gpt-5-nano",
                 instructions="You rate schema similarity.",
                 input=prompt,
-                temperature=0.1,
             )
             score = float(resp.output_text.strip())
             return max(0.0, min(1.0, score))
