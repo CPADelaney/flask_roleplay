@@ -2131,7 +2131,7 @@ class NewGameAgent:
                 agent_id=NEW_GAME_AGENT_NYX_ID
             )
             
-            # Note: StoryDirector initialization moved to after game setup is complete
+            # Note: WorldDirector initialization moved to after game setup is complete
             
             # Process any pending directives
             if self.directive_handler:
@@ -2282,21 +2282,22 @@ class NewGameAgent:
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id, f"Game: {env.setting_name}")
             
-            # Initialize StoryDirector AFTER game setup is complete
-            logger.info("Initializing StoryDirector")
+            # Initialize WorldDirector AFTER game setup is complete
+            logger.info("Initializing WorldDirector")
             try:
-                from story_agent.story_director_agent import StoryDirector
-                story_director = StoryDirector(user_id, conversation_id)
-                # Register it with the EXISTING governance
+                from story_agent.world_director_agent import CompleteWorldDirector
+                world_director = CompleteWorldDirector(user_id, conversation_id)
+                await world_director.initialize()
+                # Register it with the existing governance
                 await governance.register_agent(
-                    agent_type=AgentType.STORY_DIRECTOR,
-                    agent_instance=story_director,
-                    agent_id="story_director"
+                    agent_type=AgentType.WORLD_DIRECTOR,
+                    agent_instance=world_director,
+                    agent_id="world_director"
                 )
-                logger.info(f"StoryDirector initialized and registered for {conversation_id}")
+                logger.info(f"WorldDirector initialized and registered for {conversation_id}")
             except Exception as e:
-                logger.error(f"StoryDirector init failed: {e}", exc_info=True)
-                # Don't fail the entire game creation if StoryDirector fails
+                logger.error(f"WorldDirector init failed: {e}", exc_info=True)
+                # Don't fail the entire game creation if WorldDirector fails
             
             # NOW start background directive processing after everything is set up
             if self.directive_handler:

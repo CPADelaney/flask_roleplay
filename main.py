@@ -318,7 +318,7 @@ async def initialize_systems(app: Quart):
     from nyx.core.brain.base import NyxBrain
     from tasks import set_app_initialized
     from logic.aggregator_sdk import init_singletons
-    from story_agent.story_director_agent import initialize_story_director, register_with_governance
+    # Legacy StoryDirector removed; WorldDirector initializes on demand
     from db.connection import initialize_connection_pool, close_connection_pool
     from logic.nyx_enhancements_integration import initialize_nyx_memory_system
   #  from mcp_orchestrator import MCPOrchestrator
