@@ -79,8 +79,9 @@ class ConflictSystemIntegration:
         self.context_service = None
         self.memory_manager = None
         self.vector_service = None
-        self.story_director = None
-        self.story_director_context = None
+        # WorldDirector now manages dynamic narrative state
+        self.world_director = None
+        self.world_director_context = None
         
 
         # Directive handlers
@@ -184,19 +185,18 @@ class ConflictSystemIntegration:
                         self.user_id, self.conversation_id
                     )
     
-                    # 6. story-director (guard recursion) -----------------------------
-                    if not hasattr(self, "_story_dir_lock"):
-                        self._story_dir_lock = asyncio.Lock()
-    
-                    async with self._story_dir_lock:
-                        if not hasattr(self, "story_director"):
-                            from story_agent.story_director_agent import (
-                                initialize_story_director,
-                            )
-                            (self.story_director,
-                             self.story_director_context) = await initialize_story_director(
+                    # 6. world-director (guard recursion) -----------------------------
+                    if not hasattr(self, "_world_dir_lock"):
+                        self._world_dir_lock = asyncio.Lock()
+
+                    async with self._world_dir_lock:
+                        if not hasattr(self, "world_director"):
+                            from story_agent.world_director_agent import CompleteWorldDirector
+                            self.world_director = CompleteWorldDirector(
                                 self.user_id, self.conversation_id
                             )
+                            await self.world_director.initialize()
+                            self.world_director_context = self.world_director.context
     
                     # 7. governance registration --------------------------------------
                     await self._register_with_governance()
@@ -407,34 +407,20 @@ class ConflictSystemIntegration:
     async def _get_story_progression(self) -> Dict[str, Any]:
         """Get story progression information"""
         try:
-            if self.story_director and self.story_director_context:
+            if self.world_director and self.world_director_context:
                 try:
-                    from story_agent.story_director_agent import (
-                        get_current_story_state
-                    )
-                    story_state = await get_current_story_state(self.story_director, self.story_director_context)
-                    
-                    if story_state and hasattr(story_state, 'final_output'):
-                        state_text = story_state.final_output
-                        
-                        try:
-                            import re
-                            json_match = re.search(r'({.*})', state_text)
-                            if json_match:
-                                json_str = json_match.group(1)
-                                state_data = json.loads(json_str)
-                                
-                                narrative_stage = state_data.get("narrative_stage", {})
-                                return {
-                                    'current_day': state_data.get("current_day", 1),
-                                    'progress': narrative_stage.get("progress", 0),
-                                    'phase': narrative_stage.get("name", "beginning"),
-                                    'key_decisions': state_data.get("key_decisions", [])
-                                }
-                        except json.JSONDecodeError:
-                            pass
+                    # World director provides comprehensive state without linear narrative stages
+                    state_result = await self.world_director.generate_next_moment()
+                    state_data = state_result.get("world_state", {})
+                    current_time = state_data.get("current_time", {})
+                    return {
+                        'current_day': current_time.get('day', 1),
+                        'progress': 0,
+                        'phase': state_data.get("world_mood", "unknown"),
+                        'key_decisions': []
+                    }
                 except Exception as e:
-                    logger.warning(f"Error getting story state from director: {e}")
+                    logger.warning(f"Error getting world state from director: {e}")
             
             if self.context_service:
                 context_data = await self.context_service.get_context()

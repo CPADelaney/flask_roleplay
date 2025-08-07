@@ -27,7 +27,9 @@ class DirectivePriority:
 class AgentType:
     """Constants for agent types."""
     NPC = "npc"
-    STORY_DIRECTOR = "story_director"
+    WORLD_DIRECTOR = "world_director"
+    # Deprecated alias for backward compatibility with linear story systems
+    STORY_DIRECTOR = WORLD_DIRECTOR
     CONFLICT_ANALYST = "conflict_analyst"
     NARRATIVE_CRAFTER = "narrative_crafter"
     RESOURCE_OPTIMIZER = "resource_optimizer"

@@ -281,7 +281,8 @@ class ConflictGovernanceMixin:
         
         # Adjust based on agent types and their importance
         agent_importance = {
-            AgentType.STORY_DIRECTOR: 1.5,
+            # World director has highest narrative authority in open-world mode
+            AgentType.WORLD_DIRECTOR: 1.5,
             AgentType.UNIVERSAL_UPDATER: 1.3,
             AgentType.SCENE_MANAGER: 1.2,
             AgentType.CONFLICT_ANALYST: 1.1,
@@ -339,7 +340,7 @@ class ConflictGovernanceMixin:
         agent2 = conflict_analysis["agents"][1]
         
         agent_priorities = {
-            AgentType.STORY_DIRECTOR: 10,
+            AgentType.WORLD_DIRECTOR: 10,
             AgentType.UNIVERSAL_UPDATER: 9,
             AgentType.CONFLICT_ANALYST: 8,
             AgentType.SCENE_MANAGER: 7,

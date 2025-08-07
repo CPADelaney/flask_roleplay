@@ -2062,7 +2062,8 @@ class QueenOfThornsStoryProgression:
                 },
                 updates={"story_flags": json.dumps(story_flags)},
                 reason=f"Advancing {element_type} by {amount}",
-                agent_type=AgentType.STORY_DIRECTOR,
+                agent_type=AgentType.WORLD_DIRECTOR,
+                # World director handles narrative progression in open-world mode
                 agent_id="story_progression"
             )
             

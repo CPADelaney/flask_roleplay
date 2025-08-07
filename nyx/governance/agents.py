@@ -199,7 +199,8 @@ class AgentGovernanceMixin:
         registered = 0
     
         agent_modules = [
-            ("story_agent.story_director_agent", "StoryDirector", AgentType.STORY_DIRECTOR),
+            # Switched to world director for open-world orchestration
+            ("story_agent.world_director_agent", "CompleteWorldDirector", AgentType.WORLD_DIRECTOR),
             ("logic.universal_updater_agent", "UniversalUpdaterAgent", AgentType.UNIVERSAL_UPDATER),
             ("agents.scene_manager", "SceneManagerAgent", AgentType.SCENE_MANAGER),
             ("agents.conflict_analyst", "ConflictAnalystAgent", AgentType.CONFLICT_ANALYST),
@@ -497,7 +498,8 @@ class AgentGovernanceMixin:
         # Define standard capabilities for known agent types
         agent_capabilities = {
             AgentType.UNIVERSAL_UPDATER: ["narrative_analysis", "state_extraction", "state_updating"],
-            AgentType.STORY_DIRECTOR: ["narrative_planning", "plot_development", "pacing_control"],
+            # World director now manages overarching world simulation
+            AgentType.WORLD_DIRECTOR: ["narrative_planning", "plot_development", "pacing_control"],
             AgentType.CONFLICT_ANALYST: ["conflict_detection", "resolution_planning", "stake_analysis"],
             AgentType.NARRATIVE_CRAFTER: ["content_creation", "dialogue_generation", "scene_crafting"],
             AgentType.RESOURCE_OPTIMIZER: ["resource_management", "optimization", "allocation"],
@@ -611,7 +613,7 @@ class AgentGovernanceMixin:
         capabilities = agent.get("capabilities", [])
         
         # Primary roles based on agent type
-        if agent_type == AgentType.STORY_DIRECTOR:
+        if agent_type == AgentType.WORLD_DIRECTOR:
             return "narrative_lead"
         elif agent_type == AgentType.CONFLICT_ANALYST:
             return "conflict_manager"
