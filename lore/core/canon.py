@@ -262,13 +262,20 @@ async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None
     ctx = ensure_canonical_context(ctx)
     
     tags = tags or []
-    
+
+    # asyncpg doesn't automatically serialize lists/dicts for JSONB columns
+    # when a statement has been prepared with text parameters. This caused
+    # failures when passing a raw list (e.g. ['roleplay', 'update', 'discipline'])
+    # to the query. To ensure consistent behavior we explicitly JSON-encode the
+    # tags list before insertion.
+    tags_json = json.dumps(tags)
+
     await conn.execute("""
         INSERT INTO CanonicalEvents (
             user_id, conversation_id, event_text, tags, significance, timestamp
         )
         VALUES ($1, $2, $3, $4, $5, $6)
-    """, ctx.user_id, ctx.conversation_id, event_text, tags, significance, datetime.utcnow())
+    """, ctx.user_id, ctx.conversation_id, event_text, tags_json, significance, datetime.utcnow())
 
 async def ensure_npc_exists(ctx, conn, npc_reference: Union[int, str, Dict[str, Any]]) -> int:
     """
