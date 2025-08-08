@@ -725,11 +725,10 @@ async def extract_player_stats(ctx: RunContextWrapper, narrative: str) -> Player
         stats=[StatEntry(key=k, value=v) for k, v in changes.items()]
     )
 
-@function_tool
-async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> ApplyUpdatesResult:
+async def _apply_universal_updates_impl(ctx: RunContextWrapper, updates_json: str) -> ApplyUpdatesResult:
     """
-    Apply universal updates to the database.
-    Handles conversion between array format (schema) and dict format (database).
+    Actual implementation you can call directly from Python.
+    The @function_tool wrapper below just delegates to this.
     """
     # Accept dict/list directly; strings get parsed (with code-fence stripping)
     raw = updates_json
@@ -743,13 +742,17 @@ async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> 
         except json.JSONDecodeError:
             bad = _strip_code_fences(updates_json or "")
             logger.error("Invalid JSON from updater agent (preview): %r", bad[:200])
-            normalized = await _invoke_function_tool(normalize_json, ctx, json_str=s)
-            if normalized.ok and normalized.data:
+            # Use normalize_json tool (robustly) but we can also inline a fallback
+            try:
+                normalized = await _invoke_function_tool(normalize_json, ctx, json_str=s)
+            except Exception:
+                normalized = None
+            if normalized and getattr(normalized, "ok", False) and getattr(normalized, "data", None):
                 updates = array_to_dict([item.model_dump() for item in normalized.data])
             else:
                 return ApplyUpdatesResult(
                     success=False,
-                    error=f"Invalid JSON: {normalized.error or 'Unknown error'}"
+                    error=f"Invalid JSON: {(normalized and normalized.error) or 'Unknown error'}"
                 )
 
     try:
@@ -776,11 +779,11 @@ async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> 
     try:
         # Convert array formats to dict formats for database storage
         db_updates = convert_updates_for_database(updates)
-        
+
         # Set user_id and conversation_id
         db_updates["user_id"] = user_id
         db_updates["conversation_id"] = conversation_id
-        
+
         async with get_db_connection_context() as conn:
             # Apply updates
             result = await apply_universal_updates_async(
@@ -790,7 +793,7 @@ async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> 
                 db_updates,
                 conn
             )
-            
+
             # Report action
             await governor.process_agent_action_report(
                 agent_type=AgentType.UNIVERSAL_UPDATER,
@@ -805,6 +808,14 @@ async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> 
     except Exception as e:
         logging.error(f"Error applying universal updates: {e}")
         return ApplyUpdatesResult(success=False, error=str(e))
+
+@function_tool
+async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> ApplyUpdatesResult:
+    """
+    Thin tool wrapper that forwards to the real implementation.
+    Agents can call this tool; your Python code should call the impl directly.
+    """
+    return await _apply_universal_updates_impl(ctx, updates_json)
 
 # ===============================================================================
 # Database Processing Functions (Updated for Array/Dict Conversion)
@@ -1380,12 +1391,10 @@ async def process_universal_update(
                 skel = _build_min_skeleton(user_id, conversation_id, narrative)
                 update_json = json.dumps(skel, ensure_ascii=False, separators=(",", ":"))
 
-            # Invoke the tool (robust to SDK differences)
+            # Call the impl directly (no SDK tool invocation needed)
             wrapped_ctx = RunContextWrapper(updater_context)
-            update_result = await _invoke_function_tool(
-                apply_universal_updates,
-                wrapped_ctx,
-                updates_json=update_json,
+            update_result = await _apply_universal_updates_impl(
+                wrapped_ctx, update_json
             )
             return update_result.model_dump()
                 
