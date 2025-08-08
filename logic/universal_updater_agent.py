@@ -20,6 +20,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 # OpenAI Agents SDK imports
 from agents import (
     Agent,
+    AgentOutputSchema,
     ModelSettings,
     Runner,
     function_tool,
@@ -1297,11 +1298,15 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
     handoffs=[
         handoff(extraction_agent, tool_name_override="extract_state_changes")
     ],
-    output_type=UniversalUpdateInput,
+    output_type=AgentOutputSchema(UniversalUpdateInput, strict_json_schema=False),
     input_guardrails=[
         InputGuardrail(guardrail_function=content_safety_guardrail),
     ],
-    model_settings=ModelSettings(temperature=0.2),
+    model_settings=ModelSettings(
+        temperature=0.2,
+        response_format="json_object",
+        max_output_tokens=2000
+    ),
     model='gpt-5-nano'
 )
 
@@ -1330,27 +1335,33 @@ async def process_universal_update(
         group_id=f"user-{user_id}"
     ):
         prompt = f"""
-        Analyze the following narrative text and extract appropriate game state updates.
-        
-        Narrative:
-        {narrative}
-        
-        Based on this narrative, identify:
-        1. NPC creations or updates (changes in location, stats, etc.)
-        2. Player stat changes (increases or decreases in corruption, confidence, etc.)
-        3. Relationship changes between characters
-        4. New locations, events, items, or quests
-        5. Journal entries or activity updates
-        6. Whether an image should be generated for this scene
-        
-        IMPORTANT: Use array format for these fields:
-        - roleplay_updates: Array of {{key, value}} pairs
-        - ChaseSchedule: Array of {{key: day_name, value: day_schedule}}
-        - character_stat_updates.stats: Array of {{key: stat_name, value: stat_change}}
-        - NPC schedule: Array format
-        - Activity stat_integration: Array format
-        
-        Provide a structured output conforming to the UniversalUpdateInput schema.
+Analyze the narrative and return ONLY a single JSON object matching UniversalUpdateInput.
+Do not include any text before or after the JSON. No markdown fences.
+
+Example shape:
+{{
+  "user_id": {user_id},
+  "conversation_id": {conversation_id},
+  "narrative": {json.dumps(narrative[:60] + ("..." if len(narrative) > 60 else ""))},
+  "roleplay_updates": [],
+  "ChaseSchedule": [],
+  "MainQuest": null,
+  "PlayerRole": null,
+  "npc_creations": [],
+  "npc_updates": [],
+  "character_stat_updates": {{"player_name":"Chase","stats":[]}},
+  "relationship_updates": [],
+  "npc_introductions": [],
+  "location_creations": [],
+  "event_list_updates": [],
+  "inventory_updates": {{"player_name":"Chase","added_items":[],"removed_items":[]}},
+  "quest_updates": [],
+  "social_links": [],
+  "perk_unlocks": [],
+  "activity_updates": [],
+  "journal_updates": [],
+  "image_generation": {{"generate": false,"priority":"low","focus":"balanced","framing":"medium_shot"}}
+}}
         """
         
         try:
@@ -1374,21 +1385,25 @@ async def process_universal_update(
                 try:
                     update_json = _to_updates_json(update_data)
                 except Exception as e:
-                    logging.error(f"Updater output could not be normalized to JSON: {e}")
+                    logger.error("Updater output could not be normalized to JSON: %s", e)
 
             if not update_json:
-                # Fallback 1: completion_text
-                raw_txt = _strip_code_fences(getattr(result, "completion_text", "") or "")
+                raw_txt = (
+                    getattr(result, "output_text", None)
+                    or getattr(result, "completion_text", None)
+                    or (getattr(getattr(result, "response", None), "output_text", None))
+                    or ""
+                )
+                raw_txt = _strip_code_fences(raw_txt)
                 if raw_txt:
                     try:
                         json.loads(raw_txt)
                         update_json = raw_txt
                     except Exception:
-                        logging.error("Invalid JSON from updater agent (preview): %r", raw_txt[:200])
+                        logger.error("Invalid JSON from updater agent (preview): %r", raw_txt[:200])
 
             if not update_json:
-                # Fallback 2: synthesize a valid empty skeleton so pipeline continues
-                logging.error("Updater returned empty output. Using minimal skeleton to continue.")
+                logger.error("Updater returned empty output. Using minimal skeleton to continue.")
                 skel = _build_min_skeleton(user_id, conversation_id, narrative)
                 update_json = json.dumps(skel, ensure_ascii=False, separators=(",", ":"))
 
@@ -1400,7 +1415,7 @@ async def process_universal_update(
             return update_result.model_dump()
                 
         except Exception as e:
-            logging.error(f"Error in universal updater agent execution: {str(e)}", exc_info=True)
+            logger.error("Error in universal updater agent execution: %s", str(e), exc_info=True)
             return {"success": False, "error": f"Agent execution error: {str(e)}"}
 
 async def register_with_governance(user_id: int, conversation_id: int):
