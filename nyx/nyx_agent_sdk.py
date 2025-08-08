@@ -2440,11 +2440,11 @@ Always maintain your dominant persona while being attentive to user needs and sy
         handoff(decision_agent),
         handoff(reflection_agent),
     ],
-    tools=[decide_image_generation, generate_universal_updates],  # Main agent needs these tools
-    output_type=str,
+    tools=[decide_image_generation, generate_universal_updates],
+    output_type=NarrativeResponse,      # <-- single output type
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano",
-    model_settings=ModelSettings()
+    model_settings=ModelSettings  # <-- no temperature
 )
 
 # ===== Main Functions (maintaining original signatures) =====
@@ -2463,24 +2463,24 @@ async def process_user_input(
     """Process user input and generate Nyx's response"""
     start_time = time.time()
     nyx_context = None
-    
+
     try:
         # Create and initialize context
         nyx_context = NyxContext(user_id, conversation_id)
         await nyx_context.initialize()
         nyx_context.current_context = context_data or {}
         nyx_context.current_context["user_input"] = user_input
-        
+
         # Extract system prompt if provided
         system_prompt = (context_data or {}).get("system_prompt", "")
         private_reflection = (context_data or {}).get("private_reflection", "")
-        
-        # Create agent with system prompt
+
+        # Pick agent
         if system_prompt:
             agent = await create_nyx_agent_with_prompt(system_prompt, private_reflection)
         else:
             agent = nyx_main_agent
-        
+
         # Run the agent
         result = await Runner.run(
             agent,
@@ -2488,17 +2488,25 @@ async def process_user_input(
             context=nyx_context,
             run_config=RunConfig(
                 workflow_name="Nyx Roleplay",
-                trace_metadata={"user_id": str(user_id), "conversation_id": str(conversation_id)}
-            )
+                trace_metadata={
+                    "user_id": str(user_id),
+                    "conversation_id": str(conversation_id),
+                },
+            ),
         )
 
-        # Get the structured response if possible
-        output_text = result.output_text or ""
+        # Prefer structured output; fall back to raw text
         try:
-            response = NarrativeResponse.model_validate_json(output_text)
-        except ValidationError:
+            response = result.final_output_as(NarrativeResponse)
+        except Exception:
+            raw_text = (
+                getattr(result, "output_text", None)
+                or getattr(result, "completion_text", None)
+                or (getattr(getattr(result, "response", None), "output_text", None))
+                or ""
+            )
             response = NarrativeResponse(
-                narrative=output_text,
+                narrative=raw_text,
                 tension_level=0,
                 generate_image=False,
                 image_prompt=None,
@@ -2506,81 +2514,95 @@ async def process_user_input(
                 time_advancement=False,
                 universal_updates=None,
             )
-        
-        # Defensive check: ensure universal updates were generated
-        if not nyx_context.current_context.get("universal_updates") and response.narrative:
-            # Call generate_universal_updates_impl directly (not the decorated version)
+
+        # Ensure we have something to show the user (tool-only runs can be empty otherwise)
+        if not response.narrative:
+            response.narrative = "…"
+
+        # Fire-and-forget universal updates if missing; don't block the reply
+        if response.narrative and not nyx_context.current_context.get("universal_updates"):
             try:
-                # Debugging: ensure we're calling the raw function, not a FunctionTool
-                logger.debug(
-                    "generate_universal_updates_impl type: %s",
-                    type(generate_universal_updates_impl)
-                )
                 wrapper = RunContextWrapper(context=nyx_context)
-                logger.debug(
-                    "Auto-generating universal updates using %s",
-                    type(generate_universal_updates_impl)
-                )
-                await generate_universal_updates_impl(wrapper, response.narrative)
+                asyncio.create_task(generate_universal_updates_impl(wrapper, response.narrative))
             except Exception:
-                logger.exception("Failed to auto-generate universal updates")
-        
-        # Extract universal updates from context - convert to regular dict for compatibility
-        universal_updates_dict = {}
-        if nyx_context.current_context.get("universal_updates"):
-            if isinstance(nyx_context.current_context["universal_updates"], dict):
-                universal_updates_dict = nyx_context.current_context["universal_updates"]
-        
-        # Apply response filtering if available
-        if nyx_context.response_filter and response.narrative:
-            filtered_narrative = await nyx_context.response_filter.filter_response(
-                response.narrative,
-                nyx_context.current_context
+                logger.exception("Failed to schedule auto-generation of universal updates")
+
+        # Extract universal updates (may still be empty if running in background)
+        universal_updates_dict: Dict[str, Any] = {}
+        uu = nyx_context.current_context.get("universal_updates")
+        if isinstance(uu, dict):
+            universal_updates_dict = uu
+
+        # Optional response filtering
+        if getattr(nyx_context, "response_filter", None) and response.narrative:
+            try:
+                response.narrative = await nyx_context.response_filter.filter_response(
+                    response.narrative, nyx_context.current_context
+                )
+            except Exception:
+                logger.exception("response_filter failed; using unfiltered narrative")
+
+        # Optional task generation
+        try:
+            if nyx_context.should_generate_task():
+                task_result = await nyx_context.task_integration.generate_creative_task(
+                    nyx_context,
+                    npc_id=nyx_context.current_context.get("active_npc_id"),
+                    scenario_id=nyx_context.current_context.get("scenario_id"),
+                )
+                if task_result.get("success"):
+                    response.narrative += f"\n\n[New Task: {task_result['task']['name']}]"
+                    nyx_context.active_tasks.append(task_result["task"])
+                    nyx_context.record_task_run("task_generation")
+        except Exception:
+            logger.exception("Task generation failed")
+
+        # Store the interaction in memory (best-effort)
+        try:
+            await nyx_context.memory_system.remember(
+                entity_type="integrated",
+                entity_id=0,
+                memory_text=f"User: {user_input}\nNyx: {response.narrative}",
+                importance="medium",
+                emotional=True,
+                tags=["interaction", "conversation"],
             )
-            response.narrative = filtered_narrative
-        
-        # Check for task generation
-        if nyx_context.should_generate_task():
-            task_result = await nyx_context.task_integration.generate_creative_task(
-                nyx_context,
-                npc_id=nyx_context.current_context.get("active_npc_id"),
-                scenario_id=nyx_context.current_context.get("scenario_id")
+        except Exception:
+            logger.exception("Memory write failed")
+
+        # Learning signals (best-effort)
+        try:
+            await nyx_context.learn_from_interaction(
+                action="response",
+                outcome=f"tension_{response.tension_level}",
+                success=True,
             )
-            if task_result["success"]:
-                # Enhance response with task information
-                response.narrative += f"\n\n[New Task: {task_result['task']['name']}]"
-                nyx_context.active_tasks.append(task_result['task'])
-                nyx_context.record_task_run("task_generation")
-        
-        # Store the interaction in memory
-        memory_result = await nyx_context.memory_system.remember(
-            entity_type="integrated",
-            entity_id=0,
-            memory_text=f"User: {user_input}\nNyx: {response.narrative}",
-            importance="medium",
-            emotional=True,
-            tags=["interaction", "conversation"]
-        )
-        
-        # Learn from the interaction
-        await nyx_context.learn_from_interaction(
-            action="response",
-            outcome=f"tension_{response.tension_level}",
-            success=True
-        )
-        
-        # Update performance metrics
+        except Exception:
+            logger.exception("learn_from_interaction failed")
+
+        # Performance metrics
         response_time = time.time() - start_time
-        nyx_context.update_performance("response_times", response_time)
-        nyx_context.update_performance("total_actions", nyx_context.performance_metrics["total_actions"] + 1)
-        nyx_context.update_performance("successful_actions", nyx_context.performance_metrics["successful_actions"] + 1)
-        
-        # Get token usage if available
+        try:
+            nyx_context.update_performance("response_times", response_time)
+            nyx_context.update_performance(
+                "total_actions", nyx_context.performance_metrics["total_actions"] + 1
+            )
+            nyx_context.update_performance(
+                "successful_actions",
+                nyx_context.performance_metrics["successful_actions"] + 1,
+            )
+        except Exception:
+            logger.exception("update_performance failed")
+
+        # Token usage (optional helper)
         tokens_used = extract_token_usage(result)
-        
-        # Save updated state
-        await _save_context_state(nyx_context)
-        
+
+        # Persist context (best-effort)
+        try:
+            await _save_context_state(nyx_context)
+        except Exception:
+            logger.exception("_save_context_state failed")
+
         return {
             "success": True,
             "response": {
@@ -2590,73 +2612,62 @@ async def process_user_input(
                 "image_prompt": response.image_prompt,
                 "environment_update": response.environment_description,
                 "time_advancement": response.time_advancement,
-                "universal_updates": universal_updates_dict  # Include any universal updates
+                "universal_updates": universal_updates_dict,  # May be empty if updater is still running
             },
             "memories_used": [],
             "performance": {
                 "response_time": response_time,
-                "memory_usage": nyx_context.performance_metrics["memory_usage"],
-                "cpu_usage": nyx_context.performance_metrics["cpu_usage"],
-                "tokens_used": tokens_used
+                "memory_usage": nyx_context.performance_metrics.get("memory_usage"),
+                "cpu_usage": nyx_context.performance_metrics.get("cpu_usage"),
+                "tokens_used": tokens_used,
             },
             "learning": {
-                "patterns_learned": len(nyx_context.learned_patterns),
-                "adaptation_success_rate": nyx_context.learning_metrics["adaptation_success_rate"]
-            }
+                "patterns_learned": len(getattr(nyx_context, "learned_patterns", [])),
+                "adaptation_success_rate": nyx_context.learning_metrics.get(
+                    "adaptation_success_rate"
+                ),
+            },
         }
-        
+
     except ValidationError as e:
         logger.error(f"Validation error in agent response: {e}")
-        # Try to auto-correct common validation errors
-        try:
-            # If it's just a field value out of bounds, we can try to fix it
-            error_dict = e.errors()[0] if e.errors() else {}
-            if "greater_than_equal" in str(error_dict) or "less_than_equal" in str(error_dict):
-                logger.info("Attempting to auto-correct validation error")
-                # For now, return a safe minimal response
-                # In future, could parse the error and fix specific fields
-        except Exception:
-            pass
-            
-        # Return a safe fallback response
         return {
             "success": False,
             "error": "Response validation error",
             "response": {
                 "narrative": "I need to adjust my response format. Let me try again in a moment.",
                 "tension_level": 0,
-                "generate_image": False
-            }
+                "generate_image": False,
+            },
         }
-        
+
     except Exception as e:
         logger.error(f"Error processing user input: {e}")
         if nyx_context is not None and hasattr(nyx_context, "performance_metrics"):
-            nyx_context.update_performance(
-                "total_actions",
-                nyx_context.performance_metrics["total_actions"] + 1
-            )
-            nyx_context.update_performance(
-                "failed_actions",
-                nyx_context.performance_metrics["failed_actions"] + 1
-            )
-            nyx_context.log_error(e, {"user_input": user_input})
-            await nyx_context.learn_from_interaction(
-                action="response",
-                outcome="error",
-                success=False,
-            )
-        
+            try:
+                nyx_context.update_performance(
+                    "total_actions", nyx_context.performance_metrics["total_actions"] + 1
+                )
+                nyx_context.update_performance(
+                    "failed_actions", nyx_context.performance_metrics["failed_actions"] + 1
+                )
+                nyx_context.log_error(e, {"user_input": user_input})
+                await nyx_context.learn_from_interaction(
+                    action="response", outcome="error", success=False
+                )
+            except Exception:
+                logger.exception("error-path metrics/logging failed")
+
         return {
             "success": False,
             "error": str(e),
             "response": {
                 "narrative": "I apologize, but I encountered an error processing your request. Please try again.",
                 "tension_level": 0,
-                "generate_image": False
-            }
+                "generate_image": False,
+            },
         }
-      
+
 async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
     # Use a fresh connection, not one from the context
