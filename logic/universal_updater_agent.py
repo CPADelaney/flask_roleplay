@@ -638,7 +638,7 @@ async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> 
     try:
         updates = json.loads(updates_json)
     except json.JSONDecodeError:
-        normalized = await normalize_json(ctx, updates_json)
+        normalized = await Runner.call_tool(normalize_json, ctx, json_str=updates_json)
         if normalized.ok and normalized.data:
             updates = array_to_dict([item.model_dump() for item in normalized.data])
         else:
@@ -1262,10 +1262,13 @@ async def process_universal_update(
                     logging.error(f"Invalid JSON from updater agent: {e}")
                     return {"success": False, "error": f"Invalid JSON: {e}"}
 
-                # Wrap the context for the tool call
+                # Wrap the context and call the FunctionTool correctly
                 wrapped_ctx = RunContextWrapper(updater_context)
-                update_result = await apply_universal_updates(wrapped_ctx, update_json)
-                
+                update_result = await Runner.call_tool(
+                    apply_universal_updates,
+                    wrapped_ctx,
+                    updates_json=update_json,
+                )
                 # Convert ApplyUpdatesResult back to dict
                 return update_result.model_dump()
             else:
