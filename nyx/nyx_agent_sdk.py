@@ -2019,10 +2019,23 @@ async def generate_universal_updates_impl(
         # Store the updates in context
         if "universal_updates" not in ctx.context.current_context:
             ctx.context.current_context["universal_updates"] = {}
-        
+
         # Merge the updates
         if update_result.get("success") and update_result.get("details"):
-            for key, value in update_result["details"].items():
+            details = update_result["details"]
+            # Convert list-based key/value pairs into a dictionary
+            if isinstance(details, list):
+                try:
+                    from logic.universal_updater_agent import array_to_dict
+                    details_dict = array_to_dict(details)
+                except Exception:  # Fallback if helper import fails
+                    details_dict = {d.get("key"): d.get("value") for d in details}
+            elif isinstance(details, dict):
+                details_dict = details
+            else:
+                details_dict = {}
+
+            for key, value in details_dict.items():
                 ctx.context.current_context["universal_updates"][key] = value
         
         # Return structured output
