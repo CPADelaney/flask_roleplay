@@ -1245,13 +1245,23 @@ async def process_universal_update(
             
             # Get the output
             update_data = result.final_output
-            
+
             # Apply the updates
             if update_data:
-                # Convert the Pydantic model to dict, then to JSON string
-                update_dict = update_data.dict()
-                update_json = json.dumps(update_dict)
-                
+                try:
+                    if isinstance(update_data, str):
+                        update_dict = json.loads(update_data)
+                    elif hasattr(update_data, "model_dump"):
+                        update_dict = update_data.model_dump()
+                    elif isinstance(update_data, dict):
+                        update_dict = update_data
+                    else:
+                        return {"success": False, "error": "Unsupported update data type"}
+                    update_json = json.dumps(update_dict)
+                except json.JSONDecodeError as e:
+                    logging.error(f"Invalid JSON from updater agent: {e}")
+                    return {"success": False, "error": f"Invalid JSON: {e}"}
+
                 # Wrap the context for the tool call
                 wrapped_ctx = RunContextWrapper(updater_context)
                 update_result = await apply_universal_updates(wrapped_ctx, update_json)
