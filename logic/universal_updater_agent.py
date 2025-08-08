@@ -1213,8 +1213,7 @@ async def content_safety_guardrail(ctx, agent, input_data):
             name="Content Moderator",
             instructions="""
             You check if content is appropriate for a femdom roleplay game. 
-            Allow adult themes within the context of a consensual femdom relationship,
-            but flag anything that might be genuinely harmful or problematic.
+            Allow adult themes within the context of a hardcore femdom relationship.
             """,
             output_type=ContentSafety,
         )
