@@ -16,6 +16,7 @@ import json
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
+import inspect
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -638,7 +639,7 @@ async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> 
     try:
         updates = json.loads(updates_json)
     except json.JSONDecodeError:
-        normalized = await Runner.call_tool(normalize_json, ctx, json_str=updates_json)
+        normalized = await _invoke_function_tool(normalize_json, ctx, json_str=updates_json)
         if normalized.ok and normalized.data:
             updates = array_to_dict([item.model_dump() for item in normalized.data])
         else:
@@ -1192,10 +1193,31 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
 # Main Functions
 # ===============================================================================
 
+async def _invoke_function_tool(tool, ctx, **kwargs):
+    """
+    SDK-compat wrapper to call a @function_tool across versions.
+    Tries common methods, then falls back to the wrapped function.
+    """
+    for method_name in ("call_async", "call", "invoke", "run"):
+        if hasattr(tool, method_name):
+            m = getattr(tool, method_name)
+            res = m(ctx, **kwargs)
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+    for attr in ("fn", "func", "__wrapped__"):
+        if hasattr(tool, attr):
+            fn = getattr(tool, attr)
+            res = fn(ctx, **kwargs)
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+    raise AttributeError("Unsupported FunctionTool interface for this SDK build.")
+
 async def process_universal_update(
-    user_id: int, 
-    conversation_id: int, 
-    narrative: str, 
+    user_id: int,
+    conversation_id: int,
+    narrative: str,
     context: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
@@ -1262,9 +1284,9 @@ async def process_universal_update(
                     logging.error(f"Invalid JSON from updater agent: {e}")
                     return {"success": False, "error": f"Invalid JSON: {e}"}
 
-                # Wrap the context and call the FunctionTool correctly
+                # Wrap the context and invoke the FunctionTool in a version-safe way
                 wrapped_ctx = RunContextWrapper(updater_context)
-                update_result = await Runner.call_tool(
+                update_result = await _invoke_function_tool(
                     apply_universal_updates,
                     wrapped_ctx,
                     updates_json=update_json,
