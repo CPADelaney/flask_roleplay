@@ -692,10 +692,7 @@ class OptimizedIncrementalContextManager:
         Get the full context without delta tracking.
         """
         context_data = await get_aggregated_roleplay_context(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            current_input=user_input,
-            location=location
+            user_id, conversation_id, player_name="Chase"
         )
         return {
             "full_context": context_data,

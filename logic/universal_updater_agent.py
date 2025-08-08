@@ -133,19 +133,15 @@ class StrictBaseModel(BaseModel):
     """Base class enforcing a strict schema for OpenAI Agents"""
     model_config = ConfigDict(extra='forbid')
 
-# Key-Value pair models for array format
-# NOTE: The OpenAI structured output schema requires every property to declare a
-# concrete type. Using ``Any`` results in a property without a ``type`` field,
-# which the API rejects with ``invalid_json_schema`` errors. To support flexible
-# values while still providing explicit types, we define a union of possible JSON
-# value types.
-JsonValue = Union[str, int, float, bool, Dict[str, Any], List[Any], None]
-
-
-class KeyValuePair(StrictBaseModel):
-    """Generic key-value pair for array format"""
-    key: str
-    value: JsonValue
+# ---- JSON-safe aliases (strict) ----
+# Allowed scalar types in strict output
+JsonScalar = Union[str, int, float, bool, None]
+# Allowed “value” types in {key,value} pairs:
+# - scalar
+# - list of scalars
+# - DaySchedule (defined below)
+# NOTE: If you need more object types here later, add them explicitly.
+# (We define KeyValuePair AFTER DaySchedule so the type exists.)
 
 class KeyValueStr(StrictBaseModel):
     """String key-value pair"""
@@ -169,6 +165,15 @@ class ScheduleEntry(StrictBaseModel):
     """Single schedule entry in array format"""
     key: str  # Day name (Monday, Tuesday, etc.)
     value: DaySchedule
+
+# Now that DaySchedule exists, define the strict KeyValuePair
+JsonList = List[JsonScalar]
+JsonValue = Union[JsonScalar, JsonList, DaySchedule]
+
+class KeyValuePair(StrictBaseModel):
+    """Generic key-value pair for array format (strict)"""
+    key: str
+    value: JsonValue
 
 # NPC models
 class NPCArchetype(StrictBaseModel):
@@ -316,7 +321,7 @@ class ActivityPurpose(StrictBaseModel):
 class StatIntegrationEntry(StrictBaseModel):
     """Single stat integration entry in array format"""
     key: str
-    value: Any
+    value: JsonScalar
 
 class Activity(StrictBaseModel):
     """Activity with array format for stat_integration"""
@@ -1042,9 +1047,7 @@ async def process_roleplay_updates_canonical(
     
     for key, value in roleplay_updates.items():
         if value is not None:
-            await canon.update_current_roleplay(
-                canon_ctx, conn, user_id, conversation_id, key, str(value)
-            )
+            await canon.update_current_roleplay(canon_ctx, conn, key, str(value))
             count += 1
     
     return count
