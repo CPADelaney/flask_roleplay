@@ -1301,7 +1301,8 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
     input_guardrails=[
         InputGuardrail(guardrail_function=content_safety_guardrail),
     ],
-    model_settings=ModelSettings(temperature=0.2)
+    model_settings=ModelSettings(temperature=0.2),
+    model='gpt-5-nano'
 )
 
 # ===============================================================================
