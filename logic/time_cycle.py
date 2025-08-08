@@ -2235,7 +2235,7 @@ async def set_current_time(user_id, conversation_id, new_year, new_month, new_da
                 ("CurrentDay", str(new_day)),
                 ("TimeOfDay", new_phase),
             ]:
-                await canon.update_current_roleplay(canon_ctx, conn, user_id, conversation_id, key, val)
+                await canon.update_current_roleplay(canon_ctx, conn, key, str(val))
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
         logger.error(f"Database error setting current time: {e}", exc_info=True)
     except Exception as e:

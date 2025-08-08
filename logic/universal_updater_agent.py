@@ -16,7 +16,6 @@ import json
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
-import inspect
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -92,6 +91,59 @@ def _to_updates_json(update_data) -> str:
         json.loads(s)
         return s
     raise ValueError(f"Unsupported updater output type: {type(update_data)}")
+
+
+async def _invoke_function_tool(tool, ctx, **kwargs):
+    """
+    Call a FunctionTool across SDK variants:
+    - Prefer .invoke(ctx, **kwargs)
+    - Fall back to .run(ctx, **kwargs)
+    - Fall back to Runner.run_tool(...) if available
+    - As a last resort, try calling it directly if it's still a coroutine fn
+    """
+    # Common modern path
+    if hasattr(tool, "invoke") and callable(getattr(tool, "invoke")):
+        return await tool.invoke(ctx, **kwargs)
+    if hasattr(tool, "run") and callable(getattr(tool, "run")):
+        return await tool.run(ctx, **kwargs)
+    # Some SDKs expose a Runner helper
+    try:
+        from agents.run import Runner as _R
+        if hasattr(_R, "run_tool"):
+            return await _R.run_tool(tool, ctx=ctx, **kwargs)
+    except Exception:
+        pass
+    # Very old decorator returns a bare async fn
+    if callable(tool):
+        return await tool(ctx, **kwargs)
+    raise TypeError("Cannot invoke FunctionTool with this SDK build.")
+
+
+def _build_min_skeleton(user_id: int, conversation_id: int, narrative: str) -> dict:
+    """Return a valid empty UniversalUpdateInput payload."""
+    return {
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "narrative": narrative or "",
+        "roleplay_updates": [],
+        "ChaseSchedule": [],
+        "MainQuest": None,
+        "PlayerRole": None,
+        "npc_creations": [],
+        "npc_updates": [],
+        "character_stat_updates": {"player_name": "Chase", "stats": []},
+        "relationship_updates": [],
+        "npc_introductions": [],
+        "location_creations": [],
+        "event_list_updates": [],
+        "inventory_updates": {"player_name": "Chase", "added_items": [], "removed_items": []},
+        "quest_updates": [],
+        "social_links": [],
+        "perk_unlocks": [],
+        "activity_updates": [],
+        "journal_updates": [],
+        "image_generation": {"generate": False, "priority": "low", "focus": "balanced", "framing": "medium_shot"},
+    }
 
 # ===============================================================================
 # Array Format Helper Functions
@@ -689,6 +741,8 @@ async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> 
         try:
             updates = json.loads(s)
         except json.JSONDecodeError:
+            bad = _strip_code_fences(updates_json or "")
+            logger.error("Invalid JSON from updater agent (preview): %r", bad[:200])
             normalized = await _invoke_function_tool(normalize_json, ctx, json_str=s)
             if normalized.ok and normalized.data:
                 updates = array_to_dict([item.model_dump() for item in normalized.data])
@@ -1243,26 +1297,6 @@ universal_updater_agent = Agent[UniversalUpdaterContext](
 # Main Functions
 # ===============================================================================
 
-async def _invoke_function_tool(tool, ctx, **kwargs):
-    """
-    SDK-compat wrapper to call a @function_tool across versions.
-    Tries common methods, then falls back to the wrapped function.
-    """
-    for method_name in ("call_async", "call", "invoke", "run"):
-        if hasattr(tool, method_name):
-            m = getattr(tool, method_name)
-            res = m(ctx, **kwargs)
-            if inspect.isawaitable(res):
-                res = await res
-            return res
-    for attr in ("fn", "func", "__wrapped__"):
-        if hasattr(tool, attr):
-            fn = getattr(tool, attr)
-            res = fn(ctx, **kwargs)
-            if inspect.isawaitable(res):
-                res = await res
-            return res
-    raise AttributeError("Unsupported FunctionTool interface for this SDK build.")
 
 async def process_universal_update(
     user_id: int,
@@ -1315,44 +1349,45 @@ async def process_universal_update(
                 context=updater_context
             )
 
-            # Get structured output; prefer strict cast if available
+            # Try several paths to get structured output
+            update_data = None
             try:
                 update_data = result.final_output_as(UniversalUpdateInput)
             except Exception:
-                update_data = result.final_output
+                update_data = getattr(result, "final_output", None)
 
-            # Apply the updates
+            # Convert whatever we got into JSON; try multiple fallbacks
+            update_json = None
             if update_data:
-                # Convert whatever we got into a guaranteed JSON string
                 try:
                     update_json = _to_updates_json(update_data)
                 except Exception as e:
                     logging.error(f"Updater output could not be normalized to JSON: {e}")
-                    bad = _strip_code_fences(getattr(result, "completion_text", "") or "")
-                    logger.error(f"Invalid JSON from updater agent (preview): {bad[:200]!r}")
-                    # Best-effort: if we can get a raw completion text, try that too
-                    raw_txt = getattr(result, "completion_text", "") or ""
-                    raw_txt = _strip_code_fences(raw_txt)
-                    if raw_txt:
-                        try:
-                            json.loads(raw_txt)
-                            update_json = raw_txt
-                        except Exception:
-                            return {"success": False, "error": "Agent returned non-JSON output"}
-                    else:
-                        return {"success": False, "error": "Agent returned empty output"}
 
-                # Wrap the context and invoke the FunctionTool in a version-safe way
-                wrapped_ctx = RunContextWrapper(updater_context)
-                update_result = await _invoke_function_tool(
-                    apply_universal_updates,
-                    wrapped_ctx,
-                    updates_json=update_json,
-                )
-                # Convert ApplyUpdatesResult back to dict
-                return update_result.model_dump()
-            else:
-                return {"success": False, "error": "No updates extracted"}
+            if not update_json:
+                # Fallback 1: completion_text
+                raw_txt = _strip_code_fences(getattr(result, "completion_text", "") or "")
+                if raw_txt:
+                    try:
+                        json.loads(raw_txt)
+                        update_json = raw_txt
+                    except Exception:
+                        logging.error("Invalid JSON from updater agent (preview): %r", raw_txt[:200])
+
+            if not update_json:
+                # Fallback 2: synthesize a valid empty skeleton so pipeline continues
+                logging.error("Updater returned empty output. Using minimal skeleton to continue.")
+                skel = _build_min_skeleton(user_id, conversation_id, narrative)
+                update_json = json.dumps(skel, ensure_ascii=False, separators=(",", ":"))
+
+            # Invoke the tool (robust to SDK differences)
+            wrapped_ctx = RunContextWrapper(updater_context)
+            update_result = await _invoke_function_tool(
+                apply_universal_updates,
+                wrapped_ctx,
+                updates_json=update_json,
+            )
+            return update_result.model_dump()
                 
         except Exception as e:
             logging.error(f"Error in universal updater agent execution: {str(e)}", exc_info=True)
