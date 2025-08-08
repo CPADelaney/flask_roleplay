@@ -1262,7 +1262,8 @@ extraction_agent = Agent[UniversalUpdaterContext](
         check_npc_exists,
     ],
     output_type=str,
-    model_settings=ModelSettings(temperature=0.1)
+    model_settings=ModelSettings(temperature=0.1),
+    model='gpt-5-nano'
 )
 
 universal_updater_agent = Agent[UniversalUpdaterContext](
