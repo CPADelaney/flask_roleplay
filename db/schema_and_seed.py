@@ -3102,15 +3102,25 @@ async def create_all_tables():
                 END $$;
                 ''',
                 '''
-                DO $$ 
+                ALTER TABLE PlayerInventory ADD COLUMN IF NOT EXISTS player_name VARCHAR(255) NOT NULL DEFAULT 'Chase';
+                ''',
+                '''
+                DO $$
                 BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint 
-                        WHERE conname = 'playerinventory_user_conversation_player_item_unique'
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'playerinventory' AND column_name = 'player_name'
                     ) THEN
-                        ALTER TABLE PlayerInventory 
-                        ADD CONSTRAINT playerinventory_user_conversation_player_item_unique 
-                        UNIQUE (user_id, conversation_id, player_name, item_name);
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'playerinventory_user_conversation_player_item_unique'
+                        ) THEN
+                            ALTER TABLE PlayerInventory
+                            ADD CONSTRAINT playerinventory_user_conversation_player_item_unique
+                            UNIQUE (user_id, conversation_id, player_name, item_name);
+                        END IF;
+                    ELSE
+                        RAISE WARNING 'player_name column missing in PlayerInventory; constraint not created';
                     END IF;
                 END $$;
                 ''',
