@@ -51,6 +51,48 @@ from nyx.integrate import get_central_governance
 
 logger = logging.getLogger(__name__)
 
+# -------------------------------------------------------------------------------
+# Helper functions for robust JSON handling
+# -------------------------------------------------------------------------------
+
+def _strip_code_fences(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    t = s.strip()
+    if t.startswith("```"):
+        # strip first fence line
+        t = t.split("\n", 1)[1] if "\n" in t else ""
+        # strip trailing fence
+        if t.rstrip().endswith("```"):
+            t = t.rsplit("```", 1)[0]
+    return t.strip()
+
+def _to_updates_json(update_data) -> str:
+    """
+    Accepts pydantic v1/v2 models, dicts, lists, or JSON strings.
+    Returns a JSON string (never empty). Raises ValueError if impossible.
+    """
+    # Pydantic v2
+    if hasattr(update_data, "model_dump"):
+        payload = update_data.model_dump(exclude_none=True)
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    # Pydantic v1
+    if hasattr(update_data, "dict"):
+        payload = update_data.dict()
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    # Raw dict/list
+    if isinstance(update_data, (dict, list)):
+        return json.dumps(update_data, ensure_ascii=False, separators=(",", ":"))
+    # String-ish
+    if isinstance(update_data, str):
+        s = _strip_code_fences(update_data)
+        if not s or not s.strip():
+            raise ValueError("Empty JSON string from agent")
+        # validate it is JSON; if not, try to normalize later
+        json.loads(s)
+        return s
+    raise ValueError(f"Unsupported updater output type: {type(update_data)}")
+
 # ===============================================================================
 # Array Format Helper Functions
 # ===============================================================================
@@ -518,6 +560,7 @@ async def normalize_json(ctx: RunContextWrapper, json_str: str) -> NormalizedJso
     Normalize JSON string, fixing common errors.
     """
     try:
+        json_str = _strip_code_fences(json_str)
         # Try to parse as-is first
         data = json.loads(json_str)
         if isinstance(data, dict):
@@ -540,7 +583,8 @@ async def normalize_json(ctx: RunContextWrapper, json_str: str) -> NormalizedJso
                 data = []
             return NormalizedJson(ok=True, data=data)
         except json.JSONDecodeError as e:
-            logging.error(f"Failed to normalize JSON: {e}")
+            bad = _strip_code_fences(json_str or "")
+            logging.error(f"Failed to normalize JSON: {e}; preview: {bad[:200]!r}")
             return NormalizedJson(
                 ok=False,
                 error="Failed to parse JSON",
@@ -635,18 +679,30 @@ async def apply_universal_updates(ctx: RunContextWrapper, updates_json: str) -> 
     Apply universal updates to the database.
     Handles conversion between array format (schema) and dict format (database).
     """
-    # Parse the JSON string
+    # Accept dict/list directly; strings get parsed (with code-fence stripping)
+    raw = updates_json
+    if isinstance(raw, (dict, list)):
+        updates = raw
+        s = None
+    else:
+        s = _strip_code_fences(raw if isinstance(raw, str) else "")
+        try:
+            updates = json.loads(s)
+        except json.JSONDecodeError:
+            normalized = await _invoke_function_tool(normalize_json, ctx, json_str=s)
+            if normalized.ok and normalized.data:
+                updates = array_to_dict([item.model_dump() for item in normalized.data])
+            else:
+                return ApplyUpdatesResult(
+                    success=False,
+                    error=f"Invalid JSON: {normalized.error or 'Unknown error'}"
+                )
+
     try:
-        updates = json.loads(updates_json)
-    except json.JSONDecodeError:
-        normalized = await _invoke_function_tool(normalize_json, ctx, json_str=updates_json)
-        if normalized.ok and normalized.data:
-            updates = array_to_dict([item.model_dump() for item in normalized.data])
-        else:
-            return ApplyUpdatesResult(
-                success=False,
-                error=f"Invalid JSON: {normalized.error or 'Unknown error'}"
-            )
+        preview = (s if isinstance(raw, str) else json.dumps(raw))[:200]
+        logging.debug(f"[apply_universal_updates] Incoming updates preview: {preview}")
+    except Exception:
+        pass
     
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
@@ -772,10 +828,7 @@ async def process_npc_creations_canonical(
 ) -> int:
     """Process NPC creations using canon. Expects dict format for database."""
     count = 0
-    canon_ctx = RunContextWrapper(context={
-        'user_id': user_id,
-        'conversation_id': conversation_id
-    })
+    canon_ctx = RunContextWrapper(context={'user_id': user_id, 'conversation_id': conversation_id})
     
     for npc in npc_creations:
         # Prepare JSON fields
@@ -1037,10 +1090,7 @@ async def process_roleplay_updates_canonical(
 ) -> int:
     """Process roleplay updates. Can handle both dict and array format."""
     count = 0
-    canon_ctx = RunContextWrapper(context={
-        'user_id': user_id,
-        'conversation_id': conversation_id
-    })
+    canon_ctx = RunContextWrapper(context={'user_id': user_id, 'conversation_id': conversation_id})
     
     # Convert to dict format if needed
     if isinstance(roleplay_updates, list):
@@ -1264,25 +1314,33 @@ async def process_universal_update(
                 prompt,
                 context=updater_context
             )
-            
-            # Get the output
-            update_data = result.final_output
+
+            # Get structured output; prefer strict cast if available
+            try:
+                update_data = result.final_output_as(UniversalUpdateInput)
+            except Exception:
+                update_data = result.final_output
 
             # Apply the updates
             if update_data:
+                # Convert whatever we got into a guaranteed JSON string
                 try:
-                    if isinstance(update_data, str):
-                        update_dict = json.loads(update_data)
-                    elif hasattr(update_data, "model_dump"):
-                        update_dict = update_data.model_dump()
-                    elif isinstance(update_data, dict):
-                        update_dict = update_data
+                    update_json = _to_updates_json(update_data)
+                except Exception as e:
+                    logging.error(f"Updater output could not be normalized to JSON: {e}")
+                    bad = _strip_code_fences(getattr(result, "completion_text", "") or "")
+                    logger.error(f"Invalid JSON from updater agent (preview): {bad[:200]!r}")
+                    # Best-effort: if we can get a raw completion text, try that too
+                    raw_txt = getattr(result, "completion_text", "") or ""
+                    raw_txt = _strip_code_fences(raw_txt)
+                    if raw_txt:
+                        try:
+                            json.loads(raw_txt)
+                            update_json = raw_txt
+                        except Exception:
+                            return {"success": False, "error": "Agent returned non-JSON output"}
                     else:
-                        return {"success": False, "error": "Unsupported update data type"}
-                    update_json = json.dumps(update_dict)
-                except json.JSONDecodeError as e:
-                    logging.error(f"Invalid JSON from updater agent: {e}")
-                    return {"success": False, "error": f"Invalid JSON: {e}"}
+                        return {"success": False, "error": "Agent returned empty output"}
 
                 # Wrap the context and invoke the FunctionTool in a version-safe way
                 wrapped_ctx = RunContextWrapper(updater_context)
