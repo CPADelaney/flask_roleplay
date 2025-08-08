@@ -2443,8 +2443,7 @@ Always maintain your dominant persona while being attentive to user needs and sy
     tools=[decide_image_generation, generate_universal_updates],
     output_type=NarrativeResponse,      # <-- single output type
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
-    model="gpt-5-nano",
-    model_settings=ModelSettings  # <-- no temperature
+    model="gpt-5-nano"
 )
 
 # ===== Main Functions (maintaining original signatures) =====
