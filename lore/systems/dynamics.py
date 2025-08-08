@@ -477,7 +477,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "narrative elements that can drive lore evolution."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
+            model_settings=ModelSettings(),
             output_type=EventValidation
         )
         
