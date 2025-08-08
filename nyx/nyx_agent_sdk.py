@@ -2425,6 +2425,8 @@ Your approach:
 10. UPDATE emotional state after calculating changes
 11. ALWAYS call generate_universal_updates after creating your narrative to extract state changes
 
+After calling any tools, ALWAYS send a final user-facing message and do not end the run on a tool call.
+
 Always maintain your dominant persona while being attentive to user needs and system performance.""",
     handoffs=[
         handoff(memory_agent),
@@ -2439,7 +2441,7 @@ Always maintain your dominant persona while being attentive to user needs and sy
         handoff(reflection_agent),
     ],
     tools=[decide_image_generation, generate_universal_updates],  # Main agent needs these tools
-    output_type=NarrativeResponse,
+    output_type=str,
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano",
     model_settings=ModelSettings()
@@ -2489,9 +2491,21 @@ async def process_user_input(
                 trace_metadata={"user_id": str(user_id), "conversation_id": str(conversation_id)}
             )
         )
-        
-        # Get the structured response
-        response = result.final_output_as(NarrativeResponse)
+
+        # Get the structured response if possible
+        output_text = result.output_text or ""
+        try:
+            response = NarrativeResponse.model_validate_json(output_text)
+        except ValidationError:
+            response = NarrativeResponse(
+                narrative=output_text,
+                tension_level=0,
+                generate_image=False,
+                image_prompt=None,
+                environment_description=None,
+                time_advancement=False,
+                universal_updates=None,
+            )
         
         # Defensive check: ensure universal updates were generated
         if not nyx_context.current_context.get("universal_updates") and response.narrative:
