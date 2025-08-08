@@ -9,7 +9,7 @@ tf-keras==2.19.0
 openai==1.87.0                    # keep — compatible
 openai-agents==0.2.5              # upgrade to this
 openai-agents-mcp==0.0.8          # upgrade into the 0.2.x line
-mcp-agent==0.2             # upgrade into the 0.2.x line
+mcp-agent==0.1.8             # upgrade into the 0.2.x line
 instructor==1.8.3                 # keep
 markupsafe==2.1.1                 # can keep; 2.1.3+ also fine
 
