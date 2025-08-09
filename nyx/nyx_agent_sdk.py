@@ -2976,12 +2976,12 @@ async def create_nyx_agent_with_prompt(system_prompt: str, private_reflection: s
     
     # Look for preset story indicators in the system prompt or context
     # This could be passed as a special marker or detected from context
-    if "preset_story_id" in system_prompt or "the_moth_and_flame" in system_prompt:
+    if "preset_story_id" in system_prompt or "queen_of_thorns" in system_prompt:
         from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
         
         preset_constraints = f"""
 
-==== PRESET STORY ACTIVE: THE MOTH AND FLAME ====
+==== PRESET STORY ACTIVE: THE QUEEN OF THORNS ====
 {QueenOfThornsConsistencyGuide.get_complete_system_prompt()}
 
 CRITICAL VALIDATION REQUIREMENTS:
@@ -3107,7 +3107,7 @@ async def create_preset_aware_nyx_agent(
         system_prompt = f"{system_prompt}\n\npreset_story_id: {preset_info['story_id']}"
         
         # Add story-specific context
-        if preset_info['story_id'] == 'the_moth_and_flame':
+        if preset_info['story_id'] == 'queen_of_thorns':
             system_prompt += f"""
 \nCurrent Story Context:
 - Setting: San Francisco Bay Area, 2025
