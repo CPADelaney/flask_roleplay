@@ -21,8 +21,8 @@ from cachetools import TTLCache
 
 # Use TYPE_CHECKING to avoid circular imports
 if TYPE_CHECKING:
-    from story_agent.world_director_agent import (
-        WorldDirector,
+    from story_agent.world_director_agent import CompleteWorldDirector as WorldDirector
+    from story_agent.world_simulation_models import (
         WorldState,
         SliceOfLifeEvent,
         PowerExchange,
