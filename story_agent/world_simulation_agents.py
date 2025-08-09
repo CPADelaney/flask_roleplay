@@ -18,7 +18,7 @@ from agents.exceptions import AgentsException, ModelBehaviorError
 
 # Use TYPE_CHECKING to avoid circular imports at runtime
 if TYPE_CHECKING:
-    from story_agent.world_director_agent import (
+    from story_agent.world_simulation_models import (
         WorldState, WorldMood, TimeOfDay, ActivityType, PowerDynamicType
     )
 
