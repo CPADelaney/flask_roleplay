@@ -1996,6 +1996,11 @@ class CompleteWorldDirector:
                 "reveals": [],
                 "relationship_events": {'events': []}
             }
+
+WorldDirector = CompleteWorldDirector
+WorldState = CompleteWorldState
+WorldDirectorContext = CompleteWorldDirectorContext
+
 from story_agent.world_simulation_models import (
     WorldState,
     WorldMood,
@@ -2011,6 +2016,7 @@ from story_agent.world_simulation_models import (
 
 __all__ = [
     'CompleteWorldDirector',
+    'WorldDirector',
     'CompleteWorldDirectorContext',
     'CompleteWorldState',
     # Re-exported models
