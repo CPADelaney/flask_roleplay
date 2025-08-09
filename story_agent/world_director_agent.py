@@ -2005,7 +2005,8 @@ from story_agent.world_simulation_models import (
     SliceOfLifeEvent,
     PowerExchange,
     WorldTension,
-    RelationshipDynamics
+    RelationshipDynamics,
+    NPCRoutine
 )
 
 __all__ = [
@@ -2021,5 +2022,6 @@ __all__ = [
     'SliceOfLifeEvent',
     'PowerExchange',
     'WorldTension',
-    'RelationshipDynamics'
+    'RelationshipDynamics',
+    'NPCRoutine'
 ]
