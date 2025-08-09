@@ -120,28 +120,74 @@ class RelationshipDynamics(BaseModel):
     model_config = {"extra": "forbid"}
 
 class WorldState(BaseModel):
-    """Current state of the simulated world"""
-    current_time: TimeOfDay
-    world_mood: WorldMood
-    world_tension: WorldTension
-    relationship_dynamics: RelationshipDynamics
+    """Complete world state with ALL system integrations"""
+    # Time and Calendar
+    current_time: CurrentTimeData
+    calendar_names: Dict[str, Any] = Field(default_factory=dict)
+    calendar_events: List[Dict[str, Any]] = Field(default_factory=list)
     
-    # Active elements
+    # Vitals and Stats
+    player_vitals: VitalsData
+    visible_stats: Dict[str, Any] = Field(default_factory=dict)
+    hidden_stats: Dict[str, Any] = Field(default_factory=dict)
+    active_stat_combinations: List[Dict[str, Any]] = Field(default_factory=list)
+    stat_thresholds_active: Dict[str, Any] = Field(default_factory=dict)
+    
+    # Memory and Context
+    recent_memories: List[Dict[str, Any]] = Field(default_factory=list)
+    semantic_abstractions: List[str] = Field(default_factory=list)
+    active_flashbacks: List[Dict[str, Any]] = Field(default_factory=list)
+    pending_reveals: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    # Dreams and Revelations
+    pending_dreams: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_revelations: List[Dict[str, Any]] = Field(default_factory=list)
+    inner_monologues: List[str] = Field(default_factory=list)
+    
+    # Rules and Effects
+    active_rules: List[Dict[str, Any]] = Field(default_factory=list)
+    triggered_effects: List[Dict[str, Any]] = Field(default_factory=list)
+    pending_effects: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    # Inventory
+    player_inventory: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_item_changes: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    # NPCs and Relationships
     active_npcs: List[Dict[str, Any]] = Field(default_factory=list)
-    ongoing_events: List[SliceOfLifeEvent] = Field(default_factory=list)
-    available_activities: List[ActivityType] = Field(default_factory=list)
-    recent_power_exchanges: List[PowerExchange] = Field(default_factory=list)
+    npc_masks: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+    npc_narrative_stages: Dict[int, str] = Field(default_factory=dict)
+    relationship_states: Dict[str, Any] = Field(default_factory=dict)
+    relationship_overview: Optional[Dict[str, Any]] = None
+    pending_relationship_events: List[Dict[str, Any]] = Field(default_factory=list)
     
-    # Environmental factors
-    location: str = "apartment"
-    weather: Optional[str] = None
-    special_conditions: List[str] = Field(default_factory=list)
+    # Addictions
+    addiction_status: Dict[str, Any] = Field(default_factory=dict)
+    active_cravings: List[Dict[str, Any]] = Field(default_factory=list)
+    addiction_contexts: Dict[str, Any] = Field(default_factory=dict)
     
-    # Metadata
-    last_update: datetime = Field(default_factory=datetime.now)
-    tick_count: int = 0
+    # Currency
+    player_money: int = 0
+    currency_system: Dict[str, Any] = Field(default_factory=dict)
+    recent_transactions: List[Dict[str, Any]] = Field(default_factory=list)
     
-    model_config = {"extra": "forbid"}
+    # World State
+    world_mood: WorldMood
+    tension_factors: Dict[str, float] = Field(default_factory=dict)
+    environmental_factors: Dict[str, Any] = Field(default_factory=dict)
+    location_data: str = ""
+    
+    # Events
+    ongoing_events: List[Dict[str, Any]] = Field(default_factory=list)
+    available_activities: List[Dict[str, Any]] = Field(default_factory=list)
+    event_history: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    # Governance
+    nyx_directives: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_config = ConfigDict(extra="forbid")
 
 class NPCRoutine(BaseModel):
     """NPC's daily routine"""
