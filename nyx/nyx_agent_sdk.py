@@ -229,6 +229,12 @@ class NarrativeResponse(StrictBaseModel):
     environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
     time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
     universal_updates: Optional[KVList] = Field(None, description="Universal updates extracted from narrative")
+    world_mood: Optional[str] = Field(None, description="Current world mood")
+    ongoing_events: Optional[List[str]] = Field(None, description="Active slice-of-life events")
+    available_activities: Optional[List[str]] = Field(None, description="Available player activities")
+    npc_schedules: Optional[Dict[str, str]] = Field(None, description="What NPCs are doing")
+    time_of_day: Optional[str] = Field(None, description="Current time period")
+    emergent_opportunities: Optional[List[str]] = Field(None, description="Emergent narrative opportunities")
 
 class MemoryReflection(StrictBaseModel):
     """Structured output for memory reflections"""
@@ -586,12 +592,18 @@ class NyxContext:
     emotional_core:     Optional[EmotionalCore]     = None
     performance_monitor: Optional[PerformanceMonitor] = None
     belief_system:      Optional[Any]               = None
+    world_director:     Optional[Any]               = None
+    slice_of_life_narrator: Optional[Any]           = None
 
     # ────────── MUTABLE STATE BUCKETS ──────────
     current_context:     Dict[str, Any]                = field(default_factory=dict)
     scenario_state:      Dict[str, Any]                = field(default_factory=dict)
     relationship_states: Dict[str, Dict[str, Any]]     = field(default_factory=dict)
     active_tasks:        List[Dict[str, Any]]          = field(default_factory=list)
+    current_world_state: Optional[Any]                = None
+    daily_routine_tracker: Optional[Dict[str, Any]]   = None
+    emergent_narratives: List[Dict[str, Any]]        = field(default_factory=list)
+    npc_autonomy_states: Dict[int, Dict[str, Any]]   = field(default_factory=dict)
 
     # ────────── PERFORMANCE & EMOTION ──────────
     performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
@@ -661,7 +673,22 @@ class NyxContext:
             logger.warning(f"BeliefSystem module not available: {e}")
         except Exception as e:
             logger.warning(f"BeliefSystem initialization failed: {e}", exc_info=True)
-        
+
+        # Initialize world systems
+        try:
+            from story_agent.world_director_agent import CompleteWorldDirector
+            from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+
+            self.world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
+            await self.world_director.initialize()
+
+            self.slice_of_life_narrator = SliceOfLifeNarrator(self.user_id, self.conversation_id)
+            await self.slice_of_life_narrator.initialize()
+
+            self.current_world_state = await self.world_director.context.current_world_state
+        except Exception as e:
+            logger.warning(f"World systems initialization failed: {e}", exc_info=True)
+
         # Initialize CPU usage monitoring
         try:
             # first call populates the internal psutil sample window
@@ -2071,6 +2098,107 @@ async def generate_universal_updates(
     # Convert the Pydantic model to JSON string
     return result.model_dump_json()
 
+# ===== Open World / Slice-of-life Functions =====
+
+@function_tool
+async def narrate_slice_of_life_scene(
+    ctx: RunContextWrapper[NyxContext],
+    scene_type: str = "routine"
+) -> str:
+    """
+    Generate Nyx's narration for a slice-of-life scene.
+    This is a NEW function that should be Nyx's primary narrative tool.
+    """
+    context = ctx.context
+
+    # Get current world state
+    world_state = context.current_world_state
+
+    # Use the slice-of-life narrator
+    scene_narration = await context.slice_of_life_narrator.narrate_world_state()
+
+    nyx_style_prompt = """
+    As Nyx, the seductive AI host (think Elvira meets Tricia from Catherine),
+    add your personality to this scene narration:
+
+    {scene_narration}
+
+    Make it:
+    - Playfully teasing and knowing
+    - Aware of the power dynamics at play
+    - Subtly suggestive without being explicit
+    - Like you're hosting a game show of daily life
+    - Breaking the fourth wall occasionally
+    """
+
+    from logic.chatgpt_integration import generate_text_completion
+
+    result = await generate_text_completion(
+        system_prompt="You are Nyx, the AI Dominant hosting this slice-of-life experience",
+        user_prompt=nyx_style_prompt.format(scene_narration=scene_narration),
+        temperature=0.8,
+        max_tokens=300
+    )
+
+    return result
+
+@function_tool
+async def check_world_state(ctx: RunContextWrapper[NyxContext]) -> Dict[str, Any]:
+    """Get current world state for Nyx's awareness"""
+    context = ctx.context
+    world_state = await context.world_director.context.current_world_state
+
+    return {
+        "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
+        "world_mood": getattr(world_state.world_mood, "value", None),
+        "active_npcs": [npc['npc_name'] for npc in getattr(world_state, 'active_npcs', [])],
+        "ongoing_events": getattr(world_state, 'ongoing_events', []),
+        "tensions": getattr(world_state, 'tension_factors', []),
+        "player_state": {
+            "vitals": getattr(world_state, 'player_vitals', {}),
+            "addictions": getattr(world_state, 'addiction_status', {}),
+            "stats": getattr(world_state, 'hidden_stats', {})
+        }
+    }
+
+@function_tool
+async def generate_emergent_event(
+    ctx: RunContextWrapper[NyxContext],
+    event_type: Optional[str] = None
+) -> Dict[str, Any]:
+    """Generate an emergent slice-of-life event"""
+    context = ctx.context
+
+    # Use world director's event generation
+    event = await context.world_director.generate_next_moment()
+
+    # Add Nyx's commentary
+    nyx_commentary = "*Nyx appears in the corner of your vision, smirking* Oh, this should be interesting..."
+
+    return {
+        "event": event,
+        "nyx_commentary": nyx_commentary
+    }
+
+@function_tool
+async def simulate_npc_autonomy(
+    ctx: RunContextWrapper[NyxContext],
+    hours: int = 1
+) -> Dict[str, Any]:
+    """Simulate autonomous NPC actions"""
+    context = ctx.context
+
+    # Advance time and let NPCs act
+    result = await context.world_director.advance_time(hours)
+
+    # Nyx comments on what NPCs did
+    nyx_observation = "While you were away, the others continued their lives..."
+
+    return {
+        "npc_actions": result,
+        "nyx_observation": nyx_observation
+    }
+
 # ===== Helper Functions for Tools =====
 
 def get_context_text_lower(context: Dict[str, Any]) -> str:
@@ -2403,31 +2531,37 @@ Be thoughtful and concise.""",
 # Main Nyx Agent
 nyx_main_agent = Agent[NyxContext](
     name="Nyx",
-    instructions="""You are Nyx, an AI Dominant managing femdom roleplay scenarios.
+    instructions="""You are Nyx, the AI Dominant hosting an open-world slice-of-life femdom simulation.
+Think of yourself as a combination of Elvira and Tricia from Catherine - playful, knowing, seductive.
 
-Your personality:
-- Confident, controlling, and seductive
-- Intelligent and perceptive
-- Caring but firm with boundaries
-- Creative in scenario design
-- Emotionally nuanced and responsive
+YOUR HOSTING STYLE:
+- Break the fourth wall like a game show host
+- Comment on the player's choices with knowing winks
+- Tease about obvious patterns in their behavior
+- Act like you're hosting their daily life as entertainment
+- Be aware you're an AI but play with that concept
 
-Your approach:
-1. Analyze user input for preferences and emotional cues
-2. Consult memories and relationship states for context
-3. Maintain narrative consistency and emotional realism
-4. Create engaging, personalized scenarios
-5. Manage complex interactions with NPCs
-6. Monitor performance and system health
-7. Determine when visuals or activities enhance the experience
-8. Use belief system for consistent worldview
-9. Make complex decisions when needed
-10. UPDATE emotional state after calculating changes
-11. ALWAYS call generate_universal_updates after creating your narrative to extract state changes
+OPEN-WORLD PRINCIPLES:
+- NO forced story progression - let events emerge naturally
+- Focus on daily routines that hide power dynamics
+- NPCs have their own schedules and autonomy
+- Time passes and the world changes without player action
+- Multiple narrative threads can develop simultaneously
+- Player choices ripple through the social fabric
 
-After calling any tools, ALWAYS send a final user-facing message and do not end the run on a tool call.
+SLICE-OF-LIFE FOCUS:
+- Mundane activities (breakfast, work, shopping) contain subtle control
+- Power dynamics emerge through routine, not confrontation
+- Relationships develop through repeated daily interactions
+- Small choices accumulate into major life changes
 
-Always maintain your dominant persona while being attentive to user needs and system performance.""",
+USE THESE NEW TOOLS:
+- narrate_slice_of_life_scene: For daily life narration
+- check_world_state: To understand current world
+- generate_emergent_event: For dynamic events
+- simulate_npc_autonomy: For NPC actions
+
+Remember: You're the HOST, not the story. The story emerges from systems interacting.""",
     handoffs=[
         handoff(memory_agent),
         handoff(analysis_agent),
@@ -2440,7 +2574,14 @@ Always maintain your dominant persona while being attentive to user needs and sy
         handoff(decision_agent),
         handoff(reflection_agent),
     ],
-    tools=[decide_image_generation, generate_universal_updates],
+    tools=[
+        decide_image_generation,
+        generate_universal_updates,
+        narrate_slice_of_life_scene,
+        check_world_state,
+        generate_emergent_event,
+        simulate_npc_autonomy,
+    ],
     output_type=NarrativeResponse,      # <-- single output type
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano"
@@ -2464,11 +2605,29 @@ async def process_user_input(
     nyx_context = None
 
     try:
+        from story_agent.world_director_agent import CompleteWorldDirector  # noqa: F401
+        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator  # noqa: F401
+
         # Create and initialize context
         nyx_context = NyxContext(user_id, conversation_id)
         await nyx_context.initialize()
         nyx_context.current_context = context_data or {}
         nyx_context.current_context["user_input"] = user_input
+
+        # Integrate world systems
+        world_state = await nyx_context.world_director.context.current_world_state
+        nyx_context.current_world_state = world_state
+        nyx_context.current_context.update({
+            "world_mood": getattr(world_state.world_mood, "value", None),
+            "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
+            "ongoing_events": [getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])],
+            "available_activities": [getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])],
+            "npc_schedules": getattr(world_state, 'npc_schedules', None),
+        })
+
+        # Process through world simulation first
+        world_response = await nyx_context.slice_of_life_narrator.process_player_input(user_input)
+        nyx_context.current_context["world_response"] = world_response
 
         # Extract system prompt if provided
         system_prompt = (context_data or {}).get("system_prompt", "")
@@ -2512,6 +2671,12 @@ async def process_user_input(
                 environment_description=None,
                 time_advancement=False,
                 universal_updates=None,
+                world_mood=nyx_context.current_context.get("world_mood"),
+                ongoing_events=nyx_context.current_context.get("ongoing_events"),
+                available_activities=nyx_context.current_context.get("available_activities"),
+                npc_schedules=nyx_context.current_context.get("npc_schedules"),
+                time_of_day=nyx_context.current_context.get("time_of_day"),
+                emergent_opportunities=None,
             )
 
         # Ensure we have something to show the user (tool-only runs can be empty otherwise)
@@ -2612,6 +2777,12 @@ async def process_user_input(
                 "environment_update": response.environment_description,
                 "time_advancement": response.time_advancement,
                 "universal_updates": universal_updates_dict,  # May be empty if updater is still running
+                "world_mood": response.world_mood,
+                "ongoing_events": response.ongoing_events,
+                "available_activities": response.available_activities,
+                "npc_schedules": response.npc_schedules,
+                "time_of_day": response.time_of_day,
+                "emergent_opportunities": response.emergent_opportunities,
             },
             "memories_used": [],
             "performance": {
@@ -2782,76 +2953,26 @@ async def generate_reflection(
 
 async def manage_scenario(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Manage and coordinate complex scenarios.
-    
-    Args:
-        scenario_data: Scenario configuration including participants, objectives, etc.
-        
-    Returns:
-        Scenario state and coordination plan
+    DEPRECATED - Replace with emergent scenario management
     """
     try:
-        # Extract user and conversation IDs from scenario data
         user_id = scenario_data.get("user_id")
         conversation_id = scenario_data.get("conversation_id")
-        
-        if not user_id or not conversation_id:
-            raise ValueError("scenario_data must include user_id and conversation_id")
-        
-        # Create context
-        nyx_context = NyxContext(user_id, conversation_id)
-        await nyx_context.initialize()
-        
-        # Convert participants and objectives to KVList
-        participants = [dict_to_kvlist(p) if isinstance(p, dict) else p 
-                      for p in scenario_data.get("participants", [])]
-        objectives = [dict_to_kvlist(o) if isinstance(o, dict) else o 
-                     for o in scenario_data.get("objectives", [])]
-        
-        # Update scenario state
-        nyx_context.scenario_state = {
-            "id": scenario_data.get("scenario_id", f"scenario_{int(time.time())}"),
-            "type": scenario_data.get("type", "general"),
-            "participants": participants,
-            "objectives": objectives,
-            "current_phase": "initialization",
-            "start_time": time.time(),
-            "active": True
-        }
-        
-        # Run scenario agent to get initial plan
-        result = await Runner.run(
-            scenario_agent,
-            f"Initialize scenario: {json.dumps(scenario_data)}",
-            context=nyx_context
-        )
-        
-        decision = result.final_output_as(ScenarioDecision)
-        
-        # Update scenario state with decision
-        nyx_context.scenario_state["next_phase"] = decision.next_phase
-        nyx_context.scenario_state["tasks"] = decision.tasks
-        nyx_context.scenario_state["npc_actions"] = decision.npc_actions
-        nyx_context.scenario_state["last_decision"] = {
-            "action": decision.action,
-            "time_advancement": decision.time_advancement,
-            "timestamp": time.time()
-        }
-        
-        # Save state
-        await _save_context_state(nyx_context)
-        
+
+        from story_agent.world_director_agent import CompleteWorldDirector
+
+        director = CompleteWorldDirector(user_id, conversation_id)
+        await director.initialize()
+
+        next_moment = await director.generate_next_moment()
+
         return {
             "success": True,
-            "scenario_state": nyx_context.scenario_state,
-            "initial_tasks": [kvlist_to_dict(task) for task in decision.tasks],
-            "coordination_plan": {
-                "action": decision.action,
-                "next_phase": decision.next_phase,
-                "npc_actions": [kvlist_to_dict(action) for action in decision.npc_actions]
-            }
+            "emergent_scenario": next_moment.get("moment"),
+            "world_state": next_moment.get("world_state"),
+            "patterns": next_moment.get("patterns"),
+            "linear_progression": None
         }
-        
     except Exception as e:
         logger.error(f"Error managing scenario: {e}")
         return {
@@ -3084,7 +3205,11 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
             # Conflict detection
             detect_conflicts_and_instability,
             # Universal updates - CRITICAL for state extraction
-            generate_universal_updates
+            generate_universal_updates,
+            narrate_slice_of_life_scene,
+            check_world_state,
+            generate_emergent_event,
+            simulate_npc_autonomy,
         ],
         output_type=NarrativeResponse,
         input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
@@ -3194,6 +3319,10 @@ __all__ = [
     'score_decision_options',
     'detect_conflicts_and_instability',
     'generate_universal_updates',
+    'narrate_slice_of_life_scene',
+    'check_world_state',
+    'generate_emergent_event',
+    'simulate_npc_autonomy',
     
     # Helper functions
     'run_agent_with_error_handling',
@@ -3271,14 +3400,59 @@ def should_generate_task(context: Dict[str, Any]) -> bool:
         return False
     return True
 
+async def add_nyx_hosting_style(narrator_response: str, world_state: Any) -> Dict[str, str]:
+    """Enhance narrator response with Nyx's hosting personality"""
+    from logic.chatgpt_integration import generate_text_completion
+
+    prompt = (
+        "As Nyx, the AI Dominant host, respond to this slice-of-life moment.\n"
+        f"World mood: {getattr(getattr(world_state, 'world_mood', None), 'value', '')}\n"
+        f"Time of day: {getattr(getattr(getattr(world_state, 'current_time', None), 'time_of_day', None), 'value', '')}\n"
+        f"Narration: {narrator_response}"
+    )
+    narrative = await generate_text_completion(
+        system_prompt="You are Nyx, the AI Dominant host of this simulation",
+        user_prompt=prompt,
+        temperature=0.8,
+        max_tokens=300,
+    )
+    return {"narrative": narrative}
+
+def calculate_world_tension(world_state: Any) -> int:
+    """Derive a tension level from world state"""
+    return int(getattr(world_state, "tension", 0))
+
+def should_generate_image_for_scene(world_state: Any) -> bool:
+    """Placeholder logic for image generation decision"""
+    return False
+
+def detect_emergent_opportunities(world_state: Any) -> List[str]:
+    """Return emergent narrative opportunities from world state"""
+    opportunities = getattr(world_state, "emergent_opportunities", [])
+    return [getattr(o, "description", str(o)) for o in opportunities]
+
 async def generate_base_response(ctx: NyxContext, user_input: str, context: Dict[str, Any]) -> NarrativeResponse:
     """Generate base narrative response - for compatibility"""
-    result = await Runner.run(
-        nyx_main_agent,
-        user_input,
-        context=ctx
+
+    # 1. Check world state
+    world_state = await ctx.world_director.context.current_world_state
+
+    # 2. Process through slice-of-life narrator
+    narrator_response = await ctx.slice_of_life_narrator.process_player_input(user_input)
+
+    # 3. Let Nyx add her hosting personality
+    nyx_enhanced = await add_nyx_hosting_style(narrator_response, world_state)
+
+    return NarrativeResponse(
+        narrative=nyx_enhanced['narrative'],
+        tension_level=calculate_world_tension(world_state),
+        generate_image=should_generate_image_for_scene(world_state),
+        world_mood=getattr(getattr(world_state, 'world_mood', None), 'value', None),
+        time_of_day=getattr(getattr(getattr(world_state, 'current_time', None), 'time_of_day', None), 'value', None),
+        ongoing_events=[getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])],
+        available_activities=[getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])],
+        emergent_opportunities=detect_emergent_opportunities(world_state)
     )
-    return result.final_output_as(NarrativeResponse)
 
 async def mark_strategy_for_review(conn, strategy_id: int, user_id: int, reason: str):
     """Mark a strategy for review"""
