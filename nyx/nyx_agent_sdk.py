@@ -2169,15 +2169,54 @@ async def generate_emergent_event(
     """Generate an emergent slice-of-life event"""
     context = ctx.context
 
-    # Use world director's event generation
     event = await context.world_director.generate_next_moment()
 
-    # Add Nyx's commentary
-    nyx_commentary = "*Nyx appears in the corner of your vision, smirking* Oh, this should be interesting..."
+    # JSON-safe payload of the raw event
+    safe_event = _json_safe(event)
 
+    # Human-friendly summary (best effort)
+    def _get(d, *keys):
+        cur = d if isinstance(d, dict) else {}
+        for k in keys:
+            cur = cur.get(k) if isinstance(cur, dict) else None
+        return cur
+
+    title = None
+    etype = None
+    participants = []
+    location = None
+    timestamp = None
+
+    if isinstance(safe_event, dict):
+        title = safe_event.get("title") or _get(safe_event, "moment", "title")
+        etype = safe_event.get("type") or _get(safe_event, "moment", "type")
+        location = safe_event.get("location") or _get(safe_event, "moment", "location")
+        timestamp = safe_event.get("time") or _get(safe_event, "moment", "time")
+        # participants may live in different shapes; try a few
+        raw_parts = (
+            safe_event.get("participants")
+            or _get(safe_event, "moment", "participants")
+            or _get(safe_event, "world_state", "active_npcs")
+            or []
+        )
+        if isinstance(raw_parts, list):
+            for p in raw_parts:
+                if isinstance(p, dict):
+                    participants.append(p.get("npc_name") or p.get("name") or p.get("title") or str(p))
+                else:
+                    participants.append(str(p))
+
+    nyx_commentary = "*Nyx appears in the corner of your vision, smirking* Oh, this should be interesting..."
     return {
-        "event": event,
-        "nyx_commentary": nyx_commentary
+        "event": safe_event,
+        "event_summary": {
+            "title": title,
+            "type": etype,
+            "location": location,
+            "time": timestamp,
+            "participants": participants,
+        },
+        "nyx_commentary": nyx_commentary,
     }
 
 @function_tool
@@ -2187,19 +2226,95 @@ async def simulate_npc_autonomy(
 ) -> Dict[str, Any]:
     """Simulate autonomous NPC actions"""
     context = ctx.context
-
-    # Advance time and let NPCs act
     result = await context.world_director.advance_time(hours)
 
-    # Nyx comments on what NPCs did
-    nyx_observation = "While you were away, the others continued their lives..."
+    safe_result = _json_safe(result)
 
+    # Try to produce a compact, readable action log
+    action_log: List[Dict[str, Any]] = []
+    candidate_actions = []
+    if isinstance(safe_result, list):
+        candidate_actions = safe_result
+    elif isinstance(safe_result, dict):
+        # common containers: "actions", "npc_actions", "events"
+        for key in ("actions", "npc_actions", "events", "log"):
+            if isinstance(safe_result.get(key), list):
+                candidate_actions = safe_result[key]
+                break
+
+    for entry in candidate_actions or []:
+        if isinstance(entry, dict):
+            npc = entry.get("npc") or entry.get("npc_name") or entry.get("name")
+            action = entry.get("action") or entry.get("current_activity") or entry.get("activity")
+            t = entry.get("time") or entry.get("timestamp")
+            action_log.append({"npc": npc, "action": action, "time": t})
+        else:
+            action_log.append({"entry": str(entry)})
+
+    nyx_observation = "While you were away, the others continued their lives..."
     return {
-        "npc_actions": result,
-        "nyx_observation": nyx_observation
+        "npc_actions": safe_result,
+        "npc_action_log": action_log,
+        "nyx_observation": nyx_observation,
     }
 
 # ===== Helper Functions for Tools =====
+
+def _json_safe(value, *, _depth=0, _max_depth=4):
+    """Best-effort conversion of arbitrary Python objects to JSON-safe primitives."""
+    if _depth > _max_depth:
+        return str(value)
+
+    # Primitives
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+
+    # datetime/date -> ISO string
+    try:
+        from datetime import datetime, date
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+    except Exception:
+        pass
+
+    # Enum -> its value
+    try:
+        from enum import Enum
+        if isinstance(value, Enum):
+            return _json_safe(getattr(value, "value", str(value)), _depth=_depth+1, _max_depth=_max_depth)
+    except Exception:
+        pass
+
+    # List/Tuple/Set
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for v in value]
+
+    # Dict-like
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for k, v in value.items()}
+
+    # Dataclass
+    try:
+        import dataclasses
+        if dataclasses.is_dataclass(value):
+            return _json_safe(dataclasses.asdict(value), _depth=_depth+1, _max_depth=_max_depth)
+    except Exception:
+        pass
+
+    # Pydantic v1/v2 models
+    for attr in ("model_dump", "dict"):
+        fn = getattr(value, attr, None)
+        if callable(fn):
+            try:
+                return _json_safe(fn(), _depth=_depth+1, _max_depth=_max_depth)
+            except Exception:
+                break
+
+    # Fallback: attempt __dict__, else str()
+    data = getattr(value, "__dict__", None)
+    if isinstance(data, dict):
+        return _json_safe(data, _depth=_depth+1, _max_depth=_max_depth)
+    return str(value)
 
 def get_context_text_lower(context: Dict[str, Any]) -> str:
     """Extract text from context and convert to lowercase for analysis"""
