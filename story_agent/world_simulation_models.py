@@ -143,6 +143,18 @@ class WorldState(BaseModel):
     
     model_config = {"extra": "forbid"}
 
+class NPCRoutine(BaseModel):
+    """NPC's daily routine"""
+    npc_id: int
+    npc_name: str
+    schedule: List[Dict[str, Any]] = Field(default_factory=list)
+    current_activity: Optional[str] = None
+    current_location: Optional[str] = None
+    availability: str = "available"  # "busy", "available", "interruptible"
+    mood: Optional[str] = None
+    
+    model_config = {"extra": "forbid"}
+
 # Export all models
 __all__ = [
     'WorldMood',
@@ -153,5 +165,6 @@ __all__ = [
     'PowerExchange',
     'WorldTension',
     'RelationshipDynamics',
-    'WorldState'
+    'WorldState',
+    'NPCRoutine'
 ]
