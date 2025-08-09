@@ -1998,7 +1998,6 @@ class CompleteWorldDirector:
             }
 
 WorldDirector = CompleteWorldDirector
-WorldState = CompleteWorldState
 WorldDirectorContext = CompleteWorldDirectorContext
 
 from story_agent.world_simulation_models import (
