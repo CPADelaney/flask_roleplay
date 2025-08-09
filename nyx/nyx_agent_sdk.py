@@ -2151,15 +2151,20 @@ async def check_world_state(ctx: RunContextWrapper[NyxContext]) -> Dict[str, Any
     return {
         "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
         "world_mood": getattr(world_state.world_mood, "value", None),
-        "active_npcs": [npc['npc_name'] for npc in getattr(world_state, 'active_npcs', [])],
-        "ongoing_events": getattr(world_state, 'ongoing_events', []),
-        "tensions": getattr(world_state, 'tension_factors', []),
-        "player_state": {
-            "vitals": getattr(world_state, 'player_vitals', {}),
-            "addictions": getattr(world_state, 'addiction_status', {}),
-            "stats": getattr(world_state, 'hidden_stats', {})
-        }
-    }
+        "active_npcs": [
+            (npc.get("npc_name") or npc.get("name") or npc.get("title"))
+            if isinstance(npc, dict) else str(npc)
+            for npc in getattr(world_state, "active_npcs", []) or []
+        ],
+        "ongoing_events": _json_safe(getattr(world_state, "ongoing_events", [])),
+        "tensions": _json_safe(getattr(world_state, "tension_factors", {})),
+        "player_state": _json_safe({
+            "vitals": getattr(world_state, "player_vitals", {}),
+            "addictions": getattr(world_state, "addiction_status", {}),
+            "stats": getattr(world_state, "hidden_stats", {}),
+        }),
+     }
+ 
 
 @function_tool
 async def generate_emergent_event(
@@ -2253,6 +2258,7 @@ async def simulate_npc_autonomy(
 
     nyx_observation = "While you were away, the others continued their lives..."
     return {
+        "advanced_time_hours": hours,
         "npc_actions": safe_result,
         "npc_action_log": action_log,
         "nyx_observation": nyx_observation,
