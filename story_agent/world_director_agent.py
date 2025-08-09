@@ -13,9 +13,30 @@ import time
 import random
 from typing import Dict, List, Any, Optional, Union, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
-from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime, timezone, timedelta
-from enum import Enum
+
+from story_agent.world_simulation_models import (
+    WorldMood,
+    ActivityType,
+    TimeOfDay,
+    CurrentTimeData,
+    VitalsData,
+    AddictionCravingData,
+    DreamData,
+    RevelationData,
+    ChoiceData,
+    ChoiceProcessingResult,
+    CompleteWorldState,
+    WorldState,
+    SliceOfLifeEvent,
+    PowerExchange,
+    PowerDynamicType,
+    WorldTension,
+    RelationshipDynamics,
+    NPCRoutine,
+    EmergentPattern,
+    NarrativeThread,
+)
 
 from db.connection import get_db_connection_context
 from agents import Agent, function_tool, Runner, trace, ModelSettings, RunContextWrapper
@@ -89,8 +110,6 @@ from logic.time_cycle import (
     get_current_time_model,
     advance_time_with_events,
     get_current_vitals,
-    VitalsData,
-    CurrentTimeData,
     process_activity_vitals,
     ActivityManager,
     ActivityType as TimeActivityType
@@ -197,154 +216,6 @@ def _get_chatgpt_functions():
     }
 
 
-class WorldMood(Enum):
-    """Overall mood/atmosphere of the world"""
-    RELAXED = "relaxed"
-    TENSE = "tense"
-    PLAYFUL = "playful"
-    INTIMATE = "intimate"
-    MYSTERIOUS = "mysterious"
-    OPPRESSIVE = "oppressive"
-    CHAOTIC = "chaotic"
-    EXHAUSTED = "exhausted"
-    DESPERATE = "desperate"
-    CORRUPTED = "corrupted"
-    DREAMLIKE = "dreamlike"  # Added for dream sequences
-    CRAVING = "craving"       # Added for addiction states
-
-class ActivityType(Enum):
-    """Types of slice-of-life activities"""
-    WORK = "work"
-    SOCIAL = "social"
-    LEISURE = "leisure"
-    INTIMATE = "intimate"
-    ROUTINE = "routine"
-    SPECIAL = "special"
-    ADDICTION = "addiction"
-    VITAL = "vital"
-    DREAM = "dream"           # Added for dream sequences
-    REVELATION = "revelation" # Added for narrative moments
-
-class AddictionCravingData(BaseModel):
-    """Data describing an addiction craving"""
-    addiction_type: Optional[str] = None
-    intensity: float = 1.0
-
-
-class DreamData(BaseModel):
-    """Data describing a dream trigger"""
-    pass
-
-
-class RevelationData(BaseModel):
-    """Data describing a personal revelation"""
-    topic: Optional[str] = None
-
-
-class ChoiceData(BaseModel):
-    """Comprehensive player choice information"""
-    text: Optional[str] = None
-    stat_impacts: Optional[Any] = None
-    addiction_impacts: Optional[Any] = None
-    npc_id: Optional[int] = None
-    relationship_impacts: Optional[Any] = None
-    activity_type: Optional[str] = None
-    intensity: Optional[float] = None
-    inventory_changes: Optional[List[Any]] = None
-    currency_change: Optional[float] = None
-    time_passed: Optional[float] = None
-    emotional_valence: Optional[float] = None
-
-    model_config = ConfigDict(extra="forbid")
-
-class CompleteWorldState(BaseModel):
-    """Complete world state with ALL system integrations"""
-    # Time and Calendar
-    current_time: CurrentTimeData
-    calendar_names: Dict[str, Any] = Field(default_factory=dict)
-    calendar_events: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # Vitals and Stats
-    player_vitals: VitalsData
-    visible_stats: Dict[str, Any] = Field(default_factory=dict)
-    hidden_stats: Dict[str, Any] = Field(default_factory=dict)
-    active_stat_combinations: List[Dict[str, Any]] = Field(default_factory=list)
-    stat_thresholds_active: Dict[str, Any] = Field(default_factory=dict)
-    
-    # Memory and Context
-    recent_memories: List[Dict[str, Any]] = Field(default_factory=list)
-    semantic_abstractions: List[str] = Field(default_factory=list)
-    active_flashbacks: List[Dict[str, Any]] = Field(default_factory=list)
-    pending_reveals: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # Dreams and Revelations
-    pending_dreams: List[Dict[str, Any]] = Field(default_factory=list)
-    recent_revelations: List[Dict[str, Any]] = Field(default_factory=list)
-    inner_monologues: List[str] = Field(default_factory=list)
-    
-    # Rules and Effects
-    active_rules: List[Dict[str, Any]] = Field(default_factory=list)
-    triggered_effects: List[Dict[str, Any]] = Field(default_factory=list)
-    pending_effects: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # Inventory
-    player_inventory: List[Dict[str, Any]] = Field(default_factory=list)
-    recent_item_changes: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # NPCs and Relationships
-    active_npcs: List[Dict[str, Any]] = Field(default_factory=list)
-    npc_masks: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
-    npc_narrative_stages: Dict[int, str] = Field(default_factory=dict)
-    relationship_states: Dict[str, Any] = Field(default_factory=dict)
-    relationship_overview: Optional[Dict[str, Any]] = None
-    pending_relationship_events: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # Addictions
-    addiction_status: Dict[str, Any] = Field(default_factory=dict)
-    active_cravings: List[Dict[str, Any]] = Field(default_factory=list)
-    addiction_contexts: Dict[str, Any] = Field(default_factory=dict)
-    
-    # Currency
-    player_money: int = 0
-    currency_system: Dict[str, Any] = Field(default_factory=dict)
-    recent_transactions: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # World State
-    world_mood: WorldMood
-    tension_factors: Dict[str, float] = Field(default_factory=dict)
-    environmental_factors: Dict[str, Any] = Field(default_factory=dict)
-    location_data: str = ""
-    
-    # Events
-    ongoing_events: List[Dict[str, Any]] = Field(default_factory=list)
-    available_activities: List[Dict[str, Any]] = Field(default_factory=list)
-    event_history: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # Governance
-    nyx_directives: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class ChoiceProcessingResult(BaseModel):
-    """Structured result for complete player choice processing."""
-    success: bool
-    effects: List[Any] = Field(default_factory=list)
-    narratives: List[Any] = Field(default_factory=list)
-    stat_changes: Optional[Any] = None
-    new_thresholds: Optional[Any] = None
-    npc_stage_change: Optional[Any] = None
-    activity_result: Optional[Any] = None
-    triggered_rules: Optional[Any] = None
-    currency: Optional[Any] = None
-    hunger_update: Optional[Any] = None
-    preferences_detected: Optional[Any] = None
-    narrative: Optional[str] = None
-    error: Optional[str] = None
-
-    model_config = ConfigDict(extra="forbid")
 
 # ===============================================================================
 # Complete World Director Context with ALL Systems
@@ -1999,19 +1870,6 @@ class CompleteWorldDirector:
 
 WorldDirector = CompleteWorldDirector
 WorldDirectorContext = CompleteWorldDirectorContext
-
-from story_agent.world_simulation_models import (
-    WorldState,
-    WorldMood,
-    TimeOfDay,
-    ActivityType,
-    PowerDynamicType,
-    SliceOfLifeEvent,
-    PowerExchange,
-    WorldTension,
-    RelationshipDynamics,
-    NPCRoutine
-)
 
 __all__ = [
     'CompleteWorldDirector',

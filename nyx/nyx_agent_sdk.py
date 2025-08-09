@@ -3907,3 +3907,32 @@ class AgentContext:
     def _should_run_task(self, task_id: str) -> bool:
         """Check if task should run"""
         return self._nyx_context.should_run_task(task_id)
+
+
+from story_agent.world_simulation_models import (
+    CompleteWorldState,
+    WorldState,
+    WorldMood,
+    TimeOfDay,
+    ActivityType,
+    PowerDynamicType,
+    SliceOfLifeEvent,
+    PowerExchange,
+    WorldTension,
+    RelationshipDynamics,
+    NPCRoutine,
+    CurrentTimeData,
+    VitalsData,
+    AddictionCravingData,
+    DreamData,
+    RevelationData,
+    ChoiceData,
+    ChoiceProcessingResult,
+)
+
+from story_agent.world_director_agent import (
+    CompleteWorldDirector,
+    WorldDirector,
+    CompleteWorldDirectorContext,
+    WorldDirectorContext,
+)
