@@ -26,6 +26,8 @@ from story_agent.world_simulation_models import (
     RevelationData,
     ChoiceData,
     ChoiceProcessingResult,
+    kvdict,
+    kvlist_from_obj,
     CompleteWorldState,
     WorldState,
     SliceOfLifeEvent,
@@ -1158,10 +1160,8 @@ async def process_complete_player_choice(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
     choice_data: ChoiceData
 ) -> ChoiceProcessingResult:
-    """Process player choice through ALL systems"""
     context = ctx.context
     results = ChoiceProcessingResult(success=True)
-    choice = choice_data.model_dump(exclude_none=True)
 
     # Lazy load
     chatgpt_funcs = _get_chatgpt_functions()
@@ -1169,55 +1169,51 @@ async def process_complete_player_choice(
     generate_text_completion = chatgpt_funcs['generate_text_completion']
 
     try:
-        # 1. Apply stat changes with thresholds check
-        if 'stat_impacts' in choice:
+        # 1) Stats
+        if choice_data.stat_impacts:
             try:
                 stat_result = await apply_stat_changes(
                     context.user_id, context.conversation_id,
-                    context.player_name, choice['stat_impacts'],
-                    reason=f"Choice: {choice.get('text', 'unknown')}"
+                    context.player_name, kvdict(choice_data.stat_impacts),
+                    reason=f"Choice: {choice_data.text or 'unknown'}"
                 )
-                results.stat_changes = stat_result
+                results.stat_changes = kvlist_from_obj(stat_result)
 
-                # Check for new thresholds
                 new_hidden_stats = await get_player_hidden_stats(
                     context.user_id, context.conversation_id, context.player_name
                 )
                 new_thresholds = context._check_stat_thresholds(new_hidden_stats)
-
                 if new_thresholds != context.current_world_state.stat_thresholds_active:
-                    results.new_thresholds = new_thresholds
+                    results.new_thresholds = kvlist_from_obj(new_thresholds)
             except Exception as e:
                 logger.error(f"Error applying stat changes: {e}")
-                results.effects.append({"error": f"Stat change failed: {e}"})
+                results.effects.append(kvlist_from_obj({"error": f"Stat change failed: {e}"}))
 
-        # 2. Process addiction impacts
-        if 'addiction_impacts' in choice:
-            for addiction_type, intensity in choice['addiction_impacts'].items():
+        # 2) Addiction
+        if choice_data.addiction_impacts:
+            for item in choice_data.addiction_impacts:
                 try:
                     addiction_result = await process_addiction_update(
                         context.user_id, context.conversation_id,
-                        context.player_name, addiction_type, intensity,
-                        choice.get('npc_id')
+                        context.player_name, item.key, item.value,
+                        choice_data.npc_id
                     )
-                    results.effects.append(addiction_result)
+                    results.effects.append(kvlist_from_obj(addiction_result))
                 except Exception as e:
                     logger.error(f"Error processing addiction impact: {e}")
-                    results.effects.append({"error": f"Addiction update failed: {e}"})
+                    results.effects.append(kvlist_from_obj({"error": f"Addiction update failed: {e}"}))
 
-        # 3. Process relationship impacts
-        if 'relationship_impacts' in choice:
-            for npc_name, impacts in choice['relationship_impacts'].items():
+        # 3) Relationships
+        if choice_data.relationship_impacts:
+            for ri in choice_data.relationship_impacts:
                 try:
-                    # Find NPC
                     npc_id = None
                     for npc in context.current_world_state.active_npcs:
-                        if npc.get('npc_name') == npc_name:
+                        if npc.get('npc_name') == ri.npc_name:
                             npc_id = npc.get('npc_id')
                             break
 
                     if npc_id:
-                        # Process interaction
                         interaction_result = await process_relationship_interaction_tool(
                             RunContextWrapper({
                                 'user_id': context.user_id,
@@ -1228,136 +1224,127 @@ async def process_complete_player_choice(
                             entity2_type='npc',
                             entity2_id=npc_id,
                             interaction_type='choice',
-                            context=json.dumps(impacts),
+                            context=json.dumps(kvdict(ri.impacts)),
                             check_for_event=True
                         )
-                        results.effects.append(interaction_result)
+                        results.effects.append(kvlist_from_obj(interaction_result))
 
-                        # Check for narrative progression
-                        if impacts.get('trust', 0) > 5 or impacts.get('submission', 0) > 5:
+                        impacts_dict = kvdict(ri.impacts)
+                        if impacts_dict.get('trust', 0) > 5 or impacts_dict.get('submission', 0) > 5:
                             progression = await progress_npc_narrative_stage(
-                                context.user_id, context.conversation_id,
-                                npc_id,
-                                corruption_change=impacts.get('submission', 0),
-                                dependency_change=impacts.get('dependency', 0),
-                                realization_change=impacts.get('realization', 0)
+                                context.user_id, context.conversation_id, npc_id,
+                                corruption_change=impacts_dict.get('submission', 0),
+                                dependency_change=impacts_dict.get('dependency', 0),
+                                realization_change=impacts_dict.get('realization', 0)
                             )
                             if progression.get('stage_changed'):
-                                results.npc_stage_change = progression
+                                results.npc_stage_change = kvlist_from_obj(progression)
                 except Exception as e:
                     logger.error(f"Error processing relationship impact: {e}")
-                    results.effects.append({"error": f"Relationship update failed: {e}"})
+                    results.effects.append(kvlist_from_obj({"error": f"Relationship update failed: {e}"}))
 
-        # 4. Activity processing
-        if 'activity_type' in choice:
+        # 4) Activity
+        if choice_data.activity_type:
             try:
                 activity_result = await process_activity_vitals(
                     context.user_id, context.conversation_id,
-                    context.player_name, choice['activity_type'],
-                    choice.get('intensity', 1.0)
+                    context.player_name, choice_data.activity_type,
+                    choice_data.intensity or 1.0
                 )
-                results.activity_result = activity_result
+                results.activity_result = kvlist_from_obj(activity_result)
 
-                # Apply activity effects on stats
-                if choice['activity_type'] in ACTIVITY_EFFECTS:
+                if choice_data.activity_type in ACTIVITY_EFFECTS:
                     effect_result = await apply_activity_effects(
                         context.user_id, context.conversation_id,
-                        choice['activity_type'],
-                        choice.get('intensity', 1.0)
+                        choice_data.activity_type,
+                        choice_data.intensity or 1.0
                     )
-                    results.effects.append(effect_result)
+                    results.effects.append(kvlist_from_obj(effect_result))
             except Exception as e:
                 logger.error(f"Error processing activity: {e}")
-                results.effects.append({"error": f"Activity processing failed: {e}"})
+                results.effects.append(kvlist_from_obj({"error": f"Activity processing failed: {e}"}))
 
-        # 5. Check for triggered rules
+        # 5) Rules
         try:
             triggered_rules = await enforce_all_rules_on_player(context.player_name)
             if triggered_rules:
-                results.triggered_rules = triggered_rules
-
+                results.triggered_rules = [kvlist_from_obj(r) for r in triggered_rules]
                 for rule in triggered_rules:
                     try:
                         effect_result = await apply_effect(
-                            rule['effect'], context.player_name,
-                            npc_id=choice.get('npc_id')
+                            rule['effect'], context.player_name, npc_id=choice_data.npc_id
                         )
-                        results.effects.append(effect_result)
+                        results.effects.append(kvlist_from_obj(effect_result))
                     except Exception as e:
                         logger.error(f"Error applying rule effect: {e}")
         except Exception as e:
             logger.error(f"Error checking rules: {e}")
 
-        # 6. Inventory changes
-        if 'inventory_changes' in choice:
-            for change in choice['inventory_changes']:
-                try:
-                    if change.get('action') == 'add':
-                        inv_result = await add_item(
-                            context.user_id, context.conversation_id,
-                            context.player_name, change.get('item_name', 'unknown'),
-                            change.get('description'), change.get('effect')
-                        )
-                    else:
-                        inv_result = await remove_item(
-                            context.user_id, context.conversation_id,
-                            context.player_name, change.get('item_name', 'unknown')
-                        )
-                    results.effects.append(inv_result)
-                except Exception as e:
-                    logger.error(f"Error with inventory change: {e}")
-                    results.effects.append({"error": f"Inventory change failed: {e}"})
-
-        # 7. Currency changes
-        if 'currency_change' in choice:
+        # 6) Inventory
+        for change in choice_data.inventory_changes:
             try:
-                amount = choice['currency_change']
+                if change.action == 'add':
+                    inv_result = await add_item(
+                        context.user_id, context.conversation_id,
+                        context.player_name, change.item_name,
+                        change.description, change.effect
+                    )
+                else:
+                    inv_result = await remove_item(
+                        context.user_id, context.conversation_id,
+                        context.player_name, change.item_name
+                    )
+                results.effects.append(kvlist_from_obj(inv_result))
+            except Exception as e:
+                logger.error(f"Error with inventory change: {e}")
+                results.effects.append(kvlist_from_obj({"error": f"Inventory change failed: {e}"}))
+
+        # 7) Currency
+        if choice_data.currency_change is not None:
+            try:
+                amount = choice_data.currency_change
                 formatted = await context.currency_generator.format_currency(abs(amount))
                 context.current_world_state.player_money += amount
-                results.currency = {
+                results.currency = kvlist_from_obj({
                     "change": formatted,
                     "new_balance": context.current_world_state.player_money
-                }
+                })
             except Exception as e:
                 logger.error(f"Error processing currency: {e}")
 
-        # 8. Check for hunger/thirst over time
-        if choice.get('time_passed', 0) > 0:
+        # 8) Hunger over time
+        if (choice_data.time_passed or 0) > 0:
             try:
                 hunger_result = await update_hunger_from_time(
                     context.user_id, context.conversation_id,
-                    context.player_name, choice['time_passed']
+                    context.player_name, choice_data.time_passed
                 )
-                results.hunger_update = hunger_result
+                results.hunger_update = kvlist_from_obj(hunger_result)
             except Exception as e:
                 logger.error(f"Error updating hunger: {e}")
 
-        # 9. Store in memory with analysis
-        memory_text = f"Choice: {choice.get('text', 'Unknown choice')}"
-        
+        # 9) Memory + preference analysis
+        memory_text = f"Choice: {choice_data.text or 'Unknown choice'}"
         try:
-            # Analyze preferences in the choice
             preferences = await analyze_preferences(memory_text)
-            
             await MemoryManager.add_memory(
                 context.user_id, context.conversation_id,
                 entity_id=1, entity_type="player",
                 memory_text=memory_text,
                 memory_type=MemoryType.INTERACTION,
                 significance=MemorySignificance.HIGH if results.triggered_rules else MemorySignificance.MEDIUM,
-                emotional_valence=choice.get('emotional_valence', 0),
+                emotional_valence=choice_data.emotional_valence or 0.0,
                 tags=["player_choice"] + list(preferences.get('explicit_preferences', []))
             )
-            
-            results.preferences_detected = preferences
+            results.preferences_detected = kvlist_from_obj(preferences)
         except Exception as e:
             logger.error(f"Error storing memory: {e}")
-        
-        # 10. Generate comprehensive narrative
+
+        # 10) Narrative
         narrative_prompt = f"""Generate a narrative response to the player's choice.
 
-Choice: {choice.get('text')}
-All Effects: {json.dumps(results, default=str)}
+Choice: {choice_data.text}
+All Effects: {json.dumps(results.model_dump(), default=str)}
 
 Create a seamless narrative that:
 1. Shows immediate consequences naturally
@@ -1368,7 +1355,6 @@ Create a seamless narrative that:
 6. Maintains the current mood
 
 Keep it atmospheric with rich subtext."""
-
         try:
             narrative = await generate_text_completion(
                 system_prompt="You are weaving game mechanics into natural narrative flow.",
@@ -1380,9 +1366,9 @@ Keep it atmospheric with rich subtext."""
         except Exception as e:
             logger.error(f"Error generating narrative: {e}")
             results.narrative = "Your choice has been made."
-        
+
         return results
-        
+
     except Exception as e:
         logger.error(f"Error processing player choice: {e}", exc_info=True)
         return ChoiceProcessingResult(
@@ -1390,7 +1376,6 @@ Keep it atmospheric with rich subtext."""
             error=str(e),
             narrative="Your action has consequences..."
         )
-
 @function_tool
 async def check_all_emergent_patterns(
     ctx: RunContextWrapper[CompleteWorldDirectorContext]
