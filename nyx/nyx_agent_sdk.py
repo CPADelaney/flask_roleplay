@@ -326,6 +326,7 @@ class GenerateImageFromSceneInput(BaseModel):
     scene_description: str = Field(..., description="Description of the scene")
     characters: List[str] = Field(..., description="List of characters in the scene")
     style: str = Field("realistic", description="Style for the image")
+  
 
 class CalculateEmotionalStateInput(BaseModel):
     """Input for calculate_and_update_emotional_state and calculate_emotional_impact functions"""
@@ -997,6 +998,77 @@ ScoredOption.model_rebuild()
 DecisionOption.model_rebuild()
 
 # ===== Helper Functions =====
+
+def _walk_schema_for_additional_props(node, path="$", hits=None):
+    if hits is None:
+        hits = []
+    if isinstance(node, dict):
+        if "additionalProperties" in node:
+            hits.append(f"{path}.additionalProperties={node['additionalProperties']!r}")
+        for k, v in node.items():
+            _walk_schema_for_additional_props(v, f"{path}.{k}", hits)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            _walk_schema_for_additional_props(v, f"{path}[{i}]", hits)
+    return hits
+
+def _safe_model_schema(cls: type) -> dict:
+    # v2: model_json_schema; fall back if someone is on v1
+    for attr in ("model_json_schema", "schema"):
+        fn = getattr(cls, attr, None)
+        if callable(fn):
+            try:
+                return fn()
+            except Exception:
+                pass
+    return {}
+
+def _log_model_schema(cls: type, logger, prefix=""):
+    schema = _safe_model_schema(cls)
+    hits = _walk_schema_for_additional_props(schema)
+    if hits:
+        logger.error("%sModel %s emits additionalProperties at:\n  - %s",
+                     prefix, cls.__name__, "\n  - ".join(hits))
+    else:
+        logger.info("%sModel %s schema: OK (no additionalProperties found)", prefix, cls.__name__)
+
+def debug_strict_schema_for_agent(agent, logger):
+    """Logs strict_tools and scans all tool payload models for additionalProperties."""
+    ms = getattr(agent, "model_settings", None)
+    strict = getattr(ms, "strict_tools", None)
+    logger.info("Agent %s strict_tools=%s | tools=%d",
+                getattr(agent, "name", agent), strict, len(getattr(agent, "tools", []) or []))
+
+    # Best-effort: infer Pydantic models from tool function signatures
+    for tool in getattr(agent, "tools", []) or []:
+        fn = getattr(tool, "__wrapped__", None) or getattr(tool, "fn", None) or tool
+        name = getattr(tool, "name", None) or getattr(fn, "__name__", str(tool))
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            logger.info("Tool %s: cannot inspect signature", name)
+            continue
+
+        # Look for the first param whose annotation is a Pydantic model subclass
+        for p in sig.parameters.values():
+            ann = p.annotation
+            if isinstance(ann, type) and issubclass(ann, BaseModel):
+                logger.info("Scanning tool %s payload model: %s", name, ann.__name__)
+                _log_model_schema(ann, logger, prefix=f"[tool:{name}] ")
+                break  # assume single payload model
+
+    # Also scan *all* Pydantic models defined in this module (cheap and thorough)
+    try:
+        current_module = inspect.getmodule(debug_strict_schema_for_agent)
+        models = []
+        for _, obj in (current_module.__dict__ if current_module else {}).items():
+            if inspect.isclass(obj) and issubclass(obj, BaseModel) and obj is not BaseModel:
+                models.append(obj)
+        logger.info("Scanning %d module-local models for additionalProperties…", len(models))
+        for cls in sorted(models, key=lambda c: c.__name__):
+            _log_model_schema(cls, logger, prefix="[module] ")
+    except Exception as e:
+        logger.exception("Model scan failed: %s", e)
 
 async def run_agent_with_error_handling(
     agent: Agent,
@@ -2788,6 +2860,11 @@ async def process_user_input(
         else:
             agent = nyx_main_agent
 
+        try:
+            debug_strict_schema_for_agent(agent, logger)
+        except Exception:
+            logger.exception("strict-schema preflight logging failed")
+
         # Run the agent
         result = await Runner.run(
             agent,
@@ -3239,13 +3316,14 @@ async def store_messages(user_id: int, conversation_id: int, user_input: str, ny
 
 async def create_nyx_agent_with_prompt(system_prompt: str, private_reflection: str = "") -> Agent[NyxContext]:
     """Create a Nyx agent with custom system prompt and preset story awareness"""
-    
+    # If you later clean your Pydantic schemas, flip strict_tools to True.
+    from agents import ModelSettings
+
     # Check if we need to add preset story constraints
     preset_constraints = ""
     validation_instructions = ""
     
     # Look for preset story indicators in the system prompt or context
-    # This could be passed as a special marker or detected from context
     if "preset_story_id" in system_prompt or "queen_of_thorns" in system_prompt:
         from story_templates.moth.lore.consistency_guide import QueenOfThornsConsistencyGuide
         
@@ -3278,9 +3356,8 @@ Before providing your response:
 If you notice any violations in your planned response, revise it before outputting.
 """
     
-    # Check for other preset stories that might be added in the future
+    # Generic preset handling
     elif "preset_story_id" in system_prompt:
-        # Generic preset handling for future stories
         preset_constraints = """
 
 ==== PRESET STORY ACTIVE ====
@@ -3311,9 +3388,9 @@ Core responsibilities:
 
 Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be confident, controlling, and seductive while remaining intelligent, perceptive, and caring but firm with boundaries.
 """
-    
-    # Create the agent with all tools and handoffs
-    return Agent[NyxContext](
+
+    # Build the agent (strict_tools disabled to bypass additionalProperties issues)
+    ag = Agent[NyxContext](
         name="Nyx",
         instructions=combined_instructions,
         handoffs=[
@@ -3353,7 +3430,7 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
             score_decision_options,
             # Conflict detection
             detect_conflicts_and_instability,
-            # Universal updates - CRITICAL for state extraction
+            # Universal updates / slice-of-life
             generate_universal_updates,
             narrate_slice_of_life_scene,
             check_world_state,
@@ -3362,9 +3439,20 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
         ],
         input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
         model="gpt-5-nano",
-        model_settings=ModelSettings()
+        model_settings=ModelSettings(strict_tools=False),  # ← key change
     )
 
+    # Minimal preflight logging so you can verify the flag is actually off
+    try:
+        logger.info(
+            "create_nyx_agent_with_prompt: agent=%s strict_tools=%s tools=%d",
+            ag.name, getattr(ag.model_settings, "strict_tools", None), len(ag.tools or [])
+        )
+    except Exception:
+        logger.exception("strict-schema preflight logging failed")
+
+    return ag
+  
 async def create_preset_aware_nyx_agent(
     conversation_id: int,
     system_prompt: str, 
