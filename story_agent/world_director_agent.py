@@ -16,18 +16,32 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 
 from story_agent.world_simulation_models import (
+    # Core enums/models
     WorldMood,
     ActivityType,
     TimeOfDay,
     CurrentTimeData,
     VitalsData,
+
+    # Event data
     AddictionCravingData,
     DreamData,
     RevelationData,
-    ChoiceData,
-    ChoiceProcessingResult,
+
+    # Helper key/value types
+    KVItem,
     kvdict,
     kvlist_from_obj,
+
+    # Relationship/inventory helpers
+    RelationshipImpact,
+    InventoryChange,
+
+    # Choice and results
+    ChoiceData,
+    ChoiceProcessingResult,
+
+    # World state & narrative
     CompleteWorldState,
     WorldState,
     SliceOfLifeEvent,
@@ -38,6 +52,14 @@ from story_agent.world_simulation_models import (
     NPCRoutine,
     EmergentPattern,
     NarrativeThread,
+
+    # Emergent pattern outputs
+    MemorySimilarity,
+    RelationshipPatternOut,
+    AddictionPatternOut,
+    StatPatternOut,
+    RulePatternOut,
+    EmergentPatternsResult,
 )
 
 from db.connection import get_db_connection_context
@@ -1376,120 +1398,97 @@ Keep it atmospheric with rich subtext."""
             error=str(e),
             narrative="Your action has consequences..."
         )
+        
 @function_tool
 async def check_all_emergent_patterns(
     ctx: RunContextWrapper[CompleteWorldDirectorContext]
-) -> Dict[str, Any]:
-    """Check ALL systems for emergent patterns and narratives"""
+) -> EmergentPatternsResult:
     context = ctx.context
-    patterns = {
-        "memory_patterns": [],
-        "relationship_patterns": [],
-        "addiction_patterns": [],
-        "stat_patterns": [],
-        "rule_patterns": []
-    }
-    
-    # Lazy load
+    result = EmergentPatternsResult()
+
     chatgpt_funcs = _get_chatgpt_functions()
     get_text_embedding = chatgpt_funcs['get_text_embedding']
     cosine_similarity = chatgpt_funcs['cosine_similarity']
     generate_text_completion = chatgpt_funcs['generate_text_completion']
-    
+
     try:
-        # 1. Memory patterns using vector similarity
-        recent_memories = context.current_world_state.recent_memories
-        if len(recent_memories) > 5:
+        # 1) Memory patterns
+        recent = [m for m in (context.current_world_state.recent_memories or []) if isinstance(m, dict) and m.get('text')]
+        if len(recent) > 5:
             try:
-                # Get embeddings for recent memories
-                embeddings = []
-                for mem in recent_memories[:10]:
-                    if isinstance(mem, dict) and 'text' in mem:
-                        embedding = await get_text_embedding(mem['text'])
-                        embeddings.append(embedding)
-                
-                # Find similar memories (high cosine similarity)
-                if embeddings:
-                    similarities = []
-                    for i in range(len(embeddings)):
-                        for j in range(i+1, len(embeddings)):
-                            sim = cosine_similarity(embeddings[i], embeddings[j])
-                            if sim > 0.8:  # High similarity threshold
-                                similarities.append({
-                                    "memory1": recent_memories[i],
-                                    "memory2": recent_memories[j],
-                                    "similarity": sim
-                                })
-                    
-                    if similarities:
-                        patterns['memory_patterns'] = similarities
+                embs = [await get_text_embedding(m['text']) for m in recent[:10]]
+                for i in range(len(embs)):
+                    for j in range(i+1, len(embs)):
+                        sim = float(cosine_similarity(embs[i], embs[j]))
+                        if sim > 0.8:
+                            result.memory_patterns.append(MemorySimilarity(
+                                m1_index=i,
+                                m2_index=j,
+                                m1_excerpt=str(recent[i]['text'])[:160],
+                                m2_excerpt=str(recent[j]['text'])[:160],
+                                similarity=sim
+                            ))
             except Exception as e:
                 logger.error(f"Error analyzing memory patterns: {e}")
-        
-        # 2. Relationship patterns
+
+        # 2) Relationship patterns
         try:
-            for npc in context.current_world_state.active_npcs[:5]:
-                if 'relationship' in npc:
-                    rel_patterns = npc['relationship'].get('patterns', [])
-                    if rel_patterns:
-                        patterns['relationship_patterns'].append({
-                            "npc": npc.get('npc_name', 'Unknown'),
-                            "patterns": rel_patterns,
-                            "archetype": npc['relationship'].get('archetype', 'unknown')
-                        })
+            for npc in (context.current_world_state.active_npcs or [])[:5]:
+                rel = npc.get('relationship') if isinstance(npc, dict) else None
+                if isinstance(rel, dict):
+                    pats = rel.get('patterns') or []
+                    if pats:
+                        result.relationship_patterns.append(RelationshipPatternOut(
+                            npc=npc.get('npc_name', 'Unknown'),
+                            patterns=[str(p) for p in pats],
+                            archetype=str(rel.get('archetype', 'unknown'))
+                        ))
         except Exception as e:
             logger.error(f"Error analyzing relationship patterns: {e}")
-        
-        # 3. Addiction patterns
+
+        # 3) Addiction patterns
         try:
-            if context.current_world_state.addiction_status.get('has_addictions'):
-                addictions = context.current_world_state.addiction_status.get('addictions', {})
-                for addiction_type, data in addictions.items():
-                    if data.get('level', 0) >= 3:
-                        patterns['addiction_patterns'].append({
-                            "type": addiction_type,
-                            "level": data['level'],
-                            "trajectory": "escalating" if data.get('recent_increases', 0) > 2 else "stable"
-                        })
+            status = context.current_world_state.addiction_status or {}
+            if status.get('has_addictions'):
+                for a_type, data in (status.get('addictions') or {}).items():
+                    level = int(data.get('level', 0))
+                    traj = "escalating" if int(data.get('recent_increases', 0)) > 2 else "stable"
+                    if level >= 3:
+                        result.addiction_patterns.append(AddictionPatternOut(
+                            type=str(a_type), level=level, trajectory=traj
+                        ))
         except Exception as e:
             logger.error(f"Error analyzing addiction patterns: {e}")
-        
-        # 4. Stat combination patterns
+
+        # 4) Stat combination patterns
         try:
-            active_combos = context.current_world_state.active_stat_combinations
-            if active_combos:
-                patterns['stat_patterns'] = [
-                    {
-                        "combination": combo.get('name', 'unknown'),
-                        "behaviors": combo.get('behaviors', [])
-                    }
-                    for combo in active_combos
-                ]
+            for combo in (context.current_world_state.active_stat_combinations or []):
+                result.stat_patterns.append(StatPatternOut(
+                    combination=str(combo.get('name', 'unknown')),
+                    behaviors=[str(b) for b in (combo.get('behaviors') or [])]
+                ))
         except Exception as e:
             logger.error(f"Error analyzing stat patterns: {e}")
-        
-        # 5. Rule trigger patterns
+
+        # 5) Rule trigger patterns
         try:
-            if context.current_world_state.triggered_effects:
-                rule_frequency = {}
-                for effect in context.current_world_state.triggered_effects:
-                    rule_name = effect.get('rule', {}).get('rule_name', 'unknown')
-                    rule_frequency[rule_name] = rule_frequency.get(rule_name, 0) + 1
-                
-                patterns['rule_patterns'] = [
-                    {"rule": name, "frequency": count}
-                    for name, count in rule_frequency.items()
-                    if count > 1
-                ]
+            freq = {}
+            for eff in (context.current_world_state.triggered_effects or []):
+                rule_name = str((eff.get('rule') or {}).get('rule_name', 'unknown'))
+                freq[rule_name] = freq.get(rule_name, 0) + 1
+            for name, count in freq.items():
+                if count > 1:
+                    result.rule_patterns.append(RulePatternOut(rule=name, frequency=int(count)))
         except Exception as e:
             logger.error(f"Error analyzing rule patterns: {e}")
-        
-        # Generate narrative analysis of patterns
-        if any(patterns.values()):
+
+        # Narrative analysis
+        if any([result.memory_patterns, result.relationship_patterns, result.addiction_patterns,
+                result.stat_patterns, result.rule_patterns]):
             try:
                 analysis_prompt = f"""Analyze these emergent patterns in a femdom RPG:
 
-{json.dumps(patterns, indent=2, default=str)}
+{result.model_dump_json(indent=2)}
 
 Identify:
 1. Converging narratives across different systems
@@ -1499,24 +1498,21 @@ Identify:
 5. Potential climax points approaching
 
 Output as narrative insight, not JSON."""
-
-                narrative_analysis = await generate_text_completion(
+                result.narrative_analysis = await generate_text_completion(
                     system_prompt="You are a narrative analyst finding emergent stories in complex patterns.",
                     user_prompt=analysis_prompt,
                     temperature=0.6,
                     max_tokens=400
                 )
-                
-                patterns['narrative_analysis'] = narrative_analysis
             except Exception as e:
                 logger.error(f"Error generating narrative analysis: {e}")
-                patterns['narrative_analysis'] = "Patterns detected in the emerging narrative."
-        
-        return patterns
-        
+                result.narrative_analysis = "Patterns detected in the emerging narrative."
+
+        return result
+
     except Exception as e:
         logger.error(f"Error checking emergent patterns: {e}", exc_info=True)
-        return patterns
+        return result
 
 # ===============================================================================
 # Complete World Director Agent (with error handling)
