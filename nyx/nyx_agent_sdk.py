@@ -42,7 +42,8 @@ from agents import (
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
-from pydantic import BaseModel, Field, ValidationError, ConfigDict
+from pydantic import BaseModel as _PydanticBaseModel, Field, ValidationError, ConfigDict
+import inspect  # Required by debug_strict_schema_for_agent
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
@@ -214,8 +215,37 @@ class ScoredOption(BaseModel):
 
 # ===== Pydantic Models for Structured Outputs =====
 
+def _strip_additional_props(node):
+    """Recursively strip additionalProperties/unevaluatedProperties from schema"""
+    if isinstance(node, dict):
+        # Remove both keys that may appear depending on draft/emitters
+        node.pop("additionalProperties", None)
+        node.pop("unevaluatedProperties", None)
+        for v in node.values():
+            _strip_additional_props(v)
+    elif isinstance(node, list):
+        for v in node:
+            _strip_additional_props(v)
+
+class BaseModel(_PydanticBaseModel):
+    """
+    Pydantic v2-compatible BaseModel that:
+    - Forbids extra keys at runtime (strict)
+    - Strips additionalProperties/unevaluatedProperties from JSON Schema (for strict tool validators)
+    """
+    # Runtime behavior: reject unexpected fields
+    model_config = ConfigDict(extra='forbid')
+    
+    # JSON Schema emitter hook (Pydantic v2)
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        schema = handler(core_schema)
+        _strip_additional_props(schema)
+        return schema
+
+# Keep a StrictBaseModel alias for compatibility
 class StrictBaseModel(BaseModel):
-    model_config = ConfigDict()
+    pass
 
 class NarrativeResponse(BaseModel):
     """Structured output for Nyx's narrative responses"""
@@ -2805,7 +2835,8 @@ Remember: You're the HOST, not the story. The story emerges from systems interac
         simulate_npc_autonomy,
     ],
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=True),
 )
 
 # ===== Main Functions (maintaining original signatures) =====
@@ -3439,7 +3470,7 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
         ],
         input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
         model="gpt-5-nano",
-        model_settings=ModelSettings(strict_tools=False),  # ← key change
+        model_settings=ModelSettings(strict_tools=True),  # ← key change
     )
 
     # Minimal preflight logging so you can verify the flag is actually off
