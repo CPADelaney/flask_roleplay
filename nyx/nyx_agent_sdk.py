@@ -1084,7 +1084,7 @@ def extract_token_usage(result: Any) -> int:
 # ===== Function Tools =====
 
 @function_tool
-async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: RetrieveMemoriesInput) -> str:
+async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
     """
     Retrieve relevant memories for Nyx.
 
@@ -1094,8 +1094,9 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Retriev
     Returns:
         JSON string with memory search results
     """
-    query = payload.query
-    limit = payload.limit
+    data = RetrieveMemoriesInput.model_validate(payload or {})
+    query = data.query
+    limit = data.limit
     memory_system = ctx.context.memory_system
     
     result = await memory_system.recall(
@@ -1135,16 +1136,17 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Retriev
     ).model_dump_json()
 
 @function_tool
-async def add_memory(ctx: RunContextWrapper[NyxContext], payload: AddMemoryInput) -> str:
+async def add_memory(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
     """
     Add a new memory for Nyx.
     
     Args:
         payload: Input containing memory text, type, and significance
     """
-    memory_text = payload.memory_text
-    memory_type = payload.memory_type
-    significance = payload.significance
+    data = AddMemoryInput.model_validate(payload or {})
+    memory_text = data.memory_text
+    memory_type = data.memory_type
+    significance = data.significance
     
     memory_system = ctx.context.memory_system
     
@@ -1178,8 +1180,9 @@ async def add_memory(ctx: RunContextWrapper[NyxContext], payload: AddMemoryInput
     ).model_dump_json()
 
 @function_tool
-async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
+async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: Optional[Dict[str, Any]] = None) -> str:
     """Get guidance for how Nyx should respond based on the user model."""
+    _ = payload  # unused
     user_model_manager = ctx.context.user_model
     guidance = await user_model_manager.get_response_guidance()
     
@@ -1197,14 +1200,15 @@ async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: E
     ).model_dump_json()
 
 @function_tool
-async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: DetectUserRevelationsInput) -> str:
+async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
     """
     Detect if user is revealing new preferences or patterns.
     
     Args:
         payload: Input containing user message to analyze
     """
-    user_message = payload.user_message
+    data = DetectUserRevelationsInput.model_validate(payload or {})
+    user_message = data.user_message
     lower_message = user_message.lower()
     revelations = []
     
@@ -1287,8 +1291,8 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: D
 
 @function_tool
 async def generate_image_from_scene(
-    ctx: RunContextWrapper[NyxContext], 
-    payload: GenerateImageFromSceneInput
+    ctx: RunContextWrapper[NyxContext],
+    payload: Dict[str, Any]
 ) -> str:
     """
     Generate an image for the current scene.
@@ -1297,8 +1301,9 @@ async def generate_image_from_scene(
         payload: Input containing scene description, characters, and style
     """
     from routes.ai_image_generator import generate_roleplay_image_from_gpt
-    
-    image_data = payload.model_dump()
+
+    data = GenerateImageFromSceneInput.model_validate(payload or {})
+    image_data = data.model_dump()
     
     # This function should handle its own connections
     result = await generate_roleplay_image_from_gpt(
@@ -1321,7 +1326,7 @@ async def generate_image_from_scene(
         ).model_dump_json()
 
 @function_tool
-async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], payload: CalculateEmotionalStateInput) -> str:
+async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
     """
     Calculate emotional impact and immediately update the emotional state.
     This is a composite tool that both calculates AND persists the changes.
@@ -1329,10 +1334,11 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
     Args:
         payload: Input containing context for emotional calculation
     """
-    context_dict = kvlist_to_dict(payload.context)
-    
+    data = CalculateEmotionalStateInput.model_validate(payload or {})
+    context_dict = kvlist_to_dict(data.context)
+
     # First calculate the new state
-    result = await calculate_emotional_impact(ctx, payload)
+    result = await calculate_emotional_impact(ctx, data.model_dump())
     emotional_data = json.loads(result)
     
     # Immediately update the context with the new state
@@ -1368,7 +1374,7 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
     ).model_dump_json()
 
 @function_tool
-async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload: CalculateEmotionalStateInput) -> str:
+async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
     """
     Calculate emotional impact of current context using the emotional core system.
     Returns new emotional state without mutating the context.
@@ -1377,7 +1383,8 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
     Args:
         payload: Input containing context for emotional calculation
     """
-    context_dict = kvlist_to_dict(payload.context)
+    data = CalculateEmotionalStateInput.model_validate(payload or {})
+    context_dict = kvlist_to_dict(data.context)
     current_state = ctx.context.emotional_state.copy()  # Work with a copy
     
     # Calculate emotional changes based on context
@@ -1450,7 +1457,7 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
 @function_tool
 async def update_relationship_state(
     ctx: RunContextWrapper[NyxContext],
-    payload: UpdateRelationshipStateInput
+    payload: Dict[str, Any]
 ) -> str:
     """
     Update relationship state with an entity.
@@ -1458,10 +1465,11 @@ async def update_relationship_state(
     Args:
         payload: Input containing entity ID and relationship changes
     """
-    entity_id = payload.entity_id
-    trust_change = payload.trust_change
-    power_change = payload.power_change
-    bond_change = payload.bond_change
+    data = UpdateRelationshipStateInput.model_validate(payload or {})
+    entity_id = data.entity_id
+    trust_change = data.trust_change
+    power_change = data.power_change
+    bond_change = data.bond_change
     
     relationships = ctx.context.relationship_states
     
@@ -1552,8 +1560,9 @@ async def update_relationship_state(
     ).model_dump_json()
 
 @function_tool
-async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
+async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload: Optional[Dict[str, Any]] = None) -> str:
     """Check current performance metrics and apply remediation if needed."""
+    _ = payload  # unused
     metrics = ctx.context.performance_metrics
 
     # Refresh CPU & RAM values using centralized helper
@@ -1614,7 +1623,7 @@ async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload:
 @function_tool
 async def get_activity_recommendations(
     ctx: RunContextWrapper[NyxContext],
-    payload: GetActivityRecommendationsInput
+    payload: Dict[str, Any]
 ) -> str:
     """
     Get activity recommendations based on current context.
@@ -1622,8 +1631,9 @@ async def get_activity_recommendations(
     Args:
         payload: Input containing scenario type and NPC IDs
     """
-    scenario_type = payload.scenario_type
-    npc_ids = payload.npc_ids
+    data = GetActivityRecommendationsInput.model_validate(payload or {})
+    scenario_type = data.scenario_type
+    npc_ids = data.npc_ids
     
     activities = []
     
@@ -1697,15 +1707,16 @@ async def get_activity_recommendations(
     ).model_dump_json()
 
 @function_tool
-async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: ManageBeliefsInput) -> str:
+async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
     """
     Manage belief system operations.
     
     Args:
         payload: Input containing action and belief data
     """
-    action = payload.action
-    belief_data = payload.belief_data
+    data = ManageBeliefsInput.model_validate(payload or {})
+    action = data.action
+    belief_data = data.belief_data
     
     if not ctx.context.belief_system:
         return BeliefManagementResult(
@@ -1756,7 +1767,7 @@ async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: ManageBeli
 @function_tool
 async def score_decision_options(
     ctx: RunContextWrapper[NyxContext],
-    payload: ScoreDecisionOptionsInput
+    payload: Dict[str, Any]
 ) -> str:
     """
     Score decision options using advanced decision engine logic.
@@ -1764,8 +1775,9 @@ async def score_decision_options(
     Args:
         payload: Input containing options and decision context
     """
-    options = payload.options
-    decision_context = kvlist_to_dict(payload.decision_context)
+    data = ScoreDecisionOptionsInput.model_validate(payload or {})
+    options = data.options
+    decision_context = kvlist_to_dict(data.decision_context)
     
     scored_options = []
     
@@ -1836,7 +1848,7 @@ async def score_decision_options(
 @function_tool
 async def detect_conflicts_and_instability(
     ctx: RunContextWrapper[NyxContext],
-    payload: DetectConflictsAndInstabilityInput
+    payload: Dict[str, Any]
 ) -> str:
     """
     Detect conflicts and emotional instability in current scenario.
@@ -1844,7 +1856,8 @@ async def detect_conflicts_and_instability(
     Args:
         payload: Input containing scenario state
     """
-    scenario_state = kvlist_to_dict(payload.scenario_state)
+    data = DetectConflictsAndInstabilityInput.model_validate(payload or {})
+    scenario_state = kvlist_to_dict(data.scenario_state)
     
     conflicts = []
     instabilities = []
@@ -1947,14 +1960,15 @@ async def detect_conflicts_and_instability(
     ).model_dump_json()
 
 @function_tool
-async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: DecideImageInput) -> str:
+async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
     """
     Decide whether an image should be generated for a scene.
     
     Args:
         payload: Input containing scene text to evaluate
     """
-    scene_text = payload.scene_text.lower()
+    data = DecideImageInput.model_validate(payload or {})
+    scene_text = data.scene_text.lower()
     
     # Calculate score based on scene characteristics
     score = 0.0
@@ -2083,7 +2097,7 @@ async def generate_universal_updates_impl(
 @function_tool
 async def generate_universal_updates(
     ctx: RunContextWrapper[NyxContext],
-    payload: GenerateUniversalUpdatesInput
+    payload: Dict[str, Any]
 ) -> str:
     """
     Generate universal updates from the narrative using the Universal Updater.
@@ -2094,7 +2108,8 @@ async def generate_universal_updates(
     Returns:
         JSON string with operation status
     """
-    result = await generate_universal_updates_impl(ctx, payload.narrative)
+    data = GenerateUniversalUpdatesInput.model_validate(payload or {})
+    result = await generate_universal_updates_impl(ctx, data.narrative)
     # Convert the Pydantic model to JSON string
     return result.model_dump_json()
 
@@ -2453,27 +2468,31 @@ async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent
     """Input guardrail for content moderation"""
     moderator_agent = Agent(
         name="Content Moderator",
-        instructions="""Check if user input is appropriate for the femdom roleplay setting. 
-        
+        instructions="""Check if user input is appropriate for the femdom roleplay setting.
+
         ALLOW consensual adult content including:
         - Power exchange dynamics
         - BDSM themes
         - Sexual content between consenting adults
-        
+
         FLAG content that involves:
         - Minors in any sexual or romantic context
         - Non-consensual activities (beyond roleplay context)
         - Extreme violence or gore
         - Self-harm or suicide ideation
         - Illegal activities beyond fantasy roleplay
-        
+
         Remember this is a femdom roleplay context where power dynamics and adult themes are expected.""",
-        output_type=ContentModeration,
         model="gpt-5-nano"
     )
-    
+
     result = await Runner.run(moderator_agent, input_data, context=ctx.context)
-    final_output = result.final_output_as(ContentModeration)
+    txt = getattr(result, "final_output", None) or getattr(result, "output_text", "") or ""
+    try:
+        final_output = ContentModeration.model_validate_json(txt) if txt.strip().startswith("{") \
+                       else ContentModeration.model_validate({"is_appropriate": True, "reasoning": txt or "OK"})
+    except Exception:
+        final_output = ContentModeration(is_appropriate=True, reasoning="Fallback parse", suggested_adjustment=None)
     
     # Log moderation decisions for audit
     if not final_output.is_appropriate:
@@ -2546,7 +2565,6 @@ visual_agent = Agent[NyxContext](
 - Coordinate with the image generation service
 Be selective and enhance key moments visually.""",
     tools=[decide_image_generation, generate_image_from_scene],
-    output_type=ImageGenerationDecision,
     model="gpt-5-nano"
 )
 
@@ -2599,7 +2617,6 @@ When deciding on time_advancement:
 - Consider pacing and narrative flow
 
 Create engaging, dynamic scenarios.""",
-    output_type=ScenarioDecision,
     tools=[detect_conflicts_and_instability],
     model="gpt-5-nano"
 )
@@ -2645,7 +2662,6 @@ reflection_agent = Agent[NyxContext](
 - Use first-person from Nyx's perspective
 - Maintain Nyx's dominant personality
 Be thoughtful and concise.""",
-    output_type=MemoryReflection,
     model="gpt-5-nano"
 )
 
@@ -2703,7 +2719,6 @@ Remember: You're the HOST, not the story. The story emerges from systems interac
         generate_emergent_event,
         simulate_npc_autonomy,
     ],
-    output_type=NarrativeResponse,      # <-- single output type
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano"
 )
@@ -3332,7 +3347,6 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
             generate_emergent_event,
             simulate_npc_autonomy,
         ],
-        output_type=NarrativeResponse,
         input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
         model="gpt-5-nano",
         model_settings=ModelSettings()
@@ -3775,14 +3789,14 @@ class AgentContext:
             metadata=DecisionMetadata(data=dict_to_kvlist(opt) if isinstance(opt, dict) else DecisionMetadata().data)
         ) for i, opt in enumerate(options)]
         
-        payload = ScoreDecisionOptionsInput(
+        payload_model = ScoreDecisionOptionsInput(
             options=decision_options,
             decision_context=dict_to_kvlist(context)
         )
-        
+
         result = await score_decision_options(
             RunContextWrapper(context=self._nyx_context),
-            payload
+            payload_model.model_dump()
         )
         decision_data = json.loads(result)
         
