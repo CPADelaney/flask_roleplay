@@ -56,6 +56,22 @@ from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
 
+class BaseModel(_PydanticBaseModel):
+    """
+    Pydantic v2-compatible BaseModel that:
+    - Forbids extra keys at runtime (strict)
+    - Strips additionalProperties/unevaluatedProperties from JSON Schema (for strict tool validators)
+    """
+    # Runtime behavior: reject unexpected fields
+    model_config = ConfigDict(extra='forbid')
+    
+    # JSON Schema emitter hook (Pydantic v2)
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        schema = handler(core_schema)
+        _strip_additional_props(schema)
+        return schema
+
 # ===== Utility Types for Strict Schema =====
 
 JsonScalar = Union[str, int, float, bool, None]
@@ -226,22 +242,6 @@ def _strip_additional_props(node):
     elif isinstance(node, list):
         for v in node:
             _strip_additional_props(v)
-
-class BaseModel(_PydanticBaseModel):
-    """
-    Pydantic v2-compatible BaseModel that:
-    - Forbids extra keys at runtime (strict)
-    - Strips additionalProperties/unevaluatedProperties from JSON Schema (for strict tool validators)
-    """
-    # Runtime behavior: reject unexpected fields
-    model_config = ConfigDict(extra='forbid')
-    
-    # JSON Schema emitter hook (Pydantic v2)
-    @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
-        schema = handler(core_schema)
-        _strip_additional_props(schema)
-        return schema
 
 # Keep a StrictBaseModel alias for compatibility
 class StrictBaseModel(BaseModel):
