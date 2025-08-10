@@ -42,7 +42,7 @@ from agents import (
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
-from pydantic import BaseModel, Field, ConfigDict, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
@@ -54,10 +54,6 @@ from .response_filter import ResponseFilter
 from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
-
-# Base class enforcing strict schema for tools that require it
-class StrictBaseModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
 
 # ===== Utility Types for Strict Schema =====
 
@@ -218,7 +214,7 @@ class ScoredOption(BaseModel):
 
 # ===== Pydantic Models for Structured Outputs =====
 
-class NarrativeResponse(StrictBaseModel):
+class NarrativeResponse(BaseModel):
     """Structured output for Nyx's narrative responses"""
     
     
@@ -232,11 +228,11 @@ class NarrativeResponse(StrictBaseModel):
     world_mood: Optional[str] = Field(None, description="Current world mood")
     ongoing_events: Optional[List[str]] = Field(None, description="Active slice-of-life events")
     available_activities: Optional[List[str]] = Field(None, description="Available player activities")
-    npc_schedules: Optional[Dict[str, str]] = Field(None, description="What NPCs are doing")
+    npc_schedules: Optional[Dict[str, Any]] = Field(None, description="What NPCs are doing")
     time_of_day: Optional[str] = Field(None, description="Current time period")
     emergent_opportunities: Optional[List[str]] = Field(None, description="Emergent narrative opportunities")
 
-class MemoryReflection(StrictBaseModel):
+class MemoryReflection(BaseModel):
     """Structured output for memory reflections"""
     
     
@@ -262,7 +258,7 @@ class EmotionalStateUpdate(BaseModel):
     primary_emotion: str = Field(..., description="Primary emotion label")
     reasoning: str = Field(..., description="Why the emotional state changed")
 
-class ScenarioDecision(StrictBaseModel):
+class ScenarioDecision(BaseModel):
     """Structured output for scenario management decisions"""
     
     
@@ -288,7 +284,7 @@ class ActivityRecommendation(BaseModel):
     recommended_activities: List[ActivityRec] = Field(..., description="List of recommended activities")
     reasoning: str = Field(..., description="Why these activities are recommended")
 
-class ImageGenerationDecision(StrictBaseModel):
+class ImageGenerationDecision(BaseModel):
     """Decision about whether to generate an image"""
     
     
@@ -504,7 +500,7 @@ class ConflictDetectionResult(BaseModel):
     stability_note: str = Field(..., description="Explanation of stability score")
     requires_intervention: bool = Field(..., description="Whether intervention is needed")
 
-class UniversalUpdateResult(StrictBaseModel):
+class UniversalUpdateResult(BaseModel):
     """Output for generate_universal_updates function"""
     
     
@@ -2162,13 +2158,13 @@ async def narrate_slice_of_life_scene(
     return result
 
 @function_tool
-async def check_world_state(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> Dict[str, Any]:
+async def check_world_state(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
     """Get current world state for Nyx's awareness"""
     _ = payload  # unused
     context = ctx.context
     world_state = await context.world_director.context.current_world_state
 
-    return {
+    out = {
         "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
         "world_mood": getattr(world_state.world_mood, "value", None),
         "active_npcs": [
@@ -2183,7 +2179,8 @@ async def check_world_state(ctx: RunContextWrapper[NyxContext], payload: EmptyIn
             "addictions": getattr(world_state, "addiction_status", {}),
             "stats": getattr(world_state, "hidden_stats", {}),
         }),
-     }
+    }
+    return json.dumps(out, ensure_ascii=False)
  
 
 class EmergentEventInput(BaseModel):
@@ -2193,7 +2190,7 @@ class EmergentEventInput(BaseModel):
 async def generate_emergent_event(
     ctx: RunContextWrapper[NyxContext],
     payload: EmergentEventInput
-) -> Dict[str, Any]:
+) -> str:
     """Generate an emergent slice-of-life event"""
     context = ctx.context
     event_type = payload.event_type  # optional event type from payload
@@ -2212,7 +2209,7 @@ async def generate_emergent_event(
 
     title = None
     etype = None
-    participants = []
+    participants: List[str] = []
     location = None
     timestamp = None
 
@@ -2236,7 +2233,7 @@ async def generate_emergent_event(
                     participants.append(str(p))
 
     nyx_commentary = "*Nyx appears in the corner of your vision, smirking* Oh, this should be interesting..."
-    return {
+    out = {
         "event": safe_event,
         "event_summary": {
             "title": title,
@@ -2247,6 +2244,7 @@ async def generate_emergent_event(
         },
         "nyx_commentary": nyx_commentary,
     }
+    return json.dumps(out, ensure_ascii=False)
 
 class SimulateAutonomyInput(BaseModel):
     hours: int = Field(1, ge=1, le=24, description="Hours to advance")
@@ -2255,7 +2253,7 @@ class SimulateAutonomyInput(BaseModel):
 async def simulate_npc_autonomy(
     ctx: RunContextWrapper[NyxContext],
     payload: SimulateAutonomyInput
-) -> Dict[str, Any]:
+) -> str:
     """Simulate autonomous NPC actions"""
     context = ctx.context
     result = await context.world_director.advance_time(payload.hours)  # advance time based on requested hours
@@ -2268,7 +2266,7 @@ async def simulate_npc_autonomy(
     if isinstance(safe_result, list):
         candidate_actions = safe_result
     elif isinstance(safe_result, dict):
-        # common containers: "actions", "npc_actions", "events"
+        # common containers: "actions", "npc_actions", "events", "log"
         for key in ("actions", "npc_actions", "events", "log"):
             if isinstance(safe_result.get(key), list):
                 candidate_actions = safe_result[key]
@@ -2284,12 +2282,13 @@ async def simulate_npc_autonomy(
             action_log.append({"entry": str(entry)})
 
     nyx_observation = "While you were away, the others continued their lives..."
-    return {
+    out = {
         "advanced_time_hours": payload.hours,  # report hours advanced from payload
         "npc_actions": safe_result,
         "npc_action_log": action_log,
         "nyx_observation": nyx_observation,
     }
+    return json.dumps(out, ensure_ascii=False)
 
 # ===== Helper Functions for Tools =====
 
