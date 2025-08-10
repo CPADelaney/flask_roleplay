@@ -7,7 +7,7 @@ Single source of truth to avoid circular imports and model duplication.
 """
 
 from enum import Enum
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime, timezone
 
@@ -137,20 +137,49 @@ class RevelationData(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
+
+class KVItem(BaseModel):
+    key: str
+    value: Any
+
+
+def kvlist_from_obj(obj: Any) -> List[KVItem]:
+    if isinstance(obj, dict):
+        return [KVItem(key=str(k), value=v) for k, v in obj.items()]
+    if isinstance(obj, list):
+        return [KVItem(key=str(i), value=v) for i, v in enumerate(obj)]
+    return [KVItem(key="value", value=obj)]
+
+
+def kvdict(items: List[KVItem]) -> Dict[str, Any]:
+    return {it.key: it.value for it in (items or [])}
+
+
+class RelationshipImpact(BaseModel):
+    npc_name: str
+    impacts: List[KVItem] = Field(default_factory=list)
+
+
+class InventoryChange(BaseModel):
+    action: Literal["add", "remove"]
+    item_name: str
+    description: Optional[str] = None
+    effect: Optional[str] = None
+
+
 class ChoiceData(BaseModel):
-    """Comprehensive player choice information"""
     text: Optional[str] = None
-    stat_impacts: Optional[Dict[str, float]] = None
-    addiction_impacts: Optional[Dict[str, float]] = None
+    stat_impacts: List[KVItem] = Field(default_factory=list)
+    addiction_impacts: List[KVItem] = Field(default_factory=list)
     npc_id: Optional[int] = None
-    relationship_impacts: Optional[Dict[str, Any]] = None
+    relationship_impacts: List[RelationshipImpact] = Field(default_factory=list)
     activity_type: Optional[str] = None
-    intensity: Optional[float] = Field(None, ge=0, le=1)
-    inventory_changes: Optional[List[Dict[str, Any]]] = None
+    intensity: Optional[float] = 1.0
+    inventory_changes: List[InventoryChange] = Field(default_factory=list)
     currency_change: Optional[float] = None
-    time_passed: Optional[float] = None
-    emotional_valence: Optional[float] = Field(None, ge=-1, le=1)
-    
+    time_passed: Optional[float] = 0.0
+    emotional_valence: Optional[float] = 0.0
+
     model_config = ConfigDict(extra="forbid")
 
 # ===============================================================================
@@ -158,21 +187,20 @@ class ChoiceData(BaseModel):
 # ===============================================================================
 
 class ChoiceProcessingResult(BaseModel):
-    """Structured result for complete player choice processing"""
     success: bool
-    effects: List[Dict[str, Any]] = Field(default_factory=list)
+    effects: List[List[KVItem]] = Field(default_factory=list)
     narratives: List[str] = Field(default_factory=list)
-    stat_changes: Optional[Dict[str, Any]] = None
-    new_thresholds: Optional[Dict[str, Any]] = None
-    npc_stage_change: Optional[Dict[str, Any]] = None
-    activity_result: Optional[Dict[str, Any]] = None
-    triggered_rules: Optional[List[Dict[str, Any]]] = None
-    currency: Optional[Dict[str, Any]] = None
-    hunger_update: Optional[Dict[str, Any]] = None
-    preferences_detected: Optional[Dict[str, Any]] = None
+    stat_changes: Optional[List[KVItem]] = None
+    new_thresholds: Optional[List[KVItem]] = None
+    npc_stage_change: Optional[List[KVItem]] = None
+    activity_result: Optional[List[KVItem]] = None
+    triggered_rules: List[List[KVItem]] = Field(default_factory=list)
+    currency: Optional[List[KVItem]] = None
+    hunger_update: Optional[List[KVItem]] = None
+    preferences_detected: Optional[List[KVItem]] = None
     narrative: Optional[str] = None
     error: Optional[str] = None
-    
+
     model_config = ConfigDict(extra="forbid")
 
 # ===============================================================================
@@ -385,6 +413,11 @@ __all__ = [
     'AddictionCravingData',
     'DreamData',
     'RevelationData',
+    'KVItem',
+    'kvlist_from_obj',
+    'kvdict',
+    'RelationshipImpact',
+    'InventoryChange',
     'ChoiceData',
     'ChoiceProcessingResult',
     
