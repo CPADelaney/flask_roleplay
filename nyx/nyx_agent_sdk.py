@@ -387,7 +387,7 @@ class DetectConflictsAndInstabilityInput(BaseModel):
     
     scenario_state: KVList = Field(..., description="Current scenario state")
 
-class GenerateUniversalUpdatesInput(StrictBaseModel):
+class GenerateUniversalUpdatesInput(BaseModel):
     """Input for generate_universal_updates function"""
     
     
@@ -1084,7 +1084,7 @@ def extract_token_usage(result: Any) -> int:
 # ===== Function Tools =====
 
 @function_tool
-async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
+async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: RetrieveMemoriesInput) -> str:
     """
     Retrieve relevant memories for Nyx.
 
@@ -1136,7 +1136,7 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Dict[st
     ).model_dump_json()
 
 @function_tool
-async def add_memory(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
+async def add_memory(ctx: RunContextWrapper[NyxContext], payload: AddMemoryInput) -> str:
     """
     Add a new memory for Nyx.
     
@@ -1180,7 +1180,7 @@ async def add_memory(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]
     ).model_dump_json()
 
 @function_tool
-async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: Optional[Dict[str, Any]] = None) -> str:
+async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
     """Get guidance for how Nyx should respond based on the user model."""
     _ = payload  # unused
     user_model_manager = ctx.context.user_model
@@ -1200,7 +1200,7 @@ async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: O
     ).model_dump_json()
 
 @function_tool
-async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
+async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: DetectUserRevelationsInput) -> str:
     """
     Detect if user is revealing new preferences or patterns.
     
@@ -1292,7 +1292,7 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: D
 @function_tool
 async def generate_image_from_scene(
     ctx: RunContextWrapper[NyxContext],
-    payload: Dict[str, Any]
+    payload: GenerateImageFromSceneInput
 ) -> str:
     """
     Generate an image for the current scene.
@@ -1326,7 +1326,7 @@ async def generate_image_from_scene(
         ).model_dump_json()
 
 @function_tool
-async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
+async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], payload: CalculateEmotionalStateInput) -> str:
     """
     Calculate emotional impact and immediately update the emotional state.
     This is a composite tool that both calculates AND persists the changes.
@@ -1374,7 +1374,7 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
     ).model_dump_json()
 
 @function_tool
-async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
+async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload: CalculateEmotionalStateInput) -> str:
     """
     Calculate emotional impact of current context using the emotional core system.
     Returns new emotional state without mutating the context.
@@ -1457,7 +1457,7 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
 @function_tool
 async def update_relationship_state(
     ctx: RunContextWrapper[NyxContext],
-    payload: Dict[str, Any]
+    payload: UpdateRelationshipStateInput
 ) -> str:
     """
     Update relationship state with an entity.
@@ -1560,7 +1560,7 @@ async def update_relationship_state(
     ).model_dump_json()
 
 @function_tool
-async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload: Optional[Dict[str, Any]] = None) -> str:
+async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
     """Check current performance metrics and apply remediation if needed."""
     _ = payload  # unused
     metrics = ctx.context.performance_metrics
@@ -1623,7 +1623,7 @@ async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload:
 @function_tool
 async def get_activity_recommendations(
     ctx: RunContextWrapper[NyxContext],
-    payload: Dict[str, Any]
+    payload: GetActivityRecommendationsInput
 ) -> str:
     """
     Get activity recommendations based on current context.
@@ -1707,7 +1707,7 @@ async def get_activity_recommendations(
     ).model_dump_json()
 
 @function_tool
-async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
+async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: ManageBeliefsInput) -> str:
     """
     Manage belief system operations.
     
@@ -1767,7 +1767,7 @@ async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: Dict[str, 
 @function_tool
 async def score_decision_options(
     ctx: RunContextWrapper[NyxContext],
-    payload: Dict[str, Any]
+    payload: ScoreDecisionOptionsInput
 ) -> str:
     """
     Score decision options using advanced decision engine logic.
@@ -1848,7 +1848,7 @@ async def score_decision_options(
 @function_tool
 async def detect_conflicts_and_instability(
     ctx: RunContextWrapper[NyxContext],
-    payload: Dict[str, Any]
+    payload: DetectConflictsAndInstabilityInput
 ) -> str:
     """
     Detect conflicts and emotional instability in current scenario.
@@ -1960,7 +1960,7 @@ async def detect_conflicts_and_instability(
     ).model_dump_json()
 
 @function_tool
-async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: Dict[str, Any]) -> str:
+async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: DecideImageInput) -> str:
     """
     Decide whether an image should be generated for a scene.
     
@@ -2097,7 +2097,7 @@ async def generate_universal_updates_impl(
 @function_tool
 async def generate_universal_updates(
     ctx: RunContextWrapper[NyxContext],
-    payload: Dict[str, Any]
+    payload: GenerateUniversalUpdatesInput
 ) -> str:
     """
     Generate universal updates from the narrative using the Universal Updater.
@@ -2115,16 +2115,20 @@ async def generate_universal_updates(
 
 # ===== Open World / Slice-of-life Functions =====
 
+class NarrateSliceInput(BaseModel):
+    scene_type: str = Field("routine", description="Slice-of-life scene type")
+
 @function_tool
 async def narrate_slice_of_life_scene(
     ctx: RunContextWrapper[NyxContext],
-    scene_type: str = "routine"
+    payload: NarrateSliceInput
 ) -> str:
     """
     Generate Nyx's narration for a slice-of-life scene.
     This is a NEW function that should be Nyx's primary narrative tool.
     """
     context = ctx.context
+    scene_type = payload.scene_type  # extracted scene type from payload
 
     # Get current world state
     world_state = context.current_world_state
@@ -2158,8 +2162,9 @@ async def narrate_slice_of_life_scene(
     return result
 
 @function_tool
-async def check_world_state(ctx: RunContextWrapper[NyxContext]) -> Dict[str, Any]:
+async def check_world_state(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> Dict[str, Any]:
     """Get current world state for Nyx's awareness"""
+    _ = payload  # unused
     context = ctx.context
     world_state = await context.world_director.context.current_world_state
 
@@ -2181,13 +2186,17 @@ async def check_world_state(ctx: RunContextWrapper[NyxContext]) -> Dict[str, Any
      }
  
 
+class EmergentEventInput(BaseModel):
+    event_type: Optional[str] = Field(None, description="Optional event type hint")
+
 @function_tool
 async def generate_emergent_event(
     ctx: RunContextWrapper[NyxContext],
-    event_type: Optional[str] = None
+    payload: EmergentEventInput
 ) -> Dict[str, Any]:
     """Generate an emergent slice-of-life event"""
     context = ctx.context
+    event_type = payload.event_type  # optional event type from payload
 
     event = await context.world_director.generate_next_moment()
 
@@ -2239,14 +2248,17 @@ async def generate_emergent_event(
         "nyx_commentary": nyx_commentary,
     }
 
+class SimulateAutonomyInput(BaseModel):
+    hours: int = Field(1, ge=1, le=24, description="Hours to advance")
+
 @function_tool
 async def simulate_npc_autonomy(
     ctx: RunContextWrapper[NyxContext],
-    hours: int = 1
+    payload: SimulateAutonomyInput
 ) -> Dict[str, Any]:
     """Simulate autonomous NPC actions"""
     context = ctx.context
-    result = await context.world_director.advance_time(hours)
+    result = await context.world_director.advance_time(payload.hours)  # advance time based on requested hours
 
     safe_result = _json_safe(result)
 
@@ -2273,7 +2285,7 @@ async def simulate_npc_autonomy(
 
     nyx_observation = "While you were away, the others continued their lives..."
     return {
-        "advanced_time_hours": hours,
+        "advanced_time_hours": payload.hours,  # report hours advanced from payload
         "npc_actions": safe_result,
         "npc_action_log": action_log,
         "nyx_observation": nyx_observation,
