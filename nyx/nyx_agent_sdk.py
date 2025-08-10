@@ -42,7 +42,7 @@ from agents import (
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, ConfigDict
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
@@ -214,6 +214,9 @@ class ScoredOption(BaseModel):
 
 # ===== Pydantic Models for Structured Outputs =====
 
+class StrictBaseModel(BaseModel):
+    model_config = ConfigDict()
+
 class NarrativeResponse(BaseModel):
     """Structured output for Nyx's narrative responses"""
     
@@ -228,7 +231,7 @@ class NarrativeResponse(BaseModel):
     world_mood: Optional[str] = Field(None, description="Current world mood")
     ongoing_events: Optional[List[str]] = Field(None, description="Active slice-of-life events")
     available_activities: Optional[List[str]] = Field(None, description="Available player activities")
-    npc_schedules: Optional[Dict[str, Any]] = Field(None, description="What NPCs are doing")
+    npc_schedules: Optional[KVList] = None
     time_of_day: Optional[str] = Field(None, description="Current time period")
     emergent_opportunities: Optional[List[str]] = Field(None, description="Emergent narrative opportunities")
 
@@ -2159,7 +2162,6 @@ async def narrate_slice_of_life_scene(
 
 @function_tool
 async def check_world_state(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
-    """Get current world state for Nyx's awareness"""
     _ = payload  # unused
     context = ctx.context
     world_state = await context.world_director.context.current_world_state
@@ -2811,7 +2813,7 @@ async def process_user_input(
                 or ""
             )
             response = NarrativeResponse(
-                narrative=raw_text,
+                narrative=raw_text or "…",
                 tension_level=0,
                 generate_image=False,
                 image_prompt=None,
@@ -2821,7 +2823,7 @@ async def process_user_input(
                 world_mood=nyx_context.current_context.get("world_mood"),
                 ongoing_events=nyx_context.current_context.get("ongoing_events"),
                 available_activities=nyx_context.current_context.get("available_activities"),
-                npc_schedules=nyx_context.current_context.get("npc_schedules"),
+                npc_schedules=dict_to_kvlist(nyx_context.current_context.get("npc_schedules") or {}),
                 time_of_day=nyx_context.current_context.get("time_of_day"),
                 emergent_opportunities=None,
             )
