@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 # Core Time/Vitals Models (imported from time_cycle for type consistency)
 # ===============================================================================
 
+
 class TimeOfDay(Enum):
     """Time periods in the simulation"""
     EARLY_MORNING = "early_morning"  # 5-7 AM
@@ -394,6 +395,45 @@ class NarrativeThread(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
+class MemorySimilarity(BaseModel):
+    m1_index: int
+    m2_index: int
+    m1_excerpt: str
+    m2_excerpt: str
+    similarity: float
+    model_config = ConfigDict(extra="forbid")
+
+class RelationshipPatternOut(BaseModel):
+    npc: str
+    patterns: List[str] = Field(default_factory=list)
+    archetype: str = "unknown"
+    model_config = ConfigDict(extra="forbid")
+
+class AddictionPatternOut(BaseModel):
+    type: str
+    level: int
+    trajectory: Literal["escalating", "stable"]
+    model_config = ConfigDict(extra="forbid")
+
+class StatPatternOut(BaseModel):
+    combination: str
+    behaviors: List[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+class RulePatternOut(BaseModel):
+    rule: str
+    frequency: int
+    model_config = ConfigDict(extra="forbid")
+
+class EmergentPatternsResult(BaseModel):
+    memory_patterns: List[MemorySimilarity] = Field(default_factory=list)
+    relationship_patterns: List[RelationshipPatternOut] = Field(default_factory=list)
+    addiction_patterns: List[AddictionPatternOut] = Field(default_factory=list)
+    stat_patterns: List[StatPatternOut] = Field(default_factory=list)
+    rule_patterns: List[RulePatternOut] = Field(default_factory=list)
+    narrative_analysis: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
 # ===============================================================================
 # Export all models
 # ===============================================================================
@@ -403,36 +443,49 @@ __all__ = [
     'TimeOfDay',
     'CurrentTimeData',
     'VitalsData',
-    
+
     # Enums
     'WorldMood',
     'ActivityType',
     'PowerDynamicType',
-    
+
     # Event Data
     'AddictionCravingData',
     'DreamData',
     'RevelationData',
+
+    # Helper key/value types
     'KVItem',
     'kvlist_from_obj',
     'kvdict',
+
+    # Relationship / Inventory helpers
     'RelationshipImpact',
     'InventoryChange',
+
+    # Choice and results
     'ChoiceData',
     'ChoiceProcessingResult',
-    
+
     # Core Models
     'SliceOfLifeEvent',
     'PowerExchange',
     'WorldTension',
     'RelationshipDynamics',
     'NPCRoutine',
-    
+
     # World State
     'CompleteWorldState',
     'WorldState',  # Alias for backwards compatibility
-    
+
     # Pattern Detection
     'EmergentPattern',
     'NarrativeThread',
+
+    'MemorySimilarity',
+    'RelationshipPatternOut',
+    'AddictionPatternOut',
+    'StatPatternOut',
+    'RulePatternOut',
+    'EmergentPatternsResult',
 ]
