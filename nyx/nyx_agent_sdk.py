@@ -2646,7 +2646,8 @@ memory_agent = Agent[NyxContext](
 - Provide relevant context from past interactions
 Be precise and thorough in memory management.""",
     tools=[retrieve_memories, add_memory],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Analysis Agent
@@ -2661,7 +2662,8 @@ analysis_agent = Agent[NyxContext](
 - Maintain awareness of user boundaries
 Be observant and insightful.""",
     tools=[detect_user_revelations, get_user_model_guidance, update_relationship_state],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Emotional Agent - Fixed to update state after calculation
@@ -2677,7 +2679,8 @@ emotional_agent = Agent[NyxContext](
 - ALWAYS use calculate_and_update_emotional_state to persist changes
 Keep emotions contextual and believable.""",
     tools=[calculate_and_update_emotional_state, calculate_emotional_impact],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Visual Agent
@@ -2692,7 +2695,8 @@ visual_agent = Agent[NyxContext](
 - Coordinate with the image generation service
 Be selective and enhance key moments visually.""",
     tools=[decide_image_generation, generate_image_from_scene],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Activity Agent
@@ -2707,7 +2711,8 @@ activity_agent = Agent[NyxContext](
 - Balance difficulty and engagement
 Create engaging, contextual activities.""",
     tools=[get_activity_recommendations],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Performance Agent
@@ -2722,7 +2727,8 @@ performance_agent = Agent[NyxContext](
 - Ensure system health
 Keep the system running efficiently.""",
     tools=[check_performance_metrics],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Scenario Agent
@@ -2745,7 +2751,8 @@ When deciding on time_advancement:
 
 Create engaging, dynamic scenarios.""",
     tools=[detect_conflicts_and_instability],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Belief Agent
@@ -2760,7 +2767,8 @@ belief_agent = Agent[NyxContext](
 - Integrate beliefs into responses
 Keep beliefs coherent and evolving.""",
     tools=[manage_beliefs],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Decision Agent
@@ -2775,7 +2783,8 @@ decision_agent = Agent[NyxContext](
 - Explain decision reasoning
 Make intelligent, contextual decisions.""",
     tools=[score_decision_options],
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Reflection Agent
@@ -2789,7 +2798,8 @@ reflection_agent = Agent[NyxContext](
 - Use first-person from Nyx's perspective
 - Maintain Nyx's dominant personality
 Be thoughtful and concise.""",
-    model="gpt-5-nano"
+    model="gpt-5-nano",
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 # Main Nyx Agent
@@ -2848,7 +2858,7 @@ Remember: You're the HOST, not the story. The story emerges from systems interac
     ],
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=True),
+    model_settings=ModelSettings(strict_tools=False),
 )
 
 log_strict_hits(nyx_main_agent)
@@ -3484,7 +3494,7 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
         ],
         input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
         model="gpt-5-nano",
-        model_settings=ModelSettings(strict_tools=True),  # ← key change
+        model_settings=ModelSettings(strict_tools=False),  # ← key change
     )
 
     log_strict_hits(ag)
