@@ -58,18 +58,16 @@ logger = logging.getLogger(__name__)
 
 # --- BEGIN: global JSON Schema sanitizer for Pydantic v2 & tools ---
 
-def _walk_and_strip_ap(node: Any) -> None:
+def _walk_and_strip_ap(node):
     """
-    Recursively strip flags that OpenAI Agents' strict validator dislikes.
-    Removes additionalProperties / unevaluatedProperties anywhere they appear.
+    Recursively strip flags strict validators dislike.
+    Removes additionalProperties / unevaluatedProperties anywhere.
     """
     if isinstance(node, dict):
-        # Remove flags at any object node
         if node.get("type") == "object":
             node.pop("additionalProperties", None)
             node.pop("unevaluatedProperties", None)
 
-        # Recurse common schema containers
         for key in ("properties", "$defs", "definitions", "patternProperties"):
             sub = node.get(key)
             if isinstance(sub, dict):
@@ -89,7 +87,6 @@ def _walk_and_strip_ap(node: Any) -> None:
             elif isinstance(sub, dict):
                 _walk_and_strip_ap(sub)
 
-        # Also walk any remaining dict values (covers edge cases)
         for v in list(node.values()):
             _walk_and_strip_ap(v)
 
@@ -97,45 +94,42 @@ def _walk_and_strip_ap(node: Any) -> None:
         for item in node:
             _walk_and_strip_ap(item)
 
-def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+def sanitize_json_schema(schema: dict) -> dict:
     s = copy.deepcopy(schema)
     _walk_and_strip_ap(s)
     return s
 
-def enable_openai_schema_sanitizer() -> None:
-    """
-    Monkey-patch Pydantic BaseModel.model_json_schema so *every* model
-    (including nested $defs) exports a schema without additionalProperties.
-    Runtime validation (extra='forbid') is unchanged.
-    """
-    _orig = _PydanticBaseModel.model_json_schema
+# Patch the Agents SDK so every tool schema is sanitized at definition time.
+try:
+    import agents.function_schema as _af
+    import agents.tool as _at
 
-    def _patched(cls, *args, **kwargs):  # type: ignore[override]
-        raw = _orig(cls, *args, **kwargs)
-        return sanitize_json_schema(raw)
+    _ORIG_FUNCTION_SCHEMA = _af.function_schema
 
-    _PydanticBaseModel.model_json_schema = classmethod(_patched)  # type: ignore[assignment]
+    def _sanitizing_function_schema(func, *args, **kwargs):
+        sch = _ORIG_FUNCTION_SCHEMA(func, *args, **kwargs)
+        return sanitize_json_schema(sch)
 
-# Activate immediately (do this before tools/agents are built)
-enable_openai_schema_sanitizer()
+    # Replace in both places the SDK might call it
+    _af.function_schema = _sanitizing_function_schema
+    _at.function_schema = _sanitizing_function_schema
+    logger.debug("Patched agents.function_schema for strict schema sanitization.")
+except Exception:
+    logger.exception("Failed to patch agents.function_schema; continuing without strict sanitizer")
+
+
 
 # --- END: global JSON Schema sanitizer for Pydantic v2 & tools ---
 
+from pydantic import BaseModel as _PydanticBaseModel, Field, ConfigDict
+
 class BaseModel(_PydanticBaseModel):
-    """
-    Pydantic v2-compatible BaseModel that:
-    - Forbids extra keys at runtime (strict)
-    - Strips additionalProperties/unevaluatedProperties from JSON Schema (for strict tool validators)
-    """
-    # Runtime behavior: reject unexpected fields
-    model_config = ConfigDict(extra='forbid')
-    
-    # JSON Schema emitter hook (Pydantic v2)
+    model_config = ConfigDict(extra="forbid")
+
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
         schema = handler(core_schema)
-        _strip_additional_properties(schema)
-        return schema
+        return sanitize_json_schema(schema)
 
 # ===== Utility Types for Strict Schema =====
 
