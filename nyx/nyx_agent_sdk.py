@@ -81,7 +81,7 @@ class BaseModel(_PydanticBaseModel):
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
         schema = handler(core_schema)
-        _strip_additional_props(schema)
+        _strip_additional_properties(schema)
         return schema
 
 # ===== Utility Types for Strict Schema =====
@@ -243,17 +243,114 @@ class ScoredOption(BaseModel):
 
 # ===== Pydantic Models for Structured Outputs =====
 
-def _strip_additional_props(node):
-    """Recursively strip additionalProperties/unevaluatedProperties from schema"""
-    if isinstance(node, dict):
-        # Remove both keys that may appear depending on draft/emitters
-        node.pop("additionalProperties", None)
-        node.pop("unevaluatedProperties", None)
-        for v in node.values():
-            _strip_additional_props(v)
-    elif isinstance(node, list):
-        for v in node:
-            _strip_additional_props(v)
+def _strip_additional_properties(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively remove `additionalProperties` from any object nodes.
+    This avoids "additionalProperties should not be set for object types"
+    errors under strict tool schemas.
+    """
+    s = copy.deepcopy(schema)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            # kill AP at this level if present
+            if node.get("type") == "object" and "additionalProperties" in node:
+                node.pop("additionalProperties", None)
+            # recurse all values
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    # Most SDKs stick JSONSchema under "parameters"
+    if "parameters" in s:
+        walk(s["parameters"])
+    else:
+        walk(s)
+    return s
+
+def _coerce_tool_to_schema(tool: Any) -> Dict[str, Any]:
+    """
+    Accepts any of:
+      - raw python callable (decorated or not)
+      - agents.FunctionTool (wrapper)
+      - dict schema (already OpenAI/JSONSchema-shaped)
+    Returns a { name, description?, parameters: {...} } dict.
+    """
+    # 1) If it's already a dict-like schema, just sanitize and return
+    if isinstance(tool, dict) and "parameters" in tool:
+        return _strip_additional_properties(tool)
+
+    # 2) Try to unwrap common wrappers to get the underlying function
+    fn = None
+    for attr in ("__wrapped__", "func", "function", "_callable", "_func"):
+        candidate = getattr(tool, attr, None)
+        if callable(candidate):
+            fn = candidate
+            break
+
+    if callable(tool) and getattr(tool, "__name__", None):
+        fn = tool
+
+    # 3) If we found a callable, use function_schema on it
+    if callable(fn):
+        sch = function_schema(fn)
+        return _strip_additional_properties(sch)
+
+    # 4) Some wrappers can emit schema directly
+    for attr in ("to_openai_schema", "to_json_schema", "schema", "openai_schema"):
+        getter = getattr(tool, attr, None)
+        try:
+            maybe = getter() if callable(getter) else getter
+        except Exception:
+            maybe = None
+        if isinstance(maybe, dict) and "parameters" in maybe:
+            return _strip_additional_properties(maybe)
+
+    # 5) Last ditch: minimal stub so we can keep going
+    name = getattr(tool, "name", None) or getattr(tool, "__name__", None) or "anonymous_tool"
+    logger.warning("Falling back to stub schema for tool %r (%s)", tool, name)
+    return {
+        "name": name,
+        "description": "Undocumented tool (auto-generated stub).",
+        "parameters": {"type": "object", "properties": {}},  # no AP
+    }
+
+
+def debug_strict_schema_for_agent(agent: Any, log: logging.Logger = logger) -> None:
+    """
+    Log sanitized tool schemas at DEBUG without throwing if a tool is wrapped.
+    """
+    try:
+        tools: List[Any] = []
+        if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
+            tools = agent.get_all_tools() or []
+        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
+            tools = agent.get_tools() or []
+        else:
+            tools = getattr(agent, "tools", []) or []
+
+        log.debug("[strict] inspecting %d tools on agent %s", len(tools), getattr(agent, "name", agent))
+
+        for i, t in enumerate(tools):
+            try:
+                sch = _coerce_tool_to_schema(t)
+                name = sch.get("name") or getattr(t, "name", f"tool_{i}")
+                log.debug("[strict] tool=%s schema=%s", name, json.dumps(sch, ensure_ascii=False))
+            except Exception as e:
+                # don’t bomb the run; just record and continue
+                name = getattr(t, "name", getattr(t, "__name__", f"tool_{i}"))
+                log.error("Could not inspect tool %s", name, exc_info=True)
+    except Exception:
+        log.exception("debug_strict_schema_for_agent: top-level failure")
+
+
+def log_strict_hits(agent: Any) -> None:
+    """
+    Backwards-compatible alias used elsewhere in your code.
+    """
+    debug_strict_schema_for_agent(agent, logger)
 
 # Keep a StrictBaseModel alias for compatibility
 class StrictBaseModel(BaseModel):
