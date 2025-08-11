@@ -59,44 +59,136 @@ logger = logging.getLogger(__name__)
 
 # --- BEGIN: global JSON Schema sanitizer for Pydantic v2 & tools ---
 
-def _nyx_walk_and_strip_ap(node):
+def _nyx_walk_and_strip_ap(node, path="$", removed_locations=None):
+    """Walk schema and strip additionalProperties, tracking where they were found."""
+    if removed_locations is None:
+        removed_locations = []
+        
     if isinstance(node, dict):
-        if node.get("type") == "object":
-            # Remove flags the OpenAI agent strict validator rejects
+        # Check and remove additionalProperties/unevaluatedProperties
+        if "additionalProperties" in node:
+            removed_locations.append(f"{path}.additionalProperties={node['additionalProperties']}")
             node.pop("additionalProperties", None)
+        if "unevaluatedProperties" in node:
+            removed_locations.append(f"{path}.unevaluatedProperties={node['unevaluatedProperties']}")
             node.pop("unevaluatedProperties", None)
 
-        # recurse typical schema containers
+        # Recurse through typical schema containers
         for key in ("properties", "$defs", "definitions", "patternProperties"):
             sub = node.get(key)
             if isinstance(sub, dict):
-                for v in sub.values():
-                    _nyx_walk_and_strip_ap(v)
+                for k, v in sub.items():
+                    _nyx_walk_and_strip_ap(v, f"{path}.{key}.{k}", removed_locations)
 
         for key in ("items", "prefixItems", "contains", "not"):
             sub = node.get(key)
             if sub is not None:
-                _nyx_walk_and_strip_ap(sub)
+                _nyx_walk_and_strip_ap(sub, f"{path}.{key}", removed_locations)
 
-        for key in ("anyOf", "oneOf", "allOf", "if", "then", "else"):
+        for key in ("anyOf", "oneOf", "allOf"):
             sub = node.get(key)
             if isinstance(sub, list):
-                for v in sub:
-                    _nyx_walk_and_strip_ap(v)
+                for i, v in enumerate(sub):
+                    _nyx_walk_and_strip_ap(v, f"{path}.{key}[{i}]", removed_locations)
             elif isinstance(sub, dict):
-                _nyx_walk_and_strip_ap(sub)
+                _nyx_walk_and_strip_ap(sub, f"{path}.{key}", removed_locations)
+                
+        for key in ("if", "then", "else"):
+            sub = node.get(key)
+            if isinstance(sub, dict):
+                _nyx_walk_and_strip_ap(sub, f"{path}.{key}", removed_locations)
 
-        # walk everything else just in case
-        for v in list(node.values()):
-            _nyx_walk_and_strip_ap(v)
+        # Walk any other dict values
+        for k, v in list(node.items()):
+            if k not in {"properties", "$defs", "definitions", "patternProperties", 
+                        "items", "prefixItems", "contains", "not", 
+                        "anyOf", "oneOf", "allOf", "if", "then", "else", 
+                        "type", "description", "title", "required", "enum", 
+                        "const", "default", "examples", "minimum", "maximum",
+                        "minLength", "maxLength", "pattern", "format"}:
+                if isinstance(v, (dict, list)):
+                    _nyx_walk_and_strip_ap(v, f"{path}.{k}", removed_locations)
 
     elif isinstance(node, list):
-        for item in node:
-            _nyx_walk_and_strip_ap(item)
+        for i, item in enumerate(node):
+            _nyx_walk_and_strip_ap(item, f"{path}[{i}]", removed_locations)
+            
+    return removed_locations
+
+def _check_for_additional_properties(node, path="$", found_locations=None):
+    """Check if additionalProperties still exist in the schema."""
+    if found_locations is None:
+        found_locations = []
+        
+    if isinstance(node, dict):
+        if "additionalProperties" in node:
+            found_locations.append(f"{path}.additionalProperties={node['additionalProperties']}")
+        if "unevaluatedProperties" in node:
+            found_locations.append(f"{path}.unevaluatedProperties={node['unevaluatedProperties']}")
+            
+        for k, v in node.items():
+            if isinstance(v, (dict, list)):
+                _check_for_additional_properties(v, f"{path}.{k}", found_locations)
+                
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            _check_for_additional_properties(item, f"{path}[{i}]", found_locations)
+            
+    return found_locations
 
 def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize JSON schema by removing additionalProperties with detailed logging."""
+    import json
+    import hashlib
+    
+    # Create a schema fingerprint for tracking
+    schema_str = json.dumps(schema, sort_keys=True, default=str)
+    schema_hash = hashlib.md5(schema_str.encode()).hexdigest()[:8]
+    
+    # Get some context about the schema
+    schema_type = schema.get("type", "unknown")
+    schema_title = schema.get("title", schema.get("name", "unnamed"))
+    
+    logger.debug(f"[SCHEMA-{schema_hash}] Sanitizing schema: type={schema_type}, title={schema_title}")
+    
+    # Check for additionalProperties before sanitization
+    before_locations = _check_for_additional_properties(schema)
+    if before_locations:
+        logger.warning(f"[SCHEMA-{schema_hash}] Found additionalProperties BEFORE sanitization at {len(before_locations)} locations:")
+        for loc in before_locations[:5]:  # Log first 5 locations
+            logger.warning(f"  - {loc}")
+        if len(before_locations) > 5:
+            logger.warning(f"  ... and {len(before_locations) - 5} more locations")
+    
+    # Deep copy and sanitize
     s = copy.deepcopy(schema)
-    _nyx_walk_and_strip_ap(s)
+    removed_locations = _nyx_walk_and_strip_ap(s)
+    
+    if removed_locations:
+        logger.info(f"[SCHEMA-{schema_hash}] Removed additionalProperties from {len(removed_locations)} locations:")
+        for loc in removed_locations[:5]:  # Log first 5 removals
+            logger.info(f"  - {loc}")
+        if len(removed_locations) > 5:
+            logger.info(f"  ... and {len(removed_locations) - 5} more locations")
+    
+    # Check for additionalProperties after sanitization
+    after_locations = _check_for_additional_properties(s)
+    if after_locations:
+        logger.error(f"[SCHEMA-{schema_hash}] WARNING: additionalProperties STILL PRESENT after sanitization at {len(after_locations)} locations:")
+        for loc in after_locations:
+            logger.error(f"  - {loc}")
+        
+        # Log a sample of the problematic schema for debugging
+        try:
+            sample = json.dumps(s, indent=2, default=str)
+            if len(sample) > 1000:
+                sample = sample[:1000] + "... (truncated)"
+            logger.error(f"[SCHEMA-{schema_hash}] Problematic schema sample:\n{sample}")
+        except:
+            logger.error(f"[SCHEMA-{schema_hash}] Could not serialize problematic schema")
+    else:
+        logger.debug(f"[SCHEMA-{schema_hash}] Successfully sanitized - no additionalProperties remaining")
+    
     return s
 
 # Patch where the SDK builds output tool schemas (module names vary by SDK version)
@@ -3305,58 +3397,33 @@ async def process_user_input(
             except Exception:
                 logger.exception(f"[{trace_id}] strict-schema preflight logging failed")
 
-        # --- Run agent (with strict-schema retry)
+        # --- Run agent (with strict-schema retry) - CORRECTED SECTION
         async with _log_step("Runner.run", trace_id):
-            def _log_result_meta(result):
-                safe_result_meta = {
-                    "stop_reason": getattr(result, "stop_reason", None),
-                    "status": getattr(result, "status", None),
-                    "tool_calls": getattr(result, "tool_calls", None),
-                }
-                logger.debug(f"[{trace_id}] run meta={_js(safe_result_meta)}")
+            result = await _run_with_strict_retry(
+                agent,
+                user_input,
+                context=nyx_context,
+                run_config=RunConfig(
+                    workflow_name="Nyx Roleplay",
+                    trace_metadata={
+                        "trace_id": trace_id,
+                        "user_id": str(user_id),
+                        "conversation_id": str(conversation_id),
+                    },
+                ),
+                trace_id=trace_id,
+                label="process_user_input"
+            )
+            
+            # Log result metadata
+            safe_result_meta = {
+                "stop_reason": getattr(result, "stop_reason", None),
+                "status": getattr(result, "status", None),
+                "tool_calls": getattr(result, "tool_calls", None),
+            }
+            logger.debug(f"[{trace_id}] run meta={_js(safe_result_meta)}")
 
-            try:
-                result = await Runner.run(
-                    agent,
-                    user_input,
-                    context=nyx_context,
-                    run_config=RunConfig(
-                        workflow_name="Nyx Roleplay",
-                        trace_metadata={
-                            "trace_id": trace_id,
-                            "user_id": str(user_id),
-                            "conversation_id": str(conversation_id),
-                        },
-                    ),
-                )
-                _log_result_meta(result)
-
-            except Exception as e:
-                if _is_strict_schema_error(e):
-                    logger.warning(f"[{trace_id}] strict schema error raised during run; relaxing output and retrying once")
-                    _disable_strict_output(agent)
-
-                    # Try once more
-                    result = await Runner.run(
-                        agent,
-                        user_input,
-                        context=nyx_context,
-                        run_config=RunConfig(
-                            workflow_name="Nyx Roleplay",
-                            trace_metadata={
-                                "trace_id": trace_id,
-                                "user_id": str(user_id),
-                                "conversation_id": str(conversation_id),
-                                "retry_relaxed": "1",
-                            },
-                        ),
-                    )
-                    _log_result_meta(result)
-                else:
-                    logger.exception(f"[{trace_id}] Runner.run failed (non-strict error)")
-                    raise
-
-        # --- Parse output
+        # --- Parse output (continues as before)
         async with _log_step("parse NarrativeResponse", trace_id):
             try:
                 response = result.final_output_as(NarrativeResponse)
@@ -3566,6 +3633,7 @@ async def process_user_input(
                 "generate_image": False,
             },
         }
+
 async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
     # Use a fresh connection, not one from the context
