@@ -275,16 +275,82 @@ def sanitize_agent_tools_in_place(agent):
     except Exception:
         logger.exception("sanitize_agent_tools_in_place failed")
 
+
 def strict_output(model_cls):
     """
-    Convenience: use this when wiring your agent's output_type to ensure the
-    output tool schema is also sanitized.
+    Return the Pydantic model class as-is. Our global JSON-Schema sanitizer
+    already strips additionalProperties/unevaluatedProperties, so we don't
+    need to wrap this in GuardrailFunctionOutput (which is for guardrails).
     """
+    if not inspect.isclass(model_cls):
+        raise TypeError("strict_output expects a Pydantic model class")
     try:
-        return GuardrailFunctionOutput(model=model_cls)
-    except TypeError:
-        # older SDK signature
-        return GuardrailFunctionOutput(pydantic_model=model_cls)
+        # Force schema build once (will be sanitized by our patch)
+        _ = model_cls.model_json_schema()
+        logger.debug("strict_output: schema ready for %s", getattr(model_cls, "__name__", model_cls))
+    except Exception:
+        logger.debug("strict_output: schema build skipped for %r", model_cls, exc_info=True)
+    return model_cls
+
+def _is_strict_schema_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    return (
+        "additionalproperties" in msg
+        or "unevaluatedproperties" in msg
+        or "strict schema" in msg
+        or "should not be set for object types" in msg
+    )
+
+
+def _disable_strict_output(agent):
+    """
+    Best-effort: relax structured output on the agent so a retry can succeed
+    even if the SDK emitted a too-strict schema.
+    """
+    for attr in ("output_type", "output", "structured_output", "guardrail_output", "tool_output"):
+        if hasattr(agent, attr):
+            try:
+                setattr(agent, attr, None)
+            except Exception:
+                pass
+    setattr(agent, "_nyx_relaxed_output", True)
+
+
+async def _run_with_strict_retry(
+    agent,
+    input_data,
+    *,
+    context,
+    run_config: RunConfig | None = None,
+    trace_id: str | None = None,
+    label: str | None = None,
+):
+    # sanitize tools that may have been built before our patches
+    try:
+        sanitize_agent_tools_in_place(agent)
+    except Exception:
+        logger.debug("sanitize_agent_tools_in_place: skipped", exc_info=True)
+
+    try:
+        return await Runner.run(agent, input_data, context=context, run_config=run_config)
+    except Exception as e:
+        if not _is_strict_schema_error(e):
+            raise
+        logger.warning(f"[{trace_id or '-'}] strict schema error in {label or 'Runner.run'}; relaxing & retrying once")
+        _disable_strict_output(agent)
+        try:
+            sanitize_agent_tools_in_place(agent)
+        except Exception:
+            pass
+
+        # tag retry if possible
+        if run_config and getattr(run_config, "trace_metadata", None) is not None:
+            try:
+                run_config.trace_metadata["retry_relaxed"] = "1"
+            except Exception:
+                pass
+
+        return await Runner.run(agent, input_data, context=context, run_config=run_config)
 
 def _log_agent_tool_schemas(agent, level=logging.DEBUG):
     try:
