@@ -31,6 +31,7 @@ import json
 import asyncio
 import os
 import time
+import copy
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 from dataclasses import dataclass, field
