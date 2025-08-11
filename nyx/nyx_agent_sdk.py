@@ -42,6 +42,7 @@ from agents import (
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
+from agents.function_schema import function_schema
 from pydantic import BaseModel as _PydanticBaseModel, Field, ValidationError, ConfigDict
 import inspect  # Required by debug_strict_schema_for_agent
 
@@ -55,6 +56,17 @@ from .response_filter import ResponseFilter
 from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
+
+
+def log_strict_hits(agent):
+    for t in agent.tools or []:
+        try:
+            s = function_schema(t)  # returns { "name", "description", "parameters": { ... } }
+            params = s.get("parameters") or {}
+            if "additionalProperties" in json.dumps(params):
+                logger.error("Tool %s has additionalProperties somewhere", getattr(t, "name", t))
+        except Exception:
+            logger.exception("Could not inspect tool %s", getattr(t, "name", t))
 
 class BaseModel(_PydanticBaseModel):
     """
@@ -2839,6 +2851,8 @@ Remember: You're the HOST, not the story. The story emerges from systems interac
     model_settings=ModelSettings(strict_tools=True),
 )
 
+log_strict_hits(nyx_main_agent)
+
 # ===== Main Functions (maintaining original signatures) =====
 
 async def initialize_agents():
@@ -3472,6 +3486,8 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
         model="gpt-5-nano",
         model_settings=ModelSettings(strict_tools=True),  # ← key change
     )
+
+    log_strict_hits(ag)
 
     # Minimal preflight logging so you can verify the flag is actually off
     try:
