@@ -1,19 +1,46 @@
 # main.py
 
 import os
-import logging
-import time
 import sys
+import logging
+import logging.config  # <-- new
+import time
 import json
-from redis import asyncio as redis_async
-import asyncio
 from typing import Dict, Any, Optional
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+# ---- Logging setup (flip with LOG_LEVEL env var) ---------------------
+def setup_logging(level: str | None = None) -> None:
+    lvl = (level or "DEBUG").upper()
+    logging.config.dictConfig({
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "std": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+                "formatter": "std",
+                "level": lvl,
+            }
+        },
+        "root": {"level": lvl, "handlers": ["console"]},
+        "loggers": {
+            # keep chatty deps saner
+            "httpx": {"level": os.getenv("HTTPX_LOG_LEVEL", "INFO")},
+            "engineio": {"level": os.getenv("ENGINEIO_LOG_LEVEL", "INFO")},
+            "socketio": {"level": os.getenv("SOCKETIO_LOG_LEVEL", "INFO")},
+            "aioprometheus": {"level": "INFO"},
+            "asyncio": {"level": "INFO"},
+        },
+    })
+
+setup_logging(os.getenv("LOG_LEVEL", "DEBUG"))
+# ---------------------------------------------------------------------
+
+from redis import asyncio as redis_async
+import asyncio
 
 # quart and related imports
 from quart import Quart, render_template, session, request, jsonify, redirect, Response
@@ -31,11 +58,11 @@ import secrets
 import atexit
 
 # External services
-import asyncpg # Use asyncpg directly where needed
-from redis import Redis # Keep Redis sync for now, unless heavy usage requires 
-from celery import Celery # Keep Celery object import
+import asyncpg
+from redis import Redis
+from celery import Celery
 
-# Blueprint imports (ensure these use asyncpg in their async routes)
+# Blueprint imports ...
 from routes.new_game import new_game_bp
 from routes.player_input import player_input_bp, player_input_root_bp
 from routes.settings_routes import settings_bp
@@ -67,32 +94,29 @@ from logic.chatgpt_integration import build_message_history
 from routes.ai_image_generator import init_app as init_image_routes, generate_roleplay_image_from_gpt
 from routes.chatgpt_routes import init_app as init_chat_routes
 from logic.gpt_image_decision import should_generate_image_for_response
-# from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
 from middleware.security import validate_input
 
 # Nyx integration
-from logic.nyx_enhancements_integration import initialize_nyx_memory_system # Keep this async
+from logic.nyx_enhancements_integration import initialize_nyx_memory_system
 from nyx.integrate import get_central_governance
 from logic.conflict_system.conflict_integration import register_enhanced_integration
 
-# DB connection helper - CRITICAL: Ensure these work with asyncpg pool
+# DB connection helper
 from db.connection import (
-    initialize_connection_pool, # Async function
-    close_connection_pool, # Async function
-    get_db_connection_context # Async context manager
+    initialize_connection_pool,
+    close_connection_pool,
+    get_db_connection_context,
 )
 
 from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
 
 # Middleware
-from middleware.rate_limiting import rate_limit, async_ip_block_middleware # Use the async IP block
-from middleware.validation import validate_request 
+from middleware.rate_limiting import rate_limit, async_ip_block_middleware
+from middleware.validation import validate_request
 
 from logic.aggregator_sdk import init_singletons
 
 logger = logging.getLogger(__name__)
-
-logging.basicConfig(level=logging.INFO)
 
 # Database DSN
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
