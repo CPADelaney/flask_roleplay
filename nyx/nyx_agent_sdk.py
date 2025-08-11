@@ -58,55 +58,43 @@ logger = logging.getLogger(__name__)
 
 # --- BEGIN: global JSON Schema sanitizer for Pydantic v2 & tools ---
 
-def _walk_and_strip_ap(node):
-    """Remove additionalProperties/unevaluatedProperties anywhere in a JSON schema tree."""
+def _nyx_walk_and_strip_ap(node):
     if isinstance(node, dict):
         if node.get("type") == "object":
             node.pop("additionalProperties", None)
             node.pop("unevaluatedProperties", None)
-        # common containers
+
         for key in ("properties", "$defs", "definitions", "patternProperties"):
             sub = node.get(key)
             if isinstance(sub, dict):
                 for v in sub.values():
-                    _walk_and_strip_ap(v)
+                    _nyx_walk_and_strip_ap(v)
+
         for key in ("items", "prefixItems", "contains", "not"):
             sub = node.get(key)
             if sub is not None:
-                _walk_and_strip_ap(sub)
+                _nyx_walk_and_strip_ap(sub)
+
         for key in ("anyOf", "oneOf", "allOf", "if", "then", "else"):
             sub = node.get(key)
             if isinstance(sub, list):
                 for v in sub:
-                    _walk_and_strip_ap(v)
+                    _nyx_walk_and_strip_ap(v)
             elif isinstance(sub, dict):
-                _walk_and_strip_ap(sub)
-        # sweep anything else
+                _nyx_walk_and_strip_ap(sub)
+
+        # Walk any remaining dict values (covers edge cases)
         for v in list(node.values()):
-            _walk_and_strip_ap(v)
+            _nyx_walk_and_strip_ap(v)
+
     elif isinstance(node, list):
         for item in node:
-            _walk_and_strip_ap(item)
+            _nyx_walk_and_strip_ap(item)
 
-def _sanitize(schema: dict) -> dict:
+def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     s = copy.deepcopy(schema)
-    _walk_and_strip_ap(s)
+    _nyx_walk_and_strip_ap(s)
     return s
-
-# Patch where the SDK builds function tool schemas
-try:
-    import agents.function_schema as _af
-    import agents.tool as _at
-    _ORIG_FUNC_SCHEMA = _af.function_schema
-
-    def _sanitizing_function_schema(func, *args, **kwargs):
-        return _sanitize(_ORIG_FUNC_SCHEMA(func, *args, **kwargs))
-
-    _af.function_schema = _sanitizing_function_schema
-    _at.function_schema = _sanitizing_function_schema  # some SDK code imports from tool
-    logger.debug("Patched agents.function_schema for strict JSON schema.")
-except Exception:
-    logger.exception("Could not patch function tool schema generator")
 
 # Patch where the SDK builds output tool schemas (module names vary by SDK version)
 def _try_patch_output_schema():
@@ -167,7 +155,7 @@ def sanitize_agent_tools_in_place(agent):
 from pydantic import BaseModel as _PydanticBaseModel, Field, ConfigDict
 
 class BaseModel(_PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra='forbid')
 
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
