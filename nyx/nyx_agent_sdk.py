@@ -2870,185 +2870,264 @@ async def initialize_agents():
     # Initialization handled per-request in process_user_input
     pass
 
+import time
+import uuid
+import json
+import logging
+from contextlib import asynccontextmanager
+from typing import Dict, Any, Optional
+
+logger = logging.getLogger("nyx.runtime")
+
+def _preview(text: Optional[str], n: int = 240) -> str:
+    if not text:
+        return ""
+    cleaned = " ".join(str(text).split())
+    return cleaned[:n] + ("…" if len(cleaned) > n else "")
+
+def _js(obj: Any) -> str:
+    try:
+        return json.dumps(obj, ensure_ascii=False, default=str)
+    except Exception:
+        return f"<unserializable:{type(obj).__name__}>"
+
+@asynccontextmanager
+async def _log_step(name: str, trace_id: str, **meta):
+    t0 = time.time()
+    logger.debug(f"[{trace_id}] ▶ START {name} meta={_js(meta)}")
+    try:
+        yield
+        dt = time.time() - t0
+        logger.info(f"[{trace_id}] ✔ DONE  {name} in {dt:.3f}s")
+    except Exception:
+        dt = time.time() - t0
+        logger.exception(f"[{trace_id}] ✖ FAIL  {name} after {dt:.3f}s meta={_js(meta)}")
+        raise
+
 async def process_user_input(
     user_id: int,
     conversation_id: int,
     user_input: str,
     context_data: Dict[str, Any] = None
 ) -> Dict[str, Any]:
-    """Process user input and generate Nyx's response"""
+    """Process user input and generate Nyx's response (instrumented)."""
+    trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
     nyx_context = None
+
+    logger.info(
+        f"[{trace_id}] process_user_input begin "
+        f"user_id={user_id} conversation_id={conversation_id} "
+        f"user_input_preview={_preview(user_input)}"
+    )
 
     try:
         from story_agent.world_director_agent import CompleteWorldDirector  # noqa: F401
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator  # noqa: F401
 
-        # Create and initialize context
-        nyx_context = NyxContext(user_id, conversation_id)
-        await nyx_context.initialize()
-        nyx_context.current_context = context_data or {}
-        nyx_context.current_context["user_input"] = user_input
+        # --- Create & initialize context
+        async with _log_step("init NyxContext", trace_id):
+            nyx_context = NyxContext(user_id, conversation_id)
+            await nyx_context.initialize()
+            nyx_context.current_context = (context_data or {}).copy()
+            nyx_context.current_context["user_input"] = user_input
 
-        # Integrate world systems
-        world_state = await nyx_context.world_director.context.current_world_state
-        nyx_context.current_world_state = world_state
-        nyx_context.current_context.update({
-            "world_mood": getattr(world_state.world_mood, "value", None),
-            "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
-            "ongoing_events": [getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])],
-            "available_activities": [getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])],
-            "npc_schedules": getattr(world_state, 'npc_schedules', None),
-        })
+        # --- Integrate world systems
+        async with _log_step("hydrate world_state", trace_id):
+            world_state = await nyx_context.world_director.context.current_world_state
+            nyx_context.current_world_state = world_state
+            nyx_context.current_context.update({
+                "world_mood": getattr(world_state.world_mood, "value", None),
+                "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
+                "ongoing_events": [getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])],
+                "available_activities": [getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])],
+                "npc_schedules": getattr(world_state, 'npc_schedules', None),
+            })
+            logger.debug(f"[{trace_id}] world context={_js({k: nyx_context.current_context.get(k) for k in ('world_mood','time_of_day')})}")
 
-        # Process through world simulation first
-        world_response = await nyx_context.slice_of_life_narrator.process_player_input(user_input)
-        nyx_context.current_context["world_response"] = world_response
+        # --- World sim first
+        async with _log_step("world simulation", trace_id, input_preview=_preview(user_input)):
+            world_response = await nyx_context.slice_of_life_narrator.process_player_input(user_input)
+            nyx_context.current_context["world_response"] = world_response
+            logger.debug(f"[{trace_id}] world_response_preview={_preview(str(world_response))}")
 
-        # Extract system prompt if provided
-        system_prompt = (context_data or {}).get("system_prompt", "")
-        private_reflection = (context_data or {}).get("private_reflection", "")
+        # --- Agent selection
+        async with _log_step("select agent", trace_id):
+            system_prompt = (context_data or {}).get("system_prompt", "")
+            private_reflection = (context_data or {}).get("private_reflection", "")
+            if system_prompt:
+                agent = await create_nyx_agent_with_prompt(system_prompt, private_reflection)
+                logger.debug(f"[{trace_id}] using dynamic agent with system_prompt_preview={_preview(system_prompt)}")
+            else:
+                agent = nyx_main_agent
+                logger.debug(f"[{trace_id}] using default nyx_main_agent")
 
-        # Pick agent
-        if system_prompt:
-            agent = await create_nyx_agent_with_prompt(system_prompt, private_reflection)
-        else:
-            agent = nyx_main_agent
+            try:
+                debug_strict_schema_for_agent(agent, logger)
+            except Exception:
+                logger.exception(f"[{trace_id}] strict-schema preflight logging failed")
 
-        try:
-            debug_strict_schema_for_agent(agent, logger)
-        except Exception:
-            logger.exception("strict-schema preflight logging failed")
-
-        # Run the agent
-        result = await Runner.run(
-            agent,
-            user_input,
-            context=nyx_context,
-            run_config=RunConfig(
-                workflow_name="Nyx Roleplay",
-                trace_metadata={
-                    "user_id": str(user_id),
-                    "conversation_id": str(conversation_id),
-                },
-            ),
-        )
-
-        # Prefer structured output; fall back to raw text
-        try:
-            response = result.final_output_as(NarrativeResponse)
-        except Exception:
-            raw_text = (
-                getattr(result, "output_text", None)
-                or getattr(result, "completion_text", None)
-                or (getattr(getattr(result, "response", None), "output_text", None))
-                or ""
+        # --- Run agent
+        async with _log_step("Runner.run", trace_id):
+            result = await Runner.run(
+                agent,
+                user_input,
+                context=nyx_context,
+                run_config=RunConfig(
+                    workflow_name="Nyx Roleplay",
+                    trace_metadata={
+                        "trace_id": trace_id,
+                        "user_id": str(user_id),
+                        "conversation_id": str(conversation_id),
+                    },
+                ),
             )
-            response = NarrativeResponse(
-                narrative=raw_text or "…",
-                tension_level=0,
-                generate_image=False,
-                image_prompt=None,
-                environment_description=None,
-                time_advancement=False,
-                universal_updates=None,
-                world_mood=nyx_context.current_context.get("world_mood"),
-                ongoing_events=nyx_context.current_context.get("ongoing_events"),
-                available_activities=nyx_context.current_context.get("available_activities"),
-                npc_schedules=dict_to_kvlist(nyx_context.current_context.get("npc_schedules") or {}),
-                time_of_day=nyx_context.current_context.get("time_of_day"),
-                emergent_opportunities=None,
-            )
+            # Log a few safe fields from the result if present
+            safe_result_meta = {
+                "stop_reason": getattr(result, "stop_reason", None),
+                "status": getattr(result, "status", None),
+                "tool_calls": getattr(result, "tool_calls", None),
+            }
+            logger.debug(f"[{trace_id}] run meta={_js(safe_result_meta)}")
 
-        # Ensure we have something to show the user (tool-only runs can be empty otherwise)
+        # --- Parse output
+        async with _log_step("parse NarrativeResponse", trace_id):
+            try:
+                response = result.final_output_as(NarrativeResponse)
+                parsed_from = "structured"
+            except Exception:
+                raw_text = (
+                    getattr(result, "output_text", None)
+                    or getattr(result, "completion_text", None)
+                    or (getattr(getattr(result, "response", None), "output_text", None))
+                    or ""
+                )
+                response = NarrativeResponse(
+                    narrative=raw_text or "…",
+                    tension_level=0,
+                    generate_image=False,
+                    image_prompt=None,
+                    environment_description=None,
+                    time_advancement=False,
+                    universal_updates=None,
+                    world_mood=nyx_context.current_context.get("world_mood"),
+                    ongoing_events=nyx_context.current_context.get("ongoing_events"),
+                    available_activities=nyx_context.current_context.get("available_activities"),
+                    npc_schedules=dict_to_kvlist(nyx_context.current_context.get("npc_schedules") or {}),
+                    time_of_day=nyx_context.current_context.get("time_of_day"),
+                    emergent_opportunities=None,
+                )
+                parsed_from = "fallback"
+            logger.info(f"[{trace_id}] response parsed via={parsed_from} narrative_preview={_preview(response.narrative)}")
+
+        # Ensure not empty
         if not response.narrative:
+            logger.warning(f"[{trace_id}] empty narrative; substituting ellipsis")
             response.narrative = "…"
 
-        # Fire-and-forget universal updates if missing; don't block the reply
-        if response.narrative and not nyx_context.current_context.get("universal_updates"):
+        # --- Fire-and-forget universal updates
+        async with _log_step("schedule universal updates", trace_id):
+            if response.narrative and not nyx_context.current_context.get("universal_updates"):
+                try:
+                    wrapper = RunContextWrapper(context=nyx_context)
+                    asyncio.create_task(generate_universal_updates_impl(wrapper, response.narrative))
+                    logger.debug(f"[{trace_id}] universal updates scheduled")
+                except Exception:
+                    logger.exception(f"[{trace_id}] failed to schedule universal updates")
+
+        # --- Extract universal updates
+        uu: Dict[str, Any] = {}
+        val = nyx_context.current_context.get("universal_updates")
+        if isinstance(val, dict):
+            uu = val
+        logger.debug(f"[{trace_id}] universal_updates_keys={list(uu.keys()) if uu else []}")
+
+        # --- Optional response filtering
+        async with _log_step("response_filter", trace_id):
+            if getattr(nyx_context, "response_filter", None) and response.narrative:
+                try:
+                    before = response.narrative
+                    response.narrative = await nyx_context.response_filter.filter_response(
+                        response.narrative, nyx_context.current_context
+                    )
+                    logger.debug(f"[{trace_id}] response filtered changed={before != response.narrative}")
+                except Exception:
+                    logger.exception(f"[{trace_id}] response_filter failed; using unfiltered narrative")
+
+        # --- Optional task generation
+        async with _log_step("task_generation", trace_id):
             try:
-                wrapper = RunContextWrapper(context=nyx_context)
-                asyncio.create_task(generate_universal_updates_impl(wrapper, response.narrative))
+                if nyx_context.should_generate_task():
+                    task_result = await nyx_context.task_integration.generate_creative_task(
+                        nyx_context,
+                        npc_id=nyx_context.current_context.get("active_npc_id"),
+                        scenario_id=nyx_context.current_context.get("scenario_id"),
+                    )
+                    if task_result.get("success"):
+                        response.narrative += f"\n\n[New Task: {task_result['task']['name']}]"
+                        nyx_context.active_tasks.append(task_result["task"])
+                        nyx_context.record_task_run("task_generation")
+                        logger.info(f"[{trace_id}] task generated name={task_result['task'].get('name')}")
             except Exception:
-                logger.exception("Failed to schedule auto-generation of universal updates")
+                logger.exception(f"[{trace_id}] task generation failed")
 
-        # Extract universal updates (may still be empty if running in background)
-        universal_updates_dict: Dict[str, Any] = {}
-        uu = nyx_context.current_context.get("universal_updates")
-        if isinstance(uu, dict):
-            universal_updates_dict = uu
-
-        # Optional response filtering
-        if getattr(nyx_context, "response_filter", None) and response.narrative:
+        # --- Store interaction in memory (best-effort)
+        async with _log_step("memory write", trace_id):
             try:
-                response.narrative = await nyx_context.response_filter.filter_response(
-                    response.narrative, nyx_context.current_context
+                await nyx_context.memory_system.remember(
+                    entity_type="integrated",
+                    entity_id=0,
+                    memory_text=f"User: {user_input}\nNyx: {response.narrative}",
+                    importance="medium",
+                    emotional=True,
+                    tags=["interaction", "conversation"],
+                )
+                logger.debug(f"[{trace_id}] memory write ok")
+            except Exception:
+                logger.exception(f"[{trace_id}] memory write failed")
+
+        # --- Learning signals (best-effort)
+        async with _log_step("learn_from_interaction", trace_id):
+            try:
+                await nyx_context.learn_from_interaction(
+                    action="response",
+                    outcome=f"tension_{response.tension_level}",
+                    success=True,
                 )
             except Exception:
-                logger.exception("response_filter failed; using unfiltered narrative")
+                logger.exception(f"[{trace_id}] learn_from_interaction failed")
 
-        # Optional task generation
-        try:
-            if nyx_context.should_generate_task():
-                task_result = await nyx_context.task_integration.generate_creative_task(
-                    nyx_context,
-                    npc_id=nyx_context.current_context.get("active_npc_id"),
-                    scenario_id=nyx_context.current_context.get("scenario_id"),
-                )
-                if task_result.get("success"):
-                    response.narrative += f"\n\n[New Task: {task_result['task']['name']}]"
-                    nyx_context.active_tasks.append(task_result["task"])
-                    nyx_context.record_task_run("task_generation")
-        except Exception:
-            logger.exception("Task generation failed")
-
-        # Store the interaction in memory (best-effort)
-        try:
-            await nyx_context.memory_system.remember(
-                entity_type="integrated",
-                entity_id=0,
-                memory_text=f"User: {user_input}\nNyx: {response.narrative}",
-                importance="medium",
-                emotional=True,
-                tags=["interaction", "conversation"],
-            )
-        except Exception:
-            logger.exception("Memory write failed")
-
-        # Learning signals (best-effort)
-        try:
-            await nyx_context.learn_from_interaction(
-                action="response",
-                outcome=f"tension_{response.tension_level}",
-                success=True,
-            )
-        except Exception:
-            logger.exception("learn_from_interaction failed")
-
-        # Performance metrics
+        # --- Performance metrics
         response_time = time.time() - start_time
+        async with _log_step("update_performance", trace_id, response_time=response_time):
+            try:
+                nyx_context.update_performance("response_times", response_time)
+                nyx_context.update_performance(
+                    "total_actions", nyx_context.performance_metrics["total_actions"] + 1
+                )
+                nyx_context.update_performance(
+                    "successful_actions",
+                    nyx_context.performance_metrics["successful_actions"] + 1,
+                )
+            except Exception:
+                logger.exception(f"[{trace_id}] update_performance failed")
+
+        # --- Token usage (optional)
+        tokens_used = {}
         try:
-            nyx_context.update_performance("response_times", response_time)
-            nyx_context.update_performance(
-                "total_actions", nyx_context.performance_metrics["total_actions"] + 1
-            )
-            nyx_context.update_performance(
-                "successful_actions",
-                nyx_context.performance_metrics["successful_actions"] + 1,
-            )
+            tokens_used = extract_token_usage(result)
+            logger.info(f"[{trace_id}] tokens_used={_js(tokens_used)}")
         except Exception:
-            logger.exception("update_performance failed")
+            logger.exception(f"[{trace_id}] extract_token_usage failed")
 
-        # Token usage (optional helper)
-        tokens_used = extract_token_usage(result)
+        # --- Persist context (best-effort)
+        async with _log_step("_save_context_state", trace_id):
+            try:
+                await _save_context_state(nyx_context)
+            except Exception:
+                logger.exception(f"[{trace_id}] _save_context_state failed")
 
-        # Persist context (best-effort)
-        try:
-            await _save_context_state(nyx_context)
-        except Exception:
-            logger.exception("_save_context_state failed")
-
-        return {
+        payload = {
             "success": True,
             "response": {
                 "narrative": response.narrative,
@@ -3057,7 +3136,7 @@ async def process_user_input(
                 "image_prompt": response.image_prompt,
                 "environment_update": response.environment_description,
                 "time_advancement": response.time_advancement,
-                "universal_updates": universal_updates_dict,  # May be empty if updater is still running
+                "universal_updates": uu,
                 "world_mood": response.world_mood,
                 "ongoing_events": response.ongoing_events,
                 "available_activities": response.available_activities,
@@ -3080,8 +3159,11 @@ async def process_user_input(
             },
         }
 
+        logger.info(f"[{trace_id}] process_user_input success in {time.time() - start_time:.3f}s")
+        return payload
+
     except ValidationError as e:
-        logger.error(f"Validation error in agent response: {e}")
+        logger.error(f"[{trace_id}] Validation error in agent response: {e}")
         return {
             "success": False,
             "error": "Response validation error",
@@ -3093,7 +3175,7 @@ async def process_user_input(
         }
 
     except Exception as e:
-        logger.error(f"Error processing user input: {e}")
+        logger.error(f"[{trace_id}] Error processing user input: {e}")
         if nyx_context is not None and hasattr(nyx_context, "performance_metrics"):
             try:
                 nyx_context.update_performance(
@@ -3102,12 +3184,12 @@ async def process_user_input(
                 nyx_context.update_performance(
                     "failed_actions", nyx_context.performance_metrics["failed_actions"] + 1
                 )
-                nyx_context.log_error(e, {"user_input": user_input})
+                nyx_context.log_error(e, {"user_input_preview": _preview(user_input)})
                 await nyx_context.learn_from_interaction(
                     action="response", outcome="error", success=False
                 )
             except Exception:
-                logger.exception("error-path metrics/logging failed")
+                logger.exception(f"[{trace_id}] error-path metrics/logging failed")
 
         return {
             "success": False,
