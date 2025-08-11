@@ -59,26 +59,21 @@ logger = logging.getLogger(__name__)
 # --- BEGIN: global JSON Schema sanitizer for Pydantic v2 & tools ---
 
 def _walk_and_strip_ap(node):
-    """
-    Recursively strip flags strict validators dislike.
-    Removes additionalProperties / unevaluatedProperties anywhere.
-    """
+    """Remove additionalProperties/unevaluatedProperties anywhere in a JSON schema tree."""
     if isinstance(node, dict):
         if node.get("type") == "object":
             node.pop("additionalProperties", None)
             node.pop("unevaluatedProperties", None)
-
+        # common containers
         for key in ("properties", "$defs", "definitions", "patternProperties"):
             sub = node.get(key)
             if isinstance(sub, dict):
                 for v in sub.values():
                     _walk_and_strip_ap(v)
-
         for key in ("items", "prefixItems", "contains", "not"):
             sub = node.get(key)
             if sub is not None:
                 _walk_and_strip_ap(sub)
-
         for key in ("anyOf", "oneOf", "allOf", "if", "then", "else"):
             sub = node.get(key)
             if isinstance(sub, list):
@@ -86,36 +81,84 @@ def _walk_and_strip_ap(node):
                     _walk_and_strip_ap(v)
             elif isinstance(sub, dict):
                 _walk_and_strip_ap(sub)
-
+        # sweep anything else
         for v in list(node.values()):
             _walk_and_strip_ap(v)
-
     elif isinstance(node, list):
         for item in node:
             _walk_and_strip_ap(item)
 
-def sanitize_json_schema(schema: dict) -> dict:
+def _sanitize(schema: dict) -> dict:
     s = copy.deepcopy(schema)
     _walk_and_strip_ap(s)
     return s
 
-# Patch the Agents SDK so every tool schema is sanitized at definition time.
+# Patch where the SDK builds function tool schemas
 try:
     import agents.function_schema as _af
     import agents.tool as _at
-
-    _ORIG_FUNCTION_SCHEMA = _af.function_schema
+    _ORIG_FUNC_SCHEMA = _af.function_schema
 
     def _sanitizing_function_schema(func, *args, **kwargs):
-        sch = _ORIG_FUNCTION_SCHEMA(func, *args, **kwargs)
-        return sanitize_json_schema(sch)
+        return _sanitize(_ORIG_FUNC_SCHEMA(func, *args, **kwargs))
 
-    # Replace in both places the SDK might call it
     _af.function_schema = _sanitizing_function_schema
-    _at.function_schema = _sanitizing_function_schema
-    logger.debug("Patched agents.function_schema for strict schema sanitization.")
+    _at.function_schema = _sanitizing_function_schema  # some SDK code imports from tool
+    logger.debug("Patched agents.function_schema for strict JSON schema.")
 except Exception:
-    logger.exception("Failed to patch agents.function_schema; continuing without strict sanitizer")
+    logger.exception("Could not patch function tool schema generator")
+
+# Patch where the SDK builds output tool schemas (module names vary by SDK version)
+def _try_patch_output_schema():
+    patched_any = False
+    candidates = [
+        ("agents.output_schema", "model_to_openai_schema"),
+        ("agents.output_schema", "pydantic_to_openai_schema"),
+        ("agents.outputs", "model_to_openai_schema"),
+        ("agents.outputs", "build_output_tool_parameters"),
+        ("agents.output_tool", "build_output_tool_parameters"),
+    ]
+    for mod_name, fn_name in candidates:
+        try:
+            mod = __import__(mod_name, fromlist=[fn_name])
+            orig = getattr(mod, fn_name, None)
+            if callable(orig):
+                def _wrap(*a, __orig=orig, **k):
+                    return _sanitize(__orig(*a, **k))
+                setattr(mod, fn_name, _wrap)
+                logger.debug("Patched %s.%s for strict JSON schema.", mod_name, fn_name)
+                patched_any = True
+        except Exception:
+            # best-effort; some modules won’t exist depending on SDK version
+            continue
+    if not patched_any:
+        logger.warning("Could not find an output schema builder to patch; "
+                       "if errors persist, we’ll sanitize tools directly on the agent.")
+
+_try_patch_output_schema()
+
+# Safety: sanitize tool objects returned by the agent just before a run
+def sanitize_agent_tools_in_place(agent):
+    try:
+        tools = []
+        if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
+            tools = agent.get_all_tools() or []
+        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
+            tools = agent.get_tools() or []
+        else:
+            tools = getattr(agent, "tools", []) or []
+
+        for t in tools:
+            # common attributes various wrappers use for their schema
+            for attr in ("parameters", "_parameters", "_schema", "schema", "openai_schema"):
+                val = getattr(t, attr, None)
+                if isinstance(val, dict):
+                    try:
+                        setattr(t, attr, _sanitize(val))
+                    except Exception:
+                        pass
+    except Exception:
+        logger.exception("sanitize_agent_tools_in_place failed")
 
 
 
@@ -3328,6 +3371,331 @@ async def process_user_input(
             },
         }
 
+async def process_user_input(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Process user input and generate Nyx's response (instrumented)."""
+    trace_id = uuid.uuid4().hex[:8]
+    start_time = time.time()
+    nyx_context = None
+
+    logger.info(
+        f"[{trace_id}] process_user_input begin "
+        f"user_id={user_id} conversation_id={conversation_id} "
+        f"user_input_preview={_preview(user_input)}"
+    )
+
+    try:
+        from story_agent.world_director_agent import CompleteWorldDirector  # noqa: F401
+        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator  # noqa: F401
+
+        # --- Create & initialize context
+        async with _log_step("init NyxContext", trace_id):
+            nyx_context = NyxContext(user_id, conversation_id)
+            await nyx_context.initialize()
+            nyx_context.current_context = (context_data or {}).copy()
+            nyx_context.current_context["user_input"] = user_input
+
+        # --- Integrate world systems
+        async with _log_step("hydrate world_state", trace_id):
+            world_state = await nyx_context.world_director.context.current_world_state
+            nyx_context.current_world_state = world_state
+            nyx_context.current_context.update({
+                "world_mood": getattr(world_state.world_mood, "value", None),
+                "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
+                "ongoing_events": [getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])],
+                "available_activities": [getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])],
+                "npc_schedules": getattr(world_state, 'npc_schedules', None),
+            })
+            logger.debug(f"[{trace_id}] world context={_js({k: nyx_context.current_context.get(k) for k in ('world_mood','time_of_day')})}")
+
+        # --- World sim first
+        async with _log_step("world simulation", trace_id, input_preview=_preview(user_input)):
+            world_response = await nyx_context.slice_of_life_narrator.process_player_input(user_input)
+            nyx_context.current_context["world_response"] = world_response
+            logger.debug(f"[{trace_id}] world_response_preview={_preview(str(world_response))}")
+
+        # --- Agent selection
+        async with _log_step("select agent", trace_id):
+            system_prompt = (context_data or {}).get("system_prompt", "")
+            private_reflection = (context_data or {}).get("private_reflection", "")
+            if system_prompt:
+                agent = await create_nyx_agent_with_prompt(system_prompt, private_reflection)
+                logger.debug(f"[{trace_id}] using dynamic agent with system_prompt_preview={_preview(system_prompt)}")
+            else:
+                agent = nyx_main_agent
+                logger.debug(f"[{trace_id}] using default nyx_main_agent")
+
+            # Pre-flight strict schema visibility (doesn't raise)
+            try:
+                debug_strict_schema_for_agent(agent, logger)
+            except Exception:
+                logger.exception(f"[{trace_id}] strict-schema preflight logging failed")
+
+        # --- Run agent (with strict-schema retry)
+        async with _log_step("Runner.run", trace_id):
+            def _log_result_meta(result):
+                safe_result_meta = {
+                    "stop_reason": getattr(result, "stop_reason", None),
+                    "status": getattr(result, "status", None),
+                    "tool_calls": getattr(result, "tool_calls", None),
+                }
+                logger.debug(f"[{trace_id}] run meta={_js(safe_result_meta)}")
+
+            try:
+                result = await Runner.run(
+                    agent,
+                    user_input,
+                    context=nyx_context,
+                    run_config=RunConfig(
+                        workflow_name="Nyx Roleplay",
+                        trace_metadata={
+                            "trace_id": trace_id,
+                            "user_id": str(user_id),
+                            "conversation_id": str(conversation_id),
+                        },
+                    ),
+                )
+                _log_result_meta(result)
+
+            except Exception as e:
+                if _is_strict_schema_error(e):
+                    logger.warning(f"[{trace_id}] strict schema error raised during run; relaxing output and retrying once")
+                    _disable_strict_output(agent)
+
+                    # Try once more
+                    result = await Runner.run(
+                        agent,
+                        user_input,
+                        context=nyx_context,
+                        run_config=RunConfig(
+                            workflow_name="Nyx Roleplay",
+                            trace_metadata={
+                                "trace_id": trace_id,
+                                "user_id": str(user_id),
+                                "conversation_id": str(conversation_id),
+                                "retry_relaxed": "1",
+                            },
+                        ),
+                    )
+                    _log_result_meta(result)
+                else:
+                    logger.exception(f"[{trace_id}] Runner.run failed (non-strict error)")
+                    raise
+
+        # --- Parse output
+        async with _log_step("parse NarrativeResponse", trace_id):
+            try:
+                response = result.final_output_as(NarrativeResponse)
+                parsed_from = "structured"
+            except Exception:
+                raw_text = (
+                    getattr(result, "output_text", None)
+                    or getattr(result, "completion_text", None)
+                    or (getattr(getattr(result, "response", None), "output_text", None))
+                    or ""
+                )
+                response = NarrativeResponse(
+                    narrative=raw_text or "…",
+                    tension_level=0,
+                    generate_image=False,
+                    image_prompt=None,
+                    environment_description=None,
+                    time_advancement=False,
+                    universal_updates=None,
+                    world_mood=nyx_context.current_context.get("world_mood"),
+                    ongoing_events=nyx_context.current_context.get("ongoing_events"),
+                    available_activities=nyx_context.current_context.get("available_activities"),
+                    npc_schedules=dict_to_kvlist(nyx_context.current_context.get("npc_schedules") or {}),
+                    time_of_day=nyx_context.current_context.get("time_of_day"),
+                    emergent_opportunities=None,
+                )
+                parsed_from = "fallback"
+            logger.info(f"[{trace_id}] response parsed via={parsed_from} narrative_preview={_preview(response.narrative)}")
+
+        # Ensure not empty
+        if not response.narrative:
+            logger.warning(f"[{trace_id}] empty narrative; substituting ellipsis")
+            response.narrative = "…"
+
+        # --- Fire-and-forget universal updates
+        async with _log_step("schedule universal updates", trace_id):
+            if response.narrative and not nyx_context.current_context.get("universal_updates"):
+                try:
+                    wrapper = RunContextWrapper(context=nyx_context)
+                    asyncio.create_task(generate_universal_updates_impl(wrapper, response.narrative))
+                    logger.debug(f"[{trace_id}] universal updates scheduled")
+                except Exception:
+                    logger.exception(f"[{trace_id}] failed to schedule universal updates")
+
+        # --- Extract universal updates
+        uu: Dict[str, Any] = {}
+        val = nyx_context.current_context.get("universal_updates")
+        if isinstance(val, dict):
+            uu = val
+        logger.debug(f"[{trace_id}] universal_updates_keys={list(uu.keys()) if uu else []}")
+
+        # --- Optional response filtering
+        async with _log_step("response_filter", trace_id):
+            if getattr(nyx_context, "response_filter", None) and response.narrative:
+                try:
+                    before = response.narrative
+                    response.narrative = await nyx_context.response_filter.filter_response(
+                        response.narrative, nyx_context.current_context
+                    )
+                    logger.debug(f"[{trace_id}] response filtered changed={before != response.narrative}")
+                except Exception:
+                    logger.exception(f"[{trace_id}] response_filter failed; using unfiltered narrative")
+
+        # --- Optional task generation
+        async with _log_step("task_generation", trace_id):
+            try:
+                if nyx_context.should_generate_task():
+                    task_result = await nyx_context.task_integration.generate_creative_task(
+                        nyx_context,
+                        npc_id=nyx_context.current_context.get("active_npc_id"),
+                        scenario_id=nyx_context.current_context.get("scenario_id"),
+                    )
+                    if task_result.get("success"):
+                        response.narrative += f"\n\n[New Task: {task_result['task']['name']}]"
+                        nyx_context.active_tasks.append(task_result["task"])
+                        nyx_context.record_task_run("task_generation")
+                        logger.info(f"[{trace_id}] task generated name={task_result['task'].get('name')}")
+            except Exception:
+                logger.exception(f"[{trace_id}] task generation failed")
+
+        # --- Store interaction in memory (best-effort)
+        async with _log_step("memory write", trace_id):
+            try:
+                await nyx_context.memory_system.remember(
+                    entity_type="integrated",
+                    entity_id=0,
+                    memory_text=f"User: {user_input}\nNyx: {response.narrative}",
+                    importance="medium",
+                    emotional=True,
+                    tags=["interaction", "conversation"],
+                )
+                logger.debug(f"[{trace_id}] memory write ok")
+            except Exception:
+                logger.exception(f"[{trace_id}] memory write failed")
+
+        # --- Learning signals (best-effort)
+        async with _log_step("learn_from_interaction", trace_id):
+            try:
+                await nyx_context.learn_from_interaction(
+                    action="response",
+                    outcome=f"tension_{response.tension_level}",
+                    success=True,
+                )
+            except Exception:
+                logger.exception(f"[{trace_id}] learn_from_interaction failed")
+
+        # --- Performance metrics
+        response_time = time.time() - start_time
+        async with _log_step("update_performance", trace_id, response_time=response_time):
+            try:
+                nyx_context.update_performance("response_times", response_time)
+                nyx_context.update_performance(
+                    "total_actions", nyx_context.performance_metrics["total_actions"] + 1
+                )
+                nyx_context.update_performance(
+                    "successful_actions",
+                    nyx_context.performance_metrics["successful_actions"] + 1,
+                )
+            except Exception:
+                logger.exception(f"[{trace_id}] update_performance failed")
+
+        # --- Token usage (optional)
+        tokens_used = {}
+        try:
+            tokens_used = extract_token_usage(result)
+            logger.info(f"[{trace_id}] tokens_used={_js(tokens_used)}")
+        except Exception:
+            logger.exception(f"[{trace_id}] extract_token_usage failed")
+
+        # --- Persist context (best-effort)
+        async with _log_step("_save_context_state", trace_id):
+            try:
+                await _save_context_state(nyx_context)
+            except Exception:
+                logger.exception(f"[{trace_id}] _save_context_state failed")
+
+        payload = {
+            "success": True,
+            "response": {
+                "narrative": response.narrative,
+                "tension_level": response.tension_level,
+                "generate_image": response.generate_image,
+                "image_prompt": response.image_prompt,
+                "environment_update": response.environment_description,
+                "time_advancement": response.time_advancement,
+                "universal_updates": uu,
+                "world_mood": response.world_mood,
+                "ongoing_events": response.ongoing_events,
+                "available_activities": response.available_activities,
+                "npc_schedules": response.npc_schedules,
+                "time_of_day": response.time_of_day,
+                "emergent_opportunities": response.emergent_opportunities,
+            },
+            "memories_used": [],
+            "performance": {
+                "response_time": response_time,
+                "memory_usage": nyx_context.performance_metrics.get("memory_usage"),
+                "cpu_usage": nyx_context.performance_metrics.get("cpu_usage"),
+                "tokens_used": tokens_used,
+            },
+            "learning": {
+                "patterns_learned": len(getattr(nyx_context, "learned_patterns", [])),
+                "adaptation_success_rate": nyx_context.learning_metrics.get(
+                    "adaptation_success_rate"
+                ),
+            },
+        }
+
+        logger.info(f"[{trace_id}] process_user_input success in {time.time() - start_time:.3f}s")
+        return payload
+
+    except ValidationError as e:
+        logger.error(f"[{trace_id}] Validation error in agent response: {e}")
+        return {
+            "success": False,
+            "error": "Response validation error",
+            "response": {
+                "narrative": "I need to adjust my response format. Let me try again in a moment.",
+                "tension_level": 0,
+                "generate_image": False,
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"[{trace_id}] Error processing user input: {e}")
+        if nyx_context is not None and hasattr(nyx_context, "performance_metrics"):
+            try:
+                nyx_context.update_performance(
+                    "total_actions", nyx_context.performance_metrics["total_actions"] + 1
+                )
+                nyx_context.update_performance(
+                    "failed_actions", nyx_context.performance_metrics["failed_actions"] + 1
+                )
+                nyx_context.log_error(e, {"user_input_preview": _preview(user_input)})
+                await nyx_context.learn_from_interaction(
+                    action="response", outcome="error", success=False
+                )
+            except Exception:
+                logger.exception(f"[{trace_id}] error-path metrics/logging failed")
+
+        return {
+            "success": False,
+            "error": str(e),
+            "response": {
+                "narrative": "I apologize, but I encountered an error processing your request. Please try again.",
+                "tension_level": 0,
+                "generate_image": False,
+            },
+        }
 async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
     # Use a fresh connection, not one from the context
@@ -3972,16 +4340,17 @@ async def process_user_input_with_openai(
     user_id: int,
     conversation_id: int,
     user_input: str,
-    context_data: Dict[str, Any] = None
+    context_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Process user input using the OpenAI integration"""
     return await process_user_input(user_id, conversation_id, user_input, context_data)
+
 
 async def process_user_input_standalone(
     user_id: int,
     conversation_id: int,
     user_input: str,
-    context_data: Dict[str, Any] = None
+    context_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Process user input standalone"""
     return await process_user_input(user_id, conversation_id, user_input, context_data)
