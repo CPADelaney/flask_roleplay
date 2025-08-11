@@ -2856,7 +2856,7 @@ Remember: You're the HOST, not the story. The story emerges from systems interac
         generate_emergent_event,
         simulate_npc_autonomy,
     ],
-    input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
+  #  input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano",
     model_settings=ModelSettings(strict_tools=False),
 )
@@ -3492,7 +3492,7 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
             generate_emergent_event,
             simulate_npc_autonomy,
         ],
-        input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
+#        input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
         model="gpt-5-nano",
         model_settings=ModelSettings(strict_tools=False),  # ← key change
     )
