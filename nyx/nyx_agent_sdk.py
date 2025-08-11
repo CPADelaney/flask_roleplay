@@ -250,12 +250,38 @@ def sanitize_agent_tools_in_place(agent):
 from pydantic import BaseModel as _PydanticBaseModel, Field, ConfigDict
 
 class BaseModel(_PydanticBaseModel):
-    model_config = ConfigDict(extra='forbid')
+    # Don't use extra='forbid' as it adds additionalProperties to the schema
+    model_config = ConfigDict()  # Empty config, no extra='forbid'
+
+    @classmethod
+    def model_json_schema(cls, **kwargs):
+        """Override to ensure no additionalProperties in schema."""
+        schema = super().model_json_schema(**kwargs)
+        # Remove additionalProperties at all levels
+        def strip_ap(obj):
+            if isinstance(obj, dict):
+                # Remove the problematic keys
+                obj.pop('additionalProperties', None)
+                obj.pop('unevaluatedProperties', None)
+                # Recurse
+                for v in obj.values():
+                    strip_ap(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    strip_ap(item)
+            return obj
+        
+        return strip_ap(schema)
 
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
-        raw = handler(core_schema)
-        return sanitize_json_schema(raw)
+        """Override the schema generation to remove additionalProperties."""
+        schema = handler(core_schema)
+        # Don't add additionalProperties at all
+        if isinstance(schema, dict):
+            schema.pop('additionalProperties', None)
+            schema.pop('unevaluatedProperties', None)
+        return schema
 
 
 # ===== Utility Types for Strict Schema =====
@@ -3384,12 +3410,29 @@ async def process_user_input(
         async with _log_step("select agent", trace_id):
             system_prompt = (context_data or {}).get("system_prompt", "")
             private_reflection = (context_data or {}).get("private_reflection", "")
-            if system_prompt:
-                agent = await create_nyx_agent_with_prompt(system_prompt, private_reflection)
-                logger.debug(f"[{trace_id}] using dynamic agent with system_prompt_preview={_preview(system_prompt)}")
-            else:
-                agent = nyx_main_agent
-                logger.debug(f"[{trace_id}] using default nyx_main_agent")
+            
+            try:
+                if system_prompt:
+                    agent = await create_nyx_agent_with_prompt(system_prompt, private_reflection)
+                    logger.debug(f"[{trace_id}] using dynamic agent with system_prompt_preview={_preview(system_prompt)}")
+                else:
+                    agent = nyx_main_agent
+                    logger.debug(f"[{trace_id}] using default nyx_main_agent")
+            except Exception as e:
+                if "additionalProperties" in str(e):
+                    logger.warning(f"[{trace_id}] Agent creation failed due to strict schema, creating fallback agent")
+                    # Create a simple fallback agent without structured output
+                    from agents import Agent, ModelSettings
+                    agent = Agent[NyxContext](
+                        name="Nyx Fallback",
+                        instructions="""You are Nyx, the AI Dominant. Respond naturally without structured output.""",
+                        model="gpt-5-nano",
+                        model_settings=ModelSettings(strict_tools=False),
+                        # No output_type, no tools
+                    )
+                else:
+                    raise
+
 
             # Pre-flight strict schema visibility (doesn't raise)
             try:
