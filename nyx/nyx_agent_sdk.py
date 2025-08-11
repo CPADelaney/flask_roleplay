@@ -1,3 +1,4 @@
+# nyx/nyx_agent_sky.py
 """
 Nyx Agent SDK - Refactored to use OpenAI Agents SDK with Strict Typing
 
@@ -61,9 +62,11 @@ logger = logging.getLogger(__name__)
 def _nyx_walk_and_strip_ap(node):
     if isinstance(node, dict):
         if node.get("type") == "object":
+            # Remove flags the OpenAI agent strict validator rejects
             node.pop("additionalProperties", None)
             node.pop("unevaluatedProperties", None)
 
+        # recurse typical schema containers
         for key in ("properties", "$defs", "definitions", "patternProperties"):
             sub = node.get(key)
             if isinstance(sub, dict):
@@ -83,7 +86,7 @@ def _nyx_walk_and_strip_ap(node):
             elif isinstance(sub, dict):
                 _nyx_walk_and_strip_ap(sub)
 
-        # Walk any remaining dict values (covers edge cases)
+        # walk everything else just in case
         for v in list(node.values()):
             _nyx_walk_and_strip_ap(v)
 
@@ -159,8 +162,9 @@ class BaseModel(_PydanticBaseModel):
 
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
-        schema = handler(core_schema)
-        return sanitize_json_schema(schema)
+        raw = handler(core_schema)
+        return sanitize_json_schema(raw)
+
 
 # ===== Utility Types for Strict Schema =====
 
@@ -187,6 +191,117 @@ def dict_to_kvlist(d: dict) -> KVList:
 
 def kvlist_to_dict(kv: KVList) -> dict:
     return {pair.key: pair.value for pair in kv.items}
+
+try:
+    import agents.function_schema as _fs  # module, not the imported name
+    _ORIG_FUNCTION_SCHEMA = _fs.function_schema
+
+    def _NYX_function_schema(func, *args, **kwargs):
+        sch = _ORIG_FUNCTION_SCHEMA(func, *args, **kwargs)
+        # The SDK expects: {"name", "description"?, "parameters": {...}}
+        if isinstance(sch, dict):
+            if "parameters" in sch:
+                sch["parameters"] = sanitize_json_schema(sch["parameters"])
+            else:
+                sch = sanitize_json_schema(sch)
+        return sch
+
+    _fs.function_schema = _NYX_function_schema  # monkey-patch the module
+    logger.debug("Patched agents.function_schema.function_schema for strict JSON schema.")
+except Exception:
+    logger.exception("Failed to patch function_schema; will sanitize tools in-place later.")
+
+# Patch output tool schema builders (SDK versions differ; try a few)
+def _try_patch_output_schema():
+    candidates = [
+        ("agents.output_schema", "model_to_openai_schema"),
+        ("agents.output_schema", "pydantic_to_openai_schema"),
+        ("agents.outputs", "model_to_openai_schema"),
+        ("agents.outputs", "build_output_tool_parameters"),
+        ("agents.output_tool", "build_output_tool_parameters"),
+    ]
+    patched_any = False
+    for mod_name, fn_name in candidates:
+        try:
+            mod = __import__(mod_name, fromlist=[fn_name])
+            orig = getattr(mod, fn_name, None)
+            if not callable(orig):
+                continue
+
+            def _wrap(*a, __orig=orig, **k):
+                out = __orig(*a, **k)
+                # wrap dicts that look like { "type": "object", "properties": {...} }
+                if isinstance(out, dict):
+                    return sanitize_json_schema(out)
+                # some SDK funcs return a bigger struct with a "parameters" dict
+                if isinstance(out, dict) and "parameters" in out and isinstance(out["parameters"], dict):
+                    out["parameters"] = sanitize_json_schema(out["parameters"])
+                    return out
+                return out
+
+            setattr(mod, fn_name, _wrap)
+            logger.debug("Patched %s.%s for strict JSON schema.", mod_name, fn_name)
+            patched_any = True
+        except Exception:
+            continue
+
+    if not patched_any:
+        logger.warning("No output-schema builder patched; will rely on model BaseModel override + in-place tool sanitize.")
+
+_try_patch_output_schema()
+
+def sanitize_agent_tools_in_place(agent):
+    """
+    If any tools were created before our patches (import order), sanitize
+    their schema dicts in-place just before a run.
+    """
+    try:
+        if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
+            tools = agent.get_all_tools() or []
+        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
+            tools = agent.get_tools() or []
+        else:
+            tools = getattr(agent, "tools", []) or []
+
+        for t in tools:
+            # handle common attributes where schema lives
+            for attr in ("parameters", "_parameters", "_schema", "schema", "openai_schema"):
+                val = getattr(t, attr, None)
+                if isinstance(val, dict):
+                    try:
+                        setattr(t, attr, sanitize_json_schema(val))
+                    except Exception:
+                        logger.debug("Could not sanitize tool attr %s on %r", attr, t)
+    except Exception:
+        logger.exception("sanitize_agent_tools_in_place failed")
+
+def strict_output(model_cls):
+    """
+    Convenience: use this when wiring your agent's output_type to ensure the
+    output tool schema is also sanitized.
+    """
+    try:
+        return GuardrailFunctionOutput(model=model_cls)
+    except TypeError:
+        # older SDK signature
+        return GuardrailFunctionOutput(pydantic_model=model_cls)
+
+def _log_agent_tool_schemas(agent, level=logging.DEBUG):
+    try:
+        if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
+            tools = agent.get_all_tools() or []
+        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
+            tools = agent.get_tools() or []
+        else:
+            tools = getattr(agent, "tools", []) or []
+        for i, t in enumerate(tools):
+            name = getattr(t, "name", getattr(t, "__name__", f"tool_{i}"))
+            schema_like = getattr(t, "parameters", None) or getattr(t, "_schema", None) or getattr(t, "schema", None)
+            if isinstance(schema_like, dict):
+                bad = "additionalProperties" in json.dumps(schema_like)
+                logger.log(level, "[strict] tool=%s sanitized=%s", name, not bad)
+    except Exception:
+        logger.exception("_log_agent_tool_schemas failed")
 
 # ===== Constants and Configuration =====
 class Config:
