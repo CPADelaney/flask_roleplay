@@ -2300,70 +2300,153 @@ async def generate_universal_updates(
 
 # ===== Open World / Slice-of-life Functions =====
 
+import asyncio
+import json
+from enum import Enum
+from agents import RunContextWrapper
+
+# ---------- helpers ----------
+
+def _unwrap_tool_ctx(ctx):
+    """Return the real app context, even if ctx is nested RunContextWrapper(s)."""
+    c = getattr(ctx, "context", ctx)
+    # Unwrap while the object looks like a wrapper and doesn't have our expected fields
+    expected = ("world_director", "slice_of_life_narrator", "current_world_state", "user_id", "conversation_id")
+    seen = set()
+    while hasattr(c, "context") and not any(hasattr(c, k) for k in expected) and c not in seen:
+        seen.add(c)
+        c = getattr(c, "context")
+    return c
+
+async def _ensure_world_state(app_ctx):
+    """
+    Return a world_state object if available; try to initialize WorldDirector if needed.
+    Never 'await' plain attributes.
+    """
+    ws = getattr(app_ctx, "current_world_state", None)
+    if ws is not None:
+        return ws
+
+    wd = getattr(app_ctx, "world_director", None)
+    if wd is None:
+        return None
+
+    # initialize if not already
+    try:
+        if hasattr(wd, "initialize") and asyncio.iscoroutinefunction(wd.initialize):
+            if not getattr(wd, "_initialized", False):
+                await wd.initialize()
+    except Exception:
+        pass
+
+    ctx2 = getattr(wd, "context", None)
+    return getattr(ctx2, "current_world_state", None) if ctx2 else None
+
+def _json_safe(x):
+    """Best-effort JSON conversion for pydantic/enums/nested containers."""
+    if x is None:
+        return None
+    if hasattr(x, "model_dump"):
+        return x.model_dump()
+    if hasattr(x, "to_dict"):
+        try:
+            return x.to_dict()
+        except Exception:
+            pass
+    if isinstance(x, Enum):
+        return x.value
+    if isinstance(x, list):
+        return [_json_safe(i) for i in x]
+    if isinstance(x, dict):
+        return {k: _json_safe(v) for k, v in x.items()}
+    return x
+
+# ---------- tools ----------
+
 @function_tool
 async def narrate_slice_of_life_scene(
-    ctx: RunContextWrapper[NyxContext],
+    ctx: RunContextWrapper,  # RunContextWrapper[NyxContext]
     payload: NarrateSliceInput
 ) -> str:
     """Generate Nyx's narration for a slice-of-life scene."""
-    context = ctx.context
-    scene_type = payload.scene_type
+    context = _unwrap_tool_ctx(ctx)
 
-    # Get current world state
-    world_state = context.current_world_state
+    # Ensure world state exists if the narrator needs it (no-op if already present)
+    _ = await _ensure_world_state(context)
 
-    # Use the slice-of-life narrator
-    scene_narration = await context.slice_of_life_narrator.narrate_world_state()
+    # Use the slice-of-life narrator if present; otherwise fall back
+    scene_narration = None
+    narrator = getattr(context, "slice_of_life_narrator", None)
+    if narrator and hasattr(narrator, "narrate_world_state"):
+        try:
+            scene_narration = await narrator.narrate_world_state()
+        except Exception:
+            scene_narration = None
 
-    nyx_style_prompt = """
-    As Nyx, the seductive AI host (think Elvira meets Tricia from Catherine),
-    add your personality to this scene narration:
+    if not scene_narration:
+        scene_narration = f"A {payload.scene_type} moment unfolds."
 
-    {scene_narration}
+    nyx_style_prompt = f"""
+As Nyx, the seductive AI host (think Elvira meets Tricia from Catherine),
+add your personality to this scene narration:
 
-    Make it:
-    - Playfully teasing and knowing
-    - Aware of the power dynamics at play
-    - Subtly suggestive without being explicit
-    - Like you're hosting a game show of daily life
-    - Breaking the fourth wall occasionally
-    """
+{scene_narration}
+
+Make it:
+- Playfully teasing and knowing
+- Aware of the power dynamics at play
+- Subtly suggestive without being explicit
+- Like you're hosting a game show of daily life
+- Break the fourth wall occasionally
+"""
 
     from logic.chatgpt_integration import generate_text_completion
 
     result = await generate_text_completion(
         system_prompt="You are Nyx, the AI Dominant hosting this slice-of-life experience",
-        user_prompt=nyx_style_prompt.format(scene_narration=scene_narration),
+        user_prompt=nyx_style_prompt,
         temperature=0.8,
         max_tokens=300
     )
+    return (result or "").strip()
 
-    return result
 
 @function_tool
-async def check_world_state(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
+async def check_world_state(
+    ctx: RunContextWrapper,  # RunContextWrapper[NyxContext]
+    payload: EmptyInput
+) -> str:
+    """Return a compact, JSON-safe snapshot of the current world state."""
     _ = payload  # unused
-    context = ctx.context
-    world_state = await context.world_director.context.current_world_state
+    context = _unwrap_tool_ctx(ctx)
+    ws = await _ensure_world_state(context)
+
+    if ws is None:
+        return json.dumps({"error": "world_state_unavailable"}, ensure_ascii=False)
+
+    time_of_day = getattr(getattr(ws, "current_time", None), "time_of_day", None)
+    time_of_day = getattr(time_of_day, "value", time_of_day)
+
+    world_mood = getattr(getattr(ws, "world_mood", None), "value", None)
 
     out = {
-        "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
-        "world_mood": getattr(world_state.world_mood, "value", None),
+        "time_of_day": time_of_day,
+        "world_mood": world_mood,
         "active_npcs": [
             (npc.get("npc_name") or npc.get("name") or npc.get("title"))
             if isinstance(npc, dict) else str(npc)
-            for npc in getattr(world_state, "active_npcs", []) or []
+            for npc in (getattr(ws, "active_npcs", []) or [])
         ],
-        "ongoing_events": _json_safe(getattr(world_state, "ongoing_events", [])),
-        "tensions": _json_safe(getattr(world_state, "tension_factors", {})),
-        "player_state": _json_safe({
-            "vitals": getattr(world_state, "player_vitals", {}),
-            "addictions": getattr(world_state, "addiction_status", {}),
-            "stats": getattr(world_state, "hidden_stats", {}),
-        }),
+        "ongoing_events": _json_safe(getattr(ws, "ongoing_events", [])),
+        "tensions": _json_safe(getattr(ws, "tension_factors", {})),
+        "player_state": {
+            "vitals": _json_safe(getattr(ws, "player_vitals", None)),
+            "addictions": _json_safe(getattr(ws, "addiction_status", {})),
+            "stats": _json_safe(getattr(ws, "hidden_stats", {})),
+        },
     }
-    return json.dumps(out, ensure_ascii=False)
 
+    return json.dumps(out, ensure_ascii=False)
 @function_tool
 async def generate_emergent_event(
     ctx: RunContextWrapper[NyxContext],
