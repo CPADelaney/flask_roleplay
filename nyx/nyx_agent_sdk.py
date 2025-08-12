@@ -2920,15 +2920,11 @@ async def process_user_input(
 
         # ===== STEP 6: Model settings check =====
         logger.debug(f"[{trace_id}] Step 6: Checking model settings...")
-        logger.debug(f"[{trace_id}]   strict_tools: {DEFAULT_MODEL_SETTINGS.strict_tools}")
-        logger.debug(f"[{trace_id}]   response_format: {DEFAULT_MODEL_SETTINGS.response_format}")
         
         # Create custom settings with extra safety
         safe_settings = ModelSettings(
             strict_tools=False,
             response_format=None,
-            # Add any other settings that might help
-            temperature=0.7,
         )
         logger.debug(f"[{trace_id}] ✓ Using safe model settings")
 
