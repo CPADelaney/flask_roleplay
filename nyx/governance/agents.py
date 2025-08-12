@@ -19,15 +19,6 @@ from contextlib import suppress
 
 logger = logging.getLogger(__name__)
 
-def _safe_import(dotted: str):
-    """Safe import for agent discovery"""
-    try:
-        modname, attr = dotted.rsplit(".", 1)
-        mod = import_module(modname)
-        return getattr(mod, attr)
-    except Exception as e:
-        logger.debug("safe_import failed for %s: %s", dotted, e, exc_info=True)
-        return None
 
 _directive_cache_manager = CacheManager(
     name="agent_directives",
@@ -234,7 +225,7 @@ class AgentGovernanceMixin:
             try:
                 with suppress(asyncio.TimeoutError):
                     module = await asyncio.wait_for(
-                        _safe_import(module_path),
+                        self._safe_import(module_path),
                         timeout=ASYNC_IMPORT_TIMEOUT
                     )
             except Exception as e:
