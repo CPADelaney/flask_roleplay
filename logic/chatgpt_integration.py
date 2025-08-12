@@ -83,7 +83,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "value": {}  # Can be any JSON value
                     },
                     "required": ["key", "value"],
-                    "additionalProperties": False
+                    
                 }
             },
             "ChaseSchedule": {
@@ -105,11 +105,11 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                 "Night": {"type": "string"}
                             },
                             "required": ["Morning", "Afternoon", "Evening", "Night"],
-                            "additionalProperties": False
+                            
                         }
                     },
                     "required": ["key", "value"],
-                    "additionalProperties": False
+                    
                 }
             },
             "MainQuest": {
@@ -137,7 +137,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                     "id": {"type": "number"},
                                     "name": {"type": "string"}
                                 },
-                                "additionalProperties": False
+                                
                             }
                         },
                         "archetype_summary": {"type": "string"},
@@ -173,11 +173,11 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                             "Night": {"type": "string"}
                                         },
                                         "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                        "additionalProperties": False
+                                        
                                     }
                                 },
                                 "required": ["key", "value"],
-                                "additionalProperties": False
+                                
                             }
                         },
                         "memory": {
@@ -192,7 +192,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "birthdate": {"type": "string", "format": "date"}
                     },
                     "required": ["npc_name"],
-                    "additionalProperties": False
+                    
                 }
             },
             "npc_updates": {
@@ -243,11 +243,11 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                             "Night": {"type": "string"}
                                         },
                                         "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                        "additionalProperties": False
+                                        
                                     }
                                 },
                                 "required": ["key", "value"],
-                                "additionalProperties": False
+                                
                             }
                         },
                         "schedule_updates": {
@@ -267,21 +267,21 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                                     "Evening": {"type": "string"},
                                                     "Night": {"type": "string"}
                                                 },
-                                                "additionalProperties": False
+                                                
                                             },
                                             {"type": "null"}
                                         ]
                                     }
                                 },
                                 "required": ["key"],
-                                "additionalProperties": False
+                                
                             }
                         },
                         "affiliations": {"type": "array", "items": {"type": "string"}},
                         "current_location": {"type": "string"}
                     },
                     "required": ["npc_id"],
-                    "additionalProperties": False
+                    
                 }
             },
             "character_stat_updates": {
@@ -302,11 +302,11 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                 "value": {"type": "number"}
                             },
                             "required": ["key", "value"],
-                            "additionalProperties": False
+                            
                         }
                     }
                 },
-                "additionalProperties": False
+                
             },
             "relationship_updates": {
                 "type": "array",
@@ -316,7 +316,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "npc_id": {"type": "number"},
                         "affiliations": {"type": "array", "items": {"type": "string"}}
                     },
-                    "additionalProperties": False
+                    
                 }
             },
             "npc_introductions": {
@@ -327,7 +327,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "npc_id": {"type": "number"}
                     },
                     "required": ["npc_id"],
-                    "additionalProperties": False
+                    
                 }
             },
             "location_creations": {
@@ -340,7 +340,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "open_hours": {"type": "array", "items": {"type": "string"}}
                     },
                     "required": ["location_name"],
-                    "additionalProperties": False
+                    
                 }
             },
             "event_list_updates": {
@@ -366,7 +366,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                             "description": "Indicates if the event involves reality-breaking elements."
                         }
                     },
-                    "additionalProperties": False
+                    
                 }
             },
             "inventory_updates": {
@@ -386,7 +386,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                         "item_effect": {"type": "string"},
                                         "category": {"type": "string"}
                                     },
-                                    "additionalProperties": False
+                                    
                                 }
                             ]
                         }
@@ -401,13 +401,13 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                     "properties": {
                                         "item_name": {"type": "string"}
                                     },
-                                    "additionalProperties": False
+                                    
                                 }
                             ]
                         }
                     }
                 },
-                "additionalProperties": False
+                
             },
             "quest_updates": {
                 "type": "array",
@@ -421,7 +421,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "quest_giver": {"type": "string"},
                         "reward": {"type": "string"}
                     },
-                    "additionalProperties": False
+                    
                 }
             },
             "social_links": {
@@ -441,7 +441,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                             "description": "Describes multi-NPC interactions (e.g., 'NPC2 and five others gang up')."
                         }
                     },
-                    "additionalProperties": False
+                    
                 }
             },
             "perk_unlocks": {
@@ -454,7 +454,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "perk_description": {"type": "string"},
                         "perk_effect": {"type": "string"}
                     },
-                    "additionalProperties": False
+                    
                 }
             },
             "activity_updates": {
@@ -473,7 +473,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                     "default": "realistic"
                                 }
                             },
-                            "additionalProperties": False
+                            
                         },
                         "stat_integration": {
                             "type": "array",
@@ -485,14 +485,14 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                                     "value": {}
                                 },
                                 "required": ["key", "value"],
-                                "additionalProperties": False
+                                
                             }
                         },
                         "intensity_tier": {"type": "number", "minimum": 0, "maximum": 4},
                         "setting_variant": {"type": "string"}
                     },
                     "required": ["activity_name"],
-                    "additionalProperties": False
+                    
                 },
                 "description": "Create or update Activities for punishments, including surreal elements."
             },
@@ -507,7 +507,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "intensity_level": {"type": "number", "minimum": 0, "maximum": 4}
                     },
                     "required": ["entry_type", "entry_text"],
-                    "additionalProperties": False
+                    
                 },
                 "description": "Log narrative events or punishments in PlayerJournal, including surreal ones."
             },
@@ -521,7 +521,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                     "reason": {"type": "string", "description": "Why this image is generated (e.g., 'surreal punishment')."}
                 },
                 "description": "Trigger and configure image generation for the scene.",
-                "additionalProperties": False
+                
             }
         },
         "required": [
@@ -545,7 +545,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
             "journal_updates",
             "image_generation"
         ],
-        "additionalProperties": False
+        
     }
 }
 
