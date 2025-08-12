@@ -29,14 +29,29 @@ class AsyncRedisCache:
     def __init__(self):
         """Initialize Redis connection."""
         try:
-            self.redis = redis.Redis(
-                host='localhost',
-                port=6379,
-                db=0,
-                decode_responses=True
-            )
+            # Get Redis URL from environment (Render format)
+            redis_url = os.getenv('REDIS_URL')
+            
+            if redis_url:
+                # Use Redis URL if provided (for Render/production)
+                self.redis = redis.from_url(
+                    redis_url,
+                    decode_responses=True
+                )
+                logger.info(f"Connecting to Redis via URL: {redis_url.split('@')[1] if '@' in redis_url else redis_url}")
+            else:
+                # Fall back to localhost for development
+                self.redis = redis.Redis(
+                    host='localhost',
+                    port=6379,
+                    db=0,
+                    decode_responses=True
+                )
+                logger.info("Connecting to Redis at localhost:6379")
+            
             # Test connection
             self.redis.ping()
+            logger.info("Successfully connected to Redis")
         except RedisError as e:
             logger.error(f"Failed to connect to Redis: {e}")
             raise CacheError(config.ERROR_MESSAGES["cache_error"]) from e
