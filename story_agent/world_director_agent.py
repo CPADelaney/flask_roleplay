@@ -332,7 +332,6 @@ class CompleteWorldDirectorContext:
                 agent_id=f"world_director_{self.conversation_id}",
                 governance=self.nyx_governor  # Pass the governance instance
             )
-            await self.directive_handler.initialize()
             
             # Load calendar names
             self.calendar_names = await load_calendar_names(self.user_id, self.conversation_id)
