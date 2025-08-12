@@ -8,13 +8,38 @@ Single source of truth to avoid circular imports and model duplication.
 
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel as _PydanticBaseModel, Field, ConfigDict
 from datetime import datetime, timezone
+
+# ===============================================================================
+# SANITIZED BASE MODEL - Prevents additionalProperties in JSON schemas
+# ===============================================================================
+
+class BaseModel(_PydanticBaseModel):
+    """Base model that ensures no additionalProperties in schema"""
+    model_config = ConfigDict()  # Empty config, NO extra='forbid'
+
+    @classmethod
+    def model_json_schema(cls, **kwargs):
+        """Override to ensure no additionalProperties in schema."""
+        schema = super().model_json_schema(**kwargs)
+        # Remove additionalProperties at all levels
+        def strip_ap(obj):
+            if isinstance(obj, dict):
+                obj.pop('additionalProperties', None)
+                obj.pop('unevaluatedProperties', None)
+                for v in obj.values():
+                    strip_ap(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    strip_ap(item)
+            return obj
+        
+        return strip_ap(schema)
 
 # ===============================================================================
 # Core Time/Vitals Models (imported from time_cycle for type consistency)
 # ===============================================================================
-
 
 class TimeOfDay(Enum):
     """Time periods in the simulation"""
@@ -34,8 +59,6 @@ class CurrentTimeData(BaseModel):
     minute: int = 0
     time_of_day: TimeOfDay = TimeOfDay.AFTERNOON
     
-    model_config = ConfigDict(extra="forbid")
-    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
         return {
@@ -53,8 +76,6 @@ class VitalsData(BaseModel):
     thirst: float = Field(ge=0, le=100, default=50)
     fatigue: float = Field(ge=0, le=100, default=30)
     arousal: float = Field(ge=0, le=100, default=0)
-    
-    model_config = ConfigDict(extra="forbid")
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -108,6 +129,8 @@ class PowerDynamicType(Enum):
     NURTURING_DEPENDENCY = "nurturing_dependency"
     COLLABORATIVE = "collaborative"
     RESISTANCE = "resistance"
+    PLAYFUL_TEASING = "playful_teasing"
+    INTIMATE_COMMAND = "intimate_command"
 
 # ===============================================================================
 # Event Data Models (moved from world_director_agent)
@@ -119,56 +142,50 @@ class AddictionCravingData(BaseModel):
     intensity: float = Field(ge=0, le=1, default=1.0)
     time_since_last: Optional[float] = None
     withdrawal_stage: Optional[int] = None
-    
-    model_config = ConfigDict(extra="forbid")
 
 class DreamData(BaseModel):
     """Data describing a dream trigger"""
     dream_type: Optional[str] = None
     emotional_tone: Optional[str] = None
     symbolism: List[str] = Field(default_factory=list)
-    
-    model_config = ConfigDict(extra="forbid")
 
 class RevelationData(BaseModel):
     """Data describing a personal revelation"""
     topic: Optional[str] = None
     trigger: Optional[str] = None
     intensity: float = Field(ge=0, le=1, default=0.5)
-    
-    model_config = ConfigDict(extra="forbid")
-
 
 class KVItem(BaseModel):
+    """Key-value pair for flexible data passing"""
     key: str
     value: Any
 
-
 def kvlist_from_obj(obj: Any) -> List[KVItem]:
+    """Convert various objects to a list of KVItems"""
     if isinstance(obj, dict):
         return [KVItem(key=str(k), value=v) for k, v in obj.items()]
     if isinstance(obj, list):
         return [KVItem(key=str(i), value=v) for i, v in enumerate(obj)]
     return [KVItem(key="value", value=obj)]
 
-
 def kvdict(items: List[KVItem]) -> Dict[str, Any]:
+    """Convert list of KVItems back to dictionary"""
     return {it.key: it.value for it in (items or [])}
 
-
 class RelationshipImpact(BaseModel):
+    """Impact on a relationship from a choice"""
     npc_name: str
     impacts: List[KVItem] = Field(default_factory=list)
 
-
 class InventoryChange(BaseModel):
+    """Change to inventory from a choice"""
     action: Literal["add", "remove"]
     item_name: str
     description: Optional[str] = None
     effect: Optional[str] = None
 
-
 class ChoiceData(BaseModel):
+    """Data representing a player choice and its impacts"""
     text: Optional[str] = None
     stat_impacts: List[KVItem] = Field(default_factory=list)
     addiction_impacts: List[KVItem] = Field(default_factory=list)
@@ -181,13 +198,12 @@ class ChoiceData(BaseModel):
     time_passed: Optional[float] = 0.0
     emotional_valence: Optional[float] = 0.0
 
-    model_config = ConfigDict(extra="forbid")
-
 # ===============================================================================
 # Processing Result Models
 # ===============================================================================
 
 class ChoiceProcessingResult(BaseModel):
+    """Result of processing a player choice"""
     success: bool
     effects: List[List[KVItem]] = Field(default_factory=list)
     narratives: List[str] = Field(default_factory=list)
@@ -202,69 +218,79 @@ class ChoiceProcessingResult(BaseModel):
     narrative: Optional[str] = None
     error: Optional[str] = None
 
-    model_config = ConfigDict(extra="forbid")
-
 # ===============================================================================
 # Core Simulation Models
 # ===============================================================================
 
 class SliceOfLifeEvent(BaseModel):
     """A slice-of-life event in the simulation"""
+    id: Optional[str] = None
     event_type: ActivityType
     title: str
     description: str
     location: str = "unknown"
-    involved_npcs: List[int] = Field(default_factory=list)
+    participants: List[int] = Field(default_factory=list)  # NPC IDs
+    involved_npcs: List[int] = Field(default_factory=list)  # Alias for compatibility
     duration_minutes: int = 30
+    priority: float = Field(ge=0, le=1, default=0.5)
     power_dynamic: Optional[PowerDynamicType] = None
     choices: List[Dict[str, Any]] = Field(default_factory=list)
     mood_impact: Optional[str] = None
     stat_impacts: Dict[str, float] = Field(default_factory=dict)
     addiction_triggers: List[str] = Field(default_factory=list)
     memory_tags: List[str] = Field(default_factory=list)
-    
-    model_config = ConfigDict(extra="forbid")
 
 class PowerExchange(BaseModel):
     """A power exchange moment between entities"""
-    initiator_type: str  # "npc" or "player"
+    initiator_npc_id: int  # For compatibility
+    initiator_type: str = "npc"  # "npc" or "player"
     initiator_id: int
-    recipient_type: str  # "npc" or "player"
-    recipient_id: int
+    recipient_type: str = "player"  # "npc" or "player"
+    recipient_id: int = 1  # Default to player
     exchange_type: PowerDynamicType
     intensity: float = Field(ge=0, le=1)
-    description: str
+    description: str = ""
     is_public: bool = False
     witnesses: List[int] = Field(default_factory=list)
     resistance_possible: bool = True
+    player_response_options: List[str] = Field(default_factory=list)
     consequences: Dict[str, Any] = Field(default_factory=dict)
-    
-    model_config = ConfigDict(extra="forbid")
 
 class WorldTension(BaseModel):
     """Current tension levels in the world"""
     overall_tension: float = Field(ge=0, le=1, default=0.0)
     social_tension: float = Field(ge=0, le=1, default=0.0)
     power_tension: float = Field(ge=0, le=1, default=0.0)
+    sexual_tension: float = Field(ge=0, le=1, default=0.0)
     emotional_tension: float = Field(ge=0, le=1, default=0.0)
     addiction_tension: float = Field(ge=0, le=1, default=0.0)
     vital_tension: float = Field(ge=0, le=1, default=0.0)
     unresolved_conflicts: int = 0
     tension_sources: List[str] = Field(default_factory=list)
     
-    model_config = ConfigDict(extra="forbid")
+    def get_dominant_tension(self) -> tuple[str, float]:
+        """Get the dominant tension type and its level"""
+        tensions = {
+            "social": self.social_tension,
+            "power": self.power_tension,
+            "sexual": self.sexual_tension,
+            "emotional": self.emotional_tension,
+            "addiction": self.addiction_tension,
+            "vital": self.vital_tension
+        }
+        dominant = max(tensions.items(), key=lambda x: x[1])
+        return dominant[0], dominant[1]
 
 class RelationshipDynamics(BaseModel):
     """Overall relationship dynamics in the world"""
     player_submission_level: float = Field(ge=0, le=100, default=0.0)
     player_resistance_level: float = Field(ge=0, le=100, default=50.0)
     player_corruption_level: float = Field(ge=0, le=100, default=0.0)
+    acceptance_level: float = Field(ge=0, le=100, default=0.0)
     dominant_npc_ids: List[int] = Field(default_factory=list)
     supportive_npc_ids: List[int] = Field(default_factory=list)
     adversarial_npc_ids: List[int] = Field(default_factory=list)
     intimate_npc_ids: List[int] = Field(default_factory=list)
-    
-    model_config = ConfigDict(extra="forbid")
 
 class NPCRoutine(BaseModel):
     """NPC's daily routine"""
@@ -278,8 +304,6 @@ class NPCRoutine(BaseModel):
     relationship_state: Optional[Dict[str, Any]] = None
     narrative_stage: Optional[str] = None
     mask_integrity: float = Field(ge=0, le=100, default=100)
-    
-    model_config = ConfigDict(extra="forbid")
 
 # ===============================================================================
 # Complete World State (the main comprehensive model)
@@ -324,7 +348,9 @@ class CompleteWorldState(BaseModel):
     active_npcs: List[Dict[str, Any]] = Field(default_factory=list)
     npc_masks: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
     npc_narrative_stages: Dict[int, str] = Field(default_factory=dict)
+    npc_schedules: Optional[Dict[str, Any]] = None
     relationship_states: Dict[str, Any] = Field(default_factory=dict)
+    relationship_dynamics: RelationshipDynamics = Field(default_factory=RelationshipDynamics)
     relationship_overview: Optional[Dict[str, Any]] = None
     pending_relationship_events: List[Dict[str, Any]] = Field(default_factory=list)
     
@@ -340,12 +366,13 @@ class CompleteWorldState(BaseModel):
     
     # World State
     world_mood: WorldMood = WorldMood.RELAXED
+    world_tension: WorldTension = Field(default_factory=WorldTension)
     tension_factors: Dict[str, float] = Field(default_factory=dict)
     environmental_factors: Dict[str, Any] = Field(default_factory=dict)
     location_data: str = ""
     
     # Events
-    ongoing_events: List[Dict[str, Any]] = Field(default_factory=list)
+    ongoing_events: List[SliceOfLifeEvent] = Field(default_factory=list)
     available_activities: List[Dict[str, Any]] = Field(default_factory=list)
     event_history: List[Dict[str, Any]] = Field(default_factory=list)
     
@@ -354,8 +381,6 @@ class CompleteWorldState(BaseModel):
     
     # Metadata
     last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    
-    model_config = ConfigDict(extra="forbid")
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary with proper serialization"""
@@ -380,8 +405,6 @@ class EmergentPattern(BaseModel):
     evidence: List[Dict[str, Any]] = Field(default_factory=list)
     narrative_implications: Optional[str] = None
     predicted_outcomes: List[str] = Field(default_factory=list)
-    
-    model_config = ConfigDict(extra="forbid")
 
 class NarrativeThread(BaseModel):
     """A narrative thread emerging from system interactions"""
@@ -392,47 +415,45 @@ class NarrativeThread(BaseModel):
     tension_level: float = Field(ge=0, le=1)
     key_events: List[str] = Field(default_factory=list)
     potential_climax: Optional[str] = None
-    
-    model_config = ConfigDict(extra="forbid")
 
 class MemorySimilarity(BaseModel):
+    """Similarity between two memories"""
     m1_index: int
     m2_index: int
     m1_excerpt: str
     m2_excerpt: str
     similarity: float
-    model_config = ConfigDict(extra="forbid")
 
 class RelationshipPatternOut(BaseModel):
+    """Detected relationship pattern output"""
     npc: str
     patterns: List[str] = Field(default_factory=list)
     archetype: str = "unknown"
-    model_config = ConfigDict(extra="forbid")
 
 class AddictionPatternOut(BaseModel):
+    """Detected addiction pattern output"""
     type: str
     level: int
     trajectory: Literal["escalating", "stable"]
-    model_config = ConfigDict(extra="forbid")
 
 class StatPatternOut(BaseModel):
+    """Detected stat combination pattern output"""
     combination: str
     behaviors: List[str] = Field(default_factory=list)
-    model_config = ConfigDict(extra="forbid")
 
 class RulePatternOut(BaseModel):
+    """Detected rule trigger pattern output"""
     rule: str
     frequency: int
-    model_config = ConfigDict(extra="forbid")
 
 class EmergentPatternsResult(BaseModel):
+    """Result of checking all emergent patterns"""
     memory_patterns: List[MemorySimilarity] = Field(default_factory=list)
     relationship_patterns: List[RelationshipPatternOut] = Field(default_factory=list)
     addiction_patterns: List[AddictionPatternOut] = Field(default_factory=list)
     stat_patterns: List[StatPatternOut] = Field(default_factory=list)
     rule_patterns: List[RulePatternOut] = Field(default_factory=list)
     narrative_analysis: Optional[str] = None
-    model_config = ConfigDict(extra="forbid")
 
 # ===============================================================================
 # Export all models
@@ -481,7 +502,6 @@ __all__ = [
     # Pattern Detection
     'EmergentPattern',
     'NarrativeThread',
-
     'MemorySimilarity',
     'RelationshipPatternOut',
     'AddictionPatternOut',
