@@ -111,21 +111,21 @@ class EventSystem:
             self.event_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_MANAGER,
                 agent_id="event_manager",
-                capabilities=["event_processing", "event_prioritization", "event_coordination"]
+                model="gpt-5-nano"
             )
             
             # Create analysis agent
             self.analysis_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_ANALYZER,
                 agent_id="event_analyzer",
-                capabilities=["event_analysis", "impact_assessment", "pattern_recognition"]
+                model="gpt-5-nano"
             )
             
             # Create propagation agent
             self.propagation_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_PROPAGATOR,
                 agent_id="event_propagator",
-                capabilities=["event_propagation", "npc_notification", "system_integration"]
+                model="gpt-5-nano"
             )
             
             # Initialize agent context
@@ -712,3 +712,4 @@ class EventSystem:
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
             return {"error": str(e)}
+
