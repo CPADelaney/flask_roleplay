@@ -321,7 +321,7 @@ class CompleteWorldDirectorContext:
             self.context_service = await get_context_service(self.user_id, self.conversation_id)
             self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
             self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
-            self.performance_monitor = PerformanceMonitor()
+            self.performance_monitor = PerformanceMonitor(self.user_id, self.conversation_id)
             
             # Initialize governance
             self.nyx_governor = await get_central_governance(self.user_id, self.conversation_id)
