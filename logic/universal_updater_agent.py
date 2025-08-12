@@ -226,18 +226,24 @@ def ensure_dict_format(data: Union[Dict, List]) -> Dict[str, Any]:
 # ===============================================================================
 
 class StrictBaseModel(BaseModel):
-    """Base class enforcing a strict schema for OpenAI Agents"""
+    """Runtime-strict models, but JSON Schema sanitized for Agents."""
     model_config = ConfigDict(extra='forbid')
 
-# ---- JSON-safe aliases (strict) ----
-# Allowed scalar types in strict output
-JsonScalar = Union[str, int, float, bool, None]
-# Allowed “value” types in {key,value} pairs:
-# - scalar
-# - list of scalars
-# - DaySchedule (defined below)
-# NOTE: If you need more object types here later, add them explicitly.
-# (We define KeyValuePair AFTER DaySchedule so the type exists.)
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):
+        schema = super().model_json_schema(*args, **kwargs)
+
+        def _strip(d):
+            if isinstance(d, dict):
+                d.pop("additionalProperties", None)
+                d.pop("unevaluatedProperties", None)
+                for v in d.values():
+                    _strip(v)
+            elif isinstance(d, list):
+                for v in d:
+                    _strip(v)
+        _strip(schema)
+        return schema
 
 class KeyValueStr(StrictBaseModel):
     """String key-value pair"""
