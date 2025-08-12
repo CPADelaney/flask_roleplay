@@ -55,6 +55,8 @@ from nyx.performance_monitor import PerformanceMonitor
 from .response_filter import ResponseFilter
 from nyx.core.sync.strategy_controller import get_active_strategies
 
+logger = logging.getLogger(__name__)
+
 try:
     import agents.function_schema as _fs
     _ORIG_FUNCTION_SCHEMA = _fs.function_schema
@@ -77,7 +79,6 @@ except Exception:
     # Fallback: import the original if patching fails
     from agents.function_schema import function_schema
 
-logger = logging.getLogger(__name__)
 
 # --- BEGIN: global JSON Schema sanitizer for Pydantic v2 & tools ---
 
