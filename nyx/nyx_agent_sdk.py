@@ -3312,7 +3312,6 @@ Remember: You're the HOST, not the story. The story emerges from systems interac
   #  input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano",
     model_settings=ModelSettings(strict_tools=False),
-    output_type=strict_output(NarrativeResponse),
 )
 
 log_strict_hits(nyx_main_agent)
