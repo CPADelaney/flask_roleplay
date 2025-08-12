@@ -7,6 +7,7 @@ Refactored to use async/await patterns.
 
 import json
 import logging
+import os
 from typing import Any, Optional
 from datetime import datetime, timedelta
 import redis
