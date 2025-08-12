@@ -22,7 +22,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 
 from agents import Agent, Runner, function_tool, handoff, ModelSettings, RunContextWrapper
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel as _PydanticBaseModel, Field, ConfigDict
 
 # Database connection
 from db.connection import get_db_connection_context
@@ -33,6 +33,32 @@ from logic.chatgpt_integration import (
     get_chatgpt_response,
     TEMPERATURE_SETTINGS
 )
+
+# ===============================================================================
+# SANITIZED BASE MODEL - Prevents additionalProperties in JSON schemas
+# ===============================================================================
+
+class BaseModel(_PydanticBaseModel):
+    """Base model that ensures no additionalProperties in schema"""
+    model_config = ConfigDict()  # Empty config, NO extra='forbid'
+
+    @classmethod
+    def model_json_schema(cls, **kwargs):
+        """Override to ensure no additionalProperties in schema."""
+        schema = super().model_json_schema(**kwargs)
+        # Remove additionalProperties at all levels
+        def strip_ap(obj):
+            if isinstance(obj, dict):
+                obj.pop('additionalProperties', None)
+                obj.pop('unevaluatedProperties', None)
+                for v in obj.values():
+                    strip_ap(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    strip_ap(item)
+            return obj
+        
+        return strip_ap(schema)
 
 # ===============================================================================
 # NYX GOVERNANCE INTEGRATION - CRITICAL (ENHANCED)
@@ -160,7 +186,7 @@ class SceneFocus(Enum):
     TENSION = "tension"
 
 # ===============================================================================
-# Pydantic Models for Type-Safe Narration (ALL PRESERVED)
+# Pydantic Models for Type-Safe Narration (FIXED - NO extra="forbid")
 # ===============================================================================
 
 class SliceOfLifeNarration(BaseModel):
@@ -182,8 +208,6 @@ class SliceOfLifeNarration(BaseModel):
     # Context integration
     context_aware: bool = True
     relevant_memories: List[str] = Field(default_factory=list)
-    
-    model_config = ConfigDict(extra="forbid")
 
 class NPCDialogue(BaseModel):
     """Dialogue from an NPC in daily life"""
@@ -202,8 +226,6 @@ class NPCDialogue(BaseModel):
     governance_approved: bool = True
     # Context awareness
     context_informed: bool = False
-    
-    model_config = ConfigDict(extra="forbid")
 
 class AmbientNarration(BaseModel):
     """Ambient narration for world atmosphere"""
@@ -212,8 +234,6 @@ class AmbientNarration(BaseModel):
     intensity: float = 0.5
     affects_mood: bool = False
     reflects_systems: List[str] = Field(default_factory=list)
-    
-    model_config = ConfigDict(extra="forbid")
 
 class PowerMomentNarration(BaseModel):
     """Narration for a power exchange moment"""
@@ -224,8 +244,6 @@ class PowerMomentNarration(BaseModel):
     options_presentation: List[str]
     potential_consequences: List[Dict[str, Any]] = Field(default_factory=list)
     governance_tracking: Optional[Dict[str, Any]] = None
-    
-    model_config = ConfigDict(extra="forbid")
 
 class DailyActivityNarration(BaseModel):
     """Narration for routine daily activities"""
@@ -235,8 +253,6 @@ class DailyActivityNarration(BaseModel):
     npc_involvement: List[str] = Field(default_factory=list)
     subtle_control_elements: List[str] = Field(default_factory=list)
     emergent_variations: Optional[List[str]] = None
-    
-    model_config = ConfigDict(extra="forbid")
 
 # ===============================================================================
 # ENHANCED Narrator Context with Full Integration
