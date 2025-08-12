@@ -181,9 +181,6 @@ class CurrencyGenerator:
                     {"role": "system", "content": "You are a creative game world designer specializing in economic systems."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                max_tokens=500,
-                response_format={"type": "json_object"}  # Force JSON response
             )
             
             response_text = response.choices[0].message.content or "{}"
