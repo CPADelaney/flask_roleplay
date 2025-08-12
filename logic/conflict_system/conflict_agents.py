@@ -16,7 +16,7 @@ IMPORTANT: Ensure OPENAI_API_KEY is set in your environment variables.
 
 Environment Variables:
 - OPENAI_API_KEY: Your OpenAI API key (required)
-- CONFLICT_AGENTS_MODEL: Model to use (default: gpt-5-nano)
+- CONFLICT_AGENTS_MODEL: Model to use (default: gpt-4.1-nano)
 - CONFLICT_AGENTS_TEMPERATURE: Temperature setting (default: 0.7)
 - CONFLICT_AGENTS_RETRY_MAX: Max retry attempts (default: 5)
 - CONFLICT_AGENTS_RETRY_DELAY: Initial retry delay in seconds (default: 1)
@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 INSTRUCTION_DIR = Path(__file__).parent.parent.parent / "docs" / "conflict_instructions"
 
 # Model configuration - can be overridden via environment variable
-DEFAULT_MODEL = os.getenv("CONFLICT_AGENTS_MODEL", "gpt-5-nano")
+DEFAULT_MODEL = os.getenv("CONFLICT_AGENTS_MODEL", "gpt-4.1-nano")
 DEFAULT_TEMPERATURE = float(os.getenv("CONFLICT_AGENTS_TEMPERATURE", "0.7"))
 
 # Retry configuration - adjust these if needed
