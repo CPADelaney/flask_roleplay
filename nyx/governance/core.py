@@ -1058,7 +1058,7 @@ class NyxUnifiedGovernor(
             )
             for k in unknown:
                 kwargs.pop(k, None)
-    
+        
     async def create_agent(
         self,
         agent_type: str,
@@ -1069,96 +1069,99 @@ class NyxUnifiedGovernor(
     ) -> Any:
         """
         Create / register an agent.
-
-        * If `use_openai_sdk` (default) → create or fetch an **Assistant** object
-          via the OpenAI Agent SDK using chatgpt_integration.
-        * Otherwise fall back to dynamic Python-class instantiation (your old path).
-
-        kwargs are passed through to `client.beta.assistants.create`
-        after filtering to only valid parameters.
+    
+        If use_openai_sdk=True (default), we try Assistants first.
+        If the model is not supported there, we transparently fall back to Responses
+        (keeping the same model and tools).
         """
         logger.info("Creating agent via SDK=%s, type=%s, id=%s",
                     use_openai_sdk, agent_type, agent_id)
-
-        # ────────────────────────────────────────────────────────────────────
-        # 1) SDK branch  ─────────────────────────────────────────────────────
-        # ────────────────────────────────────────────────────────────────────
+    
+        # Return cached if exists
+        if agent_id in getattr(self, "_assistants", {}):
+            return self._assistants[agent_id]
+    
+        sdk_defaults = {
+            "name": f"{agent_type}:{agent_id}",
+            "model": kwargs.get("model", "gpt-5-nano"),  # keep your preferred default
+            "instructions": kwargs.get("instructions", f"You are the {agent_type} agent."),
+            "tools": kwargs.get("tools", []),
+        }
+    
+        # Migrate legacy kwargs and filter for Assistants
+        sdk_defaults.update(kwargs)
+        if hasattr(self, "_migrate_legacy_kwargs"):
+            self._migrate_legacy_kwargs(sdk_defaults)
+    
+        # Try Assistants first (if requested)
         if use_openai_sdk:
-            # return cached instance if we already created it this run
-            if agent_id in self._assistants:
-                return self._assistants[agent_id]
-
-            # return cached instance if we already created it this run
-            if agent_id in self._assistants:
-                return self._assistants[agent_id]
-
-            sdk_defaults = {
-                "name": f"{agent_type}:{agent_id}",
-                "model": "gpt-5-nano",  # Match the default from conflict_agents.py
-                "instructions": f"You are the {agent_type} agent.",
-                "tools": [],   # will be filled by kwargs or migration
-            }
-            
-            # Track which defaults we're using for logging
-            using_default_model = "model" not in kwargs
-            using_default_tools = "tools" not in kwargs and "capabilities" not in kwargs
-
-            # 1) merge kwargs, migrate, then filter
-            sdk_defaults.update(kwargs)
-            self._migrate_legacy_kwargs(sdk_defaults)  # migrate and filter
-            
-            # Warn about defaults being used
-            if using_default_model:
-                logger.warning(
-                    "create_agent: no model specified for %s/%s, using default: %s",
-                    agent_type, agent_id, sdk_defaults["model"]
-                )
-            
-            if using_default_tools and not sdk_defaults.get("tools"):
-                logger.info(
-                    "create_agent: no tools specified for %s/%s; creating chat-only assistant",
-                    agent_type, agent_id
-                )
-
             try:
-                # Get OpenAI client from chatgpt_integration
                 client = await self._get_openai_client()
-                
-                assistant: Assistant = await client.beta.assistants.create(**sdk_defaults)
+                # Only pass Assistant-supported params
+                assistant_kwargs = {k: v for k, v in sdk_defaults.items() if k in getattr(self, "VALID_OPENAI_PARAMS", set())}
+                assistant = await client.beta.assistants.create(**assistant_kwargs)
+                # Store any custom params you want to remember (non-OpenAI keys)
+                custom = {k: v for k, v in sdk_defaults.items() if k not in getattr(self, "VALID_OPENAI_PARAMS", set())}
+                setattr(assistant, "_custom_params", custom)
                 self._assistants[agent_id] = assistant
-                
-                # Store custom (non-SDK) params AFTER migration/stripping
-                assistant._custom_params = {k: v for k, v in sdk_defaults.items() 
-                                          if k not in VALID_OPENAI_PARAMS}
-                    
                 logger.info("Assistant %s created (id=%s)", assistant.name, assistant.id)
                 return assistant
-
-            except Exception as e:
-                error_msg = str(e).lower()
-                error_type = type(e).__name__
-                
-                # Try to categorize the error based on error message or type
-                if "bad request" in error_msg or "invalid" in error_msg or "400" in error_msg:
-                    logger.error("Assistant creation failed (bad request): %s", e, exc_info=True)
-                    raise AgentRegistrationError(
-                        f"Assistant creation failed (bad request - check parameters): {e}"
-                    ) from e
-                elif "unauthorized" in error_msg or "api key" in error_msg or "401" in error_msg:
-                    logger.error("Assistant creation failed (auth): %s", e, exc_info=True)
-                    raise AgentRegistrationError(
-                        f"Assistant creation failed (authentication issue): {e}"
-                    ) from e
-                elif "rate limit" in error_msg or "429" in error_msg:
-                    logger.error("Assistant creation failed (rate limit): %s", e, exc_info=True)
-                    raise AgentRegistrationError(
-                        f"Assistant creation failed (rate limit exceeded): {e}"
-                    ) from e
+    
+            except BadRequestError as e:
+                # If the model isn't allowed on Assistants, fall back to Responses
+                if _is_unsupported_model(e):
+                    logger.warning(
+                        "Model %s not supported on Assistants; falling back to Responses for %s/%s",
+                        sdk_defaults["model"], agent_type, agent_id
+                    )
                 else:
+                    # Other 400s still bubble up with your existing categorization
+                    emsg = str(e).lower()
+                    if "invalid" in emsg or "bad request" in emsg or "400" in emsg:
+                        logger.error("Assistant creation failed (bad request): %s", e, exc_info=True)
+                        raise AgentRegistrationError(
+                            f"Assistant creation failed (bad request - check parameters): {e}"
+                        ) from e
                     logger.error("OpenAI Assistant creation failed: %s", e, exc_info=True)
                     raise AgentRegistrationError(
                         f"Failed to create Assistant {agent_type}/{agent_id}: {e}"
                     ) from e
+            except Exception as e:
+                # Non-400 errors (auth/rate/etc.) keep your original handling
+                s = str(e).lower()
+                if "unauthorized" in s or "api key" in s or "401" in s:
+                    logger.error("Assistant creation failed (auth): %s", e, exc_info=True)
+                    raise AgentRegistrationError(
+                        f"Assistant creation failed (authentication issue): {e}"
+                    ) from e
+                if "rate limit" in s or "429" in s:
+                    logger.error("Assistant creation failed (rate limit): %s", e, exc_info=True)
+                    raise AgentRegistrationError(
+                        f"Assistant creation failed (rate limit exceeded): {e}"
+                    ) from e
+                logger.error("OpenAI Assistant creation failed: %s", e, exc_info=True)
+                raise AgentRegistrationError(
+                    f"Failed to create Assistant {agent_type}/{agent_id}: {e}"
+                ) from e
+    
+        # ────────────────────────────────────────────────────────────────────
+        # Responses fallback (or direct path if use_openai_sdk=False)
+        # ────────────────────────────────────────────────────────────────────
+        resp_kwargs = _filter_responses_kwargs(sdk_defaults)
+        # We “register” a shim with the same info so the caller can use it later.
+        shim = ResponsesAssistant(
+            id=f"resp_{agent_id}",
+            name=resp_kwargs.get("name") or f"{agent_type}:{agent_id}",
+            model=resp_kwargs["model"],
+            instructions=resp_kwargs.get("instructions", ""),
+            tools=resp_kwargs.get("tools", []),
+            _custom_params={k: v for k, v in sdk_defaults.items() if k not in RESPONSES_ALLOWED_KEYS},
+        )
+        # Cache under the same dictionary so existing call-sites keep working
+        self._assistants[agent_id] = shim
+        logger.info("Responses-backed agent created for %s (id=%s, model=%s)",
+                    agent_id, shim.id, shim.model)
+        return shim
 
     async def register_agent(self, *args, **kwargs):
         """
