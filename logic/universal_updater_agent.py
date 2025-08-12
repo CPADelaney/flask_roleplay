@@ -245,6 +245,12 @@ class StrictBaseModel(BaseModel):
         _strip(schema)
         return schema
 
+# Alias for compatibility
+StrictBaseModel = BaseModel
+
+# ===== Utility Types for Strict Schema =====
+JsonScalar = Union[str, int, float, bool, None]
+
 class KeyValueStr(StrictBaseModel):
     """String key-value pair"""
     key: str
@@ -256,7 +262,7 @@ class KeyValueInt(StrictBaseModel):
     value: int
 
 # Schedule models using array format
-class DaySchedule(StrictBaseModel):
+class DailySchedule(StrictBaseModel):
     """Schedule for a single day"""
     Morning: Optional[str] = None
     Afternoon: Optional[str] = None
@@ -266,11 +272,11 @@ class DaySchedule(StrictBaseModel):
 class ScheduleEntry(StrictBaseModel):
     """Single schedule entry in array format"""
     key: str  # Day name (Monday, Tuesday, etc.)
-    value: DaySchedule
+    value: DailySchedule
 
-# Now that DaySchedule exists, define the strict KeyValuePair
+# Now that DailySchedule exists, define the strict KeyValuePair
 JsonList = List[JsonScalar]
-JsonValue = Union[JsonScalar, JsonList, DaySchedule]
+JsonValue = Union[JsonScalar, JsonList, DailySchedule]
 
 class KeyValuePair(StrictBaseModel):
     """Generic key-value pair for array format (strict)"""
