@@ -2944,57 +2944,15 @@ async def process_user_input(
         except Exception as e:
             logger.error(f"[{trace_id}] ✗ Sanitization failed: {e}")
 
-        # ===== STEP 8: Runner creation =====
-        logger.debug(f"[{trace_id}] Step 8: Creating Runner...")
-        logger.debug(f"[{trace_id}] About to create Runner with:")
+        # ===== STEP 8: Prepare Runner configuration =====
+        logger.debug(f"[{trace_id}] Step 8: Preparing Runner configuration...")
         logger.debug(f"[{trace_id}]   - agent: {type(nyx_main_agent)}")
         logger.debug(f"[{trace_id}]   - context: {type(runner_context)}")
         logger.debug(f"[{trace_id}]   - settings: {safe_settings}")
         
-        try:
-            runner = Runner(
-                nyx_main_agent,
-                runner_context,
-                run_config=RunConfig(
-                    model_settings=safe_settings,
-                    # Add explicit non-strict flags if they exist
-                    strict=False,
-                    validate_schemas=False,
-                ) if hasattr(RunConfig, 'strict') else RunConfig(model_settings=safe_settings)
-            )
-            logger.info(f"[{trace_id}] ✓✓✓ RUNNER CREATED SUCCESSFULLY ✓✓✓")
-            
-            # Log runner details
-            logger.debug(f"[{trace_id}] Runner attributes: {dir(runner)[:10]}...")
-            
-        except Exception as e:
-            logger.error(f"[{trace_id}] ✗✗✗ RUNNER CREATION FAILED ✗✗✗")
-            logger.error(f"[{trace_id}] Error type: {type(e).__name__}")
-            logger.error(f"[{trace_id}] Error message: {str(e)}")
-            logger.error(f"[{trace_id}] Full error:", exc_info=True)
-            
-            # Special checks for the specific error
-            error_str = str(e)
-            if 'additionalProperties' in error_str:
-                logger.error(f"[{trace_id}] THIS IS THE ADDITIONALPROPERTIES ERROR!")
-                
-                # Try to extract which model/tool is failing
-                import re
-                patterns = [
-                    r"model['\"]?\s*:\s*['\"]?(\w+)",
-                    r"tool['\"]?\s*:\s*['\"]?(\w+)",
-                    r"function['\"]?\s*:\s*['\"]?(\w+)",
-                    r"(\w+Model)",
-                    r"(\w+Input)",
-                    r"(\w+Output)",
-                ]
-                
-                for pattern in patterns:
-                    matches = re.findall(pattern, error_str)
-                    if matches:
-                        logger.error(f"[{trace_id}] Possible culprit from pattern '{pattern}': {matches}")
-            
-            raise
+        # Prepare run config
+        run_config = RunConfig(model_settings=safe_settings)
+        logger.info(f"[{trace_id}] ✓✓✓ RUNNER CONFIG READY ✓✓✓")
 
         # ===== STEP 9: Running the agent =====
         logger.debug(f"[{trace_id}] Step 9: Running agent stream...")
@@ -3002,7 +2960,13 @@ async def process_user_input(
         metadata = {}
         
         try:
-            async for chunk in runner.stream():
+            # Use Runner.stream() as a static method
+            async for chunk in Runner.stream(
+                nyx_main_agent,
+                user_input,
+                context=runner_context,
+                run_config=run_config
+            ):
                 chunk_type = type(chunk).__name__
                 logger.debug(f"[{trace_id}] Received chunk type: {chunk_type}")
                 
