@@ -1641,6 +1641,16 @@ class SliceOfLifeNarrator:
             model_settings=ModelSettings(),
             tools=[narrate_daily_routine]
         )
+
+    async def initialize(self):
+        """Initialize the narrator context and systems"""
+        await self.context.initialize()
+        
+        # Initialize performance monitor if not already done
+        if self.performance_monitor is None:
+            self.performance_monitor = PerformanceMonitor.get_instance(
+                self.user_id, self.conversation_id
+            )
     
     async def narrate_world_state(self) -> str:
         """Generate narration for current world state"""
