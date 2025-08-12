@@ -2758,310 +2758,318 @@ async def process_user_input(
     user_input: str,
     context_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Process user input and generate Nyx's response (instrumented)."""
+    """Process user input with MAXIMUM DEBUGGING"""
     trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
     nyx_context = None
 
-    logger.info(
-        f"[{trace_id}] process_user_input begin "
-        f"user_id={user_id} conversation_id={conversation_id} "
-        f"user_input_preview={_preview(user_input)}"
-    )
+    logger.info(f"[{trace_id}] ========== PROCESS START ==========")
+    logger.info(f"[{trace_id}] user_id={user_id} conversation_id={conversation_id}")
+    logger.info(f"[{trace_id}] user_input={user_input[:100]}")
+    logger.info(f"[{trace_id}] context_data keys: {list(context_data.keys()) if context_data else 'None'}")
+
+    # Debug: Check if monkey patch is active
+    logger.debug(f"[{trace_id}] Checking if Pydantic monkey patch is active...")
+    try:
+        test_model = type('TestModel', (BaseModel,), {'test_field': str})
+        test_schema = test_model.model_json_schema()
+        has_additional = 'additionalProperties' in str(test_schema)
+        logger.debug(f"[{trace_id}] Monkey patch test: additionalProperties found={has_additional}")
+        if has_additional:
+            logger.error(f"[{trace_id}] WARNING: Monkey patch may not be working!")
+            logger.error(f"[{trace_id}] Test schema: {json.dumps(test_schema, indent=2)}")
+    except Exception as e:
+        logger.error(f"[{trace_id}] Failed to test monkey patch: {e}")
 
     try:
-        from story_agent.world_director_agent import CompleteWorldDirector
-        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+        # ===== STEP 1: Import checks =====
+        logger.debug(f"[{trace_id}] Step 1: Checking imports...")
+        try:
+            from story_agent.world_director_agent import CompleteWorldDirector
+            from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+            logger.debug(f"[{trace_id}] ✓ Story agent imports successful")
+        except Exception as e:
+            logger.error(f"[{trace_id}] ✗ Story agent import failed: {e}")
+            raise
 
-        # --- Create & initialize context
-        async with _log_step("init NyxContext", trace_id):
+        # ===== STEP 2: Context initialization =====
+        logger.debug(f"[{trace_id}] Step 2: Initializing NyxContext...")
+        try:
             nyx_context = NyxContext(user_id, conversation_id)
+            logger.debug(f"[{trace_id}] ✓ NyxContext created")
+            
             await nyx_context.initialize()
+            logger.debug(f"[{trace_id}] ✓ NyxContext initialized")
+            
             nyx_context.current_context = (context_data or {}).copy()
             nyx_context.current_context["user_input"] = user_input
+            logger.debug(f"[{trace_id}] ✓ Context data set")
+        except Exception as e:
+            logger.error(f"[{trace_id}] ✗ NyxContext initialization failed: {e}", exc_info=True)
+            raise
 
-        # --- Integrate world systems
-        async with _log_step("hydrate world_state", trace_id):
+        # ===== STEP 3: World state integration =====
+        logger.debug(f"[{trace_id}] Step 3: Integrating world systems...")
+        try:
             if nyx_context.world_director and nyx_context.world_director.context:
                 world_state = await nyx_context.world_director.context.current_world_state
                 nyx_context.current_world_state = world_state
-                nyx_context.current_context.update({
-                    "world_mood": getattr(world_state.world_mood, "value", None) if hasattr(world_state, 'world_mood') else None,
-                    "time_of_day": getattr(world_state.current_time.time_of_day, "value", None) if hasattr(world_state, 'current_time') else None,
-                    "ongoing_events": [getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])] if hasattr(world_state, 'ongoing_events') else [],
-                    "available_activities": [getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])] if hasattr(world_state, 'available_activities') else [],
-                    "npc_schedules": getattr(world_state, 'npc_schedules', None),
-                })
-                logger.debug(f"[{trace_id}] world context={_js({k: nyx_context.current_context.get(k) for k in ('world_mood','time_of_day')})}")
+                logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.keys())}")
+            else:
+                logger.debug(f"[{trace_id}] - No world director available")
+        except Exception as e:
+            logger.error(f"[{trace_id}] ✗ World state integration failed: {e}")
 
-        # --- World sim first
-        async with _log_step("world simulation", trace_id, input_preview=_preview(user_input)):
-            if nyx_context.slice_of_life_narrator:
-                world_response = await nyx_context.slice_of_life_narrator.process_player_input(user_input)
-                nyx_context.current_context["world_response"] = world_response
-                logger.debug(f"[{trace_id}] world_response_preview={_preview(str(world_response))}")
+        # ===== STEP 4: Agent inspection =====
+        logger.debug(f"[{trace_id}] Step 4: Inspecting all agents...")
+        all_agents = [
+            ("nyx_main_agent", nyx_main_agent),
+            ("memory_agent", memory_agent),
+            ("analysis_agent", analysis_agent),
+            ("emotional_agent", emotional_agent),
+            ("visual_agent", visual_agent),
+            ("activity_agent", activity_agent),
+            ("performance_agent", performance_agent),
+            ("scenario_agent", scenario_agent),
+            ("belief_agent", belief_agent),
+            ("decision_agent", decision_agent),
+            ("reflection_agent", reflection_agent),
+        ]
 
-        # --- Agent selection
-        async with _log_step("select agent", trace_id):
-            system_prompt = (context_data or {}).get("system_prompt", "")
-            private_reflection = (context_data or {}).get("private_reflection", "")
+        for agent_name, agent in all_agents:
+            logger.debug(f"[{trace_id}] Checking agent: {agent_name}")
             
+            # Check agent attributes
+            logger.debug(f"[{trace_id}]   - Has tools: {hasattr(agent, 'tools')}")
+            logger.debug(f"[{trace_id}]   - Has _tools: {hasattr(agent, '_tools')}")
+            logger.debug(f"[{trace_id}]   - Model: {getattr(agent, 'model', 'N/A')}")
+            
+            # Inspect tools
+            tools = []
             try:
-                if system_prompt:
-                    agent = await create_nyx_agent_with_prompt(system_prompt, private_reflection)
-                    logger.debug(f"[{trace_id}] using dynamic agent with system_prompt_preview={_preview(system_prompt)}")
-                else:
-                    agent = nyx_main_agent
-                    logger.debug(f"[{trace_id}] using default nyx_main_agent")
+                if hasattr(agent, 'tools'):
+                    tools = agent.tools
+                elif hasattr(agent, '_tools'):
+                    tools = agent._tools
+                elif hasattr(agent, 'get_tools'):
+                    tools = agent.get_tools() if callable(agent.get_tools) else []
             except Exception as e:
-                if "additionalProperties" in str(e):
-                    logger.warning(f"[{trace_id}] Agent creation failed due to strict schema, creating fallback agent")
-                    # Create a simple fallback agent without structured output
-                    agent = Agent[NyxContext](
-                        name="Nyx Fallback",
-                        instructions="""You are Nyx, the AI Dominant. Respond naturally without structured output.""",
-                        model="gpt-5-nano",
-                        model_settings=DEFAULT_MODEL_SETTINGS,
-                    )
-                else:
-                    raise
-        
-        # --- Run agent (with strict-schema retry)
-        async with _log_step("Runner.run", trace_id):
-            result = await run_agent_safely(
-                agent,
-                user_input,
-                context=nyx_context,
-                run_config=RunConfig(
-                    workflow_name="Nyx Roleplay",
-                    trace_metadata={
-                        "trace_id": trace_id,
-                        "user_id": str(user_id),
-                        "conversation_id": str(conversation_id),
-                    },
-                ),
-                fallback_response=None
-            )
+                logger.error(f"[{trace_id}]   ✗ Failed to get tools: {e}")
+
+            logger.debug(f"[{trace_id}]   - Tool count: {len(tools)}")
             
-            # Log result metadata
-            safe_result_meta = {
-                "stop_reason": getattr(result, "stop_reason", None),
-                "status": getattr(result, "status", None),
-                "tool_calls": getattr(result, "tool_calls", None) if hasattr(result, "tool_calls") else None,
-            }
-            logger.debug(f"[{trace_id}] run meta={_js(safe_result_meta)}")
+            # Check each tool's schema
+            for i, tool in enumerate(tools):
+                tool_name = getattr(tool, '__name__', getattr(tool, 'name', f'tool_{i}'))
+                logger.debug(f"[{trace_id}]     Tool {i}: {tool_name}")
+                
+                # Check for parameters/schema
+                schema_attrs = ['parameters', '_parameters', 'parameters_model', 'schema', '_schema', 'openai_schema']
+                for attr in schema_attrs:
+                    if hasattr(tool, attr):
+                        val = getattr(tool, attr)
+                        logger.debug(f"[{trace_id}]       - Has {attr}: {type(val)}")
+                        
+                        # Try to get JSON schema
+                        try:
+                            if isinstance(val, type) and issubclass(val, BaseModel):
+                                json_schema = val.model_json_schema()
+                                schema_str = json.dumps(json_schema)
+                                
+                                # Check for problematic fields
+                                problems = []
+                                if 'additionalProperties' in schema_str:
+                                    problems.append('additionalProperties')
+                                if 'unevaluatedProperties' in schema_str:
+                                    problems.append('unevaluatedProperties')
+                                if 'patternProperties' in schema_str:
+                                    problems.append('patternProperties')
+                                
+                                if problems:
+                                    logger.error(f"[{trace_id}]       ✗ FOUND PROBLEMS: {problems}")
+                                    logger.error(f"[{trace_id}]       Schema: {schema_str[:500]}")
+                                    
+                                    # Try to fix it
+                                    logger.debug(f"[{trace_id}]       Attempting to clean schema...")
+                                    cleaned = sanitize_json_schema(json_schema)
+                                    if 'additionalProperties' not in json.dumps(cleaned):
+                                        logger.debug(f"[{trace_id}]       ✓ Schema cleaned successfully")
+                                        # Try to update the tool
+                                        try:
+                                            setattr(tool, attr, type(f'Clean{val.__name__}', (val,), {
+                                                'model_json_schema': classmethod(lambda cls: cleaned)
+                                            }))
+                                        except:
+                                            pass
+                                    else:
+                                        logger.error(f"[{trace_id}]       ✗ Cleaning failed!")
+                                else:
+                                    logger.debug(f"[{trace_id}]       ✓ Schema is clean")
+                        except Exception as e:
+                            logger.debug(f"[{trace_id}]       Could not check schema: {e}")
 
-        # --- Parse output (continues as before)
-        async with _log_step("parse NarrativeResponse", trace_id):
-            try:
-                response = result.final_output_as(NarrativeResponse)
-                parsed_from = "structured"
-            except Exception:
-                raw_text = (
-                    getattr(result, "output_text", None)
-                    or getattr(result, "completion_text", None)
-                    or getattr(result, "final_output", None)
-                    or (getattr(getattr(result, "response", None), "output_text", None) if hasattr(result, "response") else None)
-                    or ""
-                )
-                response = NarrativeResponse(
-                    narrative=raw_text or "…",
-                    tension_level=0,
-                    generate_image=False,
-                    image_prompt=None,
-                    environment_description=None,
-                    time_advancement=False,
-                    universal_updates=None,
-                    world_mood=nyx_context.current_context.get("world_mood"),
-                    ongoing_events=nyx_context.current_context.get("ongoing_events"),
-                    available_activities=nyx_context.current_context.get("available_activities"),
-                    npc_schedules=dict_to_kvlist(nyx_context.current_context.get("npc_schedules") or {}),
-                    time_of_day=nyx_context.current_context.get("time_of_day"),
-                    emergent_opportunities=None,
-                )
-                parsed_from = "fallback"
-            logger.info(f"[{trace_id}] response parsed via={parsed_from} narrative_preview={_preview(response.narrative)}")
-
-        # Ensure not empty
-        if not response.narrative:
-            logger.warning(f"[{trace_id}] empty narrative; substituting ellipsis")
-            response.narrative = "…"
-
-        # --- Fire-and-forget universal updates
-        async with _log_step("schedule universal updates", trace_id):
-            if response.narrative and not nyx_context.current_context.get("universal_updates"):
-                try:
-                    wrapper = RunContextWrapper(context=nyx_context)
-                    asyncio.create_task(generate_universal_updates_impl(wrapper, response.narrative))
-                    logger.debug(f"[{trace_id}] universal updates scheduled")
-                except Exception:
-                    logger.exception(f"[{trace_id}] failed to schedule universal updates")
-
-        # --- Extract universal updates
-        uu: Dict[str, Any] = {}
-        val = nyx_context.current_context.get("universal_updates")
-        if isinstance(val, dict):
-            uu = val
-        logger.debug(f"[{trace_id}] universal_updates_keys={list(uu.keys()) if uu else []}")
-
-        # --- Optional response filtering
-        async with _log_step("response_filter", trace_id):
-            if getattr(nyx_context, "response_filter", None) and response.narrative:
-                try:
-                    before = response.narrative
-                    response.narrative = await nyx_context.response_filter.filter_response(
-                        response.narrative, nyx_context.current_context
-                    )
-                    logger.debug(f"[{trace_id}] response filtered changed={before != response.narrative}")
-                except Exception:
-                    logger.exception(f"[{trace_id}] response_filter failed; using unfiltered narrative")
-
-        # --- Optional task generation
-        async with _log_step("task_generation", trace_id):
-            try:
-                if nyx_context.should_generate_task():
-                    task_result = await nyx_context.task_integration.generate_creative_task(
-                        nyx_context,
-                        npc_id=nyx_context.current_context.get("active_npc_id"),
-                        scenario_id=nyx_context.current_context.get("scenario_id"),
-                    )
-                    if task_result.get("success"):
-                        response.narrative += f"\n\n[New Task: {task_result['task']['name']}]"
-                        nyx_context.active_tasks.append(task_result["task"])
-                        nyx_context.record_task_run("task_generation")
-                        logger.info(f"[{trace_id}] task generated name={task_result['task'].get('name')}")
-            except Exception:
-                logger.exception(f"[{trace_id}] task generation failed")
-
-        # --- Store interaction in memory (best-effort)
-        async with _log_step("memory write", trace_id):
-            try:
-                await nyx_context.memory_system.remember(
-                    entity_type="integrated",
-                    entity_id=0,
-                    memory_text=f"User: {user_input}\nNyx: {response.narrative}",
-                    importance="medium",
-                    emotional=True,
-                    tags=["interaction", "conversation"],
-                )
-                logger.debug(f"[{trace_id}] memory write ok")
-            except Exception:
-                logger.exception(f"[{trace_id}] memory write failed")
-
-        # --- Learning signals (best-effort)
-        async with _log_step("learn_from_interaction", trace_id):
-            try:
-                await nyx_context.learn_from_interaction(
-                    action="response",
-                    outcome=f"tension_{response.tension_level}",
-                    success=True,
-                )
-            except Exception:
-                logger.exception(f"[{trace_id}] learn_from_interaction failed")
-
-        # --- Performance metrics
-        response_time = time.time() - start_time
-        async with _log_step("update_performance", trace_id, response_time=response_time):
-            try:
-                nyx_context.update_performance("response_times", response_time)
-                nyx_context.update_performance(
-                    "total_actions", nyx_context.performance_metrics["total_actions"] + 1
-                )
-                nyx_context.update_performance(
-                    "successful_actions",
-                    nyx_context.performance_metrics["successful_actions"] + 1,
-                )
-            except Exception:
-                logger.exception(f"[{trace_id}] update_performance failed")
-
-        # --- Token usage (optional)
-        tokens_used = 0
+        # ===== STEP 5: Runner context creation =====
+        logger.debug(f"[{trace_id}] Step 5: Creating runner context...")
         try:
-            tokens_used = extract_token_usage(result)
-            logger.info(f"[{trace_id}] tokens_used={tokens_used}")
-        except Exception:
-            logger.debug(f"[{trace_id}] extract_token_usage failed")
+            runner_context = RunContextWrapper(nyx_context)
+            logger.debug(f"[{trace_id}] ✓ Runner context created")
+            logger.debug(f"[{trace_id}]   Context attributes: {dir(runner_context)[:10]}...")
+        except Exception as e:
+            logger.error(f"[{trace_id}] ✗ Runner context creation failed: {e}", exc_info=True)
+            raise
 
-        # --- Persist context (best-effort)
-        async with _log_step("_save_context_state", trace_id):
-            try:
-                await _save_context_state(nyx_context)
-            except Exception:
-                logger.exception(f"[{trace_id}] _save_context_state failed")
+        # ===== STEP 6: Model settings check =====
+        logger.debug(f"[{trace_id}] Step 6: Checking model settings...")
+        logger.debug(f"[{trace_id}]   strict_tools: {DEFAULT_MODEL_SETTINGS.strict_tools}")
+        logger.debug(f"[{trace_id}]   response_format: {DEFAULT_MODEL_SETTINGS.response_format}")
+        
+        # Create custom settings with extra safety
+        safe_settings = ModelSettings(
+            strict_tools=False,
+            response_format=None,
+            # Add any other settings that might help
+            temperature=0.7,
+        )
+        logger.debug(f"[{trace_id}] ✓ Using safe model settings")
 
-        payload = {
-            "success": True,
-            "response": {
-                "narrative": response.narrative,
-                "tension_level": response.tension_level,
-                "generate_image": response.generate_image,
-                "image_prompt": response.image_prompt,
-                "environment_update": response.environment_description,
-                "time_advancement": response.time_advancement,
-                "universal_updates": uu,
-                "world_mood": response.world_mood,
-                "ongoing_events": response.ongoing_events,
-                "available_activities": response.available_activities,
-                "npc_schedules": kvlist_to_dict(response.npc_schedules) if response.npc_schedules else None,
-                "time_of_day": response.time_of_day,
-                "emergent_opportunities": response.emergent_opportunities,
-            },
-            "memories_used": [],
-            "performance": {
-                "response_time": response_time,
-                "memory_usage": nyx_context.performance_metrics.get("memory_usage"),
-                "cpu_usage": nyx_context.performance_metrics.get("cpu_usage"),
-                "tokens_used": tokens_used,
-            },
-            "learning": {
-                "patterns_learned": len(getattr(nyx_context, "learned_patterns", {})),
-                "adaptation_success_rate": nyx_context.learning_metrics.get(
-                    "adaptation_success_rate"
-                ),
-            },
+        # ===== STEP 7: Final sanitization =====
+        logger.debug(f"[{trace_id}] Step 7: Final tool sanitization...")
+        try:
+            sanitize_agent_tools_in_place(nyx_main_agent)
+            logger.debug(f"[{trace_id}] ✓ Main agent tools sanitized")
+            
+            # Extra paranoid check
+            if hasattr(nyx_main_agent, '__dict__'):
+                for key, value in nyx_main_agent.__dict__.items():
+                    if 'schema' in key.lower() and isinstance(value, dict):
+                        if 'additionalProperties' in str(value):
+                            logger.error(f"[{trace_id}] ✗ Found additionalProperties in {key}!")
+                            nyx_main_agent.__dict__[key] = sanitize_json_schema(value)
+        except Exception as e:
+            logger.error(f"[{trace_id}] ✗ Sanitization failed: {e}")
+
+        # ===== STEP 8: Runner creation =====
+        logger.debug(f"[{trace_id}] Step 8: Creating Runner...")
+        logger.debug(f"[{trace_id}] About to create Runner with:")
+        logger.debug(f"[{trace_id}]   - agent: {type(nyx_main_agent)}")
+        logger.debug(f"[{trace_id}]   - context: {type(runner_context)}")
+        logger.debug(f"[{trace_id}]   - settings: {safe_settings}")
+        
+        try:
+            runner = Runner(
+                nyx_main_agent,
+                runner_context,
+                run_config=RunConfig(
+                    model_settings=safe_settings,
+                    # Add explicit non-strict flags if they exist
+                    strict=False,
+                    validate_schemas=False,
+                ) if hasattr(RunConfig, 'strict') else RunConfig(model_settings=safe_settings)
+            )
+            logger.info(f"[{trace_id}] ✓✓✓ RUNNER CREATED SUCCESSFULLY ✓✓✓")
+            
+            # Log runner details
+            logger.debug(f"[{trace_id}] Runner attributes: {dir(runner)[:10]}...")
+            
+        except Exception as e:
+            logger.error(f"[{trace_id}] ✗✗✗ RUNNER CREATION FAILED ✗✗✗")
+            logger.error(f"[{trace_id}] Error type: {type(e).__name__}")
+            logger.error(f"[{trace_id}] Error message: {str(e)}")
+            logger.error(f"[{trace_id}] Full error:", exc_info=True)
+            
+            # Special checks for the specific error
+            error_str = str(e)
+            if 'additionalProperties' in error_str:
+                logger.error(f"[{trace_id}] THIS IS THE ADDITIONALPROPERTIES ERROR!")
+                
+                # Try to extract which model/tool is failing
+                import re
+                patterns = [
+                    r"model['\"]?\s*:\s*['\"]?(\w+)",
+                    r"tool['\"]?\s*:\s*['\"]?(\w+)",
+                    r"function['\"]?\s*:\s*['\"]?(\w+)",
+                    r"(\w+Model)",
+                    r"(\w+Input)",
+                    r"(\w+Output)",
+                ]
+                
+                for pattern in patterns:
+                    matches = re.findall(pattern, error_str)
+                    if matches:
+                        logger.error(f"[{trace_id}] Possible culprit from pattern '{pattern}': {matches}")
+            
+            raise
+
+        # ===== STEP 9: Running the agent =====
+        logger.debug(f"[{trace_id}] Step 9: Running agent stream...")
+        response_parts = []
+        metadata = {}
+        
+        try:
+            async for chunk in runner.stream():
+                chunk_type = type(chunk).__name__
+                logger.debug(f"[{trace_id}] Received chunk type: {chunk_type}")
+                
+                if hasattr(chunk, 'event'):
+                    logger.debug(f"[{trace_id}]   Event: {chunk.event}")
+                    
+                    if chunk.event == 'agent_response':
+                        if hasattr(chunk, 'data') and hasattr(chunk.data, 'text'):
+                            response_parts.append(chunk.data.text)
+                            logger.debug(f"[{trace_id}]   Added text: {chunk.data.text[:100]}...")
+                    
+                    elif chunk.event == 'tool_call':
+                        tool_name = getattr(chunk.data, 'tool', 'unknown')
+                        logger.debug(f"[{trace_id}]   Tool called: {tool_name}")
+                        
+                    elif chunk.event == 'error':
+                        logger.error(f"[{trace_id}]   Stream error: {chunk.data}")
+                        
+                elif hasattr(chunk, 'text'):
+                    response_parts.append(chunk.text)
+                    logger.debug(f"[{trace_id}]   Direct text: {chunk.text[:100]}...")
+                    
+        except Exception as e:
+            logger.error(f"[{trace_id}] ✗ Stream processing failed: {e}", exc_info=True)
+            raise
+
+        # ===== STEP 10: Response assembly =====
+        logger.debug(f"[{trace_id}] Step 10: Assembling response...")
+        response_text = ' '.join(response_parts) if response_parts else "I couldn't generate a response."
+        
+        result = {
+            'response': response_text,
+            'metadata': metadata,
+            'trace_id': trace_id,
+            'processing_time': time.time() - start_time,
         }
-
-        logger.info(f"[{trace_id}] process_user_input success in {time.time() - start_time:.3f}s")
-        return payload
-
-    except ValidationError as e:
-        logger.error(f"[{trace_id}] Validation error in agent response: {e}")
-        return {
-            "success": False,
-            "error": "Response validation error",
-            "response": {
-                "narrative": "I need to adjust my response format. Let me try again in a moment.",
-                "tension_level": 0,
-                "generate_image": False,
-            },
-        }
-
+        
+        logger.info(f"[{trace_id}] ========== PROCESS COMPLETE ==========")
+        logger.info(f"[{trace_id}] Response length: {len(response_text)}")
+        logger.info(f"[{trace_id}] Processing time: {result['processing_time']:.2f}s")
+        
+        return result
+        
     except Exception as e:
-        logger.error(f"[{trace_id}] Error processing user input: {e}")
-        if nyx_context is not None and hasattr(nyx_context, "performance_metrics"):
-            try:
-                nyx_context.update_performance(
-                    "total_actions", nyx_context.performance_metrics["total_actions"] + 1
-                )
-                nyx_context.update_performance(
-                    "failed_actions", nyx_context.performance_metrics["failed_actions"] + 1
-                )
-                nyx_context.log_error(e, {"user_input_preview": _preview(user_input)})
-                await nyx_context.learn_from_interaction(
-                    action="response", outcome="error", success=False
-                )
-            except Exception:
-                logger.exception(f"[{trace_id}] error-path metrics/logging failed")
-
+        logger.error(f"[{trace_id}] ========== PROCESS FAILED ==========")
+        logger.error(f"[{trace_id}] Fatal error in process_user_input", exc_info=True)
+        
+        # Return error response
         return {
-            "success": False,
-            "error": str(e),
-            "response": {
-                "narrative": "I apologize, but I encountered an error processing your request. Please try again.",
-                "tension_level": 0,
-                "generate_image": False,
-            },
+            'response': "I encountered an error processing your request.",
+            'error': str(e),
+            'trace_id': trace_id,
+            'processing_time': time.time() - start_time,
         }
+        
+    finally:
+        # Cleanup
+        if nyx_context:
+            try:
+                await nyx_context.cleanup()
+                logger.debug(f"[{trace_id}] Context cleaned up")
+            except:
+                pass
 
 async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
