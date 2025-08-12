@@ -742,13 +742,13 @@ class CompleteWorldDirectorContext:
     async def _safe_drain_relationship_events(self) -> Dict[str, Any]:
         """Safely drain relationship events"""
         try:
-            return await drain_relationship_events_tool(
-                ctx=RunContextWrapper({
-                    'user_id': self.user_id,
-                    'conversation_id': self.conversation_id
-                }),
-                max_events=5
-            )
+            # Don't call the tool directly, access the event_generator
+            from logic.dynamic_relationships import event_generator
+            events = await event_generator.drain_events(max_events=5)
+            return {
+                'events': events,
+                'count': len(events)
+            }
         except Exception as e:
             logger.error(f"Error draining relationship events: {e}")
             return {'events': []}
