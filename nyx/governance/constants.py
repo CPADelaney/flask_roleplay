@@ -38,3 +38,8 @@ class AgentType:
     SCENE_MANAGER = "scene_manager"
     UNIVERSAL_UPDATER = "universal_updater"
     MEMORY_MANAGER = "memory_manager"
+    
+    # Event system agent types
+    EVENT_MANAGER = "event_manager"
+    EVENT_ANALYZER = "event_analyzer"
+    EVENT_PROPAGATOR = "event_propagator"
