@@ -20,6 +20,56 @@ from collections import defaultdict
 # from openai import AsyncOpenAI
 # from openai.types.beta.assistant import Assistant
 
+try:
+    from openai import BadRequestError
+    OPENAI_ERRORS_AVAILABLE = True
+except ImportError:
+    OPENAI_ERRORS_AVAILABLE = False
+    # Create a fallback BadRequestError class
+    class BadRequestError(Exception):
+        """Fallback BadRequestError when OpenAI is not available."""
+        pass
+
+# Helper functions for OpenAI integration
+RESPONSES_ALLOWED_KEYS = {
+    "model", "name", "instructions", "temperature", "top_p", 
+    "max_tokens", "tools", "custom_capabilities"
+}
+
+def _is_unsupported_model(error: Exception) -> bool:
+    """Check if the error indicates an unsupported model."""
+    error_msg = str(error).lower()
+    unsupported_phrases = [
+        "model not supported",
+        "unsupported model", 
+        "invalid model",
+        "does not exist",
+        "not available for assistants",
+        "gpt-5"  # gpt-5 models might not be supported yet
+    ]
+    return any(phrase in error_msg for phrase in unsupported_phrases)
+
+def _filter_responses_kwargs(kwargs: dict) -> dict:
+    """Filter kwargs to only include valid Responses API parameters."""
+    filtered = {}
+    for key in RESPONSES_ALLOWED_KEYS:
+        if key in kwargs:
+            filtered[key] = kwargs[key]
+    return filtered
+
+class ResponsesAssistant:
+    """Shim class to provide Assistant-like interface for Responses API fallback."""
+    def __init__(self, id: str, name: str, model: str, 
+                 instructions: str = "", tools: list = None, 
+                 _custom_params: dict = None):
+        self.id = id
+        self.name = name
+        self.model = model
+        self.instructions = instructions
+        self.tools = tools or []
+        self._custom_params = _custom_params or {}
+        self.created_at = datetime.now().isoformat()
+
 # Import metrics (assuming prometheus_client is available)
 try:
     from prometheus_client import Counter, Histogram, Gauge
