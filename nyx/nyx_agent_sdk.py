@@ -767,7 +767,7 @@ class NyxContext:
             self.slice_of_life_narrator = SliceOfLifeNarrator(self.user_id, self.conversation_id)
             await self.slice_of_life_narrator.initialize()
 
-            self.current_world_state = await self.world_director.context.current_world_state
+            self.current_world_state = self.world_director.context.current_world_state
         except Exception as e:
             logger.warning(f"World systems initialization failed: {e}", exc_info=True)
 
