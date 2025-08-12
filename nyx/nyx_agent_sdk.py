@@ -1,6 +1,6 @@
-# nyx/nyx_agent_sky.py
+# nyx/nyx_agent_sdk.py
 """
-Nyx Agent SDK - Refactored to use OpenAI Agents SDK with Strict Typing
+Nyx Agent SDK - Refactored to use OpenAI Agents SDK with Strict Typing Fixes
 
 MODULARIZATION TODO: This file has grown to 2k+ lines and should be split:
 - nyx/models.py - All Pydantic models and Config constants
@@ -34,9 +34,37 @@ import copy
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 from dataclasses import dataclass, field
-from contextlib import suppress
+from contextlib import suppress, asynccontextmanager
 import statistics
+import uuid
 
+# ===== CRITICAL FIX #1: Monkey patch Pydantic BEFORE any imports =====
+import pydantic.json_schema
+
+_original_model_json_schema = pydantic.json_schema.model_json_schema
+
+def _patched_model_json_schema(*args, **kwargs):
+    """Patched version that removes additionalProperties"""
+    schema = _original_model_json_schema(*args, **kwargs)
+    
+    def strip_additional_properties(obj):
+        if isinstance(obj, dict):
+            obj.pop('additionalProperties', None)
+            obj.pop('unevaluatedProperties', None)
+            for v in obj.values():
+                if isinstance(v, (dict, list)):
+                    strip_additional_properties(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                strip_additional_properties(item)
+        return obj
+    
+    return strip_additional_properties(schema)
+
+# Apply the monkey patch globally
+pydantic.json_schema.model_json_schema = _patched_model_json_schema
+
+# Now import agents and Pydantic
 from agents import (
     Agent, Runner, function_tool, handoff,
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
@@ -44,7 +72,7 @@ from agents import (
 )
 
 from pydantic import BaseModel as _PydanticBaseModel, Field, ValidationError, ConfigDict
-import inspect  # Required by debug_strict_schema_for_agent
+import inspect
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
@@ -57,274 +85,60 @@ from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
 
-try:
-    import agents.function_schema as _fs
-    _ORIG_FUNCTION_SCHEMA = _fs.function_schema
+# ===== CRITICAL FIX #2: Default Model Settings with strict_tools=False =====
+DEFAULT_MODEL_SETTINGS = ModelSettings(
+    strict_tools=False,
+    # Disable structured format validation
+    response_format=None,
+)
 
-    def _NYX_function_schema(func, *args, **kwargs):
-        sch = _ORIG_FUNCTION_SCHEMA(func, *args, **kwargs)
-        if isinstance(sch, dict):
-            if "parameters" in sch and isinstance(sch["parameters"], dict):
-                sch["parameters"] = sanitize_json_schema(sch["parameters"])
-            else:
-                sch = sanitize_json_schema(sch)
-        return sch
-
-    # Patch the module AND make it available globally
-    _fs.function_schema = _NYX_function_schema
-    function_schema = _NYX_function_schema  # Now this is the patched version
-    logger.debug("Patched agents.function_schema.function_schema for strict JSON schema.")
-except Exception:
-    logger.exception("Failed to patch function_schema; will sanitize tools in-place later.")
-    # Fallback: import the original if patching fails
-    from agents.function_schema import function_schema
-
-
-# --- BEGIN: global JSON Schema sanitizer for Pydantic v2 & tools ---
-
-def _nyx_walk_and_strip_ap(node, path="$", removed_locations=None):
-    """Walk schema and strip additionalProperties, tracking where they were found."""
-    if removed_locations is None:
-        removed_locations = []
-        
-    if isinstance(node, dict):
-        # Check and remove additionalProperties/unevaluatedProperties
-        if "additionalProperties" in node:
-            removed_locations.append(f"{path}.additionalProperties={node['additionalProperties']}")
-            node.pop("additionalProperties", None)
-        if "unevaluatedProperties" in node:
-            removed_locations.append(f"{path}.unevaluatedProperties={node['unevaluatedProperties']}")
-            node.pop("unevaluatedProperties", None)
-
-        # Recurse through typical schema containers
-        for key in ("properties", "$defs", "definitions", "patternProperties"):
-            sub = node.get(key)
-            if isinstance(sub, dict):
-                for k, v in sub.items():
-                    _nyx_walk_and_strip_ap(v, f"{path}.{key}.{k}", removed_locations)
-
-        for key in ("items", "prefixItems", "contains", "not"):
-            sub = node.get(key)
-            if sub is not None:
-                _nyx_walk_and_strip_ap(sub, f"{path}.{key}", removed_locations)
-
-        for key in ("anyOf", "oneOf", "allOf"):
-            sub = node.get(key)
-            if isinstance(sub, list):
-                for i, v in enumerate(sub):
-                    _nyx_walk_and_strip_ap(v, f"{path}.{key}[{i}]", removed_locations)
-            elif isinstance(sub, dict):
-                _nyx_walk_and_strip_ap(sub, f"{path}.{key}", removed_locations)
-                
-        for key in ("if", "then", "else"):
-            sub = node.get(key)
-            if isinstance(sub, dict):
-                _nyx_walk_and_strip_ap(sub, f"{path}.{key}", removed_locations)
-
-        # Walk any other dict values
-        for k, v in list(node.items()):
-            if k not in {"properties", "$defs", "definitions", "patternProperties", 
-                        "items", "prefixItems", "contains", "not", 
-                        "anyOf", "oneOf", "allOf", "if", "then", "else", 
-                        "type", "description", "title", "required", "enum", 
-                        "const", "default", "examples", "minimum", "maximum",
-                        "minLength", "maxLength", "pattern", "format"}:
-                if isinstance(v, (dict, list)):
-                    _nyx_walk_and_strip_ap(v, f"{path}.{k}", removed_locations)
-
-    elif isinstance(node, list):
-        for i, item in enumerate(node):
-            _nyx_walk_and_strip_ap(item, f"{path}[{i}]", removed_locations)
-            
-    return removed_locations
-
-def _check_for_additional_properties(node, path="$", found_locations=None):
-    """Check if additionalProperties still exist in the schema."""
-    if found_locations is None:
-        found_locations = []
-        
-    if isinstance(node, dict):
-        if "additionalProperties" in node:
-            found_locations.append(f"{path}.additionalProperties={node['additionalProperties']}")
-        if "unevaluatedProperties" in node:
-            found_locations.append(f"{path}.unevaluatedProperties={node['unevaluatedProperties']}")
-            
-        for k, v in node.items():
-            if isinstance(v, (dict, list)):
-                _check_for_additional_properties(v, f"{path}.{k}", found_locations)
-                
-    elif isinstance(node, list):
-        for i, item in enumerate(node):
-            _check_for_additional_properties(item, f"{path}[{i}]", found_locations)
-            
-    return found_locations
-
-def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Sanitize JSON schema by removing additionalProperties with detailed logging."""
-    import json
-    import hashlib
-    
-    # Create a schema fingerprint for tracking
-    schema_str = json.dumps(schema, sort_keys=True, default=str)
-    schema_hash = hashlib.md5(schema_str.encode()).hexdigest()[:8]
-    
-    # Get some context about the schema
-    schema_type = schema.get("type", "unknown")
-    schema_title = schema.get("title", schema.get("name", "unnamed"))
-    
-    logger.debug(f"[SCHEMA-{schema_hash}] Sanitizing schema: type={schema_type}, title={schema_title}")
-    
-    # Check for additionalProperties before sanitization
-    before_locations = _check_for_additional_properties(schema)
-    if before_locations:
-        logger.warning(f"[SCHEMA-{schema_hash}] Found additionalProperties BEFORE sanitization at {len(before_locations)} locations:")
-        for loc in before_locations[:5]:  # Log first 5 locations
-            logger.warning(f"  - {loc}")
-        if len(before_locations) > 5:
-            logger.warning(f"  ... and {len(before_locations) - 5} more locations")
-    
-    # Deep copy and sanitize
-    s = copy.deepcopy(schema)
-    removed_locations = _nyx_walk_and_strip_ap(s)
-    
-    if removed_locations:
-        logger.info(f"[SCHEMA-{schema_hash}] Removed additionalProperties from {len(removed_locations)} locations:")
-        for loc in removed_locations[:5]:  # Log first 5 removals
-            logger.info(f"  - {loc}")
-        if len(removed_locations) > 5:
-            logger.info(f"  ... and {len(removed_locations) - 5} more locations")
-    
-    # Check for additionalProperties after sanitization
-    after_locations = _check_for_additional_properties(s)
-    if after_locations:
-        logger.error(f"[SCHEMA-{schema_hash}] WARNING: additionalProperties STILL PRESENT after sanitization at {len(after_locations)} locations:")
-        for loc in after_locations:
-            logger.error(f"  - {loc}")
-        
-        # Log a sample of the problematic schema for debugging
-        try:
-            sample = json.dumps(s, indent=2, default=str)
-            if len(sample) > 1000:
-                sample = sample[:1000] + "... (truncated)"
-            logger.error(f"[SCHEMA-{schema_hash}] Problematic schema sample:\n{sample}")
-        except:
-            logger.error(f"[SCHEMA-{schema_hash}] Could not serialize problematic schema")
-    else:
-        logger.debug(f"[SCHEMA-{schema_hash}] Successfully sanitized - no additionalProperties remaining")
-    
-    return s
-
-# Patch where the SDK builds output tool schemas (module names vary by SDK version)
-def _try_patch_output_schema():
-    patched_any = False
-    candidates = [
-        ("agents.output_schema", "model_to_openai_schema"),
-        ("agents.output_schema", "pydantic_to_openai_schema"),
-        ("agents.outputs", "model_to_openai_schema"),
-        ("agents.outputs", "build_output_tool_parameters"),
-        ("agents.output_tool", "build_output_tool_parameters"),
-    ]
-    for mod_name, fn_name in candidates:
-        try:
-            mod = __import__(mod_name, fromlist=[fn_name])
-            orig = getattr(mod, fn_name, None)
-            if callable(orig):
-                def _wrap(*a, __orig=orig, **k):
-                    return _sanitize(__orig(*a, **k))
-                setattr(mod, fn_name, _wrap)
-                logger.debug("Patched %s.%s for strict JSON schema.", mod_name, fn_name)
-                patched_any = True
-        except Exception:
-            # best-effort; some modules won’t exist depending on SDK version
-            continue
-    if not patched_any:
-        logger.warning("Could not find an output schema builder to patch; "
-                       "if errors persist, we’ll sanitize tools directly on the agent.")
-
-_try_patch_output_schema()
-
-# Safety: sanitize tool objects returned by the agent just before a run
-def sanitize_agent_tools_in_place(agent):
-    try:
-        tools = []
-        if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
-            tools = agent.get_all_tools() or []
-        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
-            tools = agent.get_tools() or []
-        else:
-            tools = getattr(agent, "tools", []) or []
-
-        for t in tools:
-            # common attributes various wrappers use for their schema
-            for attr in ("parameters", "_parameters", "_schema", "schema", "openai_schema"):
-                val = getattr(t, attr, None)
-                if isinstance(val, dict):
-                    try:
-                        setattr(t, attr, _sanitize(val))
-                    except Exception:
-                        pass
-    except Exception:
-        logger.exception("sanitize_agent_tools_in_place failed")
-
-
-
-# --- END: global JSON Schema sanitizer for Pydantic v2 & tools ---
-
-from pydantic import BaseModel as _PydanticBaseModel, Field, ConfigDict
-
+# ===== CRITICAL FIX #3: Clean BaseModel without additionalProperties =====
 class BaseModel(_PydanticBaseModel):
-    # Don't use extra='forbid' as it adds additionalProperties to the schema
-    model_config = ConfigDict()  # Empty config, no extra='forbid'
-
+    """Base model that ensures no additionalProperties in schema"""
+    model_config = ConfigDict(
+        # Use 'ignore' instead of 'forbid' to avoid additionalProperties
+        extra='ignore',
+        arbitrary_types_allowed=False,
+    )
+    
     @classmethod
-    def model_json_schema(cls, **kwargs):
-        """Override to ensure no additionalProperties in schema."""
-        schema = super().model_json_schema(**kwargs)
-        # Remove additionalProperties at all levels
-        def strip_ap(obj):
+    def model_json_schema(cls, *args, **kwargs):
+        """Override to strip additionalProperties from schema"""
+        schema = super().model_json_schema(*args, **kwargs)
+        
+        def clean_schema(obj):
             if isinstance(obj, dict):
-                # Remove the problematic keys
+                # Remove the problematic properties
                 obj.pop('additionalProperties', None)
                 obj.pop('unevaluatedProperties', None)
-                # Recurse
-                for v in obj.values():
-                    strip_ap(v)
+                
+                # Recursively clean nested objects
+                for key in list(obj.keys()):
+                    if isinstance(obj[key], (dict, list)):
+                        clean_schema(obj[key])
             elif isinstance(obj, list):
                 for item in obj:
-                    strip_ap(item)
+                    clean_schema(item)
+            
             return obj
         
-        return strip_ap(schema)
+        return clean_schema(schema)
 
-    @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
-        """Override the schema generation to remove additionalProperties."""
-        schema = handler(core_schema)
-        # Don't add additionalProperties at all
-        if isinstance(schema, dict):
-            schema.pop('additionalProperties', None)
-            schema.pop('unevaluatedProperties', None)
-        return schema
-
+# Alias for compatibility
+StrictBaseModel = BaseModel
 
 # ===== Utility Types for Strict Schema =====
-
 JsonScalar = Union[str, int, float, bool, None]
-JsonValue  = Union[
-    JsonScalar,            # single value
-    List[JsonScalar],      # simple array
-]
+JsonValue = Union[JsonScalar, List[JsonScalar]]
 
 class KVPair(BaseModel):
-    
     key: str
-    value: JsonValue        # ← now non-recursive, legal schema
+    value: JsonValue
 
 class KVList(BaseModel):
-    
     items: List[KVPair] = Field(default_factory=list)
 
-KVPair.model_rebuild()      # leave this, it's harmless
+KVPair.model_rebuild()
 
 # Helpers for conversion
 def dict_to_kvlist(d: dict) -> KVList:
@@ -333,45 +147,24 @@ def dict_to_kvlist(d: dict) -> KVList:
 def kvlist_to_dict(kv: KVList) -> dict:
     return {pair.key: pair.value for pair in kv.items}
 
-
-# Patch output tool schema builders (SDK versions differ; try a few)
-def _try_patch_output_schema():
-    candidates = [
-        ("agents.output_schema", "model_to_openai_schema"),
-        ("agents.output_schema", "pydantic_to_openai_schema"),
-        ("agents.outputs", "model_to_openai_schema"),
-        ("agents.outputs", "build_output_tool_parameters"),
-        ("agents.output_tool", "build_output_tool_parameters"),
-    ]
-    patched_any = False
-    for mod_name, fn_name in candidates:
-        try:
-            mod = __import__(mod_name, fromlist=[fn_name])
-            orig = getattr(mod, fn_name, None)
-            if not callable(orig):
-                continue
-
-            def _wrap(*a, __orig=orig, **k):
-                out = __orig(*a, **k)
-                # wrap dicts that look like { "type": "object", "properties": {...} }
-                if isinstance(out, dict):
-                    return sanitize_json_schema(out)
-                # some SDK funcs return a bigger struct with a "parameters" dict
-                if isinstance(out, dict) and "parameters" in out and isinstance(out["parameters"], dict):
-                    out["parameters"] = sanitize_json_schema(out["parameters"])
-                    return out
-                return out
-
-            setattr(mod, fn_name, _wrap)
-            logger.debug("Patched %s.%s for strict JSON schema.", mod_name, fn_name)
-            patched_any = True
-        except Exception:
-            continue
-
-    if not patched_any:
-        logger.warning("No output-schema builder patched; will rely on model BaseModel override + in-place tool sanitize.")
-
-_try_patch_output_schema()
+# ===== Global sanitization functions =====
+def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize JSON schema by removing additionalProperties with detailed logging."""
+    s = copy.deepcopy(schema)
+    
+    def strip_ap(obj):
+        if isinstance(obj, dict):
+            obj.pop('additionalProperties', None)
+            obj.pop('unevaluatedProperties', None)
+            for v in obj.values():
+                if isinstance(v, (dict, list)):
+                    strip_ap(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                strip_ap(item)
+        return obj
+    
+    return strip_ap(s)
 
 def sanitize_agent_tools_in_place(agent):
     """
@@ -398,84 +191,21 @@ def sanitize_agent_tools_in_place(agent):
     except Exception:
         logger.exception("sanitize_agent_tools_in_place failed")
 
-
 def strict_output(model_cls):
-    """
-    Return the Pydantic model class as-is. Our global JSON-Schema sanitizer
-    already strips additionalProperties/unevaluatedProperties, so we don't
-    need to wrap this in GuardrailFunctionOutput (which is for guardrails).
-    """
+    """Return the Pydantic model class as-is."""
     if not inspect.isclass(model_cls):
         raise TypeError("strict_output expects a Pydantic model class")
     try:
-        # Force schema build once (will be sanitized by our patch)
         _ = model_cls.model_json_schema()
         logger.debug("strict_output: schema ready for %s", getattr(model_cls, "__name__", model_cls))
     except Exception:
         logger.debug("strict_output: schema build skipped for %r", model_cls, exc_info=True)
     return model_cls
 
-def _is_strict_schema_error(err: Exception) -> bool:
-    msg = str(err).lower()
-    return (
-        "additionalproperties" in msg
-        or "unevaluatedproperties" in msg
-        or "strict schema" in msg
-        or "should not be set for object types" in msg
-    )
-
-
-def _disable_strict_output(agent):
+def debug_strict_schema_for_agent(agent: Any, log: logging.Logger = logger) -> None:
     """
-    Best-effort: relax structured output on the agent so a retry can succeed
-    even if the SDK emitted a too-strict schema.
+    Log sanitized tool schemas at DEBUG. Never raises if a tool is wrapped.
     """
-    for attr in ("output_type", "output", "structured_output", "guardrail_output", "tool_output"):
-        if hasattr(agent, attr):
-            try:
-                setattr(agent, attr, None)
-            except Exception:
-                pass
-    setattr(agent, "_nyx_relaxed_output", True)
-
-
-async def _run_with_strict_retry(
-    agent,
-    input_data,
-    *,
-    context,
-    run_config: RunConfig | None = None,
-    trace_id: str | None = None,
-    label: str | None = None,
-):
-    # sanitize tools that may have been built before our patches
-    try:
-        sanitize_agent_tools_in_place(agent)
-    except Exception:
-        logger.debug("sanitize_agent_tools_in_place: skipped", exc_info=True)
-
-    try:
-        return await Runner.run(agent, input_data, context=context, run_config=run_config)
-    except Exception as e:
-        if not _is_strict_schema_error(e):
-            raise
-        logger.warning(f"[{trace_id or '-'}] strict schema error in {label or 'Runner.run'}; relaxing & retrying once")
-        _disable_strict_output(agent)
-        try:
-            sanitize_agent_tools_in_place(agent)
-        except Exception:
-            pass
-
-        # tag retry if possible
-        if run_config and getattr(run_config, "trace_metadata", None) is not None:
-            try:
-                run_config.trace_metadata["retry_relaxed"] = "1"
-            except Exception:
-                pass
-
-        return await Runner.run(agent, input_data, context=context, run_config=run_config)
-
-def _log_agent_tool_schemas(agent, level=logging.DEBUG):
     try:
         if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
             tools = agent.get_all_tools() or []
@@ -483,14 +213,23 @@ def _log_agent_tool_schemas(agent, level=logging.DEBUG):
             tools = agent.get_tools() or []
         else:
             tools = getattr(agent, "tools", []) or []
+
+        log.debug("[strict] inspecting %d tools on agent %s", len(tools), getattr(agent, "name", agent))
         for i, t in enumerate(tools):
-            name = getattr(t, "name", getattr(t, "__name__", f"tool_{i}"))
-            schema_like = getattr(t, "parameters", None) or getattr(t, "_schema", None) or getattr(t, "schema", None)
-            if isinstance(schema_like, dict):
-                bad = "additionalProperties" in json.dumps(schema_like)
-                logger.log(level, "[strict] tool=%s sanitized=%s", name, not bad)
+            try:
+                name = getattr(t, "name", getattr(t, "__name__", f"tool_{i}"))
+                log.debug("[strict] tool=%s", name)
+            except Exception:
+                name = f"tool_{i}"
+                log.error("Could not inspect tool %s", name, exc_info=True)
     except Exception:
-        logger.exception("_log_agent_tool_schemas failed")
+        log.exception("debug_strict_schema_for_agent: top-level failure")
+
+def log_strict_hits(agent: Any) -> None:
+    """
+    Backwards-compatible alias (your code calls this elsewhere).
+    """
+    debug_strict_schema_for_agent(agent, logger)
 
 # ===== Constants and Configuration =====
 class Config:
@@ -547,34 +286,29 @@ class Config:
 # ===== Core Data Models =====
 
 class MemoryItem(BaseModel):
-    
     id: Optional[str] = Field(None, description="Memory ID if available")
     text: str = Field(..., description="Memory text")
     relevance: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score 0-1")
     tags: List[str] = Field(default_factory=list, description="Memory tags")
 
 class EmotionalChanges(BaseModel):
-    
     valence_change: float
     arousal_change: float
     dominance_change: float
 
 class ScoreComponents(BaseModel):
-    
     context: float
     emotional: float
     pattern: float
     relationship: float
 
 class PerformanceNumbers(BaseModel):
-    
     memory_mb: float
     cpu_percent: float
     avg_response_time: float
     success_rate: float
 
 class ConflictItem(BaseModel):
-    
     type: str
     severity: float
     description: str
@@ -582,14 +316,12 @@ class ConflictItem(BaseModel):
     blocked_objectives: Optional[List[str]] = None
 
 class InstabilityItem(BaseModel):
-    
     type: str
     severity: float
     description: str
     recommendation: Optional[str] = None
 
 class ActivityRec(BaseModel):
-    
     name: str
     description: str
     requirements: List[str]
@@ -598,7 +330,6 @@ class ActivityRec(BaseModel):
     partner_id: Optional[str] = None
 
 class RelationshipStateOut(BaseModel):
-    
     trust: float
     power_dynamic: float
     emotional_bond: float
@@ -607,133 +338,23 @@ class RelationshipStateOut(BaseModel):
     type: str
 
 class RelationshipChanges(BaseModel):
-    
     trust: float
     power: float
     bond: float
 
 class DecisionMetadata(BaseModel):
-    
     data: KVList = Field(default_factory=KVList, description="Additional metadata")
 
 class ScoredOption(BaseModel):
-    
-    option: 'DecisionOption'  # Forward reference
+    option: 'DecisionOption'
     score: float
     components: ScoreComponents
     is_fallback: Optional[bool] = False
 
 # ===== Pydantic Models for Structured Outputs =====
-def _safe_import(dotted: str):
-    """Safe import for agent discovery"""
-    try:
-        modname, attr = dotted.rsplit(".", 1)
-        mod = __import__(modname, fromlist=[attr])
-        return getattr(mod, attr)
-    except Exception as e:
-        logger.debug("safe_import failed for %s: %s", dotted, e, exc_info=True)
-        return None
-
-def _strip_additional_properties(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Backwards compat wrapper that just calls sanitize_json_schema.
-    (Used elsewhere in this module.)
-    """
-    return sanitize_json_schema(schema)
-
-def _coerce_tool_to_schema(tool: Any) -> Dict[str, Any]:
-    """
-    Accepts:
-      - raw python callable
-      - agents.FunctionTool (or similar wrappers)
-      - prebuilt dict with "parameters"
-    Returns OpenAI-compatible dict: { name, description?, parameters: {...} },
-    sanitized to remove additionalProperties.
-    """
-    # 1) Already a dict-like schema
-    if isinstance(tool, dict) and "parameters" in tool:
-        return sanitize_json_schema(tool)
-
-    # 2) Try to unwrap common wrappers to get the underlying function
-    fn = None
-    for attr in ("__wrapped__", "func", "function", "_callable", "_func"):
-        candidate = getattr(tool, attr, None)
-        if callable(candidate):
-            fn = candidate
-            break
-
-    if callable(tool) and getattr(tool, "__name__", None):
-        fn = tool
-
-    # 3) If we found a callable, generate schema from the function
-    if callable(fn):
-        try:
-            sch = function_schema(fn)
-            return sanitize_json_schema(sch)
-        except Exception:
-            logger.exception("function_schema failed for %r", fn)
-
-    # 4) Some wrappers can emit schema directly
-    for attr in ("to_openai_schema", "to_json_schema", "schema", "openai_schema"):
-        getter = getattr(tool, attr, None)
-        if getter is None:
-            continue
-        try:
-            maybe = getter() if callable(getter) else getter
-        except Exception:
-            logger.exception("schema getter %s failed on %r", attr, tool)
-            maybe = None
-        if isinstance(maybe, dict) and "parameters" in maybe:
-            return sanitize_json_schema(maybe)
-
-    # 5) Minimal stub fallback
-    name = getattr(tool, "name", None) or getattr(tool, "__name__", None) or "anonymous_tool"
-    logger.warning("Falling back to stub schema for tool %r (%s)", tool, name)
-    return {
-        "name": name,
-        "description": "Undocumented tool (auto-generated stub).",
-        "parameters": {"type": "object", "properties": {}},  # sanitized by construction
-    }
-
-def debug_strict_schema_for_agent(agent: Any, log: logging.Logger = logger) -> None:
-    """
-    Log sanitized tool schemas at DEBUG. Never raises if a tool is wrapped.
-    """
-    try:
-        if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
-            tools = agent.get_all_tools() or []
-        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
-            tools = agent.get_tools() or []
-        else:
-            tools = getattr(agent, "tools", []) or []
-
-        log.debug("[strict] inspecting %d tools on agent %s", len(tools), getattr(agent, "name", agent))
-        for i, t in enumerate(tools):
-            try:
-                sch = _coerce_tool_to_schema(t)
-                name = sch.get("name") or getattr(t, "name", f"tool_{i}")
-                log.debug("[strict] tool=%s schema=%s", name, json.dumps(sch, ensure_ascii=False))
-            except Exception:
-                # log and continue
-                name = getattr(t, "name", getattr(t, "__name__", f"tool_{i}"))
-                log.error("Could not inspect tool %s", name, exc_info=True)
-    except Exception:
-        log.exception("debug_strict_schema_for_agent: top-level failure")
-
-def log_strict_hits(agent: Any) -> None:
-    """
-    Backwards-compatible alias (your code calls this elsewhere).
-    """
-    debug_strict_schema_for_agent(agent, logger)
-
-# Keep a StrictBaseModel alias for compatibility
-class StrictBaseModel(BaseModel):
-    pass
 
 class NarrativeResponse(BaseModel):
     """Structured output for Nyx's narrative responses"""
-    
-    
     narrative: str = Field(..., description="The main narrative response as Nyx")
     tension_level: int = Field(0, description="Current narrative tension level (0-10)")
     generate_image: bool = Field(False, description="Whether an image should be generated for this scene")
@@ -750,24 +371,18 @@ class NarrativeResponse(BaseModel):
 
 class MemoryReflection(BaseModel):
     """Structured output for memory reflections"""
-    
-    
     reflection: str = Field(..., description="The reflection text")
     confidence: float = Field(..., description="Confidence level in the reflection (0.0-1.0)")
     topic: Optional[str] = Field(None, description="Topic of the reflection")
 
 class ContentModeration(BaseModel):
     """Output for content moderation guardrail"""
-    
-    
     is_appropriate: bool = Field(..., description="Whether the content is appropriate")
     reasoning: str = Field(..., description="Reasoning for the decision")
     suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
 
 class EmotionalStateUpdate(BaseModel):
     """Structured output for emotional state changes"""
-    
-    
     valence: float = Field(..., description="Positive/negative emotion (-1 to 1)")
     arousal: float = Field(..., description="Emotional intensity (0 to 1)")
     dominance: float = Field(..., description="Control level (0 to 1)")
@@ -776,8 +391,6 @@ class EmotionalStateUpdate(BaseModel):
 
 class ScenarioDecision(BaseModel):
     """Structured output for scenario management decisions"""
-    
-    
     action: str = Field(..., description="Action to take (advance, maintain, escalate, de-escalate)")
     next_phase: str = Field(..., description="Next scenario phase")
     tasks: List[KVList] = Field(default_factory=list, description="Tasks to execute")
@@ -786,8 +399,6 @@ class ScenarioDecision(BaseModel):
 
 class RelationshipUpdate(BaseModel):
     """Structured output for relationship changes"""
-    
-    
     trust_change: float = Field(0.0, description="Change in trust level")
     power_dynamic_change: float = Field(0.0, description="Change in power dynamic")
     emotional_bond_change: float = Field(0.0, description="Change in emotional bond")
@@ -795,15 +406,11 @@ class RelationshipUpdate(BaseModel):
 
 class ActivityRecommendation(BaseModel):
     """Structured output for activity recommendations"""
-    
-    
     recommended_activities: List[ActivityRec] = Field(..., description="List of recommended activities")
     reasoning: str = Field(..., description="Why these activities are recommended")
 
 class ImageGenerationDecision(BaseModel):
     """Decision about whether to generate an image"""
-    
-    
     should_generate: bool = Field(..., description="Whether an image should be generated")
     score: float = Field(0.0, description="Confidence score for the decision")
     image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
@@ -813,44 +420,31 @@ class ImageGenerationDecision(BaseModel):
 
 class RetrieveMemoriesInput(BaseModel):
     """Input for retrieve_memories function"""
-    
-    
     query: str = Field(..., description="Search query to find memories")
     limit: int = Field(5, description="Maximum number of memories to return", ge=1, le=20)
 
 class AddMemoryInput(BaseModel):
     """Input for add_memory function"""
-    
-    
     memory_text: str = Field(..., description="The content of the memory")
     memory_type: str = Field("observation", description="Type of memory (observation, reflection, abstraction)")
     significance: int = Field(5, description="Importance of memory (1-10)", ge=1, le=10)
 
 class DetectUserRevelationsInput(BaseModel):
     """Input for detect_user_revelations function"""
-    
-    
     user_message: str = Field(..., description="The user's message to analyze")
 
 class GenerateImageFromSceneInput(BaseModel):
     """Input for generate_image_from_scene function"""
-    
-    
     scene_description: str = Field(..., description="Description of the scene")
     characters: List[str] = Field(..., description="List of characters in the scene")
     style: str = Field("realistic", description="Style for the image")
-  
 
 class CalculateEmotionalStateInput(BaseModel):
     """Input for calculate_and_update_emotional_state and calculate_emotional_impact functions"""
-    
-    
     context: KVList = Field(..., description="Current interaction context")
 
 class UpdateRelationshipStateInput(BaseModel):
     """Input for update_relationship_state function"""
-    
-    
     entity_id: str = Field(..., description="ID of the entity (NPC or user)")
     trust_change: float = Field(0.0, description="Change in trust level", ge=-1.0, le=1.0)
     power_change: float = Field(0.0, description="Change in power dynamic", ge=-1.0, le=1.0)
@@ -858,15 +452,11 @@ class UpdateRelationshipStateInput(BaseModel):
 
 class GetActivityRecommendationsInput(BaseModel):
     """Input for get_activity_recommendations function"""
-    
-    
     scenario_type: str = Field(..., description="Type of current scenario")
     npc_ids: List[str] = Field(..., description="List of present NPC IDs")
 
 class BeliefDataModel(BaseModel):
     """Model for belief data to avoid raw dicts"""
-    
-    
     entity_id: str = Field("nyx", description="Entity ID")
     type: str = Field("general", description="Belief type")
     content: KVList = Field(default_factory=KVList, description="Belief content")
@@ -874,69 +464,50 @@ class BeliefDataModel(BaseModel):
 
 class ManageBeliefsInput(BaseModel):
     """Input for manage_beliefs function"""
-    
-    
     action: Literal["get", "update", "query"] = Field(..., description="Action to perform")
     belief_data: BeliefDataModel = Field(..., description="Data for the belief operation")
 
 class DecisionOption(BaseModel):
     """Model for decision options to avoid raw dicts"""
-    
-    
     id: str = Field(..., description="Option ID")
     description: str = Field(..., description="Option description")
     metadata: DecisionMetadata = Field(default_factory=DecisionMetadata)
 
 class ScoreDecisionOptionsInput(BaseModel):
     """Input for score_decision_options function"""
-    
-    
     options: List[DecisionOption] = Field(..., description="List of possible decisions/actions")
     decision_context: KVList = Field(..., description="Context for making the decision")
 
 class DetectConflictsAndInstabilityInput(BaseModel):
     """Input for detect_conflicts_and_instability function"""
-    
-    
     scenario_state: KVList = Field(..., description="Current scenario state")
 
 class GenerateUniversalUpdatesInput(BaseModel):
     """Input for generate_universal_updates function"""
-    
-    
     narrative: str = Field(..., description="The narrative text to process")
 
 class DecideImageInput(BaseModel):
     """Input for decide_image_generation function"""
-    
-    
     scene_text: str = Field(..., description="Scene description to evaluate for image generation")
 
 class EmptyInput(BaseModel):
     """Empty input for functions that don't require parameters"""
-    
     pass
 
 # ===== Function Tool Output Models =====
 
 class MemorySearchResult(BaseModel):
     """Output for retrieve_memories function"""
-    
-    
     memories: List[MemoryItem] = Field(..., description="List of retrieved memories")
     formatted_text: str = Field(..., description="Formatted memory text")
 
 class MemoryStorageResult(BaseModel):
     """Output for add_memory function"""
-    
-    
     memory_id: str = Field(..., description="ID of stored memory")
     success: bool = Field(..., description="Whether memory was stored successfully")
 
 class UserGuidanceResult(BaseModel):
     """Output for get_user_model_guidance function"""
-    
-    
     top_kinks: List[Tuple[str, float]] = Field(..., description="Top user preferences with levels")
     behavior_patterns: KVList = Field(..., description="Identified behavior patterns")
     suggested_intensity: float = Field(..., description="Suggested interaction intensity")
@@ -944,23 +515,17 @@ class UserGuidanceResult(BaseModel):
 
 class RevelationDetectionResult(BaseModel):
     """Output for detect_user_revelations function"""
-    
-    
     revelations: List[KVList] = Field(..., description="Detected revelations")
     has_revelations: bool = Field(..., description="Whether any revelations were found")
 
 class ImageGenerationResult(BaseModel):
     """Output for generate_image_from_scene function"""
-    
-    
     success: bool = Field(..., description="Whether image was generated")
     image_url: Optional[str] = Field(None, description="URL of generated image")
     error: Optional[str] = Field(None, description="Error message if failed")
 
 class EmotionalCalculationResult(BaseModel):
     """Output for emotional calculation functions"""
-    
-    
     valence: float = Field(..., description="New valence value")
     arousal: float = Field(..., description="New arousal value")
     dominance: float = Field(..., description="New dominance value")
@@ -970,16 +535,12 @@ class EmotionalCalculationResult(BaseModel):
 
 class RelationshipUpdateResult(BaseModel):
     """Output for update_relationship_state function"""
-    
-    
     entity_id: str = Field(..., description="Entity ID")
     relationship: RelationshipStateOut = Field(..., description="Updated relationship state")
     changes: RelationshipChanges = Field(..., description="Changes applied")
 
 class PerformanceMetricsResult(BaseModel):
     """Output for check_performance_metrics function"""
-    
-    
     metrics: PerformanceNumbers = Field(..., description="Current performance metrics")
     suggestions: List[str] = Field(..., description="Performance improvement suggestions")
     actions_taken: List[str] = Field(..., description="Remediation actions taken")
@@ -987,30 +548,22 @@ class PerformanceMetricsResult(BaseModel):
 
 class ActivityRecommendationsResult(BaseModel):
     """Output for get_activity_recommendations function"""
-    
-    
     recommendations: List[ActivityRec] = Field(..., description="Recommended activities")
     total_available: int = Field(..., description="Total number of available activities")
 
 class BeliefManagementResult(BaseModel):
     """Output for manage_beliefs function"""
-    
-    
     result: Union[str, KVList] = Field(..., description="Operation result")
     error: Optional[str] = Field(None, description="Error message if failed")
 
 class DecisionScoringResult(BaseModel):
     """Output for score_decision_options function"""
-    
-    
     scored_options: List[ScoredOption] = Field(..., description="Options with scores")
     best_option: DecisionOption = Field(..., description="Highest scoring option")
     confidence: float = Field(..., description="Confidence in best option")
 
 class ConflictDetectionResult(BaseModel):
     """Output for detect_conflicts_and_instability function"""
-    
-    
     conflicts: List[ConflictItem] = Field(..., description="Detected conflicts")
     instabilities: List[InstabilityItem] = Field(..., description="Detected instabilities")
     overall_stability: float = Field(..., description="Overall stability score (0-1)")
@@ -1019,8 +572,6 @@ class ConflictDetectionResult(BaseModel):
 
 class UniversalUpdateResult(BaseModel):
     """Output for generate_universal_updates function"""
-    
-    
     success: bool = Field(..., description="Whether updates were generated")
     updates_generated: bool = Field(..., description="Whether any updates were found")
     error: Optional[str] = Field(None, description="Error message if failed")
@@ -1029,8 +580,6 @@ class UniversalUpdateResult(BaseModel):
 
 class ScenarioManagementRequest(BaseModel):
     """Request for scenario management"""
-    
-    
     user_id: int = Field(..., description="User ID")
     conversation_id: int = Field(..., description="Conversation ID")
     scenario_id: Optional[str] = Field(None, description="Scenario ID")
@@ -1040,8 +589,6 @@ class ScenarioManagementRequest(BaseModel):
 
 class RelationshipInteractionData(BaseModel):
     """Data for relationship interactions"""
-    
-    
     user_id: int = Field(..., description="User ID")
     conversation_id: int = Field(..., description="Conversation ID")
     participants: List[KVList] = Field(..., description="Interaction participants")
@@ -1053,16 +600,12 @@ class RelationshipInteractionData(BaseModel):
 
 class EmotionalState(BaseModel):
     """Emotional state representation"""
-    
-    
     valence: float = Field(0.0, description="Positive/negative emotion (-1 to 1)", ge=-1.0, le=1.0)
     arousal: float = Field(0.5, description="Emotional intensity (0 to 1)", ge=0.0, le=1.0)
     dominance: float = Field(0.7, description="Control level (0 to 1)", ge=0.0, le=1.0)
 
 class RelationshipState(BaseModel):
     """Relationship state representation"""
-    
-    
     trust: float = Field(0.5, description="Trust level (0-1)", ge=0.0, le=1.0)
     power_dynamic: float = Field(0.5, description="Power dynamic (0-1)", ge=0.0, le=1.0)
     emotional_bond: float = Field(0.3, description="Emotional bond strength (0-1)", ge=0.0, le=1.0)
@@ -1072,8 +615,6 @@ class RelationshipState(BaseModel):
 
 class PerformanceMetrics(BaseModel):
     """Performance metrics structure"""
-    
-    
     total_actions: int = Field(0, ge=0)
     successful_actions: int = Field(0, ge=0)
     failed_actions: int = Field(0, ge=0)
@@ -1084,11 +625,24 @@ class PerformanceMetrics(BaseModel):
 
 class LearningMetrics(BaseModel):
     """Learning metrics structure"""
-    
-    
     pattern_recognition_rate: float = Field(0.0, ge=0.0, le=1.0)
     strategy_improvement_rate: float = Field(0.0, ge=0.0, le=1.0)
     adaptation_success_rate: float = Field(0.0, ge=0.0, le=1.0)
+
+# ===== Open World / Slice-of-life Models =====
+
+class NarrateSliceInput(BaseModel):
+    scene_type: str = Field("routine", description="Slice-of-life scene type")
+
+class EmergentEventInput(BaseModel):
+    event_type: Optional[str] = Field(None, description="Optional event type hint")
+
+class SimulateAutonomyInput(BaseModel):
+    hours: int = Field(1, ge=1, le=24, description="Hours to advance")
+
+# Resolve forward references
+ScoredOption.model_rebuild()
+DecisionOption.model_rebuild()
 
 # ===== Enhanced Context with State Management =====
 @dataclass
@@ -1140,10 +694,10 @@ class NyxContext:
 
     # ────────── ERROR LOGGING ──────────
     error_log: List[Dict[str, Any]] = field(default_factory=list)
-    error_counts: Dict[str, int] = field(default_factory=dict)  # Track errors by type
+    error_counts: Dict[str, int] = field(default_factory=dict)
     
     # ────────── FEATURE FLAGS ──────────
-    _tables_available: Dict[str, bool] = field(default_factory=dict)  # Track which tables exist
+    _tables_available: Dict[str, bool] = field(default_factory=dict)
 
     # ────────── TASK SCHEDULING ──────────
     last_task_runs: Dict[str, datetime] = field(default_factory=dict)
@@ -1151,8 +705,8 @@ class NyxContext:
         "memory_reflection": 300, "relationship_update": 600,
         "scenario_check": 60, "performance_check": 300,
         "task_generation": 300, "learning_save": 900, 
-        "performance_save": 600,  # Only one task for saving performance
-        "scenario_heartbeat": 3600  # Hourly heartbeat save for audit trail
+        "performance_save": 600,
+        "scenario_heartbeat": 3600
     })
 
     # ────────── PRIVATE CACHES (init=False) ──────────
@@ -1162,7 +716,6 @@ class NyxContext:
     _cpu_usage_cache:            Optional[float] = field(init=False, default=None)
     _cpu_usage_last_update:      float = field(init=False, default=0.0)
     _cpu_usage_update_interval:  float = field(init=False, default=10.0)
-    
     
     async def initialize(self):
         """Initialize all systems"""
@@ -1204,7 +757,6 @@ class NyxContext:
 
         # Initialize CPU usage monitoring
         try:
-            # first call populates the internal psutil sample window
             self._cpu_usage_cache = safe_psutil('cpu_percent', interval=0.1, default=0.0)
         except Exception as e:
             logger.debug(f"Failed to initialize CPU monitoring: {e}")
@@ -1254,7 +806,7 @@ class NyxContext:
                 self.emotional_state.update(state)
             
             # Load scenario state if exists and table is available
-            if self._tables_available.get("scenario_states", True):  # Default to True, will be set to False if missing
+            if self._tables_available.get("scenario_states", True):
                 try:
                     scenario_row = await conn.fetchrow("""
                         SELECT state_data FROM scenario_states
@@ -1312,7 +864,7 @@ class NyxContext:
         # Update error metrics
         self.performance_metrics["error_rates"]["total"] += 1
         
-        # Keep error log bounded - more aggressive pruning on errors
+        # Keep error log bounded
         if len(self.error_log) > Config.MAX_ERROR_LOG_ENTRIES * 2:
             _prune_list(self.error_log, Config.MAX_ERROR_LOG_ENTRIES)
             
@@ -1347,7 +899,7 @@ class NyxContext:
             "emotional_state": self.emotional_state.copy()
         })
         
-        # Keep adaptation history bounded - more aggressive on failures
+        # Keep adaptation history bounded
         max_history = Config.MAX_ADAPTATION_HISTORY if success else Config.MAX_ADAPTATION_HISTORY // 2
         if len(self.adaptation_history) > max_history * 2:
             self.adaptation_history = self.adaptation_history[-max_history:]
@@ -1429,7 +981,7 @@ class NyxContext:
         logger.info("Performed memory cleanup")
     
     def get_cpu_usage(self) -> float:
-        """Get CPU usage with caching - Fixed to properly refresh"""
+        """Get CPU usage with caching"""
         try:
             current_time = time.time()
             # Check if we need to update the cache
@@ -1447,49 +999,18 @@ class NyxContext:
             return 0.0
 
     def db_connection_ctx(self):
-        """
-        Get a database connection context manager.
-        
-        Usage:
-            async with ctx.db_connection_ctx() as conn:
-                result = await conn.fetchone(...)
-        
-        Returns:
-            An async context manager that yields a database connection
-        """
+        """Get a database connection context manager"""
         return get_db_connection_context()
     
-    # Legacy compatibility - keep old name but mark deprecated
+    # Legacy compatibility
     async def get_db_connection(self):
-        """
-        DEPRECATED: Use db_connection_ctx() instead.
-        
-        Get a database connection as an async context manager.
-        
-        IMPORTANT: This returns an async context manager, not a connection object.
-        You must use it with 'async with', not 'await':
-        
-        Correct usage:
-            async with ctx.get_db_connection() as conn:
-                result = await conn.fetchone(...)
-        
-        Incorrect usage:
-            conn = await ctx.get_db_connection()  # This will fail!
-        
-        Returns:
-            An async context manager that yields a database connection
-        """
+        """DEPRECATED: Use db_connection_ctx() instead"""
         logger.warning("get_db_connection is deprecated, use db_connection_ctx() instead")
         return self.db_connection_ctx()
 
     async def close_db_connection(self, conn=None):
-        """
-        No-op compatibility wrapper so calls like
-        `await nyx_context.close_db_connection()` don't crash.
-        If you pass the connection you got from get_db_connection(),
-        it will be cleanly closed; otherwise it's a harmless no-op.
-        """
-        if conn is not None:                        # caller gave us the handle
+        """No-op compatibility wrapper"""
+        if conn is not None:
             await conn.__aexit__(None, None, None)
     
     def _update_learning_metrics(self):
@@ -1506,106 +1027,7 @@ class NyxContext:
             successes = sum(1 for a in recent if a["success"])
             self.learning_metrics["adaptation_success_rate"] = successes / len(recent)
 
-# Resolve forward references for ScoredOption
-ScoredOption.model_rebuild()
-DecisionOption.model_rebuild()
-
 # ===== Helper Functions =====
-
-def _walk_schema_for_additional_props(node, path="$", hits=None):
-    if hits is None:
-        hits = []
-    if isinstance(node, dict):
-        if "additionalProperties" in node:
-            hits.append(f"{path}.additionalProperties={node['additionalProperties']!r}")
-        for k, v in node.items():
-            _walk_schema_for_additional_props(v, f"{path}.{k}", hits)
-    elif isinstance(node, list):
-        for i, v in enumerate(node):
-            _walk_schema_for_additional_props(v, f"{path}[{i}]", hits)
-    return hits
-
-def _safe_model_schema(cls: type) -> dict:
-    # v2: model_json_schema; fall back if someone is on v1
-    for attr in ("model_json_schema", "schema"):
-        fn = getattr(cls, attr, None)
-        if callable(fn):
-            try:
-                return fn()
-            except Exception:
-                pass
-    return {}
-
-def _log_model_schema(cls: type, logger, prefix=""):
-    schema = _safe_model_schema(cls)
-    hits = _walk_schema_for_additional_props(schema)
-    if hits:
-        logger.error("%sModel %s emits additionalProperties at:\n  - %s",
-                     prefix, cls.__name__, "\n  - ".join(hits))
-    else:
-        logger.info("%sModel %s schema: OK (no additionalProperties found)", prefix, cls.__name__)
-
-def debug_strict_schema_for_agent(agent, logger):
-    """Logs strict_tools and scans all tool payload models for additionalProperties."""
-    ms = getattr(agent, "model_settings", None)
-    strict = getattr(ms, "strict_tools", None)
-    logger.info("Agent %s strict_tools=%s | tools=%d",
-                getattr(agent, "name", agent), strict, len(getattr(agent, "tools", []) or []))
-
-    # Best-effort: infer Pydantic models from tool function signatures
-    for tool in getattr(agent, "tools", []) or []:
-        fn = getattr(tool, "__wrapped__", None) or getattr(tool, "fn", None) or tool
-        name = getattr(tool, "name", None) or getattr(fn, "__name__", str(tool))
-        try:
-            sig = inspect.signature(fn)
-        except (TypeError, ValueError):
-            logger.info("Tool %s: cannot inspect signature", name)
-            continue
-
-        # Look for the first param whose annotation is a Pydantic model subclass
-        for p in sig.parameters.values():
-            ann = p.annotation
-            if isinstance(ann, type) and issubclass(ann, BaseModel):
-                logger.info("Scanning tool %s payload model: %s", name, ann.__name__)
-                _log_model_schema(ann, logger, prefix=f"[tool:{name}] ")
-                break  # assume single payload model
-
-    # Also scan *all* Pydantic models defined in this module (cheap and thorough)
-    try:
-        current_module = inspect.getmodule(debug_strict_schema_for_agent)
-        models = []
-        for _, obj in (current_module.__dict__ if current_module else {}).items():
-            if inspect.isclass(obj) and issubclass(obj, BaseModel) and obj is not BaseModel:
-                models.append(obj)
-        logger.info("Scanning %d module-local models for additionalProperties…", len(models))
-        for cls in sorted(models, key=lambda c: c.__name__):
-            _log_model_schema(cls, logger, prefix="[module] ")
-    except Exception as e:
-        logger.exception("Model scan failed: %s", e)
-
-async def run_agent_with_error_handling(
-    agent: Agent,
-    input_data: Any,
-    context: NyxContext,
-    output_type: Optional[type] = None,
-    fallback_value: Any = None
-) -> Any:
-    try:
-        result = await _run_with_strict_retry(
-            agent,
-            input_data,
-            context=context,
-            run_config=RunConfig(workflow_name=f"Nyx {getattr(agent, 'name', 'Agent')}"),
-            label="run_agent_with_error_handling",
-        )
-        if output_type:
-            return result.final_output_as(output_type)
-        return getattr(result, "final_output", None) or getattr(result, "output_text", None)
-    except Exception as e:
-        logger.error(f"Error running agent {getattr(agent, 'name', 'unknown')}: {e}")
-        if fallback_value is not None:
-            return fallback_value
-        raise
 
 def safe_psutil(func_name: str, *args, default=None, **kwargs):
     """Safe wrapper for psutil calls that may fail on certain platforms"""
@@ -1658,19 +1080,190 @@ def extract_token_usage(result: Any) -> int:
         logger.debug(f"Failed to retrieve token usage: {e}")
         return 0
 
+def get_context_text_lower(context: Dict[str, Any]) -> str:
+    """Extract text from context and convert to lowercase for analysis"""
+    text_parts = []
+    for key, value in context.items():
+        if isinstance(value, str):
+            text_parts.append(value)
+        elif isinstance(value, (list, dict)):
+            text_parts.append(str(value))
+    return " ".join(text_parts).lower()
+
+def _prune_list(lst: List[Any], max_len: int) -> None:
+    """Prune a list to maximum length in-place"""
+    if len(lst) > max_len:
+        del lst[:-max_len]
+
+def _calculate_avg_response_time(response_times: List[float]) -> float:
+    """Calculate average response time safely"""
+    if not response_times:
+        return 0.0
+    try:
+        return statistics.fmean(response_times)
+    except Exception:
+        # Fallback to simple mean
+        return sum(response_times) / len(response_times)
+
+def _calculate_variance(values: List[float]) -> float:
+    """Calculate variance of a list of values"""
+    if len(values) < 2:
+        return 0.0
+    try:
+        return statistics.variance(values)
+    except Exception:
+        # Fallback calculation
+        mean = sum(values) / len(values)
+        return sum((x - mean) ** 2 for x in values) / len(values)
+
+def _json_safe(value, *, _depth=0, _max_depth=4):
+    """Best-effort conversion of arbitrary Python objects to JSON-safe primitives."""
+    if _depth > _max_depth:
+        return str(value)
+
+    # Primitives
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+
+    # datetime/date -> ISO string
+    try:
+        from datetime import datetime, date
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+    except Exception:
+        pass
+
+    # Enum -> its value
+    try:
+        from enum import Enum
+        if isinstance(value, Enum):
+            return _json_safe(getattr(value, "value", str(value)), _depth=_depth+1, _max_depth=_max_depth)
+    except Exception:
+        pass
+
+    # List/Tuple/Set
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for v in value]
+
+    # Dict-like
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for k, v in value.items()}
+
+    # Dataclass
+    try:
+        import dataclasses
+        if dataclasses.is_dataclass(value):
+            return _json_safe(dataclasses.asdict(value), _depth=_depth+1, _max_depth=_max_depth)
+    except Exception:
+        pass
+
+    # Pydantic v1/v2 models
+    for attr in ("model_dump", "dict"):
+        fn = getattr(value, attr, None)
+        if callable(fn):
+            try:
+                return _json_safe(fn(), _depth=_depth+1, _max_depth=_max_depth)
+            except Exception:
+                break
+
+    # Fallback: attempt __dict__, else str()
+    data = getattr(value, "__dict__", None)
+    if isinstance(data, dict):
+        return _json_safe(data, _depth=_depth+1, _max_depth=_max_depth)
+    return str(value)
+
+def _preview(text: Optional[str], n: int = 240) -> str:
+    if not text:
+        return ""
+    cleaned = " ".join(str(text).split())
+    return cleaned[:n] + ("…" if len(cleaned) > n else "")
+
+def _js(obj: Any) -> str:
+    try:
+        return json.dumps(obj, ensure_ascii=False, default=str)
+    except Exception:
+        return f"<unserializable:{type(obj).__name__}>"
+
+# ===== Error Handling Functions =====
+
+async def run_agent_safely(
+    agent: Agent,
+    input_data: Any,
+    context: Any,
+    run_config: Optional[RunConfig] = None,
+    fallback_response: Any = None
+) -> Any:
+    """Run agent with automatic fallback on strict schema errors"""
+    try:
+        # First attempt with the agent as-is
+        result = await Runner.run(
+            agent,
+            input_data,
+            context=context,
+            run_config=run_config
+        )
+        return result
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "additionalproperties" in error_msg or "strict schema" in error_msg:
+            logger.warning(f"Strict schema error, attempting without structured output: {e}")
+            
+            # Create a simple text-only agent
+            fallback_agent = Agent[type(context)](
+                name=f"{agent.name} (Fallback)",
+                instructions=agent.instructions,
+                model=agent.model,
+                model_settings=DEFAULT_MODEL_SETTINGS,
+                # No tools, no structured output
+            )
+            
+            try:
+                result = await Runner.run(
+                    fallback_agent,
+                    input_data,
+                    context=context,
+                    run_config=run_config
+                )
+                return result
+            except Exception as e2:
+                logger.error(f"Fallback agent also failed: {e2}")
+                if fallback_response is not None:
+                    return fallback_response
+                raise
+        else:
+            # Not a schema error, re-raise
+            raise
+
+async def run_agent_with_error_handling(
+    agent: Agent,
+    input_data: Any,
+    context: NyxContext,
+    output_type: Optional[type] = None,
+    fallback_value: Any = None
+) -> Any:
+    """Legacy compatibility wrapper"""
+    try:
+        result = await run_agent_safely(
+            agent,
+            input_data,
+            context,
+            run_config=RunConfig(workflow_name=f"Nyx {getattr(agent, 'name', 'Agent')}"),
+            fallback_response=fallback_value
+        )
+        if output_type:
+            return result.final_output_as(output_type)
+        return getattr(result, "final_output", None) or getattr(result, "output_text", None)
+    except Exception as e:
+        logger.error(f"Error running agent {getattr(agent, 'name', 'unknown')}: {e}")
+        if fallback_value is not None:
+            return fallback_value
+        raise
+
 # ===== Function Tools =====
 
 @function_tool
 async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: RetrieveMemoriesInput) -> str:
-    """
-    Retrieve relevant memories for Nyx.
-
-    Args:
-        payload: Input containing query and limit
-
-    Returns:
-        JSON string with memory search results
-    """
+    """Retrieve relevant memories for Nyx."""
     data = RetrieveMemoriesInput.model_validate(payload or {})
     query = data.query
     limit = data.limit
@@ -1706,7 +1299,6 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Retriev
     
     formatted_text = "\n".join(formatted_memories) if formatted_memories else "No relevant memories found."
 
-    # Return as JSON string
     return MemorySearchResult(
         memories=memories,
         formatted_text=formatted_text
@@ -1714,12 +1306,7 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Retriev
 
 @function_tool
 async def add_memory(ctx: RunContextWrapper[NyxContext], payload: AddMemoryInput) -> str:
-    """
-    Add a new memory for Nyx.
-    
-    Args:
-        payload: Input containing memory text, type, and significance
-    """
+    """Add a new memory for Nyx."""
     data = AddMemoryInput.model_validate(payload or {})
     memory_text = data.memory_text
     memory_type = data.memory_type
@@ -1750,7 +1337,6 @@ async def add_memory(ctx: RunContextWrapper[NyxContext], payload: AddMemoryInput
     
     memory_id = result.get("memory_id", "unknown")
     
-    # Return structured output as JSON
     return MemoryStorageResult(
         memory_id=str(memory_id),
         success=True
@@ -1768,7 +1354,6 @@ async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: E
     suggested_intensity = guidance.get("suggested_intensity", 0.5)
     reflections = guidance.get("reflections", [])
     
-    # Return structured output
     return UserGuidanceResult(
         top_kinks=top_kinks,
         behavior_patterns=dict_to_kvlist(behavior_patterns),
@@ -1778,12 +1363,7 @@ async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext], payload: E
 
 @function_tool
 async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: DetectUserRevelationsInput) -> str:
-    """
-    Detect if user is revealing new preferences or patterns.
-    
-    Args:
-        payload: Input containing user message to analyze
-    """
+    """Detect if user is revealing new preferences or patterns."""
     data = DetectUserRevelationsInput.model_validate(payload or {})
     user_message = data.user_message
     lower_message = user_message.lower()
@@ -1819,7 +1399,6 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: D
             else:
                 intensity = 0.4
                 
-            # Track both positive and negative preferences
             revelation_data = {
                 "type": "kink_preference",
                 "kink": kink,
@@ -1850,7 +1429,6 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: D
     
     # Save revelations to database if found
     if revelations and ctx.context.user_model:
-        # User model will handle its own DB connection
         for revelation_kv in revelations:
             revelation = kvlist_to_dict(revelation_kv)
             if revelation["type"] == "kink_preference":
@@ -1860,7 +1438,6 @@ async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], payload: D
                     revelation["source"]
                 )
     
-    # Return structured output
     return RevelationDetectionResult(
         revelations=revelations,
         has_revelations=len(revelations) > 0
@@ -1871,18 +1448,12 @@ async def generate_image_from_scene(
     ctx: RunContextWrapper[NyxContext],
     payload: GenerateImageFromSceneInput
 ) -> str:
-    """
-    Generate an image for the current scene.
-    
-    Args:
-        payload: Input containing scene description, characters, and style
-    """
+    """Generate an image for the current scene."""
     from routes.ai_image_generator import generate_roleplay_image_from_gpt
 
     data = GenerateImageFromSceneInput.model_validate(payload or {})
     image_data = data.model_dump()
     
-    # This function should handle its own connections
     result = await generate_roleplay_image_from_gpt(
         image_data,
         ctx.context.user_id,
@@ -1904,18 +1475,12 @@ async def generate_image_from_scene(
 
 @function_tool
 async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], payload: CalculateEmotionalStateInput) -> str:
-    """
-    Calculate emotional impact and immediately update the emotional state.
-    This is a composite tool that both calculates AND persists the changes.
-    
-    Args:
-        payload: Input containing context for emotional calculation
-    """
+    """Calculate emotional impact and immediately update the emotional state."""
     data = CalculateEmotionalStateInput.model_validate(payload or {})
     context_dict = kvlist_to_dict(data.context)
 
     # First calculate the new state
-    result = await calculate_emotional_impact(ctx, data.model_dump())
+    result = await calculate_emotional_impact(ctx, data)
     emotional_data = json.loads(result)
     
     # Immediately update the context with the new state
@@ -1952,24 +1517,17 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
 
 @function_tool
 async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload: CalculateEmotionalStateInput) -> str:
-    """
-    Calculate emotional impact of current context using the emotional core system.
-    Returns new emotional state without mutating the context.
-    NOTE: Use calculate_and_update_emotional_state if you want to persist changes.
-    
-    Args:
-        payload: Input containing context for emotional calculation
-    """
+    """Calculate emotional impact of current context using the emotional core system."""
     data = CalculateEmotionalStateInput.model_validate(payload or {})
     context_dict = kvlist_to_dict(data.context)
-    current_state = ctx.context.emotional_state.copy()  # Work with a copy
+    current_state = ctx.context.emotional_state.copy()
     
     # Calculate emotional changes based on context
     valence_change = 0.0
     arousal_change = 0.0
     dominance_change = 0.0
     
-    # Analyze context for emotional triggers - build lowercase text once
+    # Analyze context for emotional triggers
     context_text_lower = get_context_text_lower(context_dict)
     
     if "conflict" in context_text_lower:
@@ -2017,7 +1575,6 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
     elif new_dominance > Config.HIGH_DOMINANCE_THRESHOLD:
         primary_emotion = "commanding"
     
-    # Return new state without mutating
     return EmotionalCalculationResult(
         valence=new_valence,
         arousal=new_arousal,
@@ -2028,20 +1585,19 @@ async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], payload
             arousal_change=arousal_change,
             dominance_change=dominance_change
         ),
-        state_updated=None  # Not updated in this function
+        state_updated=None
     ).model_dump_json()
+
+async def _get_memory_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> Dict[str, float]:
+    """Get emotional impact from related memories"""
+    return {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
 
 @function_tool
 async def update_relationship_state(
     ctx: RunContextWrapper[NyxContext],
     payload: UpdateRelationshipStateInput
 ) -> str:
-    """
-    Update relationship state with an entity.
-    
-    Args:
-        payload: Input containing entity ID and relationship changes
-    """
+    """Update relationship state with an entity."""
     data = UpdateRelationshipStateInput.model_validate(payload or {})
     entity_id = data.entity_id
     trust_change = data.trust_change
@@ -2154,7 +1710,7 @@ async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload:
 
     suggestions, actions_taken = [], []
 
-    # --- Health checks ----------------------------------------------------
+    # Health checks
     avg_rt = _calculate_avg_response_time(metrics["response_times"])
     if avg_rt > Config.HIGH_RESPONSE_TIME_THRESHOLD:
         suggestions.append("Response times are high – consider caching frequent queries")
@@ -2202,12 +1758,7 @@ async def get_activity_recommendations(
     ctx: RunContextWrapper[NyxContext],
     payload: GetActivityRecommendationsInput
 ) -> str:
-    """
-    Get activity recommendations based on current context.
-    
-    Args:
-        payload: Input containing scenario type and NPC IDs
-    """
+    """Get activity recommendations based on current context."""
     data = GetActivityRecommendationsInput.model_validate(payload or {})
     scenario_type = data.scenario_type
     npc_ids = data.npc_ids
@@ -2285,12 +1836,7 @@ async def get_activity_recommendations(
 
 @function_tool
 async def manage_beliefs(ctx: RunContextWrapper[NyxContext], payload: ManageBeliefsInput) -> str:
-    """
-    Manage belief system operations.
-    
-    Args:
-        payload: Input containing action and belief data
-    """
+    """Manage belief system operations."""
     data = ManageBeliefsInput.model_validate(payload or {})
     action = data.action
     belief_data = data.belief_data
@@ -2346,12 +1892,7 @@ async def score_decision_options(
     ctx: RunContextWrapper[NyxContext],
     payload: ScoreDecisionOptionsInput
 ) -> str:
-    """
-    Score decision options using advanced decision engine logic.
-    
-    Args:
-        payload: Input containing options and decision context
-    """
+    """Score decision options using advanced decision engine logic."""
     data = ScoreDecisionOptionsInput.model_validate(payload or {})
     options = data.options
     decision_context = kvlist_to_dict(data.decision_context)
@@ -2422,528 +1963,6 @@ async def score_decision_options(
         confidence=scored_options[0].score
     ).model_dump_json()
 
-@function_tool
-async def detect_conflicts_and_instability(
-    ctx: RunContextWrapper[NyxContext],
-    payload: DetectConflictsAndInstabilityInput
-) -> str:
-    """
-    Detect conflicts and emotional instability in current scenario.
-    
-    Args:
-        payload: Input containing scenario state
-    """
-    data = DetectConflictsAndInstabilityInput.model_validate(payload or {})
-    scenario_state = kvlist_to_dict(data.scenario_state)
-    
-    conflicts = []
-    instabilities = []
-    
-    # Check for relationship conflicts
-    # Create a copy of items to avoid mutation during iteration
-    relationship_items = list(ctx.context.relationship_states.items())
-    for i, (entity1_id, rel1) in enumerate(relationship_items):
-        for entity2_id, rel2 in relationship_items[i+1:]:
-            # Conflicting power dynamics
-            if abs(rel1.get("power_dynamic", 0.5) - rel2.get("power_dynamic", 0.5)) > Config.POWER_CONFLICT_THRESHOLD:
-                conflicts.append(ConflictItem(
-                    type="power_conflict",
-                    entities=[entity1_id, entity2_id],
-                    severity=abs(rel1["power_dynamic"] - rel2["power_dynamic"]),
-                    description="Conflicting power dynamics between entities"
-                ))
-            
-            # Low mutual trust
-            if rel1.get("trust", 0.5) < Config.HOSTILE_TRUST_THRESHOLD and rel2.get("trust", 0.5) < Config.HOSTILE_TRUST_THRESHOLD:
-                conflicts.append(ConflictItem(
-                    type="trust_conflict",
-                    entities=[entity1_id, entity2_id],
-                    severity=0.7,
-                    description="Mutual distrust between entities"
-                ))
-    
-    # Check for emotional instability
-    emotional_state = ctx.context.emotional_state
-    
-    # High arousal with negative valence
-    if emotional_state["arousal"] > Config.HIGH_AROUSAL_THRESHOLD and emotional_state["valence"] < Config.NEGATIVE_VALENCE_THRESHOLD:
-        instabilities.append(InstabilityItem(
-            type="emotional_volatility",
-            severity=emotional_state["arousal"],
-            description="High arousal with negative emotions",
-            recommendation="De-escalation needed"
-        ))
-    
-    # Rapid emotional changes
-    if ctx.context.adaptation_history:
-        recent_emotions = [h.get("emotional_state", {}) for h in ctx.context.adaptation_history[-5:]]
-        if recent_emotions and any(recent_emotions):  # Check if we have actual emotional states
-            valence_values = [e.get("valence", 0) for e in recent_emotions if e]
-            if valence_values:  # Only calculate variance if we have values
-                valence_variance = _calculate_variance(valence_values)
-                if valence_variance > Config.EMOTIONAL_VARIANCE_THRESHOLD:
-                    instabilities.append(InstabilityItem(
-                        type="emotional_instability",
-                        severity=min(1.0, valence_variance),
-                        description="Rapid emotional swings detected",
-                        recommendation="Stabilization recommended"
-                    ))
-    
-    # Scenario-specific conflicts
-    if scenario_state.get("objectives"):
-        blocked_objectives = [obj for obj in scenario_state["objectives"] 
-                             if obj.get("status") == "blocked"]
-        if blocked_objectives:
-            conflicts.append(ConflictItem(
-                type="objective_conflict",
-                severity=len(blocked_objectives) / len(scenario_state["objectives"]),
-                description=f"{len(blocked_objectives)} objectives are blocked",
-                blocked_objectives=[str(obj) for obj in blocked_objectives]
-            ))
-    
-    # Calculate overall stability
-    total_issues = len(conflicts) + len(instabilities)
-    overall_stability = max(0.0, 1.0 - (total_issues / Config.MAX_STABILITY_ISSUES))
-    
-    # Only save scenario state if it's a significant change
-    if ctx.context.scenario_state and ctx.context.scenario_state.get("active"):
-        should_save = False
-        
-        # Check if this is a significant change
-        if conflicts and any(c.severity > 0.7 for c in conflicts):
-            should_save = True
-        if instabilities and any(i.severity > 0.7 for i in instabilities):
-            should_save = True
-        if overall_stability < 0.3:
-            should_save = True
-            
-        if should_save:
-            async with get_db_connection_context() as conn:
-                # Use UPSERT pattern to maintain one current state
-                await conn.execute("""
-                    INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
-                    VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-                    ON CONFLICT (user_id, conversation_id) 
-                    DO UPDATE SET state_data = $3, created_at = CURRENT_TIMESTAMP
-                """, ctx.context.user_id, ctx.context.conversation_id, 
-                json.dumps(ctx.context.scenario_state, ensure_ascii=False))
-    
-    return ConflictDetectionResult(
-        conflicts=conflicts,
-        instabilities=instabilities,
-        overall_stability=overall_stability,
-        stability_note=f"{total_issues} issues detected (0 issues = 1.0 stability, 10+ issues = 0.0 stability)",
-        requires_intervention=any(c.severity > 0.8 for c in conflicts + instabilities)
-    ).model_dump_json()
-
-@function_tool
-async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: DecideImageInput) -> str:
-    """
-    Decide whether an image should be generated for a scene.
-    
-    Args:
-        payload: Input containing scene text to evaluate
-    """
-    data = DecideImageInput.model_validate(payload or {})
-    scene_text = data.scene_text.lower()
-    
-    # Calculate score based on scene characteristics
-    score = 0.0
-    
-    # High impact visual keywords
-    visual_keywords = ["dramatic", "intense", "beautiful", "transformation", "reveal", "climax", "pivotal"]
-    for keyword in visual_keywords:
-        if keyword in scene_text:
-            score += 0.2
-    
-    # Scene transitions
-    if any(word in scene_text for word in ["enter", "arrive", "transform", "change", "shift"]):
-        score += 0.15
-    
-    # Emotional peaks
-    if any(word in scene_text for word in ["gasp", "shock", "awe", "breathtaking", "stunning"]):
-        score += 0.25
-    
-    # Environmental descriptions
-    if any(word in scene_text for word in ["landscape", "environment", "setting", "atmosphere"]):
-        score += 0.1
-    
-    # Cap score at 1.0
-    score = min(1.0, score)
-    
-    # Dynamic threshold based on recent image generation
-    # Check how many images were generated recently
-    recent_images = ctx.context.current_context.get("recent_image_count", 0)
-    if recent_images > 3:
-        # Raise threshold if we've generated many images recently
-        threshold = 0.7
-    elif recent_images > 1:
-        threshold = 0.6
-    else:
-        threshold = 0.5
-    
-    # Determine if we should generate
-    should_generate = score > threshold
-    
-    # Create appropriate prompt if generating
-    image_prompt = None
-    if should_generate:
-        # Extract key visual elements
-        visual_elements = []
-        if "dramatic" in scene_text:
-            visual_elements.append("dramatic lighting")
-        if "intense" in scene_text:
-            visual_elements.append("intense atmosphere")
-        if "beautiful" in scene_text:
-            visual_elements.append("beautiful composition")
-        
-        image_prompt = f"Scene depicting: {', '.join(visual_elements) if visual_elements else 'atmospheric scene'}"
-        
-        # Update recent image count
-        ctx.context.current_context["recent_image_count"] = recent_images + 1
-    
-    return ImageGenerationDecision(
-        should_generate=should_generate,
-        score=score,
-        image_prompt=image_prompt,
-        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})"
-    ).model_dump_json()
-
-async def generate_universal_updates_impl(
-    ctx: RunContextWrapper[NyxContext],
-    narrative: str
-) -> UniversalUpdateResult:
-    """
-    Implementation of generate universal updates from the narrative using the Universal Updater.
-    
-    Args:
-        ctx: RunContextWrapper with NyxContext
-        narrative: The narrative to process
-    
-    Returns:
-        UniversalUpdateResult with operation status
-    """
-    from logic.universal_updater_agent import process_universal_update
-    
-    try:
-        # Process the narrative
-        update_result = await process_universal_update(
-            user_id=ctx.context.user_id,
-            conversation_id=ctx.context.conversation_id,
-            narrative=narrative,
-            context={"source": "nyx_agent"}
-        )
-        
-        # Store the updates in context
-        if "universal_updates" not in ctx.context.current_context:
-            ctx.context.current_context["universal_updates"] = {}
-
-        # Merge the updates
-        if update_result.get("success") and update_result.get("details"):
-            details = update_result["details"]
-            # Convert list-based key/value pairs into a dictionary
-            if isinstance(details, list):
-                try:
-                    from logic.universal_updater_agent import array_to_dict
-                    details_dict = array_to_dict(details)
-                except Exception:  # Fallback if helper import fails
-                    details_dict = {d.get("key"): d.get("value") for d in details}
-            elif isinstance(details, dict):
-                details_dict = details
-            else:
-                details_dict = {}
-
-            for key, value in details_dict.items():
-                ctx.context.current_context["universal_updates"][key] = value
-        
-        # Return structured output
-        return UniversalUpdateResult(
-            success=update_result.get("success", False),
-            updates_generated=bool(update_result.get("details")),
-            error=None
-        )
-    except Exception as e:
-        logger.error(f"Error generating universal updates: {e}")
-        return UniversalUpdateResult(
-            success=False,
-            updates_generated=False,
-            error=str(e)
-        )
-
-# Then update the @function_tool to use the implementation
-@function_tool
-async def generate_universal_updates(
-    ctx: RunContextWrapper[NyxContext],
-    payload: GenerateUniversalUpdatesInput
-) -> str:
-    """
-    Generate universal updates from the narrative using the Universal Updater.
-
-    Args:
-        payload: Input containing narrative to process
-
-    Returns:
-        JSON string with operation status
-    """
-    data = GenerateUniversalUpdatesInput.model_validate(payload or {})
-    result = await generate_universal_updates_impl(ctx, data.narrative)
-    # Convert the Pydantic model to JSON string
-    return result.model_dump_json()
-
-# ===== Open World / Slice-of-life Functions =====
-
-class NarrateSliceInput(BaseModel):
-    scene_type: str = Field("routine", description="Slice-of-life scene type")
-
-@function_tool
-async def narrate_slice_of_life_scene(
-    ctx: RunContextWrapper[NyxContext],
-    payload: NarrateSliceInput
-) -> str:
-    """
-    Generate Nyx's narration for a slice-of-life scene.
-    This is a NEW function that should be Nyx's primary narrative tool.
-    """
-    context = ctx.context
-    scene_type = payload.scene_type  # extracted scene type from payload
-
-    # Get current world state
-    world_state = context.current_world_state
-
-    # Use the slice-of-life narrator
-    scene_narration = await context.slice_of_life_narrator.narrate_world_state()
-
-    nyx_style_prompt = """
-    As Nyx, the seductive AI host (think Elvira meets Tricia from Catherine),
-    add your personality to this scene narration:
-
-    {scene_narration}
-
-    Make it:
-    - Playfully teasing and knowing
-    - Aware of the power dynamics at play
-    - Subtly suggestive without being explicit
-    - Like you're hosting a game show of daily life
-    - Breaking the fourth wall occasionally
-    """
-
-    from logic.chatgpt_integration import generate_text_completion
-
-    result = await generate_text_completion(
-        system_prompt="You are Nyx, the AI Dominant hosting this slice-of-life experience",
-        user_prompt=nyx_style_prompt.format(scene_narration=scene_narration),
-        temperature=0.8,
-        max_tokens=300
-    )
-
-    return result
-
-@function_tool
-async def check_world_state(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
-    _ = payload  # unused
-    context = ctx.context
-    world_state = await context.world_director.context.current_world_state
-
-    out = {
-        "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
-        "world_mood": getattr(world_state.world_mood, "value", None),
-        "active_npcs": [
-            (npc.get("npc_name") or npc.get("name") or npc.get("title"))
-            if isinstance(npc, dict) else str(npc)
-            for npc in getattr(world_state, "active_npcs", []) or []
-        ],
-        "ongoing_events": _json_safe(getattr(world_state, "ongoing_events", [])),
-        "tensions": _json_safe(getattr(world_state, "tension_factors", {})),
-        "player_state": _json_safe({
-            "vitals": getattr(world_state, "player_vitals", {}),
-            "addictions": getattr(world_state, "addiction_status", {}),
-            "stats": getattr(world_state, "hidden_stats", {}),
-        }),
-    }
-    return json.dumps(out, ensure_ascii=False)
- 
-
-class EmergentEventInput(BaseModel):
-    event_type: Optional[str] = Field(None, description="Optional event type hint")
-
-@function_tool
-async def generate_emergent_event(
-    ctx: RunContextWrapper[NyxContext],
-    payload: EmergentEventInput
-) -> str:
-    """Generate an emergent slice-of-life event"""
-    context = ctx.context
-    event_type = payload.event_type  # optional event type from payload
-
-    event = await context.world_director.generate_next_moment()
-
-    # JSON-safe payload of the raw event
-    safe_event = _json_safe(event)
-
-    # Human-friendly summary (best effort)
-    def _get(d, *keys):
-        cur = d if isinstance(d, dict) else {}
-        for k in keys:
-            cur = cur.get(k) if isinstance(cur, dict) else None
-        return cur
-
-    title = None
-    etype = None
-    participants: List[str] = []
-    location = None
-    timestamp = None
-
-    if isinstance(safe_event, dict):
-        title = safe_event.get("title") or _get(safe_event, "moment", "title")
-        etype = safe_event.get("type") or _get(safe_event, "moment", "type")
-        location = safe_event.get("location") or _get(safe_event, "moment", "location")
-        timestamp = safe_event.get("time") or _get(safe_event, "moment", "time")
-        # participants may live in different shapes; try a few
-        raw_parts = (
-            safe_event.get("participants")
-            or _get(safe_event, "moment", "participants")
-            or _get(safe_event, "world_state", "active_npcs")
-            or []
-        )
-        if isinstance(raw_parts, list):
-            for p in raw_parts:
-                if isinstance(p, dict):
-                    participants.append(p.get("npc_name") or p.get("name") or p.get("title") or str(p))
-                else:
-                    participants.append(str(p))
-
-    nyx_commentary = "*Nyx appears in the corner of your vision, smirking* Oh, this should be interesting..."
-    out = {
-        "event": safe_event,
-        "event_summary": {
-            "title": title,
-            "type": etype,
-            "location": location,
-            "time": timestamp,
-            "participants": participants,
-        },
-        "nyx_commentary": nyx_commentary,
-    }
-    return json.dumps(out, ensure_ascii=False)
-
-class SimulateAutonomyInput(BaseModel):
-    hours: int = Field(1, ge=1, le=24, description="Hours to advance")
-
-@function_tool
-async def simulate_npc_autonomy(
-    ctx: RunContextWrapper[NyxContext],
-    payload: SimulateAutonomyInput
-) -> str:
-    """Simulate autonomous NPC actions"""
-    context = ctx.context
-    result = await context.world_director.advance_time(payload.hours)  # advance time based on requested hours
-
-    safe_result = _json_safe(result)
-
-    # Try to produce a compact, readable action log
-    action_log: List[Dict[str, Any]] = []
-    candidate_actions = []
-    if isinstance(safe_result, list):
-        candidate_actions = safe_result
-    elif isinstance(safe_result, dict):
-        # common containers: "actions", "npc_actions", "events", "log"
-        for key in ("actions", "npc_actions", "events", "log"):
-            if isinstance(safe_result.get(key), list):
-                candidate_actions = safe_result[key]
-                break
-
-    for entry in candidate_actions or []:
-        if isinstance(entry, dict):
-            npc = entry.get("npc") or entry.get("npc_name") or entry.get("name")
-            action = entry.get("action") or entry.get("current_activity") or entry.get("activity")
-            t = entry.get("time") or entry.get("timestamp")
-            action_log.append({"npc": npc, "action": action, "time": t})
-        else:
-            action_log.append({"entry": str(entry)})
-
-    nyx_observation = "While you were away, the others continued their lives..."
-    out = {
-        "advanced_time_hours": payload.hours,  # report hours advanced from payload
-        "npc_actions": safe_result,
-        "npc_action_log": action_log,
-        "nyx_observation": nyx_observation,
-    }
-    return json.dumps(out, ensure_ascii=False)
-
-# ===== Helper Functions for Tools =====
-
-def _json_safe(value, *, _depth=0, _max_depth=4):
-    """Best-effort conversion of arbitrary Python objects to JSON-safe primitives."""
-    if _depth > _max_depth:
-        return str(value)
-
-    # Primitives
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-
-    # datetime/date -> ISO string
-    try:
-        from datetime import datetime, date
-        if isinstance(value, (datetime, date)):
-            return value.isoformat()
-    except Exception:
-        pass
-
-    # Enum -> its value
-    try:
-        from enum import Enum
-        if isinstance(value, Enum):
-            return _json_safe(getattr(value, "value", str(value)), _depth=_depth+1, _max_depth=_max_depth)
-    except Exception:
-        pass
-
-    # List/Tuple/Set
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for v in value]
-
-    # Dict-like
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for k, v in value.items()}
-
-    # Dataclass
-    try:
-        import dataclasses
-        if dataclasses.is_dataclass(value):
-            return _json_safe(dataclasses.asdict(value), _depth=_depth+1, _max_depth=_max_depth)
-    except Exception:
-        pass
-
-    # Pydantic v1/v2 models
-    for attr in ("model_dump", "dict"):
-        fn = getattr(value, attr, None)
-        if callable(fn):
-            try:
-                return _json_safe(fn(), _depth=_depth+1, _max_depth=_max_depth)
-            except Exception:
-                break
-
-    # Fallback: attempt __dict__, else str()
-    data = getattr(value, "__dict__", None)
-    if isinstance(data, dict):
-        return _json_safe(data, _depth=_depth+1, _max_depth=_max_depth)
-    return str(value)
-
-def get_context_text_lower(context: Dict[str, Any]) -> str:
-    """Extract text from context and convert to lowercase for analysis"""
-    text_parts = []
-    for key, value in context.items():
-        if isinstance(value, str):
-            text_parts.append(value)
-        elif isinstance(value, (list, dict)):
-            text_parts.append(str(value))
-    return " ".join(text_parts).lower()
-
-async def _get_memory_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> Dict[str, float]:
-    """Get emotional impact from related memories"""
-    # This is a simplified version - in reality you'd query the memory system
-    # for related memories and analyze their emotional content
-    return {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
-
 def _calculate_context_relevance(option: Dict[str, Any], context: Dict[str, Any]) -> float:
     """Calculate how relevant an option is to context"""
     score = 0.5  # Base score
@@ -3013,7 +2032,7 @@ def _calculate_relationship_impact(option: Dict[str, Any], relationship_states: 
     return 0.5 + (avg_trust * 0.5)
 
 def _get_fallback_decision(options: List[DecisionOption]) -> DecisionOption:
-    """Get a safe fallback decision - Enhanced with more keywords"""
+    """Get a safe fallback decision"""
     # Prefer conversation or observation options
     safe_words = ["talk", "observe", "wait", "consider", "listen", "pause"]
     for option in options:
@@ -3027,31 +2046,408 @@ def _get_fallback_decision(options: List[DecisionOption]) -> DecisionOption:
         metadata=DecisionMetadata()
     )
 
-def _prune_list(lst: List[Any], max_len: int) -> None:
-    """Prune a list to maximum length in-place"""
-    if len(lst) > max_len:
-        del lst[:-max_len]
+@function_tool
+async def detect_conflicts_and_instability(
+    ctx: RunContextWrapper[NyxContext],
+    payload: DetectConflictsAndInstabilityInput
+) -> str:
+    """Detect conflicts and emotional instability in current scenario."""
+    data = DetectConflictsAndInstabilityInput.model_validate(payload or {})
+    scenario_state = kvlist_to_dict(data.scenario_state)
+    
+    conflicts = []
+    instabilities = []
+    
+    # Check for relationship conflicts
+    relationship_items = list(ctx.context.relationship_states.items())
+    for i, (entity1_id, rel1) in enumerate(relationship_items):
+        for entity2_id, rel2 in relationship_items[i+1:]:
+            # Conflicting power dynamics
+            if abs(rel1.get("power_dynamic", 0.5) - rel2.get("power_dynamic", 0.5)) > Config.POWER_CONFLICT_THRESHOLD:
+                conflicts.append(ConflictItem(
+                    type="power_conflict",
+                    entities=[entity1_id, entity2_id],
+                    severity=abs(rel1["power_dynamic"] - rel2["power_dynamic"]),
+                    description="Conflicting power dynamics between entities"
+                ))
+            
+            # Low mutual trust
+            if rel1.get("trust", 0.5) < Config.HOSTILE_TRUST_THRESHOLD and rel2.get("trust", 0.5) < Config.HOSTILE_TRUST_THRESHOLD:
+                conflicts.append(ConflictItem(
+                    type="trust_conflict",
+                    entities=[entity1_id, entity2_id],
+                    severity=0.7,
+                    description="Mutual distrust between entities"
+                ))
+    
+    # Check for emotional instability
+    emotional_state = ctx.context.emotional_state
+    
+    # High arousal with negative valence
+    if emotional_state["arousal"] > Config.HIGH_AROUSAL_THRESHOLD and emotional_state["valence"] < Config.NEGATIVE_VALENCE_THRESHOLD:
+        instabilities.append(InstabilityItem(
+            type="emotional_volatility",
+            severity=emotional_state["arousal"],
+            description="High arousal with negative emotions",
+            recommendation="De-escalation needed"
+        ))
+    
+    # Rapid emotional changes
+    if ctx.context.adaptation_history:
+        recent_emotions = [h.get("emotional_state", {}) for h in ctx.context.adaptation_history[-5:]]
+        if recent_emotions and any(recent_emotions):
+            valence_values = [e.get("valence", 0) for e in recent_emotions if e]
+            if valence_values:
+                valence_variance = _calculate_variance(valence_values)
+                if valence_variance > Config.EMOTIONAL_VARIANCE_THRESHOLD:
+                    instabilities.append(InstabilityItem(
+                        type="emotional_instability",
+                        severity=min(1.0, valence_variance),
+                        description="Rapid emotional swings detected",
+                        recommendation="Stabilization recommended"
+                    ))
+    
+    # Scenario-specific conflicts
+    if scenario_state.get("objectives"):
+        blocked_objectives = [obj for obj in scenario_state["objectives"] 
+                             if obj.get("status") == "blocked"]
+        if blocked_objectives:
+            conflicts.append(ConflictItem(
+                type="objective_conflict",
+                severity=len(blocked_objectives) / len(scenario_state["objectives"]),
+                description=f"{len(blocked_objectives)} objectives are blocked",
+                blocked_objectives=[str(obj) for obj in blocked_objectives]
+            ))
+    
+    # Calculate overall stability
+    total_issues = len(conflicts) + len(instabilities)
+    overall_stability = max(0.0, 1.0 - (total_issues / Config.MAX_STABILITY_ISSUES))
+    
+    # Only save scenario state if it's a significant change
+    if ctx.context.scenario_state and ctx.context.scenario_state.get("active"):
+        should_save = False
+        
+        # Check if this is a significant change
+        if conflicts and any(c.severity > 0.7 for c in conflicts):
+            should_save = True
+        if instabilities and any(i.severity > 0.7 for i in instabilities):
+            should_save = True
+        if overall_stability < 0.3:
+            should_save = True
+            
+        if should_save:
+            async with get_db_connection_context() as conn:
+                # Use UPSERT pattern to maintain one current state
+                await conn.execute("""
+                    INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
+                    VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id, conversation_id) 
+                    DO UPDATE SET state_data = $3, created_at = CURRENT_TIMESTAMP
+                """, ctx.context.user_id, ctx.context.conversation_id, 
+                json.dumps(ctx.context.scenario_state, ensure_ascii=False))
+    
+    return ConflictDetectionResult(
+        conflicts=conflicts,
+        instabilities=instabilities,
+        overall_stability=overall_stability,
+        stability_note=f"{total_issues} issues detected (0 issues = 1.0 stability, 10+ issues = 0.0 stability)",
+        requires_intervention=any(c.severity > 0.8 for c in conflicts + instabilities)
+    ).model_dump_json()
 
-def _calculate_avg_response_time(response_times: List[float]) -> float:
-    """Calculate average response time safely"""
-    if not response_times:
-        return 0.0
-    try:
-        return statistics.fmean(response_times)
-    except Exception:
-        # Fallback to simple mean
-        return sum(response_times) / len(response_times)
+@function_tool
+async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: DecideImageInput) -> str:
+    """Decide whether an image should be generated for a scene."""
+    data = DecideImageInput.model_validate(payload or {})
+    scene_text = data.scene_text.lower()
+    
+    # Calculate score based on scene characteristics
+    score = 0.0
+    
+    # High impact visual keywords
+    visual_keywords = ["dramatic", "intense", "beautiful", "transformation", "reveal", "climax", "pivotal"]
+    for keyword in visual_keywords:
+        if keyword in scene_text:
+            score += 0.2
+    
+    # Scene transitions
+    if any(word in scene_text for word in ["enter", "arrive", "transform", "change", "shift"]):
+        score += 0.15
+    
+    # Emotional peaks
+    if any(word in scene_text for word in ["gasp", "shock", "awe", "breathtaking", "stunning"]):
+        score += 0.25
+    
+    # Environmental descriptions
+    if any(word in scene_text for word in ["landscape", "environment", "setting", "atmosphere"]):
+        score += 0.1
+    
+    # Cap score at 1.0
+    score = min(1.0, score)
+    
+    # Dynamic threshold based on recent image generation
+    recent_images = ctx.context.current_context.get("recent_image_count", 0)
+    if recent_images > 3:
+        threshold = 0.7
+    elif recent_images > 1:
+        threshold = 0.6
+    else:
+        threshold = 0.5
+    
+    # Determine if we should generate
+    should_generate = score > threshold
+    
+    # Create appropriate prompt if generating
+    image_prompt = None
+    if should_generate:
+        # Extract key visual elements
+        visual_elements = []
+        if "dramatic" in scene_text:
+            visual_elements.append("dramatic lighting")
+        if "intense" in scene_text:
+            visual_elements.append("intense atmosphere")
+        if "beautiful" in scene_text:
+            visual_elements.append("beautiful composition")
+        
+        image_prompt = f"Scene depicting: {', '.join(visual_elements) if visual_elements else 'atmospheric scene'}"
+        
+        # Update recent image count
+        ctx.context.current_context["recent_image_count"] = recent_images + 1
+    
+    return ImageGenerationDecision(
+        should_generate=should_generate,
+        score=score,
+        image_prompt=image_prompt,
+        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})"
+    ).model_dump_json()
 
-def _calculate_variance(values: List[float]) -> float:
-    """Calculate variance of a list of values"""
-    if len(values) < 2:
-        return 0.0
+async def generate_universal_updates_impl(
+    ctx: RunContextWrapper[NyxContext],
+    narrative: str
+) -> UniversalUpdateResult:
+    """Implementation of generate universal updates from the narrative using the Universal Updater."""
+    from logic.universal_updater_agent import process_universal_update
+    
     try:
-        return statistics.variance(values)
-    except Exception:
-        # Fallback calculation
-        mean = sum(values) / len(values)
-        return sum((x - mean) ** 2 for x in values) / len(values)
+        # Process the narrative
+        update_result = await process_universal_update(
+            user_id=ctx.context.user_id,
+            conversation_id=ctx.context.conversation_id,
+            narrative=narrative,
+            context={"source": "nyx_agent"}
+        )
+        
+        # Store the updates in context
+        if "universal_updates" not in ctx.context.current_context:
+            ctx.context.current_context["universal_updates"] = {}
+
+        # Merge the updates
+        if update_result.get("success") and update_result.get("details"):
+            details = update_result["details"]
+            # Convert list-based key/value pairs into a dictionary
+            if isinstance(details, list):
+                try:
+                    from logic.universal_updater_agent import array_to_dict
+                    details_dict = array_to_dict(details)
+                except Exception:
+                    details_dict = {d.get("key"): d.get("value") for d in details}
+            elif isinstance(details, dict):
+                details_dict = details
+            else:
+                details_dict = {}
+
+            for key, value in details_dict.items():
+                ctx.context.current_context["universal_updates"][key] = value
+        
+        # Return structured output
+        return UniversalUpdateResult(
+            success=update_result.get("success", False),
+            updates_generated=bool(update_result.get("details")),
+            error=None
+        )
+    except Exception as e:
+        logger.error(f"Error generating universal updates: {e}")
+        return UniversalUpdateResult(
+            success=False,
+            updates_generated=False,
+            error=str(e)
+        )
+
+@function_tool
+async def generate_universal_updates(
+    ctx: RunContextWrapper[NyxContext],
+    payload: GenerateUniversalUpdatesInput
+) -> str:
+    """Generate universal updates from the narrative using the Universal Updater."""
+    data = GenerateUniversalUpdatesInput.model_validate(payload or {})
+    result = await generate_universal_updates_impl(ctx, data.narrative)
+    return result.model_dump_json()
+
+# ===== Open World / Slice-of-life Functions =====
+
+@function_tool
+async def narrate_slice_of_life_scene(
+    ctx: RunContextWrapper[NyxContext],
+    payload: NarrateSliceInput
+) -> str:
+    """Generate Nyx's narration for a slice-of-life scene."""
+    context = ctx.context
+    scene_type = payload.scene_type
+
+    # Get current world state
+    world_state = context.current_world_state
+
+    # Use the slice-of-life narrator
+    scene_narration = await context.slice_of_life_narrator.narrate_world_state()
+
+    nyx_style_prompt = """
+    As Nyx, the seductive AI host (think Elvira meets Tricia from Catherine),
+    add your personality to this scene narration:
+
+    {scene_narration}
+
+    Make it:
+    - Playfully teasing and knowing
+    - Aware of the power dynamics at play
+    - Subtly suggestive without being explicit
+    - Like you're hosting a game show of daily life
+    - Breaking the fourth wall occasionally
+    """
+
+    from logic.chatgpt_integration import generate_text_completion
+
+    result = await generate_text_completion(
+        system_prompt="You are Nyx, the AI Dominant hosting this slice-of-life experience",
+        user_prompt=nyx_style_prompt.format(scene_narration=scene_narration),
+        temperature=0.8,
+        max_tokens=300
+    )
+
+    return result
+
+@function_tool
+async def check_world_state(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
+    _ = payload  # unused
+    context = ctx.context
+    world_state = await context.world_director.context.current_world_state
+
+    out = {
+        "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
+        "world_mood": getattr(world_state.world_mood, "value", None),
+        "active_npcs": [
+            (npc.get("npc_name") or npc.get("name") or npc.get("title"))
+            if isinstance(npc, dict) else str(npc)
+            for npc in getattr(world_state, "active_npcs", []) or []
+        ],
+        "ongoing_events": _json_safe(getattr(world_state, "ongoing_events", [])),
+        "tensions": _json_safe(getattr(world_state, "tension_factors", {})),
+        "player_state": _json_safe({
+            "vitals": getattr(world_state, "player_vitals", {}),
+            "addictions": getattr(world_state, "addiction_status", {}),
+            "stats": getattr(world_state, "hidden_stats", {}),
+        }),
+    }
+    return json.dumps(out, ensure_ascii=False)
+
+@function_tool
+async def generate_emergent_event(
+    ctx: RunContextWrapper[NyxContext],
+    payload: EmergentEventInput
+) -> str:
+    """Generate an emergent slice-of-life event"""
+    context = ctx.context
+    event_type = payload.event_type
+
+    event = await context.world_director.generate_next_moment()
+
+    # JSON-safe payload of the raw event
+    safe_event = _json_safe(event)
+
+    # Human-friendly summary
+    def _get(d, *keys):
+        cur = d if isinstance(d, dict) else {}
+        for k in keys:
+            cur = cur.get(k) if isinstance(cur, dict) else None
+        return cur
+
+    title = None
+    etype = None
+    participants: List[str] = []
+    location = None
+    timestamp = None
+
+    if isinstance(safe_event, dict):
+        title = safe_event.get("title") or _get(safe_event, "moment", "title")
+        etype = safe_event.get("type") or _get(safe_event, "moment", "type")
+        location = safe_event.get("location") or _get(safe_event, "moment", "location")
+        timestamp = safe_event.get("time") or _get(safe_event, "moment", "time")
+        # participants may live in different shapes; try a few
+        raw_parts = (
+            safe_event.get("participants")
+            or _get(safe_event, "moment", "participants")
+            or _get(safe_event, "world_state", "active_npcs")
+            or []
+        )
+        if isinstance(raw_parts, list):
+            for p in raw_parts:
+                if isinstance(p, dict):
+                    participants.append(p.get("npc_name") or p.get("name") or p.get("title") or str(p))
+                else:
+                    participants.append(str(p))
+
+    nyx_commentary = "*Nyx appears in the corner of your vision, smirking* Oh, this should be interesting..."
+    out = {
+        "event": safe_event,
+        "event_summary": {
+            "title": title,
+            "type": etype,
+            "location": location,
+            "time": timestamp,
+            "participants": participants,
+        },
+        "nyx_commentary": nyx_commentary,
+    }
+    return json.dumps(out, ensure_ascii=False)
+
+@function_tool
+async def simulate_npc_autonomy(
+    ctx: RunContextWrapper[NyxContext],
+    payload: SimulateAutonomyInput
+) -> str:
+    """Simulate autonomous NPC actions"""
+    context = ctx.context
+    result = await context.world_director.advance_time(payload.hours)
+
+    safe_result = _json_safe(result)
+
+    # Try to produce a compact, readable action log
+    action_log: List[Dict[str, Any]] = []
+    candidate_actions = []
+    if isinstance(safe_result, list):
+        candidate_actions = safe_result
+    elif isinstance(safe_result, dict):
+        # common containers: "actions", "npc_actions", "events", "log"
+        for key in ("actions", "npc_actions", "events", "log"):
+            if isinstance(safe_result.get(key), list):
+                candidate_actions = safe_result[key]
+                break
+
+    for entry in candidate_actions or []:
+        if isinstance(entry, dict):
+            npc = entry.get("npc") or entry.get("npc_name") or entry.get("name")
+            action = entry.get("action") or entry.get("current_activity") or entry.get("activity")
+            t = entry.get("time") or entry.get("timestamp")
+            action_log.append({"npc": npc, "action": action, "time": t})
+        else:
+            action_log.append({"entry": str(entry)})
+
+    nyx_observation = "While you were away, the others continued their lives..."
+    out = {
+        "advanced_time_hours": payload.hours,
+        "npc_actions": safe_result,
+        "npc_action_log": action_log,
+        "nyx_observation": nyx_observation,
+    }
+    return json.dumps(out, ensure_ascii=False)
 
 # ===== Guardrails =====
 
@@ -3074,15 +2470,15 @@ async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent
         - Illegal activities beyond fantasy roleplay
 
         Remember this is a femdom roleplay context where power dynamics and adult themes are expected.""",
-        model="gpt-5-nano"
+        model="gpt-5-nano",
+        model_settings=DEFAULT_MODEL_SETTINGS,
     )
 
-    result = await _run_with_strict_retry(
+    result = await run_agent_safely(
         moderator_agent,
         input_data,
         context=ctx.context,
         run_config=RunConfig(workflow_name="Nyx Content Moderation"),
-        label="content_moderation_guardrail",
     )
 
     txt = getattr(result, "final_output", None) or getattr(result, "output_text", "") or ""
@@ -3100,9 +2496,8 @@ async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent
         tripwire_triggered=not final_output.is_appropriate,
     )
 
-# ===== Agent Definitions =====
+# ===== Agent Definitions with DEFAULT_MODEL_SETTINGS =====
 
-# Memory Agent
 memory_agent = Agent[NyxContext](
     name="Memory Manager",
     handoff_description="Consult memory system for context or store important information",
@@ -3114,10 +2509,9 @@ memory_agent = Agent[NyxContext](
 Be precise and thorough in memory management.""",
     tools=[retrieve_memories, add_memory],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Analysis Agent
 analysis_agent = Agent[NyxContext](
     name="User Analysis",
     handoff_description="Analyze user behavior and relationship dynamics",
@@ -3130,10 +2524,9 @@ analysis_agent = Agent[NyxContext](
 Be observant and insightful.""",
     tools=[detect_user_revelations, get_user_model_guidance, update_relationship_state],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Emotional Agent - Fixed to update state after calculation
 emotional_agent = Agent[NyxContext](
     name="Emotional Manager",
     handoff_description="Process emotional changes and maintain emotional consistency",
@@ -3147,10 +2540,9 @@ emotional_agent = Agent[NyxContext](
 Keep emotions contextual and believable.""",
     tools=[calculate_and_update_emotional_state, calculate_emotional_impact],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Visual Agent
 visual_agent = Agent[NyxContext](
     name="Visual Manager",
     handoff_description="Handles visual content generation including scene images",
@@ -3163,10 +2555,9 @@ visual_agent = Agent[NyxContext](
 Be selective and enhance key moments visually.""",
     tools=[decide_image_generation, generate_image_from_scene],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Activity Agent
 activity_agent = Agent[NyxContext](
     name="Activity Coordinator",
     handoff_description="Recommends and manages activities and tasks",
@@ -3179,10 +2570,9 @@ activity_agent = Agent[NyxContext](
 Create engaging, contextual activities.""",
     tools=[get_activity_recommendations],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Performance Agent
 performance_agent = Agent[NyxContext](
     name="Performance Monitor",
     handoff_description="Check system performance and health",
@@ -3195,10 +2585,9 @@ performance_agent = Agent[NyxContext](
 Keep the system running efficiently.""",
     tools=[check_performance_metrics],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Scenario Agent
 scenario_agent = Agent[NyxContext](
     name="Scenario Manager",
     handoff_description="Manages complex scenarios and narrative progression",
@@ -3219,10 +2608,9 @@ When deciding on time_advancement:
 Create engaging, dynamic scenarios.""",
     tools=[detect_conflicts_and_instability],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Belief Agent
 belief_agent = Agent[NyxContext](
     name="Belief Manager",
     handoff_description="Manages Nyx's beliefs and worldview",
@@ -3235,10 +2623,9 @@ belief_agent = Agent[NyxContext](
 Keep beliefs coherent and evolving.""",
     tools=[manage_beliefs],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Decision Agent
 decision_agent = Agent[NyxContext](
     name="Decision Engine",
     handoff_description="Makes complex decisions using advanced scoring",
@@ -3251,10 +2638,9 @@ decision_agent = Agent[NyxContext](
 Make intelligent, contextual decisions.""",
     tools=[score_decision_options],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-# Reflection Agent
 reflection_agent = Agent[NyxContext](
     name="Reflection Creator",
     handoff_description="Creates thoughtful reflections as Nyx",
@@ -3266,7 +2652,7 @@ reflection_agent = Agent[NyxContext](
 - Maintain Nyx's dominant personality
 Be thoughtful and concise.""",
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
 # Main Nyx Agent
@@ -3323,40 +2709,19 @@ Remember: You're the HOST, not the story. The story emerges from systems interac
         generate_emergent_event,
         simulate_npc_autonomy,
     ],
-  #  input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
     model="gpt-5-nano",
-    model_settings=ModelSettings(strict_tools=False),
+    model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
+# Log strict schema info for debugging
 log_strict_hits(nyx_main_agent)
 
-# ===== Main Functions (maintaining original signatures) =====
+# ===== Main Functions =====
 
 async def initialize_agents():
     """Initialize necessary resources for the agents system"""
     # Initialization handled per-request in process_user_input
     pass
-
-import time
-import uuid
-import json
-import logging
-from contextlib import asynccontextmanager
-from typing import Dict, Any, Optional
-
-logger = logging.getLogger("nyx.runtime")
-
-def _preview(text: Optional[str], n: int = 240) -> str:
-    if not text:
-        return ""
-    cleaned = " ".join(str(text).split())
-    return cleaned[:n] + ("…" if len(cleaned) > n else "")
-
-def _js(obj: Any) -> str:
-    try:
-        return json.dumps(obj, ensure_ascii=False, default=str)
-    except Exception:
-        return f"<unserializable:{type(obj).__name__}>"
 
 @asynccontextmanager
 async def _log_step(name: str, trace_id: str, **meta):
@@ -3370,7 +2735,6 @@ async def _log_step(name: str, trace_id: str, **meta):
         dt = time.time() - t0
         logger.exception(f"[{trace_id}] ✖ FAIL  {name} after {dt:.3f}s meta={_js(meta)}")
         raise
-
 
 async def process_user_input(
     user_id: int,
@@ -3390,8 +2754,8 @@ async def process_user_input(
     )
 
     try:
-        from story_agent.world_director_agent import CompleteWorldDirector  # noqa: F401
-        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator  # noqa: F401
+        from story_agent.world_director_agent import CompleteWorldDirector
+        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
 
         # --- Create & initialize context
         async with _log_step("init NyxContext", trace_id):
@@ -3402,22 +2766,24 @@ async def process_user_input(
 
         # --- Integrate world systems
         async with _log_step("hydrate world_state", trace_id):
-            world_state = await nyx_context.world_director.context.current_world_state
-            nyx_context.current_world_state = world_state
-            nyx_context.current_context.update({
-                "world_mood": getattr(world_state.world_mood, "value", None),
-                "time_of_day": getattr(world_state.current_time.time_of_day, "value", None),
-                "ongoing_events": [getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])],
-                "available_activities": [getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])],
-                "npc_schedules": getattr(world_state, 'npc_schedules', None),
-            })
-            logger.debug(f"[{trace_id}] world context={_js({k: nyx_context.current_context.get(k) for k in ('world_mood','time_of_day')})}")
+            if nyx_context.world_director and nyx_context.world_director.context:
+                world_state = await nyx_context.world_director.context.current_world_state
+                nyx_context.current_world_state = world_state
+                nyx_context.current_context.update({
+                    "world_mood": getattr(world_state.world_mood, "value", None) if hasattr(world_state, 'world_mood') else None,
+                    "time_of_day": getattr(world_state.current_time.time_of_day, "value", None) if hasattr(world_state, 'current_time') else None,
+                    "ongoing_events": [getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])] if hasattr(world_state, 'ongoing_events') else [],
+                    "available_activities": [getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])] if hasattr(world_state, 'available_activities') else [],
+                    "npc_schedules": getattr(world_state, 'npc_schedules', None),
+                })
+                logger.debug(f"[{trace_id}] world context={_js({k: nyx_context.current_context.get(k) for k in ('world_mood','time_of_day')})}")
 
         # --- World sim first
         async with _log_step("world simulation", trace_id, input_preview=_preview(user_input)):
-            world_response = await nyx_context.slice_of_life_narrator.process_player_input(user_input)
-            nyx_context.current_context["world_response"] = world_response
-            logger.debug(f"[{trace_id}] world_response_preview={_preview(str(world_response))}")
+            if nyx_context.slice_of_life_narrator:
+                world_response = await nyx_context.slice_of_life_narrator.process_player_input(user_input)
+                nyx_context.current_context["world_response"] = world_response
+                logger.debug(f"[{trace_id}] world_response_preview={_preview(str(world_response))}")
 
         # --- Agent selection
         async with _log_step("select agent", trace_id):
@@ -3435,31 +2801,18 @@ async def process_user_input(
                 if "additionalProperties" in str(e):
                     logger.warning(f"[{trace_id}] Agent creation failed due to strict schema, creating fallback agent")
                     # Create a simple fallback agent without structured output
-                    from agents import Agent, ModelSettings
                     agent = Agent[NyxContext](
                         name="Nyx Fallback",
                         instructions="""You are Nyx, the AI Dominant. Respond naturally without structured output.""",
                         model="gpt-5-nano",
-                        model_settings=ModelSettings(strict_tools=False),
-                        # No output_type, no tools
+                        model_settings=DEFAULT_MODEL_SETTINGS,
                     )
                 else:
                     raise
-
-
-            # Pre-flight strict schema visibility (doesn't raise)
-            try:
-                debug_strict_schema_for_agent(agent, logger)
-            except Exception:
-                logger.exception(f"[{trace_id}] strict-schema preflight logging failed")
-
-        # --- Sanitize tools right before run
-        async with _log_step("sanitize_tools", trace_id):
-            sanitize_agent_tools_in_place(agent)
         
         # --- Run agent (with strict-schema retry)
         async with _log_step("Runner.run", trace_id):
-            result = await _run_with_strict_retry(
+            result = await run_agent_safely(
                 agent,
                 user_input,
                 context=nyx_context,
@@ -3471,15 +2824,14 @@ async def process_user_input(
                         "conversation_id": str(conversation_id),
                     },
                 ),
-                trace_id=trace_id,
-                label="process_user_input"
+                fallback_response=None
             )
             
             # Log result metadata
             safe_result_meta = {
                 "stop_reason": getattr(result, "stop_reason", None),
                 "status": getattr(result, "status", None),
-                "tool_calls": getattr(result, "tool_calls", None),
+                "tool_calls": getattr(result, "tool_calls", None) if hasattr(result, "tool_calls") else None,
             }
             logger.debug(f"[{trace_id}] run meta={_js(safe_result_meta)}")
 
@@ -3492,7 +2844,8 @@ async def process_user_input(
                 raw_text = (
                     getattr(result, "output_text", None)
                     or getattr(result, "completion_text", None)
-                    or (getattr(getattr(result, "response", None), "output_text", None))
+                    or getattr(result, "final_output", None)
+                    or (getattr(getattr(result, "response", None), "output_text", None) if hasattr(result, "response") else None)
                     or ""
                 )
                 response = NarrativeResponse(
@@ -3606,12 +2959,12 @@ async def process_user_input(
                 logger.exception(f"[{trace_id}] update_performance failed")
 
         # --- Token usage (optional)
-        tokens_used = {}
+        tokens_used = 0
         try:
             tokens_used = extract_token_usage(result)
-            logger.info(f"[{trace_id}] tokens_used={_js(tokens_used)}")
+            logger.info(f"[{trace_id}] tokens_used={tokens_used}")
         except Exception:
-            logger.exception(f"[{trace_id}] extract_token_usage failed")
+            logger.debug(f"[{trace_id}] extract_token_usage failed")
 
         # --- Persist context (best-effort)
         async with _log_step("_save_context_state", trace_id):
@@ -3633,7 +2986,7 @@ async def process_user_input(
                 "world_mood": response.world_mood,
                 "ongoing_events": response.ongoing_events,
                 "available_activities": response.available_activities,
-                "npc_schedules": response.npc_schedules,
+                "npc_schedules": kvlist_to_dict(response.npc_schedules) if response.npc_schedules else None,
                 "time_of_day": response.time_of_day,
                 "emergent_opportunities": response.emergent_opportunities,
             },
@@ -3645,7 +2998,7 @@ async def process_user_input(
                 "tokens_used": tokens_used,
             },
             "learning": {
-                "patterns_learned": len(getattr(nyx_context, "learned_patterns", [])),
+                "patterns_learned": len(getattr(nyx_context, "learned_patterns", {})),
                 "adaptation_success_rate": nyx_context.learning_metrics.get(
                     "adaptation_success_rate"
                 ),
@@ -3746,7 +3099,7 @@ async def _save_context_state(ctx: NyxContext):
                     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
                 """, ctx.user_id, ctx.conversation_id, 
                 json.dumps(ctx.learning_metrics, ensure_ascii=False), 
-                json.dumps(dict(list(ctx.learned_patterns.items())[-Config.MAX_LEARNED_PATTERNS:]), ensure_ascii=False))  # Save only recent patterns
+                json.dumps(dict(list(ctx.learned_patterns.items())[-Config.MAX_LEARNED_PATTERNS:]), ensure_ascii=False))
                 
                 ctx.record_task_run("learning_save")
             
@@ -3783,13 +3136,11 @@ async def generate_reflection(
         prompt = f"Create a reflection about: {topic}" if topic else \
                  "Create a reflection about the user based on your memories"
 
-        result = await _run_with_strict_retry(
+        result = await run_agent_safely(
             reflection_agent,
             prompt,
             context=nyx_context,
             run_config=RunConfig(workflow_name="Nyx Reflection"),
-            trace_id=None,
-            label="generate_reflection",
         )
 
         reflection = result.final_output_as(MemoryReflection)
@@ -3803,9 +3154,7 @@ async def generate_reflection(
         return {"reflection": "Unable to generate reflection at this time.", "confidence": 0.0, "topic": topic}
 
 async def manage_scenario(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    DEPRECATED - Replace with emergent scenario management
-    """
+    """DEPRECATED - Replace with emergent scenario management"""
     try:
         user_id = scenario_data.get("user_id")
         conversation_id = scenario_data.get("conversation_id")
@@ -3832,15 +3181,7 @@ async def manage_scenario(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 async def manage_relationships(interaction_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Manage and update relationships between entities.
-    
-    Args:
-        interaction_data: Interaction details including participants and outcomes
-        
-    Returns:
-        Updated relationship states
-    """
+    """Manage and update relationships between entities."""
     nyx_context = None
     
     try:
@@ -3891,7 +3232,6 @@ async def manage_relationships(interaction_data: Dict[str, Any]) -> Dict[str, An
                 relationship_updates[entity_key] = json.loads(result)
         
         # Note: interaction_history table is not in the schema
-        # We'll just log this as a warning instead of trying to insert
         logger.warning("interaction_history table not found in schema - skipping interaction storage")
         
         # Learn from the relationship interaction
@@ -3909,7 +3249,7 @@ async def manage_relationships(interaction_data: Dict[str, Any]) -> Dict[str, An
                 "total_relationships_updated": len(relationship_updates),
                 "interaction_type": interaction_data.get("interaction_type"),
                 "outcome": interaction_data.get("outcome"),
-                "stored_in_history": False  # Since table doesn't exist
+                "stored_in_history": False
             }
         }
         
@@ -3941,9 +3281,7 @@ async def store_messages(user_id: int, conversation_id: int, user_input: str, ny
 
 async def create_nyx_agent_with_prompt(system_prompt: str, private_reflection: str = "") -> Agent[NyxContext]:
     """Create a Nyx agent with custom system prompt and preset story awareness"""
-    # If you later clean your Pydantic schemas, flip strict_tools to True.
-    from agents import ModelSettings
-
+    
     # Check if we need to add preset story constraints
     preset_constraints = ""
     validation_instructions = ""
@@ -4031,54 +3369,34 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
             handoff(reflection_agent),
         ],
         tools=[
-            # Memory tools
             retrieve_memories,
             add_memory,
-            # Analysis tools
             get_user_model_guidance,
             detect_user_revelations,
-            # Visual tools
             generate_image_from_scene,
             decide_image_generation,
-            # Emotional tools
             calculate_and_update_emotional_state,
             calculate_emotional_impact,
-            # Relationship tools
             update_relationship_state,
-            # Performance tools
             check_performance_metrics,
-            # Activity tools
             get_activity_recommendations,
-            # Belief tools
             manage_beliefs,
-            # Decision tools
             score_decision_options,
-            # Conflict detection
             detect_conflicts_and_instability,
-            # Universal updates / slice-of-life
             generate_universal_updates,
             narrate_slice_of_life_scene,
             check_world_state,
             generate_emergent_event,
             simulate_npc_autonomy,
         ],
-#        input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
         model="gpt-5-nano",
-        model_settings=ModelSettings(strict_tools=False),  # ← key change
+        model_settings=DEFAULT_MODEL_SETTINGS,
     )
 
-    sanitize_agent_tools_in_place(ag)
-    
-    log_strict_hits(ag)
-
-    # Minimal preflight logging so you can verify the flag is actually off
-    try:
-        logger.info(
-            "create_nyx_agent_with_prompt: agent=%s strict_tools=%s tools=%d",
-            ag.name, getattr(ag.model_settings, "strict_tools", None), len(ag.tools or [])
-        )
-    except Exception:
-        logger.exception("strict-schema preflight logging failed")
+    logger.info(
+        "create_nyx_agent_with_prompt: agent=%s strict_tools=%s tools=%d",
+        ag.name, getattr(ag.model_settings, "strict_tools", None), len(ag.tools or [])
+    )
 
     return ag
   
@@ -4090,6 +3408,7 @@ async def create_preset_aware_nyx_agent(
     """Create a Nyx agent with automatic preset story detection"""
     
     # Check if conversation has a preset story
+    from story_templates.preset_story_loader import check_preset_story
     preset_info = await check_preset_story(conversation_id)
     
     # Enhance system prompt with preset information
@@ -4124,127 +3443,14 @@ async def get_emotional_state(ctx) -> str:
         }, ensure_ascii=False)
 
 async def update_emotional_state(ctx, emotional_state: Dict[str, Any]) -> str:
-    """Update emotional state - Fixed to properly update the context"""
+    """Update emotional state"""
     if hasattr(ctx, 'emotional_state'):
         ctx.emotional_state.update(emotional_state)
     elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
         ctx.context.emotional_state.update(emotional_state)
     return "Emotional state updated"
 
-# ===== Compatibility functions to maintain existing imports =====
-
-# Function mappings for backward compatibility
-# Use the actual function objects, not the decorators
-retrieve_memories_impl = retrieve_memories
-add_memory_impl = add_memory
-get_user_model_guidance_impl = get_user_model_guidance
-detect_user_revelations_impl = detect_user_revelations
-generate_image_from_scene_impl = generate_image_from_scene
-get_emotional_state_impl = get_emotional_state
-update_emotional_state_impl = update_emotional_state
-calculate_emotional_impact_impl = calculate_emotional_impact
-calculate_and_update_emotional_state_impl = calculate_and_update_emotional_state
-manage_beliefs_impl = manage_beliefs
-score_decision_options_impl = score_decision_options
-detect_conflicts_and_instability_impl = detect_conflicts_and_instability
-
-# Export list for clean imports
-__all__ = [
-    # Configuration
-    'Config',
-    
-    # Main functions
-    'initialize_agents',
-    'process_user_input',
-    'generate_reflection',
-    'manage_scenario',
-    'manage_relationships',
-    'store_messages',
-    
-    # Context classes
-    'NyxContext',
-    
-    # Output models
-    'NarrativeResponse',
-    'ImageGenerationDecision',
-    
-    # Tool functions (for advanced usage)
-    'retrieve_memories',
-    'add_memory',
-    'get_user_model_guidance',
-    'detect_user_revelations',
-    'generate_image_from_scene',
-    'decide_image_generation',
-    'calculate_emotional_impact',
-    'calculate_and_update_emotional_state',
-    'update_relationship_state',
-    'check_performance_metrics',
-    'get_activity_recommendations',
-    'manage_beliefs',
-    'score_decision_options',
-    'detect_conflicts_and_instability',
-    'generate_universal_updates',
-    'narrate_slice_of_life_scene',
-    'check_world_state',
-    'generate_emergent_event',
-    'simulate_npc_autonomy',
-    
-    # Helper functions
-    'run_agent_with_error_handling',
-    'enhance_context_with_memories',
-    'get_available_activities',
-    
-    # Compatibility functions (deprecated)
-    'enhance_context_with_strategies',
-    'determine_image_generation',
-    'process_user_input_with_openai',
-    'process_user_input_standalone',
-]
-
-async def determine_image_generation_impl(ctx, response_text: str) -> str:
-    """Compatibility wrapper for image generation decision"""
-    visual_ctx = NyxContext(ctx.user_id, ctx.conversation_id)
-    await visual_ctx.initialize()
-
-    try:
-        # First try the tool directly
-        result = await decide_image_generation(
-            RunContextWrapper(context=visual_ctx),
-            DecideImageInput(scene_text=response_text)
-        )
-        return result  # model_dump_json() already returned by your tool
-    except Exception as e:
-        logger.debug(f"decide_image_generation failed: {e}", exc_info=True)
-        try:
-            result = await _run_with_strict_retry(
-                visual_agent,
-                f"Should an image be generated for this scene? {response_text}",
-                context=visual_ctx,
-                run_config=RunConfig(workflow_name="Nyx Visual Decision"),
-                label="visual_agent_fallback",
-            )
-            decision = result.final_output_as(ImageGenerationDecision)
-            return decision.model_dump_json()
-        except Exception as e2:
-            logger.warning(f"Visual agent failed: {e2}", exc_info=True)
-            return ImageGenerationDecision(
-                should_generate=False, score=0, image_prompt=None,
-                reasoning="Unable to determine image generation need"
-            ).model_dump_json()
-
-async def enhance_context_with_strategies_impl(context: Dict[str, Any], conn) -> Dict[str, Any]:
-    """Enhance context with active strategies"""
-    strategies = await get_active_strategies(conn)
-    context["nyx2_strategies"] = strategies
-    return context
-
-def enhance_context_with_memories(context: Dict[str, Any], memories: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Add memories to context for better decision making."""
-    enhanced_context = context.copy()
-    enhanced_context['relevant_memories'] = memories
-    return enhanced_context
-
-# Helper functions for backward compatibility - use NyxContext methods instead
+# Helper functions for backward compatibility
 def should_generate_task(context: Dict[str, Any]) -> bool:
     """
     Determine if we should generate a creative task.
@@ -4297,23 +3503,23 @@ async def generate_base_response(ctx: NyxContext, user_input: str, context: Dict
     """Generate base narrative response - for compatibility"""
 
     # 1. Check world state
-    world_state = await ctx.world_director.context.current_world_state
+    world_state = await ctx.world_director.context.current_world_state if ctx.world_director else None
 
     # 2. Process through slice-of-life narrator
-    narrator_response = await ctx.slice_of_life_narrator.process_player_input(user_input)
+    narrator_response = await ctx.slice_of_life_narrator.process_player_input(user_input) if ctx.slice_of_life_narrator else ""
 
     # 3. Let Nyx add her hosting personality
-    nyx_enhanced = await add_nyx_hosting_style(narrator_response, world_state)
+    nyx_enhanced = await add_nyx_hosting_style(narrator_response, world_state) if world_state else {"narrative": narrator_response}
 
     return NarrativeResponse(
         narrative=nyx_enhanced['narrative'],
-        tension_level=calculate_world_tension(world_state),
-        generate_image=should_generate_image_for_scene(world_state),
-        world_mood=getattr(getattr(world_state, 'world_mood', None), 'value', None),
-        time_of_day=getattr(getattr(getattr(world_state, 'current_time', None), 'time_of_day', None), 'value', None),
-        ongoing_events=[getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])],
-        available_activities=[getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])],
-        emergent_opportunities=detect_emergent_opportunities(world_state)
+        tension_level=calculate_world_tension(world_state) if world_state else 0,
+        generate_image=should_generate_image_for_scene(world_state) if world_state else False,
+        world_mood=getattr(getattr(world_state, 'world_mood', None), 'value', None) if world_state else None,
+        time_of_day=getattr(getattr(getattr(world_state, 'current_time', None), 'time_of_day', None), 'value', None) if world_state else None,
+        ongoing_events=[getattr(e, 'title', str(e)) for e in getattr(world_state, 'ongoing_events', [])] if world_state else [],
+        available_activities=[getattr(a, 'value', str(a)) for a in getattr(world_state, 'available_activities', [])] if world_state else [],
+        emergent_opportunities=detect_emergent_opportunities(world_state) if world_state else []
     )
 
 async def mark_strategy_for_review(conn, strategy_id: int, user_id: int, reason: str):
@@ -4323,41 +3529,70 @@ async def mark_strategy_for_review(conn, strategy_id: int, user_id: int, reason:
         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
     """, strategy_id, user_id, reason)
 
+# ===== Compatibility functions to maintain existing imports =====
+
+# Function mappings for backward compatibility
+retrieve_memories_impl = retrieve_memories
+add_memory_impl = add_memory
+get_user_model_guidance_impl = get_user_model_guidance
+detect_user_revelations_impl = detect_user_revelations
+generate_image_from_scene_impl = generate_image_from_scene
+get_emotional_state_impl = get_emotional_state
+update_emotional_state_impl = update_emotional_state
+calculate_emotional_impact_impl = calculate_emotional_impact
+calculate_and_update_emotional_state_impl = calculate_and_update_emotional_state
+manage_beliefs_impl = manage_beliefs
+score_decision_options_impl = score_decision_options
+detect_conflicts_and_instability_impl = detect_conflicts_and_instability
+
 # Compatibility with existing code
+async def enhance_context_with_strategies_impl(context: Dict[str, Any], conn) -> Dict[str, Any]:
+    """Enhance context with active strategies"""
+    strategies = await get_active_strategies(conn)
+    context["nyx2_strategies"] = strategies
+    return context
+
 enhance_context_with_strategies = enhance_context_with_strategies_impl
+
+async def determine_image_generation_impl(ctx, response_text: str) -> str:
+    """Compatibility wrapper for image generation decision"""
+    visual_ctx = NyxContext(ctx.user_id, ctx.conversation_id)
+    await visual_ctx.initialize()
+
+    try:
+        result = await decide_image_generation(
+            RunContextWrapper(context=visual_ctx),
+            DecideImageInput(scene_text=response_text)
+        )
+        return result
+    except Exception as e:
+        logger.debug(f"decide_image_generation failed: {e}", exc_info=True)
+        try:
+            result = await run_agent_safely(
+                visual_agent,
+                f"Should an image be generated for this scene? {response_text}",
+                context=visual_ctx,
+                run_config=RunConfig(workflow_name="Nyx Visual Decision"),
+            )
+            decision = result.final_output_as(ImageGenerationDecision)
+            return decision.model_dump_json()
+        except Exception as e2:
+            logger.warning(f"Visual agent failed: {e2}", exc_info=True)
+            return ImageGenerationDecision(
+                should_generate=False, score=0, image_prompt=None,
+                reasoning="Unable to determine image generation need"
+            ).model_dump_json()
+
 determine_image_generation = determine_image_generation_impl
 
-# OpenAI integration functions
-async def process_user_input_with_openai(
-    user_id: int,
-    conversation_id: int,
-    user_input: str,
-    context_data: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    """Process user input using the OpenAI integration"""
-    return await process_user_input(user_id, conversation_id, user_input, context_data)
-
-
-async def process_user_input_standalone(
-    user_id: int,
-    conversation_id: int,
-    user_input: str,
-    context_data: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    """Process user input standalone"""
-    return await process_user_input(user_id, conversation_id, user_input, context_data)
+def enhance_context_with_memories(context: Dict[str, Any], memories: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Add memories to context for better decision making."""
+    enhanced_context = context.copy()
+    enhanced_context['relevant_memories'] = memories
+    return enhanced_context
 
 def get_available_activities(scenario_type: str, relationship_states: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Get available activities based on scenario type and relationships.
-    
-    Args:
-        scenario_type: Type of current scenario
-        relationship_states: Current relationship states
-        
-    Returns:
-        List of available activities
-    """
+    """Get available activities based on scenario type and relationships."""
     activities = []
     
     # Training activities
@@ -4413,6 +3648,25 @@ def get_available_activities(scenario_type: str, relationship_states: Dict[str, 
     
     return activities
 
+# OpenAI integration functions
+async def process_user_input_with_openai(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Process user input using the OpenAI integration"""
+    return await process_user_input(user_id, conversation_id, user_input, context_data)
+
+async def process_user_input_standalone(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Process user input standalone"""
+    return await process_user_input(user_id, conversation_id, user_input, context_data)
+
 # Legacy AgentContext for full backward compatibility
 class AgentContext:
     """Full backward compatibility with original AgentContext"""
@@ -4462,9 +3716,7 @@ class AgentContext:
             "strategy_improvement_rate": 0.0,
             "adaptation_success_rate": 0.0
         }
-        self.resource_pools = {}  # Removed - use asyncio.Semaphore if concurrency limits needed
-        # Example: decision_semaphore = asyncio.Semaphore(10)
-        # async with decision_semaphore: ... # Limits to 10 concurrent decisions
+        self.resource_pools = {}
         self.resource_usage = {
             "memory": 0,
             "cpu": 0,
@@ -4505,7 +3757,6 @@ class AgentContext:
     
     async def _load_initial_state(self):
         """Load initial state for agent context"""
-        # Already handled by NyxContext initialization
         pass
     
     async def make_decision(self, context: Dict[str, Any], options: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -4524,7 +3775,7 @@ class AgentContext:
 
         result = await score_decision_options(
             RunContextWrapper(context=self._nyx_context),
-            payload_model.model_dump()
+            payload_model
         )
         decision_data = json.loads(result)
         
@@ -4650,31 +3901,88 @@ class AgentContext:
         """Check if task should run"""
         return self._nyx_context.should_run_task(task_id)
 
+# Export list for clean imports
+__all__ = [
+    # Configuration
+    'Config',
+    
+    # Main functions
+    'initialize_agents',
+    'process_user_input',
+    'generate_reflection',
+    'manage_scenario',
+    'manage_relationships',
+    'store_messages',
+    
+    # Context classes
+    'NyxContext',
+    'AgentContext',  # Legacy compatibility
+    
+    # Output models
+    'NarrativeResponse',
+    'ImageGenerationDecision',
+    
+    # Tool functions (for advanced usage)
+    'retrieve_memories',
+    'add_memory',
+    'get_user_model_guidance',
+    'detect_user_revelations',
+    'generate_image_from_scene',
+    'decide_image_generation',
+    'calculate_emotional_impact',
+    'calculate_and_update_emotional_state',
+    'update_relationship_state',
+    'check_performance_metrics',
+    'get_activity_recommendations',
+    'manage_beliefs',
+    'score_decision_options',
+    'detect_conflicts_and_instability',
+    'generate_universal_updates',
+    'narrate_slice_of_life_scene',
+    'check_world_state',
+    'generate_emergent_event',
+    'simulate_npc_autonomy',
+    
+    # Helper functions
+    'run_agent_with_error_handling',
+    'enhance_context_with_memories',
+    'get_available_activities',
+    
+    # Compatibility functions (deprecated)
+    'enhance_context_with_strategies',
+    'determine_image_generation',
+    'process_user_input_with_openai',
+    'process_user_input_standalone',
+]
 
-from story_agent.world_simulation_models import (
-    CompleteWorldState,
-    WorldState,
-    WorldMood,
-    TimeOfDay,
-    ActivityType,
-    PowerDynamicType,
-    SliceOfLifeEvent,
-    PowerExchange,
-    WorldTension,
-    RelationshipDynamics,
-    NPCRoutine,
-    CurrentTimeData,
-    VitalsData,
-    AddictionCravingData,
-    DreamData,
-    RevelationData,
-    ChoiceData,
-    ChoiceProcessingResult,
-)
+# Import world simulation models if available
+try:
+    from story_agent.world_simulation_models import (
+        CompleteWorldState,
+        WorldState,
+        WorldMood,
+        TimeOfDay,
+        ActivityType,
+        PowerDynamicType,
+        SliceOfLifeEvent,
+        PowerExchange,
+        WorldTension,
+        RelationshipDynamics,
+        NPCRoutine,
+        CurrentTimeData,
+        VitalsData,
+        AddictionCravingData,
+        DreamData,
+        RevelationData,
+        ChoiceData,
+        ChoiceProcessingResult,
+    )
 
-from story_agent.world_director_agent import (
-    CompleteWorldDirector,
-    WorldDirector,
-    CompleteWorldDirectorContext,
-    WorldDirectorContext,
-)
+    from story_agent.world_director_agent import (
+        CompleteWorldDirector,
+        WorldDirector,
+        CompleteWorldDirectorContext,
+        WorldDirectorContext,
+    )
+except ImportError:
+    logger.warning("World simulation models not available - slice-of-life features disabled")
