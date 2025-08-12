@@ -94,35 +94,17 @@ DEFAULT_MODEL_SETTINGS = ModelSettings(
 
 # ===== CRITICAL FIX #3: Clean BaseModel without additionalProperties =====
 class BaseModel(_PydanticBaseModel):
-    """Base model that ensures no additionalProperties in schema"""
-    model_config = ConfigDict(
-        # Use 'ignore' instead of 'forbid' to avoid additionalProperties
-        extra='ignore',
-        arbitrary_types_allowed=False,
-    )
-    
     @classmethod
     def model_json_schema(cls, *args, **kwargs):
-        """Override to strip additionalProperties from schema"""
-        schema = super().model_json_schema(*args, **kwargs)
-        
-        def clean_schema(obj):
-            if isinstance(obj, dict):
-                # Remove the problematic properties
-                obj.pop('additionalProperties', None)
-                obj.pop('unevaluatedProperties', None)
-                
-                # Recursively clean nested objects
-                for key in list(obj.keys()):
-                    if isinstance(obj[key], (dict, list)):
-                        clean_schema(obj[key])
-            elif isinstance(obj, list):
-                for item in obj:
-                    clean_schema(item)
-            
-            return obj
-        
-        return clean_schema(schema)
+        try:
+            schema = super().model_json_schema(*args, **kwargs)
+            # Log if additionalProperties exists
+            if 'additionalProperties' in str(schema):
+                logger.warning(f"Model {cls.__name__} has additionalProperties in schema")
+            return clean_schema(schema)
+        except Exception as e:
+            logger.error(f"Schema generation failed for {cls.__name__}: {e}")
+            raise
 
 # Alias for compatibility
 StrictBaseModel = BaseModel
