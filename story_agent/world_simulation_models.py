@@ -57,12 +57,12 @@ class TimeOfDay(Enum):
 
 class CurrentTimeData(BaseModel):
     """Current time in the simulation"""
-    year: int = 2025
+    year: int = 1
     month: int = 1
     day: int = 1
-    hour: int = 12
-    minute: int = 0
-    time_of_day: TimeOfDay = TimeOfDay.AFTERNOON
+    hour: int = Field(12, ge=0, le=23)
+    minute: int = Field(0, ge=0, le=59)
+    time_of_day: str = "Morning"  # Changed from TimeOfDay enum to string
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -77,10 +77,17 @@ class CurrentTimeData(BaseModel):
 
 class VitalsData(BaseModel):
     """Player vital statistics"""
-    hunger: float = Field(ge=0, le=100, default=50)
-    thirst: float = Field(ge=0, le=100, default=50)
-    fatigue: float = Field(ge=0, le=100, default=30)
-    arousal: float = Field(ge=0, le=100, default=0)
+    energy: int = Field(100, ge=0, le=100)
+    hunger: int = Field(100, ge=0, le=100)
+    thirst: int = Field(100, ge=0, le=100)
+    fatigue: int = Field(0, ge=0, le=100)
+    arousal: float = Field(0, ge=0, le=100)
+    
+    # Optional fields to match logic/time_cycle.py
+    user_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    player_name: Optional[str] = None
+    last_update: Optional[datetime] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
