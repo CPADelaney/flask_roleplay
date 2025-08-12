@@ -42,7 +42,7 @@ from agents import (
     ModelSettings, GuardrailFunctionOutput, InputGuardrail,
     RunContextWrapper, RunConfig
 )
-from agents.function_schema import function_schema
+
 from pydantic import BaseModel as _PydanticBaseModel, Field, ValidationError, ConfigDict
 import inspect  # Required by debug_strict_schema_for_agent
 
@@ -54,6 +54,28 @@ from nyx.core.emotions.emotional_core import EmotionalCore
 from nyx.performance_monitor import PerformanceMonitor
 from .response_filter import ResponseFilter
 from nyx.core.sync.strategy_controller import get_active_strategies
+
+try:
+    import agents.function_schema as _fs
+    _ORIG_FUNCTION_SCHEMA = _fs.function_schema
+
+    def _NYX_function_schema(func, *args, **kwargs):
+        sch = _ORIG_FUNCTION_SCHEMA(func, *args, **kwargs)
+        if isinstance(sch, dict):
+            if "parameters" in sch and isinstance(sch["parameters"], dict):
+                sch["parameters"] = sanitize_json_schema(sch["parameters"])
+            else:
+                sch = sanitize_json_schema(sch)
+        return sch
+
+    # Patch the module AND make it available globally
+    _fs.function_schema = _NYX_function_schema
+    function_schema = _NYX_function_schema  # Now this is the patched version
+    logger.debug("Patched agents.function_schema.function_schema for strict JSON schema.")
+except Exception:
+    logger.exception("Failed to patch function_schema; will sanitize tools in-place later.")
+    # Fallback: import the original if patching fails
+    from agents.function_schema import function_schema
 
 logger = logging.getLogger(__name__)
 
@@ -310,24 +332,6 @@ def dict_to_kvlist(d: dict) -> KVList:
 def kvlist_to_dict(kv: KVList) -> dict:
     return {pair.key: pair.value for pair in kv.items}
 
-try:
-    import agents.function_schema as _fs  # module, not the imported name
-    _ORIG_FUNCTION_SCHEMA = _fs.function_schema
-
-    def _NYX_function_schema(func, *args, **kwargs):
-        sch = _ORIG_FUNCTION_SCHEMA(func, *args, **kwargs)
-        # The SDK expects: {"name", "description"?, "parameters": {...}}
-        if isinstance(sch, dict):
-            if "parameters" in sch:
-                sch["parameters"] = sanitize_json_schema(sch["parameters"])
-            else:
-                sch = sanitize_json_schema(sch)
-        return sch
-
-    _fs.function_schema = _NYX_function_schema  # monkey-patch the module
-    logger.debug("Patched agents.function_schema.function_schema for strict JSON schema.")
-except Exception:
-    logger.exception("Failed to patch function_schema; will sanitize tools in-place later.")
 
 # Patch output tool schema builders (SDK versions differ; try a few)
 def _try_patch_output_schema():
@@ -619,6 +623,15 @@ class ScoredOption(BaseModel):
     is_fallback: Optional[bool] = False
 
 # ===== Pydantic Models for Structured Outputs =====
+def _safe_import(dotted: str):
+    """Safe import for agent discovery"""
+    try:
+        modname, attr = dotted.rsplit(".", 1)
+        mod = __import__(modname, fromlist=[attr])
+        return getattr(mod, attr)
+    except Exception as e:
+        logger.debug("safe_import failed for %s: %s", dotted, e, exc_info=True)
+        return None
 
 def _strip_additional_properties(schema: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -3439,7 +3452,11 @@ async def process_user_input(
             except Exception:
                 logger.exception(f"[{trace_id}] strict-schema preflight logging failed")
 
-        # --- Run agent (with strict-schema retry) - CORRECTED SECTION
+        # --- Sanitize tools right before run
+        async with _log_step("sanitize_tools", trace_id):
+            sanitize_agent_tools_in_place(agent)
+        
+        # --- Run agent (with strict-schema retry)
         async with _log_step("Runner.run", trace_id):
             result = await _run_with_strict_retry(
                 agent,
@@ -4049,6 +4066,8 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
         model_settings=ModelSettings(strict_tools=False),  # ← key change
     )
 
+    sanitize_agent_tools_in_place(ag)
+    
     log_strict_hits(ag)
 
     # Minimal preflight logging so you can verify the flag is actually off
