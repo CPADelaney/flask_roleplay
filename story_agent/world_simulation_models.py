@@ -15,27 +15,32 @@ from datetime import datetime, timezone
 # SANITIZED BASE MODEL - Prevents additionalProperties in JSON schemas
 # ===============================================================================
 
+def _strip_ap(obj):
+    if isinstance(obj, dict):
+        obj.pop('additionalProperties', None)
+        obj.pop('unevaluatedProperties', None)
+        for v in obj.values():
+            _strip_ap(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            _strip_ap(item)
+    return obj
+
 class BaseModel(_PydanticBaseModel):
-    """Base model that ensures no additionalProperties in schema"""
-    model_config = ConfigDict()  # Empty config, NO extra='forbid'
+    """Base model that ensures no additionalProperties/unevaluatedProperties anywhere."""
+    model_config = ConfigDict()  # don't set extra=...
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        # This is the path TypeAdapter() uses (what the Agents SDK relies on).
+        schema = handler(core_schema)
+        return _strip_ap(schema)
 
     @classmethod
     def model_json_schema(cls, **kwargs):
-        """Override to ensure no additionalProperties in schema."""
+        # Kept for completeness; some tools call this directly.
         schema = super().model_json_schema(**kwargs)
-        # Remove additionalProperties at all levels
-        def strip_ap(obj):
-            if isinstance(obj, dict):
-                obj.pop('additionalProperties', None)
-                obj.pop('unevaluatedProperties', None)
-                for v in obj.values():
-                    strip_ap(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    strip_ap(item)
-            return obj
-        
-        return strip_ap(schema)
+        return _strip_ap(schema)
 
 # ===============================================================================
 # Core Time/Vitals Models (imported from time_cycle for type consistency)
