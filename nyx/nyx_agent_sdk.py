@@ -2953,52 +2953,49 @@ async def process_user_input(
         # Prepare run config
         run_config = RunConfig(model_settings=safe_settings)
         logger.info(f"[{trace_id}] ✓✓✓ RUNNER CONFIG READY ✓✓✓")
-
+        
         # ===== STEP 9: Running the agent =====
-        logger.debug(f"[{trace_id}] Step 9: Running agent stream...")
+        logger.debug(f"[{trace_id}] Step 9: Running agent...")
         response_parts = []
         metadata = {}
         
         try:
-            # Use Runner.stream() as a static method
-            async for chunk in Runner.stream(
+            # Use Runner.run() instead of stream()
+            result = await Runner.run(
                 nyx_main_agent,
                 user_input,
                 context=runner_context,
                 run_config=run_config
-            ):
-                chunk_type = type(chunk).__name__
-                logger.debug(f"[{trace_id}] Received chunk type: {chunk_type}")
-                
-                if hasattr(chunk, 'event'):
-                    logger.debug(f"[{trace_id}]   Event: {chunk.event}")
-                    
-                    if chunk.event == 'agent_response':
-                        if hasattr(chunk, 'data') and hasattr(chunk.data, 'text'):
-                            response_parts.append(chunk.data.text)
-                            logger.debug(f"[{trace_id}]   Added text: {chunk.data.text[:100]}...")
-                    
-                    elif chunk.event == 'tool_call':
-                        tool_name = getattr(chunk.data, 'tool', 'unknown')
-                        logger.debug(f"[{trace_id}]   Tool called: {tool_name}")
-                        
-                    elif chunk.event == 'error':
-                        logger.error(f"[{trace_id}]   Stream error: {chunk.data}")
-                        
-                elif hasattr(chunk, 'text'):
-                    response_parts.append(chunk.text)
-                    logger.debug(f"[{trace_id}]   Direct text: {chunk.text[:100]}...")
-                    
+            )
+            
+            # Extract the response from the result
+            if hasattr(result, 'final_output'):
+                response_text = str(result.final_output)
+            elif hasattr(result, 'output'):
+                response_text = str(result.output)
+            elif hasattr(result, 'text'):
+                response_text = str(result.text)
+            else:
+                # Try to extract any string representation
+                response_text = str(result)
+            
+            # Extract metadata if available
+            if hasattr(result, 'metadata'):
+                metadata = result.metadata
+            elif hasattr(result, 'trace'):
+                metadata['trace'] = result.trace
+            
+            logger.debug(f"[{trace_id}] Agent run completed successfully")
+            
         except Exception as e:
-            logger.error(f"[{trace_id}] ✗ Stream processing failed: {e}", exc_info=True)
+            logger.error(f"[{trace_id}] ✗ Agent run failed: {e}", exc_info=True)
             raise
-
+        
         # ===== STEP 10: Response assembly =====
         logger.debug(f"[{trace_id}] Step 10: Assembling response...")
-        response_text = ' '.join(response_parts) if response_parts else "I couldn't generate a response."
         
         result = {
-            'response': response_text,
+            'response': response_text if response_text else "I couldn't generate a response.",
             'metadata': metadata,
             'trace_id': trace_id,
             'processing_time': time.time() - start_time,
