@@ -88,6 +88,11 @@ class PlayerGovernanceMixin:
         action_details: Dict[str, Any],
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
+        # Add this debug line
+        import traceback
+        if action_details is None:
+            print(f"WARNING: action_details is None for {action_type}")
+            traceback.print_stack()
         """
         Check if an action is permitted by governance.
         
