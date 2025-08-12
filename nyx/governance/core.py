@@ -102,6 +102,13 @@ governor_active_agents = Gauge(
     ['agent_type']
 )
 
+# Valid OpenAI Assistant parameters
+VALID_OPENAI_PARAMS = {
+    "model", "name", "description", "instructions", "tools",
+    "file_ids", "metadata", "temperature", "top_p",
+    "response_format", "tool_resources"
+}
+
 # Protocol for type safety
 class SupportsInitialize(Protocol):
     async def initialize(self) -> None: ...
@@ -986,16 +993,27 @@ class NyxUnifiedGovernor(
         return self._openai_client
 
     def _migrate_legacy_kwargs(self, kwargs: dict) -> None:
-            """
-            Mutate kwargs in-place:
-              • convert deprecated 'capabilities' to new 'tools' format
-              • remove unknown keys but log them once
-            """
-            caps = kwargs.pop("capabilities", None)
-            if caps:
-                tools = kwargs.setdefault("tools", [])
-                
-                # Handle different capability formats
+        """
+        Mutate kwargs in-place:
+          • convert deprecated 'capabilities' to new 'tools' format
+          • remove unknown keys but log them once
+        """
+        caps = kwargs.pop("capabilities", None)
+        if caps:
+            tools = kwargs.setdefault("tools", [])
+            
+            # Handle different capability formats
+            if isinstance(caps, list):
+                # If capabilities is a list of strings, treat them as custom tools
+                # For now, just log them - they won't translate to OpenAI tools
+                logger.info(
+                    "create_agent: capabilities list %s cannot be converted to OpenAI tools",
+                    caps
+                )
+                # Store them as custom params for potential future use
+                kwargs["custom_capabilities"] = caps
+            elif isinstance(caps, dict):
+                # Original dict-based handling
                 if caps.get("code_interpreter") is not None:
                     tools.append({"type": "code_interpreter"})
                     
@@ -1014,16 +1032,32 @@ class NyxUnifiedGovernor(
                     "create_agent: converted legacy 'capabilities' kwarg to %d tool(s)",
                     len(tools)
                 )
-    
-            # Log & drop any keys the OpenAI SDK won't recognise
-            unknown = set(kwargs) - VALID_OPENAI_PARAMS
-            if unknown:
+            else:
                 logger.warning(
-                    "create_agent: ignoring unsupported kwargs: %s",
-                    ", ".join(sorted(unknown))
+                    "create_agent: unexpected capabilities type %s, ignoring",
+                    type(caps).__name__
                 )
-                for k in unknown:
-                    kwargs.pop(k, None)
+    
+        # Log & drop any keys the OpenAI SDK won't recognise
+        # Need to define VALID_OPENAI_PARAMS if not already defined
+        if not hasattr(self, 'VALID_OPENAI_PARAMS'):
+            # These are the common OpenAI Assistant parameters
+            VALID_OPENAI_PARAMS = {
+                "model", "name", "description", "instructions", "tools",
+                "file_ids", "metadata", "temperature", "top_p",
+                "response_format", "tool_resources"
+            }
+        else:
+            VALID_OPENAI_PARAMS = self.VALID_OPENAI_PARAMS
+            
+        unknown = set(kwargs) - VALID_OPENAI_PARAMS
+        if unknown:
+            logger.warning(
+                "create_agent: ignoring unsupported kwargs: %s",
+                ", ".join(sorted(unknown))
+            )
+            for k in unknown:
+                kwargs.pop(k, None)
     
     async def create_agent(
         self,
