@@ -172,12 +172,27 @@ def sanitize_agent_tools_in_place(agent):
     their schema dicts in-place just before a run.
     """
     try:
-        if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
-            tools = agent.get_all_tools() or []
-        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
-            tools = agent.get_tools() or []
-        else:
+        tools = []
+        
+        # Try direct attribute access first (safest)
+        if hasattr(agent, "tools"):
             tools = getattr(agent, "tools", []) or []
+        # Handle get_all_tools with potential run_context requirement
+        elif hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
+            try:
+                tools = agent.get_all_tools() or []
+            except TypeError as e:
+                if "run_context" in str(e):
+                    # New API, fall back to direct access
+                    tools = getattr(agent, "tools", []) or []
+                else:
+                    raise
+        # Try get_tools as fallback
+        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
+            try:
+                tools = agent.get_tools() or []
+            except TypeError:
+                tools = getattr(agent, "tools", []) or []
 
         for t in tools:
             # handle common attributes where schema lives
@@ -207,12 +222,31 @@ def debug_strict_schema_for_agent(agent: Any, log: logging.Logger = logger) -> N
     Log sanitized tool schemas at DEBUG. Never raises if a tool is wrapped.
     """
     try:
-        if hasattr(agent, "get_all_tools") and callable(agent.get_all_tools):
-            tools = agent.get_all_tools() or []
-        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
-            tools = agent.get_tools() or []
-        else:
+        # Try different ways to get tools
+        tools = []
+        
+        # First try direct attribute access (safest)
+        if hasattr(agent, "tools"):
             tools = getattr(agent, "tools", []) or []
+        # If get_all_tools exists but requires run_context, skip it
+        elif hasattr(agent, "get_all_tools"):
+            try:
+                # Try calling without arguments (old API)
+                tools = agent.get_all_tools() or []
+            except TypeError as e:
+                if "run_context" in str(e):
+                    # New API requires run_context, skip for now
+                    log.debug("[strict] get_all_tools requires run_context, using direct attribute access")
+                    tools = getattr(agent, "tools", []) or []
+                else:
+                    raise
+        # Try get_tools as fallback
+        elif hasattr(agent, "get_tools") and callable(agent.get_tools):
+            try:
+                tools = agent.get_tools() or []
+            except TypeError:
+                # May also require arguments
+                tools = getattr(agent, "tools", []) or []
 
         log.debug("[strict] inspecting %d tools on agent %s", len(tools), getattr(agent, "name", agent))
         for i, t in enumerate(tools):
