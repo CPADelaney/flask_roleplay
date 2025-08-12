@@ -325,7 +325,13 @@ class CompleteWorldDirectorContext:
             
             # Initialize governance
             self.nyx_governor = await get_central_governance(self.user_id, self.conversation_id)
-            self.directive_handler = DirectiveHandler(self.user_id, self.conversation_id)
+            self.directive_handler = DirectiveHandler(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                agent_type="world_director",  # or AgentType.WORLD_DIRECTOR if that enum exists
+                agent_id=f"world_director_{self.conversation_id}",
+                governance=self.nyx_governor  # Pass the governance instance
+            )
             await self.directive_handler.initialize()
             
             # Load calendar names
