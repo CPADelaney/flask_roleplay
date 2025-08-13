@@ -141,9 +141,8 @@ async def fetch_inventory_item(
             await governor.process_agent_action_report(
                 agent_type=AgentType.UNIVERSAL_UPDATER,
                 agent_id="inventory_system",
-                action_type="fetch_item",
-                result={"found": False},
-                context={"item": item_name, "player": player_name}
+                action={"type": "fetch_item", "item": item_name, "player": player_name},
+                result={"found": True}
             )
             return {"error": f"No item named '{item_name}' found in {player_name}'s inventory", "success": False}
 
@@ -162,9 +161,8 @@ async def fetch_inventory_item(
         await governor.process_agent_action_report(
             agent_type=AgentType.UNIVERSAL_UPDATER,
             agent_id="inventory_system",
-            action_type="fetch_item",
-            result={"found": False},
-            context={"item": item_name, "player": player_name}
+            action={"type": "add_item", "item": item_name, "player": player_name, "quantity": quantity},
+            result=result
         )
         return item_data
 
@@ -370,9 +368,8 @@ async def remove_item_from_inventory(
         await governor.process_agent_action_report(
             agent_type=AgentType.UNIVERSAL_UPDATER,
             agent_id="inventory_system",
-            action_type="remove_item",
-            result=result,
-            context={"item": item_name, "player": player_name}
+            action={"type": "remove_item", "item": item_name, "player": player_name, "quantity": quantity},
+            result=result
         )
         return result
 
@@ -435,9 +432,8 @@ async def get_player_inventory(
         await governor.process_agent_action_report(
             agent_type=AgentType.UNIVERSAL_UPDATER,
             agent_id="inventory_system",
-            action_type="get_inventory",
-            result={"items_count": len(inventory_items)},
-            context={"player": player_name}
+            action={"type": "get_inventory", "player": player_name},
+            result={"items_count": len(inventory_items)}
         )
 
         # Return using Pydantic model
@@ -524,9 +520,8 @@ async def update_item_effect(
         await governor.process_agent_action_report(
             agent_type=AgentType.UNIVERSAL_UPDATER,
             agent_id="inventory_system",
-            action_type="update_item",
-            result=result,
-            context={"item": item_name, "player": player_name, "effect": new_effect}
+            action={"type": "update_item", "item": item_name, "player": player_name, "effect": new_effect},
+            result=result
         )
         return result
 
@@ -632,9 +627,8 @@ async def categorize_items(
         await governor.process_agent_action_report(
             agent_type=AgentType.UNIVERSAL_UPDATER,
             agent_id="inventory_system",
-            action_type="categorize_items",
-            result=results,
-            context={"player": player_name, "items_updated": results["items_updated"]}
+            action={"type": "categorize_items", "player": player_name, "items_count": len(category_mapping)},
+            result=results
         )
 
         if results["items_not_found"]:
