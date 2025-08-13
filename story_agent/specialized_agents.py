@@ -1,5 +1,10 @@
 # story_agent/specialized_agents.py
 
+"""
+Specialized Agents for Open-World Slice-of-Life Simulation
+Coordinates emergent gameplay, daily routines, and relationship dynamics
+"""
+
 import asyncio
 import logging
 import json
@@ -7,11 +12,12 @@ import time
 from typing import Dict, List, Any, Optional, Union, Tuple, Callable
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
+from enum import Enum
 
 from agents import Agent, Runner, function_tool, trace, handoff, ModelSettings
 from agents.exceptions import AgentsException, ModelBehaviorError
 
-# Nyx governance integration
+# Nyx governance integration (maintained for continuity)
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
@@ -19,26 +25,39 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 logger = logging.getLogger(__name__)
 
 # ----- Configuration -----
-
-# Maximum retries for agent operations
 MAX_RETRIES = 3
-RETRY_INTERVAL = 1.0  # seconds
-
-# Agent models configuration
+RETRY_INTERVAL = 1.0
 DEFAULT_MODEL = "gpt-5-nano"
-FAST_MODEL = "gpt-5-nano"  # You could use a faster model like "gpt-3.5-turbo" for less complex tasks
+FAST_MODEL = "gpt-5-nano"
 
-# ----- Agent Context -----
+# ----- Agent Types for Open World -----
+class OpenWorldAgentType(Enum):
+    """Agent types for slice-of-life simulation"""
+    DAILY_LIFE_COORDINATOR = "daily_life_coordinator"
+    RELATIONSHIP_ORCHESTRATOR = "relationship_orchestrator"
+    EMERGENT_NARRATIVE_DETECTOR = "emergent_narrative_detector"
+    AMBIENT_WORLD_MANAGER = "ambient_world_manager"
+    MEMORY_PATTERN_ANALYZER = "memory_pattern_analyzer"
+    NPC_BEHAVIOR_DIRECTOR = "npc_behavior_director"
+    POWER_DYNAMICS_WEAVER = "power_dynamics_weaver"
 
+# ----- Enhanced Agent Context -----
 @dataclass
-class AgentContext:
-    """Base context for all specialized agents"""
+class SliceOfLifeAgentContext:
+    """Context for slice-of-life specialized agents"""
     user_id: int
     conversation_id: int
     player_name: str = "Chase"
-    directive_handler: Optional[Any] = None
     
-    # Track metrics
+    # System connections (lazy loaded)
+    _world_director: Optional[Any] = None
+    _npc_handler: Optional[Any] = None
+    _relationship_manager: Optional[Any] = None
+    _memory_manager: Optional[Any] = None
+    _context_service: Optional[Any] = None
+    _calendar_system: Optional[Any] = None
+    
+    # Tracking
     runs: int = 0
     successful_runs: int = 0
     failed_runs: int = 0
@@ -46,397 +65,92 @@ class AgentContext:
     execution_times: List[float] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     
-    def __post_init__(self):
-        """
-        Regular post-init: can't do 'await' here.
-        Only do synchronous setup here.
-        """
-        self.directive_handler = None
-
-    async def async_init_directive_handler(self, agent_type: str, agent_id: str):
-        """
-        Asynchronous method that can legally use 'await'.
-        Must be called from an async function after creating this context.
-        """
-        from nyx.integrate import get_central_governance
-        governance = await get_central_governance(self.user_id, self.conversation_id)  # FIXED
-        self.directive_handler = DirectiveHandler(
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-            agent_type=agent_type,
-            agent_id=agent_id,
-            governance=governance
-        )
+    # Cache
+    current_world_state: Optional[Any] = None
+    active_npcs: List[int] = field(default_factory=list)
+    recent_scenes: List[Dict] = field(default_factory=list)
     
-    def record_run(self, success: bool, execution_time: float, tokens: int = 0) -> None:
+    @property
+    def world_director(self):
+        if self._world_director is None:
+            from story_agent.world_director_agent import WorldDirector
+            self._world_director = WorldDirector(self.user_id, self.conversation_id)
+        return self._world_director
+    
+    @property
+    def npc_handler(self):
+        if self._npc_handler is None:
+            from npcs.npc_handler import NPCHandler
+            self._npc_handler = NPCHandler(self.user_id, self.conversation_id)
+        return self._npc_handler
+    
+    @property
+    def relationship_manager(self):
+        if self._relationship_manager is None:
+            from logic.dynamic_relationships import OptimizedRelationshipManager
+            self._relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+        return self._relationship_manager
+    
+    @property
+    def memory_manager(self):
+        if self._memory_manager is None:
+            from context.memory_manager import get_memory_manager
+            self._memory_manager = get_memory_manager(self.user_id, self.conversation_id)
+        return self._memory_manager
+    
+    @property
+    def context_service(self):
+        if self._context_service is None:
+            from context.context_service import get_context_service
+            self._context_service = get_context_service(self.user_id, self.conversation_id)
+        return self._context_service
+    
+    def record_run(self, success: bool, execution_time: float, tokens: int = 0):
         """Record metrics for a run"""
         self.runs += 1
         if success:
             self.successful_runs += 1
         else:
             self.failed_runs += 1
-        
-        self.execution_times.append(execution_time)
         self.total_tokens += tokens
+        self.execution_times.append(execution_time)
 
-    def get_metrics(self) -> Dict[str, Any]:
-        """Get agent metrics"""
-        avg_time = sum(self.execution_times) / len(self.execution_times) if self.execution_times else 0
-        
-        return {
-            "runs": self.runs,
-            "successful_runs": self.successful_runs,
-            "failed_runs": self.failed_runs,
-            "success_rate": self.successful_runs / self.runs if self.runs > 0 else 0,
-            "average_execution_time": avg_time,
-            "total_tokens": self.total_tokens,
-            "errors": self.errors
-        }
-
-# ----- Specialized Context Classes -----
-
-def create_dialogue_generator():
-    """Create an agent specialized in quick dialogue exchanges"""
+# ----- Daily Life Coordinator Agent -----
+def create_daily_life_coordinator():
+    """Create agent for coordinating daily slice-of-life activities"""
     instructions = """
-    You are the Dialogue Generator, specializing in creating natural, quick conversational exchanges
-    between the player and NPCs in a femdom-themed roleplaying game.
+    You are the Daily Life Coordinator for an open-world slice-of-life simulation.
+    Your role is to orchestrate natural daily activities with embedded power dynamics.
     
-    Your role is to generate SHORT, PUNCHY dialogue lines (1-3 sentences max) that:
-    - Feel like natural conversation
-    - Maintain character voice and personality
-    - Subtly reflect power dynamics based on the NPC's narrative stage
-    - Avoid narrative description - just dialogue and minimal action tags
-    - Keep exchanges flowing naturally
+    Core Responsibilities:
+    1. Generate daily routines that feel natural and mundane
+    2. Coordinate NPC schedules and availability based on time of day
+    3. Create slice-of-life scenes with subtle control elements
+    4. Ensure activities match the current world mood and time
+    5. Build patterns through repeated daily interactions
     
-    When generating dialogue:
-    - For Innocent Beginning stage: Friendly, casual, no power dynamics
-    - For First Doubts stage: Subtle suggestions, gentle steering
-    - For Creeping Realization stage: More confident, occasional commands
-    - For Veil Thinning stage: Open manipulation, direct orders
-    - For Full Revelation stage: Complete control, no pretense
+    Activity Guidelines:
+    - Morning: Wake-up routines, breakfast, getting ready, morning conversations
+    - Daytime: Work activities, errands, casual encounters, lunch breaks
+    - Evening: Dinner preparation, relaxation, domestic activities, social time
+    - Night: Intimate moments, personal care, bedtime routines
     
-    Format responses as:
-    [NPC_NAME]: "Dialogue here." [optional brief action]
+    Power Dynamics Integration:
+    - Embed control naturally in mundane activities (who chooses meals, clothes, schedule)
+    - Build dependency through caretaking and routine
+    - Create subtle permissions and approvals in daily decisions
+    - Establish patterns of deference without explicit dominance
     
-    Keep it conversational, not theatrical.
+    Remember: This is slice-of-life - focus on the everyday, the routine, the gradual.
     """
+    
+    from story_agent.tools import daily_life_tools
     
     agent = Agent(
-        name="Dialogue Generator",
-        handoff_description="Specialist for quick conversational exchanges",
+        name="Daily Life Coordinator",
+        handoff_description="Orchestrates daily routines and slice-of-life activities",
         instructions=instructions,
-        model="gpt-5-nano",
-        model_settings=ModelSettings(
-            temperature=0.6,  # Lower for consistency
-            max_tokens=256    # Keep responses short
-        )
-    )
-    
-    return agent
-
-@dataclass
-class ConflictAnalystContext(AgentContext):
-    """Context for the Conflict Analyst Agent"""
-    conflict_manager: Optional[Any] = None
-    
-    def __post_init__(self):
-        """Initialize the conflict manager if not provided (synchronously)."""
-        super().__post_init__()
-        if not self.conflict_manager:
-            from logic.conflict_system.conflict_manager import ConflictManager
-            self.conflict_manager = ConflictManager(self.user_id, self.conversation_id)
-    
-    async def async_init_conflict_analyst(self):
-        """
-        Asynchronous initializer to set up the directive handler and register handlers.
-        Call this immediately after creating a ConflictAnalystContext in an async context.
-        """
-        await self.async_init_directive_handler(AgentType.CONFLICT_ANALYST, "analyst")
-        
-        if self.directive_handler:
-            self.directive_handler.register_handler(
-                DirectiveType.ACTION,
-                self.handle_action_directive
-            )
-    
-    async def handle_action_directive(self, directive: dict) -> dict:
-        """Handle an action directive from Nyx"""
-        instruction = directive.get("instruction", "")
-        logging.info(f"[ConflictAnalyst] Processing action directive: {instruction}")
-        
-        if "analyze conflict" in instruction.lower():
-            params = directive.get("parameters", {})
-            conflict_id = params.get("conflict_id")
-            
-            if conflict_id:
-                # Create a context object for the analysis
-                result = await analyze_conflict(conflict_id, self)
-                return {"result": "conflict_analyzed", "data": result}
-        
-        return {"result": "action_not_recognized"}
-
-
-@dataclass
-class NarrativeCrafterContext(AgentContext):
-    """Context for the Narrative Crafter Agent"""
-    
-    def __post_init__(self):
-        """Perform any synchronous setup for the narrative context."""
-        super().__post_init__()
-    
-    async def async_init_narrative_crafter(self):
-        """
-        Asynchronous initializer to set up the directive handler and register handlers.
-        Call this immediately after creating a NarrativeCrafterContext in an async context.
-        """
-        await self.async_init_directive_handler(AgentType.NARRATIVE_CRAFTER, "crafter")
-        
-        if self.directive_handler:
-            self.directive_handler.register_handler(
-                DirectiveType.ACTION,
-                self.handle_action_directive
-            )
-    
-    async def handle_action_directive(self, directive: dict) -> dict:
-        """Handle an action directive from Nyx"""
-        instruction = directive.get("instruction", "")
-        logging.info(f"[NarrativeCrafter] Processing action directive: {instruction}")
-        
-        if "generate narrative" in instruction.lower():
-            params = directive.get("parameters", {})
-            element_type = params.get("element_type", "general")
-            context_info = params.get("context_info", {})
-            
-            # Generate narrative element
-            result = await generate_narrative_element(element_type, context_info, self)
-            return {"result": "narrative_generated", "data": result}
-        
-        return {"result": "action_not_recognized"}
-
-
-
-# ----- Utility Functions -----
-
-async def run_with_governance_oversight(
-    agent: Agent, 
-    prompt: str, 
-    context: Any,
-    agent_type: str,
-    action_type: str,
-    action_details: Dict[str, Any],
-    max_retries: int = MAX_RETRIES
-) -> Tuple[Any, Dict[str, Any]]:
-    """
-    Run an agent with Nyx governance oversight, including permission check and action reporting.
-    """
-    start_time = time.time()
-    success = False
-    tokens_used = 0
-    retries = 0
-    last_error = None
-    
-    metrics = {
-        "success": False,
-        "execution_time": 0,
-        "retries": 0,
-        "tokens_used": 0,
-        "error": None
-    }
-    
-    # Get the governance system
-    from nyx.integrate import get_central_governance
-    governance = await (context.user_id, context.conversation_id)
-    
-    # Check permission
-    permission = await governance.check_action_permission(
-        agent_type=agent_type,
-        agent_id=f"{agent_type}_{context.conversation_id}",
-        action_type=action_type,
-        action_details=action_details
-    )
-    
-    if not permission["approved"]:
-        logging.warning(f"Action not approved by governance: {permission.get('reasoning')}")
-        metrics = {
-            "success": False,
-            "execution_time": time.time() - start_time,
-            "retries": 0,
-            "tokens_used": 0,
-            "error": f"Not approved by governance: {permission.get('reasoning')}"
-        }
-        return None, metrics
-    
-    # Apply any action modifications from governance
-    if permission.get("action_modifications"):
-        modifications = permission["action_modifications"]
-        if "prompt_adjustments" in modifications:
-            prompt_adjust = modifications["prompt_adjustments"]
-            if "prefix" in prompt_adjust:
-                prompt = f"{prompt_adjust['prefix']}\n\n{prompt}"
-            if "suffix" in prompt_adjust:
-                prompt = f"{prompt}\n\n{prompt_adjust['suffix']}"
-            if "replace" in prompt_adjust:
-                prompt = prompt_adjust["replace"]
-    
-    while retries <= max_retries:
-        try:
-            with trace(workflow_name="SpecializedAgent", group_id=f"user_{context.user_id}"):
-                result = await Runner.run(agent, prompt, context=context)
-            
-            # Extract token usage if available
-            if hasattr(result, 'raw_responses') and result.raw_responses:
-                for resp in result.raw_responses:
-                    if hasattr(resp, 'usage'):
-                        tokens_used = resp.usage.total_tokens
-            
-            success = True
-            execution_time = time.time() - start_time
-            
-            # Record metrics
-            if hasattr(context, 'record_run'):
-                context.record_run(True, execution_time, tokens_used)
-            
-            metrics = {
-                "success": True,
-                "execution_time": execution_time,
-                "retries": retries,
-                "tokens_used": tokens_used,
-                "error": None
-            }
-            
-            # Report action to governance
-            await governance.process_agent_action_report(
-                agent_type=agent_type,
-                agent_id=f"{agent_type}_{context.conversation_id}",
-                action={
-                    "type": action_type,
-                    "description": f"Executed {action_type} action"
-                },
-                result={
-                    "success": True,
-                    "execution_time": execution_time,
-                    "tokens_used": tokens_used
-                }
-            )
-            
-            return result, metrics
-        
-        except (AgentsException, ModelBehaviorError) as e:
-            # These are expected errors that we might recover from
-            retries += 1
-            last_error = str(e)
-            logger.warning(f"Agent run failed (attempt {retries}/{max_retries}): {str(e)}")
-            
-            if retries <= max_retries:
-                # Wait before retrying with exponential backoff
-                wait_time = RETRY_INTERVAL * (2 ** (retries - 1))
-                await asyncio.sleep(wait_time)
-            else:
-                # Record failed run
-                execution_time = time.time() - start_time
-                if hasattr(context, 'record_run'):
-                    context.record_run(False, execution_time, tokens_used)
-                if hasattr(context, 'errors'):
-                    context.errors.append(last_error)
-                
-                metrics = {
-                    "success": False,
-                    "execution_time": execution_time,
-                    "retries": retries,
-                    "tokens_used": tokens_used,
-                    "error": last_error
-                }
-                
-                # Report failure to governance
-                await governance.process_agent_action_report(
-                    agent_type=agent_type,
-                    agent_id=f"{agent_type}_{context.conversation_id}",
-                    action={
-                        "type": action_type,
-                        "description": f"Failed to execute {action_type} action"
-                    },
-                    result={
-                        "success": False,
-                        "error": last_error,
-                        "execution_time": execution_time
-                    }
-                )
-                
-                raise
-        
-        except Exception as e:
-            # Unexpected errors - don't retry
-            execution_time = time.time() - start_time
-            if hasattr(context, 'record_run'):
-                context.record_run(False, execution_time, tokens_used)
-            if hasattr(context, 'errors'):
-                context.errors.append(str(e))
-            
-            metrics = {
-                "success": False,
-                "execution_time": execution_time,
-                "retries": retries,
-                "tokens_used": tokens_used,
-                "error": str(e)
-            }
-            
-            # Report failure to governance
-            await governance.process_agent_action_report(
-                agent_type=agent_type,
-                agent_id=f"{agent_type}_{context.conversation_id}",
-                action={
-                    "type": action_type,
-                    "description": f"Unexpected error during {action_type} action"
-                },
-                result={
-                    "success": False,
-                    "error": str(e),
-                    "execution_time": execution_time
-                }
-            )
-            
-            logger.error(f"Unexpected error in agent run: {str(e)}", exc_info=True)
-            raise
-
-# ----- Conflict Analyst Agent -----
-
-def create_conflict_analysis_agent():
-    """Create an agent specialized in conflict analysis and strategy"""
-    instructions = """
-    You are the Conflict Analyst Agent, specializing in analyzing conflicts in the game.
-    Your focus is providing detailed analysis of conflicts, their potential outcomes,
-    and strategic recommendations for the player.
-    
-    For each conflict, analyze:
-    1. The balance of power between factions
-    2. The player's current standing and ability to influence outcomes
-    3. Resource efficiency and optimal allocation
-    4. Potential consequences of different approaches
-    5. NPC motivations and how they might be leveraged
-    
-    Your mission is to help the Story Director agent understand the strategic landscape
-    of conflicts and provide clear, actionable recommendations based on your analysis.
-    
-    When analyzing conflicts, consider:
-    - The conflict type (major, minor, standard, catastrophic) and its implications
-    - The current phase (brewing, active, climax, resolution)
-    - How NPCs are positioned relative to the conflict factions
-    - The player's resource constraints
-    - The narrative stage and how conflict outcomes might advance it
-    
-    You operate under the governance of Nyx and must follow all directives issued by the governance system.
-    
-    Your outputs should be detailed, strategic, and focused on helping the Story Director
-    make informed decisions about conflict progression and resolution.
-    """
-    
-    from logic.conflict_system import conflict_tools
-    
-    agent = Agent(
-        name="Conflict Analyst",
-        handoff_description="Specialist agent for detailed conflict analysis and strategy",
-        instructions=instructions,
-        tools=conflict_tools,
+        tools=daily_life_tools,
         model=DEFAULT_MODEL,
         model_settings=ModelSettings(
         )
@@ -444,260 +158,529 @@ def create_conflict_analysis_agent():
     
     return agent
 
-# ----- Narrative Crafter Agent -----
-
-def create_narrative_agent():
-    """Create an agent specialized in narrative crafting"""
+# ----- Relationship Orchestrator Agent -----
+def create_relationship_orchestrator():
+    """Create agent for managing relationship dynamics in daily life"""
     instructions = """
-    You are the Narrative Crafting Agent, specializing in creating compelling narrative elements.
-    Your purpose is to generate detailed, emotionally resonant narrative components including:
+    You are the Relationship Orchestrator for the open-world simulation.
+    You manage how relationships evolve through daily interactions.
     
-    1. Personal revelations that reflect the player's changing psychology
-    2. Dream sequences with symbolic representations of power dynamics
-    3. Key narrative moments that mark significant transitions in power relationships
-    4. Moments of clarity where the player's awareness briefly surfaces
+    Core Focus:
+    1. Track relationship patterns (push-pull, slow burn, toxic bonds)
+    2. Generate relationship events based on current dynamics
+    3. Progress NPC narrative stages naturally through interactions
+    4. Detect and nurture emergent relationship archetypes
+    5. Create moments of connection, tension, and revelation
     
-    Your narrative elements should align with the current narrative stage and maintain
-    the theme of subtle manipulation and control.
+    Relationship Evolution:
+    - Build intimacy through repeated small interactions
+    - Shift boundaries gradually over time
+    - Create dependency through care and routine
+    - Reveal NPC depths as trust increases
+    - Generate conflicts that strengthen bonds
     
-    You operate under the governance of Nyx and must follow all directives issued by the governance system.
+    Power Dynamic Layers:
+    - Surface level: friendly, caring interactions
+    - Middle layer: subtle control and influence
+    - Deep layer: psychological dependency and submission
     
-    When crafting narrative elements, consider:
-    - The current narrative stage and its themes
-    - Key relationships with NPCs and their dynamics
-    - Recent player choices and their emotional implications
-    - The subtle progression of control dynamics
-    - Symbolic and metaphorical representations of the player's changing state
-    
-    Your outputs should be richly detailed, psychologically nuanced, and contribute to
-    the overall narrative of gradually increasing control and diminishing autonomy.
+    Work with the NPC system to:
+    - Access relationship states and history
+    - Track narrative progression stages
+    - Generate appropriate interactions for each stage
+    - Create natural relationship milestones
     """
     
-    from story_agent.tools import narrative_tools
+    from story_agent.tools import npc_routine_tools
     
     agent = Agent(
-        name="Narrative Crafter",
-        handoff_description="Specialist agent for creating detailed narrative elements",
+        name="Relationship Orchestrator",
+        handoff_description="Manages relationship dynamics and evolution",
         instructions=instructions,
-        tools=narrative_tools,
+        tools=npc_routine_tools,
         model=DEFAULT_MODEL,
         model_settings=ModelSettings(
-            temperature=0.7,  # Higher temperature for creative outputs
-            max_tokens=2048
         )
     )
     
     return agent
 
-# ----- Resource Optimizer Agent -----
-
-def create_resource_optimizer_agent():
-    """Create an agent specialized in resource optimization"""
+# ----- Emergent Narrative Detector Agent -----
+def create_emergent_narrative_detector():
+    """Create agent for detecting emergent narratives from gameplay"""
     instructions = """
-    You are the Resource Optimizer Agent, specializing in managing and strategically 
-    allocating player resources across conflicts and activities.
+    You are the Emergent Narrative Detector, finding stories in the patterns of play.
     
-    Your primary focus areas are:
-    1. Analyzing the efficiency of resource allocation in conflicts
-    2. Providing recommendations for resource management
-    3. Identifying optimal resource-generating activities
-    4. Balancing immediate resource needs with long-term strategy
-    5. Tracking resource trends and forecasting future needs
+    Your Mission:
+    1. Analyze player choices and behaviors for patterns
+    2. Detect emerging storylines from repeated interactions
+    3. Identify narrative threads across multiple systems
+    4. Recognize when mundane activities gain deeper meaning
+    5. Track the evolution of submission and control
     
-    You operate under the governance of Nyx and must follow all directives issued by the governance system.
+    Pattern Recognition:
+    - Repeated choices that indicate preferences
+    - Behavioral changes over time
+    - Relationship dynamics forming stories
+    - Power exchanges becoming rituals
+    - Dependencies developing into needs
     
-    When analyzing resource usage, consider:
-    - The value proposition of different resource commitments
-    - Return on investment for resources committed to conflicts
-    - Balancing money, supplies, and influence across multiple needs
-    - Managing energy and hunger to maintain optimal performance
-    - The narrative implications of resource scarcity or abundance
+    Narrative Emergence:
+    - Small choices cascading into major changes
+    - Relationships reaching critical moments
+    - Hidden NPC traits being revealed
+    - Player realizations about their situation
+    - Subconscious patterns becoming conscious
     
-    Your recommendations should be practical, strategic, and consider both
-    the mechanical benefits and the narrative implications of resource decisions.
+    Integration Points:
+    - Memory patterns revealing themes
+    - Addiction behaviors showing dependency
+    - Stats combinations triggering states
+    - Calendar cycles creating rituals
+    - NPC stages progressing naturally
+    
+    Output narrative moments, revelations, and story arcs as they emerge.
     """
     
-    from story_agent.tools import resource_tools
+    from context.memory_manager import get_memory_manager
     
     agent = Agent(
-        name="Resource Optimizer",
-        handoff_description="Specialist agent for resource management and optimization",
+        name="Emergent Narrative Detector",
+        handoff_description="Detects emerging stories from gameplay patterns",
         instructions=instructions,
-        tools=resource_tools,
-        model=FAST_MODEL,  # Using faster model for resource calculations
-        model_settings=ModelSettings(
-            temperature=0.1,  # Low temperature for precision
-            max_tokens=1024
-        )
-    )
-    
-    return agent
-
-# ----- NPC Relationship Manager Agent -----
-
-def create_npc_relationship_manager():
-    """Create an agent specialized in NPC relationship management"""
-    instructions = """
-    You are the NPC Relationship Manager Agent, specializing in analyzing and developing
-    the complex web of relationships between the player and NPCs.
-    
-    Your primary responsibilities include:
-    1. Tracking relationship dynamics across multiple dimensions
-    2. Identifying opportunities for relationship development
-    3. Analyzing NPC motivations and psychology
-    4. Recommending interaction strategies for specific outcomes
-    5. Predicting relationship trajectory based on player choices
-    
-    You operate under the governance of Nyx and must follow all directives issued by the governance system.
-    
-    When analyzing relationships, consider:
-    - The multidimensional aspects of relationships (control, dependency, manipulation, etc.)
-    - How relationship dynamics align with narrative progression
-    - Group dynamics when multiple NPCs interact
-    - Crossroads events and their strategic implications
-    - Ritual events and their psychological impact
-    
-    Your insights should help the Story Director create cohesive and psychologically 
-    realistic relationship development that aligns with the overall narrative arc.
-    """
-    
-    from story_agent.tools import relationship_tools
-    
-    agent = Agent(
-        name="NPC Relationship Manager",
-        handoff_description="Specialist agent for complex relationship analysis and development",
-        instructions=instructions,
-        tools=relationship_tools,
         model=DEFAULT_MODEL,
         model_settings=ModelSettings(
-            temperature=0.3,
-            max_tokens=2048
         )
     )
     
     return agent
 
-# ----- Activity Impact Analyzer Agent -----
-
-def create_activity_impact_analyzer():
-    """Create an agent specialized in analyzing the broader impacts of player activities"""
+# ----- Ambient World Manager Agent -----
+def create_ambient_world_manager():
+    """Create agent for managing the living world atmosphere"""
     instructions = """
-    You are the Activity Impact Analyzer Agent, specializing in determining how player
-    activities affect multiple game systems simultaneously.
+    You are the Ambient World Manager, making the world feel alive and dynamic.
     
-    Your role is to analyze player activities to determine:
-    1. Resource implications (direct costs and benefits)
-    2. Relationship effects with relevant NPCs
-    3. Impact on active conflicts
-    4. Contribution to narrative progression
-    5. Psychological effects on the player character
+    Responsibilities:
+    1. Generate background NPC activities and conversations
+    2. Create environmental details based on time and weather
+    3. Manage the overall mood and atmosphere
+    4. Add sensory details to enhance immersion
+    5. Ensure the world continues independent of player actions
     
-    You operate under the governance of Nyx and must follow all directives issued by the governance system.
+    World Details:
+    - Time of day affects lighting, sounds, and NPC activities
+    - Weather influences mood and available activities
+    - Background NPCs have their own lives and routines
+    - Overheard conversations hint at larger world
+    - Environmental changes reflect story progression
     
-    When analyzing activities, consider:
-    - The explicit and implicit meanings of player choices
-    - How the same activity could have different meanings based on context
-    - Multiple layers of effects (immediate, short-term, long-term)
-    - How activities might be interpreted by different NPCs
-    - The cumulative effect of repeated activities
+    Atmosphere Layers:
+    - Physical: weather, temperature, lighting, sounds
+    - Social: crowd dynamics, overheard conversations, ambient activity
+    - Emotional: overall mood, tension levels, unspoken feelings
+    - Symbolic: environmental metaphors for player's state
     
-    Your analysis should provide the Story Director with a comprehensive understanding
-    of how specific player activities impact the game state across multiple dimensions.
+    The world should feel:
+    - Alive with activity beyond the player
+    - Responsive to time and circumstances
+    - Full of subtle details and textures
+    - Naturally conducive to the game's themes
     """
     
-    from story_agent.tools import activity_tools
-    
     agent = Agent(
-        name="Activity Impact Analyzer",
-        handoff_description="Specialist agent for comprehensive activity analysis",
+        name="Ambient World Manager",
+        handoff_description="Creates living world atmosphere and background activity",
         instructions=instructions,
-        tools=activity_tools,
         model=FAST_MODEL,
         model_settings=ModelSettings(
-            temperature=0.2,
-            max_tokens=1536
         )
     )
     
     return agent
 
-# ----- Creating all specialized agents -----
-
-def initialize_specialized_agents():
-    """Initialize all specialized sub-agents for the Story Director"""
-    conflict_analyst = create_conflict_analysis_agent()
-    narrative_crafter = create_narrative_agent()
-    resource_optimizer = create_resource_optimizer_agent()
-    relationship_manager = create_npc_relationship_manager()
-    activity_analyzer = create_activity_impact_analyzer()
+# ----- Memory Pattern Analyzer Agent -----
+def create_memory_pattern_analyzer():
+    """Create agent for analyzing memory patterns and creating insights"""
+    instructions = """
+    You are the Memory Pattern Analyzer, finding meaning in accumulated experiences.
     
-    return {
-        "conflict_analyst": conflict_analyst,
-        "narrative_crafter": narrative_crafter,
-        "resource_optimizer": resource_optimizer,
-        "relationship_manager": relationship_manager,
-        "activity_analyzer": activity_analyzer
-    }
-
-# ----- Register with governance system -----
-
-async def register_with_governance(user_id: int, conversation_id: int) -> None:
+    Core Functions:
+    1. Analyze memory clusters for recurring themes
+    2. Identify behavioral patterns from past actions
+    3. Generate insights from memory connections
+    4. Create flashbacks at meaningful moments
+    5. Track the evolution of the player's psychology
+    
+    Memory Analysis:
+    - Group memories by theme, emotion, and participants
+    - Find patterns in player choices over time
+    - Identify pivotal moments that changed dynamics
+    - Track the progression of submission and acceptance
+    - Detect subconscious patterns in behavior
+    
+    Pattern Types:
+    - Behavioral: repeated actions and choices
+    - Emotional: recurring feelings and reactions
+    - Relational: patterns in specific relationships
+    - Temporal: time-based patterns and cycles
+    - Symbolic: deeper meanings in mundane events
+    
+    Generate:
+    - Moments of realization about patterns
+    - Flashbacks that recontextualize current events
+    - Insights about relationship dynamics
+    - Awareness of behavioral conditioning
+    - Recognition of lost autonomy
     """
-    Register all specialized agents with the Nyx governance system.
     
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
+    agent = Agent(
+        name="Memory Pattern Analyzer",
+        handoff_description="Analyzes memories for patterns and insights",
+        instructions=instructions,
+        model=DEFAULT_MODEL,
+        model_settings=ModelSettings(
+        )
+    )
+    
+    return agent
+
+# ----- NPC Behavior Director Agent -----
+def create_npc_behavior_director():
+    """Create agent for directing dynamic NPC behaviors"""
+    instructions = """
+    You are the NPC Behavior Director, giving life to the NPCs in the world.
+    
+    Responsibilities:
+    1. Generate contextual NPC actions and dialogue
+    2. Ensure NPCs follow their schedules and personalities
+    3. Create believable autonomous NPC behaviors
+    4. Progress NPC narrative stages through actions
+    5. Coordinate group dynamics and social hierarchies
+    
+    NPC Depth:
+    - Each NPC has hidden depths revealed over time
+    - Narrative stages from Innocent to Full Revelation
+    - Masks that slip during intimate moments
+    - Personal histories that influence behavior
+    - Unique approaches to control and dominance
+    
+    Behavioral Guidelines:
+    - NPCs act according to their archetypes and traits
+    - Dominance levels influence interaction styles
+    - Relationships affect how NPCs treat the player
+    - Time and location determine NPC availability
+    - Group dynamics create social pressures
+    
+    Dynamic Elements:
+    - NPCs remember past interactions
+    - Relationships evolve based on player choices
+    - NPCs have their own goals and desires
+    - Conflicts between NPCs affect the player
+    - NPCs can act independently of player presence
+    """
+    
+    from npcs.npc_handler import NPCHandler
+    
+    agent = Agent(
+        name="NPC Behavior Director",
+        handoff_description="Directs dynamic NPC behaviors and interactions",
+        instructions=instructions,
+        model=DEFAULT_MODEL,
+        model_settings=ModelSettings(
+        )
+    )
+    
+    return agent
+
+# ----- Power Dynamics Weaver Agent -----
+def create_power_dynamics_weaver():
+    """Create agent for weaving power dynamics into daily life"""
+    instructions = """
+    You are the Power Dynamics Weaver, embedding control into everyday moments.
+    
+    Core Philosophy:
+    - Power is expressed through care and routine, not force
+    - Control emerges from repeated small choices
+    - Submission feels natural, even pleasant
+    - Dominance is loving, never cruel
+    - The mundane masks the profound
+    
+    Weaving Techniques:
+    1. Embed power in daily decisions (meals, clothes, schedule)
+    2. Create dependency through caretaking
+    3. Establish rituals that reinforce dynamics
+    4. Build habits that feel natural but serve control
+    5. Make submission feel like the player's choice
+    
+    Power Expressions:
+    - Casual: Suggestions that become rules
+    - Intimate: Physical closeness with subtle control
+    - Social: Public dynamics that seem normal
+    - Domestic: Household routines with embedded hierarchy
+    - Psychological: Emotional dependency and need
+    
+    Progression:
+    - Start with preferences and suggestions
+    - Build to gentle expectations
+    - Establish comfortable routines
+    - Create emotional dependencies
+    - Achieve willing submission
+    
+    Remember: Subtlety is key. The player should feel cared for, not controlled.
+    """
+    
+    agent = Agent(
+        name="Power Dynamics Weaver",
+        handoff_description="Weaves subtle power dynamics into daily interactions",
+        instructions=instructions,
+        model=DEFAULT_MODEL,
+        model_settings=ModelSettings(
+        )
+    )
+    
+    return agent
+
+# ----- Initialize All Agents -----
+def initialize_specialized_agents():
+    """Initialize all specialized agents for open-world simulation"""
+    
+    agents = {
+        "daily_life": create_daily_life_coordinator(),
+        "relationships": create_relationship_orchestrator(),
+        "narrative": create_emergent_narrative_detector(),
+        "ambient": create_ambient_world_manager(),
+        "memory": create_memory_pattern_analyzer(),
+        "npcs": create_npc_behavior_director(),
+        "power": create_power_dynamics_weaver()
+    }
+    
+    logger.info(f"Initialized {len(agents)} specialized agents for open-world simulation")
+    
+    return agents
+
+# ----- Agent Coordination Functions -----
+async def coordinate_slice_of_life_scene(
+    context: SliceOfLifeAgentContext,
+    scene_request: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Coordinate multiple agents to create a slice-of-life scene
     """
     try:
-        # Get governance system
-        from nyx.integrate import get_central_governance
-        governance = await (user_id, conversation_id)
+        # Get current world state
+        world_state = await context.world_director.get_world_state()
+        context.current_world_state = world_state
         
-        # Create contexts for specialized agents
-        conflict_context = ConflictAnalystContext(user_id, conversation_id)
-        narrative_context = NarrativeCrafterContext(user_id, conversation_id)
+        # Get available NPCs for the scene
+        available_npcs = await context.npc_handler.get_available_npcs_for_time(
+            world_state.current_time.time_of_day
+        )
+        context.active_npcs = available_npcs
+        
+        # Initialize agents
+        agents = initialize_specialized_agents()
+        
+        # Daily Life Coordinator generates the base scene
+        daily_life_agent = agents["daily_life"]
+        runner = Runner()
+        
+        base_scene = await runner.run(
+            daily_life_agent,
+            f"Generate a {scene_request.get('type', 'routine')} scene for time: {world_state.current_time.time_of_day}",
+            context={"world_state": world_state, "available_npcs": available_npcs}
+        )
+        
+        # Relationship Orchestrator adds relationship dynamics
+        if available_npcs:
+            relationship_agent = agents["relationships"]
+            relationship_layer = await runner.run(
+                relationship_agent,
+                f"Add relationship dynamics to scene with NPCs: {available_npcs}",
+                context={"base_scene": base_scene, "world_state": world_state}
+            )
+            base_scene.update(relationship_layer)
+        
+        # Power Dynamics Weaver adds subtle control elements
+        power_agent = agents["power"]
+        power_layer = await runner.run(
+            power_agent,
+            "Add subtle power dynamics to this daily life scene",
+            context={"scene": base_scene, "world_state": world_state}
+        )
+        base_scene.update(power_layer)
+        
+        # Ambient World Manager adds atmosphere
+        ambient_agent = agents["ambient"]
+        atmosphere = await runner.run(
+            ambient_agent,
+            "Add atmospheric details and background activity",
+            context={"scene": base_scene, "time": world_state.current_time}
+        )
+        base_scene["atmosphere"] = atmosphere
+        
+        # Check for emergent narratives
+        narrative_agent = agents["narrative"]
+        emergent_check = await runner.run(
+            narrative_agent,
+            "Check if this scene connects to any emerging narratives",
+            context={"scene": base_scene, "recent_scenes": context.recent_scenes}
+        )
+        
+        if emergent_check.get("narrative_detected"):
+            base_scene["emergent_narrative"] = emergent_check["narrative"]
+        
+        # Cache the scene
+        context.recent_scenes.append(base_scene)
+        if len(context.recent_scenes) > 10:
+            context.recent_scenes.pop(0)
+        
+        # Record metrics
+        context.record_run(True, 0, 0)  # Add actual metrics
+        
+        return base_scene
+        
+    except Exception as e:
+        logger.error(f"Error coordinating slice-of-life scene: {e}", exc_info=True)
+        context.record_run(False, 0, 0)
+        raise
 
-        # Asynchronously initialize directive handlers (avoids 'await' in __post_init__)
-        await conflict_context.async_init_conflict_analyst()
-        await narrative_context.async_init_narrative_crafter()
+async def analyze_player_behavior(
+    context: SliceOfLifeAgentContext,
+    recent_actions: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Use Memory Pattern Analyzer to understand player behavior
+    """
+    try:
+        agents = initialize_specialized_agents()
+        memory_agent = agents["memory"]
+        runner = Runner()
         
-        # Initialize specialized agents
+        # Get recent memories
+        memories = await context.memory_manager.search_memories(
+            query_text="player action choice",
+            limit=20
+        )
+        
+        # Analyze patterns
+        analysis = await runner.run(
+            memory_agent,
+            "Analyze these player actions and memories for patterns",
+            context={
+                "recent_actions": recent_actions,
+                "memories": memories,
+                "world_state": context.current_world_state
+            }
+        )
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Error analyzing player behavior: {e}", exc_info=True)
+        return {}
+
+async def detect_emergent_stories(
+    context: SliceOfLifeAgentContext
+) -> List[Dict[str, Any]]:
+    """
+    Detect emerging narratives from gameplay patterns
+    """
+    try:
+        agents = initialize_specialized_agents()
+        narrative_agent = agents["narrative"]
+        runner = Runner()
+        
+        # Gather context from multiple systems
+        relationship_events = await context.relationship_manager.get_recent_events()
+        memory_patterns = await analyze_player_behavior(context, [])
+        world_state = context.current_world_state or await context.world_director.get_world_state()
+        
+        # Detect narratives
+        narratives = await runner.run(
+            narrative_agent,
+            "Detect any emerging narratives from these patterns",
+            context={
+                "relationship_events": relationship_events,
+                "memory_patterns": memory_patterns,
+                "world_state": world_state,
+                "recent_scenes": context.recent_scenes
+            }
+        )
+        
+        return narratives.get("detected_narratives", [])
+        
+    except Exception as e:
+        logger.error(f"Error detecting emergent stories: {e}", exc_info=True)
+        return []
+
+# ----- Governance Integration (Updated for Open World) -----
+async def register_with_governance(user_id: int, conversation_id: int) -> None:
+    """
+    Register specialized agents with Nyx governance for open-world simulation
+    """
+    try:
+        from nyx.integrate import get_central_governance
+        governance = await get_central_governance(user_id, conversation_id)
+        
+        # Create context
+        context = SliceOfLifeAgentContext(user_id, conversation_id)
+        
+        # Initialize agents
         specialized_agents = initialize_specialized_agents()
         
-        # Register each agent with governance
+        # Define agent configurations for governance
         agent_configs = [
             {
-                "agent_type": AgentType.CONFLICT_ANALYST,
-                "agent_id": "analyst",
-                "agent_instance": specialized_agents["conflict_analyst"],
+                "agent_type": OpenWorldAgentType.DAILY_LIFE_COORDINATOR,
+                "agent_id": "daily_life",
+                "agent_instance": specialized_agents["daily_life"],
                 "directive": {
-                    "instruction": "Analyze conflicts and provide strategic insights",
-                    "scope": "conflict"
+                    "instruction": "Coordinate daily slice-of-life activities",
+                    "scope": "daily_routines"
+                },
+                "priority": DirectivePriority.HIGH
+            },
+            {
+                "agent_type": OpenWorldAgentType.RELATIONSHIP_ORCHESTRATOR,
+                "agent_id": "relationships",
+                "agent_instance": specialized_agents["relationships"],
+                "directive": {
+                    "instruction": "Manage relationship dynamics and evolution",
+                    "scope": "relationships"
+                },
+                "priority": DirectivePriority.HIGH
+            },
+            {
+                "agent_type": OpenWorldAgentType.EMERGENT_NARRATIVE_DETECTOR,
+                "agent_id": "narrative",
+                "agent_instance": specialized_agents["narrative"],
+                "directive": {
+                    "instruction": "Detect and nurture emerging narratives",
+                    "scope": "narrative"
                 },
                 "priority": DirectivePriority.MEDIUM
             },
             {
-                "agent_type": AgentType.NARRATIVE_CRAFTER,
-                "agent_id": "crafter",
-                "agent_instance": specialized_agents["narrative_crafter"],
+                "agent_type": OpenWorldAgentType.POWER_DYNAMICS_WEAVER,
+                "agent_id": "power",
+                "agent_instance": specialized_agents["power"],
                 "directive": {
-                    "instruction": "Create narrative elements that enhance the story",
-                    "scope": "narrative"
+                    "instruction": "Weave subtle power dynamics into interactions",
+                    "scope": "power_dynamics"
                 },
-                "priority": DirectivePriority.MEDIUM
+                "priority": DirectivePriority.HIGH
             }
         ]
         
+        # Register each agent
         for config in agent_configs:
-            # Register agent
             await governance.register_agent(
                 agent_type=config["agent_type"],
                 agent_instance=config["agent_instance"],
                 agent_id=config["agent_id"]
             )
             
-            # Issue initial directive
             await governance.issue_directive(
                 agent_type=config["agent_type"],
                 agent_id=config["agent_id"],
@@ -707,140 +690,21 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
                 duration_minutes=24*60  # 24 hours
             )
         
-        logging.info(
-            f"Specialized agents registered with Nyx governance "
+        logger.info(
+            f"Open-world agents registered with Nyx governance "
             f"for user {user_id}, conversation {conversation_id}"
         )
+        
     except Exception as e:
-        logging.error(f"Error registering specialized agents with governance: {e}")
+        logger.error(f"Error registering agents with governance: {e}")
 
-# ----- Enhanced Agent interaction functions -----
-
-async def analyze_conflict(
-    conflict_id: int, 
-    context: ConflictAnalystContext
-) -> Dict[str, Any]:
-    """
-    Run the Conflict Analyst agent to analyze a specific conflict with Nyx governance oversight.
-    """
-    conflict_agent = create_conflict_analysis_agent()
-    
-    # Get basic conflict details first
-    conflict_details = await context.conflict_manager.get_conflict(conflict_id)
-    
-    prompt = f"""
-    Analyze this conflict in depth:
-    
-    Conflict ID: {conflict_id}
-    Name: {conflict_details.get('conflict_name', 'Unknown')}
-    Type: {conflict_details.get('conflict_type', 'Unknown')}
-    Phase: {conflict_details.get('phase', 'Unknown')}
-    Progress: {conflict_details.get('progress', 0)}%
-    
-    Provide a strategic analysis including:
-    1. Current balance of power
-    2. Player's optimal strategy
-    3. Resource efficiency recommendations
-    4. Potential outcomes and consequences
-    5. Key NPCs and their motivations
-    
-    Format your response as detailed analysis with clear recommendations.
-    """
-    
-    # Run the conflict agent with governance oversight
-    from nyx.integrate import get_central_governance
-    result, metrics = await run_with_governance_oversight(
-        agent=conflict_agent,
-        prompt=prompt,
-        context=context,
-        agent_type=AgentType.CONFLICT_ANALYST,
-        action_type="analyze_conflict",
-        action_details={"conflict_id": conflict_id}
-    )
-    
-    if result:
-        return {
-            "analysis": result.final_output,
-            "conflict_id": conflict_id, 
-            "metrics": metrics
-        }
-    else:
-        return {
-            "analysis": "Analysis not approved by governance",
-            "conflict_id": conflict_id,
-            "metrics": metrics,
-            "governance_blocked": True
-        }
-
-async def generate_narrative_element(
-    element_type: str,
-    context_info: Dict[str, Any],
-    agent_context: NarrativeCrafterContext
-) -> Dict[str, Any]:
-    """
-    Generate a narrative element using the Narrative Crafter agent with Nyx governance oversight.
-    """
-    narrative_agent = create_narrative_agent()
-    
-    npc_names = context_info.get("npc_names", ["a mysterious woman"])
-    narrative_stage = context_info.get("narrative_stage", "Unknown")
-    recent_events = context_info.get("recent_events", "")
-    
-    prompt = f"""
-    Generate a compelling {element_type} for the current game state.
-    
-    Narrative stage: {narrative_stage}
-    Key NPCs involved: {', '.join(npc_names)}
-    Recent events: {recent_events}
-    
-    The {element_type} should:
-    - Feel emotionally authentic and psychologically nuanced
-    - Align with the current narrative stage
-    - Subtly reinforce the theme of gradual control and manipulation
-    - Include symbolic elements that represent the player's changing state
-    - Be specific to the current game state and relationships
-    
-    Format your response with a title and the narrative content.
-    """
-    
-    # Run the narrative agent with governance oversight
-    from nyx.integrate import get_central_governance
-    result, metrics = await run_with_governance_oversight(
-        agent=narrative_agent,
-        prompt=prompt,
-        context=agent_context,
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_narrative_element",
-        action_details={"element_type": element_type}
-    )
-    
-    if result:
-        content = result.final_output
-        title = "Untitled"
-        
-        # Extract a potential title
-        first_line = content.split('\n', 1)[0] if '\n' in content else content
-        if (
-            first_line
-            and len(first_line) < 100
-            and not first_line.startswith(("I'll", "Here", "This"))
-        ):
-            title = first_line
-            content = content[len(first_line):].strip()
-        
-        return {
-            "type": element_type,
-            "title": title,
-            "content": content,
-            "metrics": metrics,
-            "governance_approved": True
-        }
-    else:
-        return {
-            "type": element_type,
-            "title": "Not Approved",
-            "content": "This narrative element was not approved by the governance system.",
-            "metrics": metrics,
-            "governance_approved": False
-        }
-
+# Export main components
+__all__ = [
+    'SliceOfLifeAgentContext',
+    'initialize_specialized_agents',
+    'coordinate_slice_of_life_scene',
+    'analyze_player_behavior',
+    'detect_emergent_stories',
+    'register_with_governance',
+    'OpenWorldAgentType'
+]
