@@ -504,11 +504,12 @@ async def create_all_tables():
                     lust INT CHECK (lust BETWEEN 0 AND 100),
                     mental_resilience INT CHECK (mental_resilience BETWEEN 0 AND 100),
                     physical_endurance INT CHECK (physical_endurance BETWEEN 0 AND 100),
+                    memories JSONB DEFAULT '[]'::jsonb,  -- ADD THIS LINE
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
-                ''',
+                '''
                 '''
                 CREATE TABLE IF NOT EXISTS PlayerInventory (
                     item_id SERIAL PRIMARY KEY,
