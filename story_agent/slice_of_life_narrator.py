@@ -472,13 +472,8 @@ class NarratorContext:
 # ===============================================================================
 
 @function_tool
-@with_governance_permission(
-    agent_type="narrator",
-    action_type="narrate_scene",
-    id_from_context=lambda ctx: f"narrator_{ctx.context.conversation_id}"
-)
 async def narrate_slice_of_life_scene(
-    ctx: RunContextWrapper,  # Add type annotation
+    ctx,  # Add type annotation
     payload: NarrateSliceOfLifeInput
 ) -> SliceOfLifeNarration:
     context = ctx.context
@@ -593,7 +588,7 @@ async def narrate_slice_of_life_scene(
     
 @function_tool
 async def generate_npc_dialogue(
-    ctx: RunContextWrapper,  # Add type annotation
+    ctx,  # Add type annotation
     npc_id: int,
     situation: str,
     world_state: WorldState,
@@ -737,7 +732,7 @@ async def generate_npc_dialogue(
 
 @function_tool
 async def narrate_power_exchange(
-    ctx: RunContextWrapper,  # Add type annotation
+    ctx,  # Add type annotation
     exchange: PowerExchange,
     world_state: WorldState
 ) -> PowerMomentNarration:
@@ -824,7 +819,7 @@ async def narrate_power_exchange(
 
 @function_tool
 async def narrate_daily_routine(
-    ctx: RunContextWrapper,  # Add type annotation
+    ctx,  # Add type annotation
     activity: str,
     world_state: WorldState,
     involved_npcs: List[int] = None
@@ -877,7 +872,7 @@ async def narrate_daily_routine(
 
 @function_tool
 async def generate_ambient_narration(
-    ctx: RunContextWrapper,  # Add type annotation
+    ctx,  # Add type annotation
     focus: str,
     world_state: WorldState,
     intensity: float = 0.5
@@ -927,7 +922,7 @@ async def generate_ambient_narration(
 
 @function_tool
 async def narrate_player_action(
-    ctx: RunContextWrapper,  # Add type annotation
+    ctx,  # Add type annotation
     action: str,
     world_state: WorldState,
     scene_context: Optional[SliceOfLifeEvent] = None
