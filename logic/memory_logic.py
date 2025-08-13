@@ -661,356 +661,356 @@ class MemoryManager:
     contextual recall.
     """
     
-@staticmethod
-async def add_memory(user_id: int, conversation_id: int, entity_id: Union[int, str], entity_type: str,
-                    memory_text: str, memory_type: str = MemoryType.INTERACTION,
-                    significance: int = MemorySignificance.MEDIUM,
-                    emotional_valence: int = 0, tags: Optional[list] = None) -> bool: # Changed to async def
-    """Add a new memory to an entity (NPC or player) using asyncpg."""
-    tags = tags or []
-    memory = EnhancedMemory(memory_text, memory_type, significance)
-    memory.emotional_valence = emotional_valence
-    memory.tags = tags
-    memory_dict = memory.to_dict()
-
-    try:
-        async with get_db_connection_context() as conn:
-            # Use transaction for read-then-write safety
-            async with conn.transaction():
-                # 1. Get current memories
-                current_memories_json = None
-                if entity_type == "npc":
-                    current_memories_json = await conn.fetchval("""
-                        SELECT memory FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3 FOR UPDATE
-                    """, user_id, conversation_id, entity_id) # Use FOR UPDATE within transaction
-                elif entity_type == "player": # Assume player identified by name 'entity_id'
-                     current_memories_json = await conn.fetchval("""
-                        SELECT memories FROM PlayerStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 FOR UPDATE
-                    """, user_id, conversation_id, entity_id)
+    @staticmethod
+    async def add_memory(user_id: int, conversation_id: int, entity_id: Union[int, str], entity_type: str,
+                        memory_text: str, memory_type: str = MemoryType.INTERACTION,
+                        significance: int = MemorySignificance.MEDIUM,
+                        emotional_valence: int = 0, tags: Optional[list] = None) -> bool: # Changed to async def
+        """Add a new memory to an entity (NPC or player) using asyncpg."""
+        tags = tags or []
+        memory = EnhancedMemory(memory_text, memory_type, significance)
+        memory.emotional_valence = emotional_valence
+        memory.tags = tags
+        memory_dict = memory.to_dict()
+    
+        try:
+            async with get_db_connection_context() as conn:
+                # Use transaction for read-then-write safety
+                async with conn.transaction():
+                    # 1. Get current memories
+                    current_memories_json = None
+                    if entity_type == "npc":
+                        current_memories_json = await conn.fetchval("""
+                            SELECT memory FROM NPCStats
+                            WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3 FOR UPDATE
+                        """, user_id, conversation_id, entity_id) # Use FOR UPDATE within transaction
+                    elif entity_type == "player": # Assume player identified by name 'entity_id'
+                         current_memories_json = await conn.fetchval("""
+                            SELECT memories FROM PlayerStats
+                            WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 FOR UPDATE
+                        """, user_id, conversation_id, entity_id)
+                    else:
+                        logger.error(f"Invalid entity_type '{entity_type}' in add_memory")
+                        return False
+    
+                    # 2. Append new memory
+                    memories = []
+                    if current_memories_json:
+                        # asyncpg might return list/dict directly for jsonb, or string
+                        if isinstance(current_memories_json, list):
+                             memories = current_memories_json
+                        elif isinstance(current_memories_json, str):
+                             try:
+                                memories = json.loads(current_memories_json)
+                                if not isinstance(memories, list): memories = [] # Ensure it's a list
+                             except json.JSONDecodeError:
+                                logger.warning(f"Could not decode existing memories for {entity_type} {entity_id}, starting fresh.")
+                                memories = []
+                        else:
+                             logger.warning(f"Unexpected type for existing memories: {type(current_memories_json)}, starting fresh.")
+                             memories = []
+    
+                    memories.append(memory_dict)
+                    updated_memories_json = json.dumps(memories) # Serialize for DB update
+    
+                    # 3. Update the database
+                    if entity_type == "npc":
+                        await conn.execute("""
+                            UPDATE NPCStats SET memory = $1
+                            WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                        """, updated_memories_json, user_id, conversation_id, entity_id)
+                    else: # player
+                        await conn.execute("""
+                            UPDATE PlayerStats SET memories = $1
+                            WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                        """, updated_memories_json, user_id, conversation_id, entity_id)
+    
+            # 4. Propagation (outside the transaction for adding the memory itself)
+            # Check propagation condition AFTER successfully adding memory
+            if memory_type in [MemoryType.EMOTIONAL, MemoryType.TRAUMATIC] and significance >= MemorySignificance.HIGH:
+                # Call the async version of propagate
+                await MemoryManager.propagate_significant_memory(user_id, conversation_id, entity_id, entity_type, memory)
+    
+            return True
+    
+        except asyncpg.PostgresError as e:
+            logger.error(f"Database error adding memory for {entity_type} {entity_id}: {e}", exc_info=True)
+            return False
+        except ConnectionError as e:
+            logger.error(f"Pool error adding memory: {e}", exc_info=True)
+            return False
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout getting DB connection for adding memory", exc_info=True)
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error adding memory: {e}", exc_info=True)
+            return False
+    
+        
+    @staticmethod
+    async def propagate_significant_memory(user_id: int, conversation_id: int, source_entity_id: Union[int, str], source_entity_type: str, memory: EnhancedMemory):
+        """Propagate significant memories to related NPCs using asyncpg."""
+        links = []
+        try:
+            async with get_db_connection_context() as conn:
+                # Find strong social links (adapt table/column names if needed)
+                from logic.dynamic_relationships import OptimizedRelationshipManager
+                
+                # Inside the function:
+                manager = OptimizedRelationshipManager(user_id, conversation_id)
+                
+                # Get relationships involving this entity
+                # Since the new system uses canonical_key ordering, we need to check both directions
+                links = await conn.fetch("""
+                    SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, 
+                           dynamics, patterns, archetypes
+                    FROM SocialLinks
+                    WHERE user_id=$1 AND conversation_id=$2
+                    AND ((entity1_type=$3 AND entity1_id=$4) OR (entity2_type=$3 AND entity2_id=$4))
+                """, user_id, conversation_id, source_entity_type, int(source_entity_id))
+                
+                # Filter links to only include strong relationships
+                strong_links = []
+                for link in links:
+                    # Parse dynamics JSON to check relationship strength
+                    dynamics = json.loads(link['dynamics']) if isinstance(link['dynamics'], str) else link['dynamics']
+                    
+                    # Check if relationship is strong enough (e.g., trust > 50 or affection > 50)
+                    if dynamics.get('trust', 0) >= 50 or dynamics.get('affection', 0) >= 50:
+                        strong_links.append(link)
+            
+            # Now check if we have any strong links
+            if not strong_links:
+                # logger.debug(f"No strong links found for {source_entity_type} {source_entity_id} to propagate memory.")
+                return True  # Not an error if no links exist
+            
+            propagation_tasks = []
+            for link in strong_links:
+                e1_type, e1_id, e2_type, e2_id = link['entity1_type'], str(link['entity1_id']), link['entity2_type'], str(link['entity2_id'])
+                
+                # Determine target based on source
+                if e1_type == source_entity_type and e1_id == str(source_entity_id):
+                    target_type, target_id = e2_type, e2_id
                 else:
-                    logger.error(f"Invalid entity_type '{entity_type}' in add_memory")
-                    return False
-
-                # 2. Append new memory
-                memories = []
-                if current_memories_json:
-                    # asyncpg might return list/dict directly for jsonb, or string
+                    target_type, target_id = e1_type, e1_id
+                
+                if target_type != "npc":  # Don't propagate back to player this way
+                    continue
+                if target_id == str(source_entity_id) and target_type == source_entity_type:  # Skip self
+                    continue
+                
+                # Create modified memory for target's perspective
+                target_memory = EnhancedMemory(
+                    f"I heard that {memory.text}",
+                    memory_type=MemoryType.OBSERVATION,
+                    significance=max(MemorySignificance.LOW, memory.significance - 2),
+                    emotional_valence=int(memory.emotional_valence * 0.7),  # Keep as int
+                    tags=memory.tags + ["secondhand"]
+                )
+                
+                # Create a task to add the memory to the target NPC
+                # Avoid awaiting each add_memory sequentially inside the loop
+                propagation_tasks.append(
+                    MemoryManager.add_memory(
+                        user_id, conversation_id,
+                        int(target_id) if target_id.isdigit() else target_id,  # Convert back to int if needed
+                        target_type,
+                        target_memory.text,
+                        target_memory.memory_type,
+                        target_memory.significance,
+                        target_memory.emotional_valence,
+                        target_memory.tags
+                    )
+                )
+            
+            # Run all propagation additions concurrently
+            if propagation_tasks:
+                results = await asyncio.gather(*propagation_tasks, return_exceptions=True)
+                # Log any errors from propagation attempts
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Error propagating memory during gather task {i}: {result}", exc_info=result)
+                logger.info(f"Attempted to propagate memory to {len(propagation_tasks)} linked NPCs.")
+            
+            return True  # Indicate propagation attempt finished
+        
+        except asyncpg.PostgresError as e:
+            logger.error(f"Database error propagating memory from {source_entity_type} {source_entity_id}: {e}", exc_info=True)
+            return False
+        except ConnectionError as e:
+            logger.error(f"Pool error propagating memory: {e}", exc_info=True)
+            return False
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout getting DB connection for propagating memory", exc_info=True)
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error propagating memory: {e}", exc_info=True)
+            return False
+        
+    @staticmethod
+    async def retrieve_relevant_memories(user_id: int, conversation_id: int, entity_id: Union[int, str], entity_type: str,
+                                         context: Optional[str] = None, tags: Optional[list] = None, limit: int = 5) -> list[EnhancedMemory]: # Changed to async def
+        """Retrieve and score relevant memories using asyncpg, updating recall counts."""
+        try:
+            async with get_db_connection_context() as conn:
+                 # Use transaction to ensure read and update consistency for recall counts
+                 async with conn.transaction():
+                    # 1. Get all memories
+                    current_memories_json = None
+                    if entity_type == "npc":
+                        current_memories_json = await conn.fetchval("""
+                            SELECT memory FROM NPCStats
+                            WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3 FOR UPDATE
+                        """, user_id, conversation_id, entity_id)
+                    elif entity_type == "player":
+                        current_memories_json = await conn.fetchval("""
+                            SELECT memories FROM PlayerStats
+                            WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 FOR UPDATE
+                        """, user_id, conversation_id, entity_id)
+                    else:
+                         logger.error(f"Invalid entity_type '{entity_type}' in retrieve_relevant_memories")
+                         return []
+    
+                    if not current_memories_json:
+                        return []
+    
+                    memories_data = []
                     if isinstance(current_memories_json, list):
-                         memories = current_memories_json
+                        memories_data = current_memories_json
                     elif isinstance(current_memories_json, str):
                          try:
-                            memories = json.loads(current_memories_json)
-                            if not isinstance(memories, list): memories = [] # Ensure it's a list
+                             memories_data = json.loads(current_memories_json)
+                             if not isinstance(memories_data, list): memories_data = []
                          except json.JSONDecodeError:
-                            logger.warning(f"Could not decode existing memories for {entity_type} {entity_id}, starting fresh.")
-                            memories = []
+                              logger.warning(f"Could not decode memories for retrieve_relevant_memories {entity_type} {entity_id}")
+                              memories_data = []
                     else:
-                         logger.warning(f"Unexpected type for existing memories: {type(current_memories_json)}, starting fresh.")
-                         memories = []
-
-                memories.append(memory_dict)
-                updated_memories_json = json.dumps(memories) # Serialize for DB update
-
-                # 3. Update the database
-                if entity_type == "npc":
-                    await conn.execute("""
-                        UPDATE NPCStats SET memory = $1
-                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                    """, updated_memories_json, user_id, conversation_id, entity_id)
-                else: # player
-                    await conn.execute("""
-                        UPDATE PlayerStats SET memories = $1
-                        WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
-                    """, updated_memories_json, user_id, conversation_id, entity_id)
-
-        # 4. Propagation (outside the transaction for adding the memory itself)
-        # Check propagation condition AFTER successfully adding memory
-        if memory_type in [MemoryType.EMOTIONAL, MemoryType.TRAUMATIC] and significance >= MemorySignificance.HIGH:
-            # Call the async version of propagate
-            await MemoryManager.propagate_significant_memory(user_id, conversation_id, entity_id, entity_type, memory)
-
-        return True
-
-    except asyncpg.PostgresError as e:
-        logger.error(f"Database error adding memory for {entity_type} {entity_id}: {e}", exc_info=True)
-        return False
-    except ConnectionError as e:
-        logger.error(f"Pool error adding memory: {e}", exc_info=True)
-        return False
-    except asyncio.TimeoutError:
-        logger.error(f"Timeout getting DB connection for adding memory", exc_info=True)
-        return False
-    except Exception as e:
-        logger.error(f"Unexpected error adding memory: {e}", exc_info=True)
-        return False
-
+                         logger.warning(f"Unexpected type for memories data: {type(current_memories_json)}")
+                         memories_data = []
     
-@staticmethod
-async def propagate_significant_memory(user_id: int, conversation_id: int, source_entity_id: Union[int, str], source_entity_type: str, memory: EnhancedMemory):
-    """Propagate significant memories to related NPCs using asyncpg."""
-    links = []
-    try:
-        async with get_db_connection_context() as conn:
-            # Find strong social links (adapt table/column names if needed)
-            from logic.dynamic_relationships import OptimizedRelationshipManager
-            
-            # Inside the function:
-            manager = OptimizedRelationshipManager(user_id, conversation_id)
-            
-            # Get relationships involving this entity
-            # Since the new system uses canonical_key ordering, we need to check both directions
-            links = await conn.fetch("""
-                SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, 
-                       dynamics, patterns, archetypes
-                FROM SocialLinks
-                WHERE user_id=$1 AND conversation_id=$2
-                AND ((entity1_type=$3 AND entity1_id=$4) OR (entity2_type=$3 AND entity2_id=$4))
-            """, user_id, conversation_id, source_entity_type, int(source_entity_id))
-            
-            # Filter links to only include strong relationships
-            strong_links = []
-            for link in links:
-                # Parse dynamics JSON to check relationship strength
-                dynamics = json.loads(link['dynamics']) if isinstance(link['dynamics'], str) else link['dynamics']
+                    if not memories_data:
+                         return []
+    
+                    # 2. Convert to EnhancedMemory objects and score (Sync logic)
+                    memory_objects = [EnhancedMemory.from_dict(m) for m in memories_data]
+                    # (Filter by tags - sync)
+                    if tags:
+                        memory_objects = [m for m in memory_objects if any(tag in m.tags for tag in tags)]
+                    # (Score memories - sync)
+                    scored_memories = []
+                    for memory in memory_objects:
+                        # Scoring logic remains the same (sync)
+                        score = memory.significance
+                        try: # Recency bonus
+                            memory_date = datetime.fromisoformat(memory.timestamp)
+                            days_old = (datetime.now(memory_date.tzinfo) - memory_date).days # Timezone aware if possible
+                            recency_score = max(0, 10 - days_old / 30)
+                            score += recency_score
+                        except (ValueError, TypeError): pass
+                        if context: # Context bonus
+                            context_words = set(context.lower().split())
+                            memory_words = set(memory.text.lower().split())
+                            common_words = context_words.intersection(memory_words)
+                            context_score = len(common_words) * 0.5
+                            score += context_score
+                        score += abs(memory.emotional_valence) * 0.3 # Emotion bonus
+                        score -= min(memory.recall_count * 0.2, 2) # Recall penalty
+                        scored_memories.append((memory, score))
+                    # (Sort and limit - sync)
+                    scored_memories.sort(key=lambda x: x[1], reverse=True)
+                    top_memory_tuples = scored_memories[:limit]
+    
+                    # 3. Update recall counts for the selected memories
+                    updated_memory_dict = {m.timestamp: m for m in memory_objects} # Map for quick lookup
+                    top_memories_list = []
+                    now_iso = datetime.now().isoformat()
+                    for memory, score in top_memory_tuples:
+                        if memory.timestamp in updated_memory_dict:
+                             mem_obj = updated_memory_dict[memory.timestamp]
+                             mem_obj.recall_count += 1
+                             mem_obj.last_recalled = now_iso
+                             top_memories_list.append(mem_obj) # Add the updated object
+    
+                    # 4. Convert all back to dicts for storage
+                    updated_memories_for_db = [m.to_dict() for m in updated_memory_dict.values()]
+                    updated_memories_json = json.dumps(updated_memories_for_db)
+    
+                    # 5. Save updated memories back to DB
+                    if entity_type == "npc":
+                        await conn.execute("""
+                            UPDATE NPCStats SET memory = $1
+                            WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                        """, updated_memories_json, user_id, conversation_id, entity_id)
+                    else: # player
+                        await conn.execute("""
+                            UPDATE PlayerStats SET memories = $1
+                            WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                        """, updated_memories_json, user_id, conversation_id, entity_id)
+    
+                 # Transaction commits here automatically on successful exit
+                 return top_memories_list # Return the list of EnhancedMemory objects
+    
+        except asyncpg.PostgresError as e:
+            logger.error(f"Database error retrieving memories for {entity_type} {entity_id}: {e}", exc_info=True)
+            return []
+        except ConnectionError as e:
+            logger.error(f"Pool error retrieving memories: {e}", exc_info=True)
+            return []
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout getting DB connection for retrieving memories", exc_info=True)
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error retrieving memories: {e}", exc_info=True)
+            return []
                 
-                # Check if relationship is strong enough (e.g., trust > 50 or affection > 50)
-                if dynamics.get('trust', 0) >= 50 or dynamics.get('affection', 0) >= 50:
-                    strong_links.append(link)
-        
-        # Now check if we have any strong links
-        if not strong_links:
-            # logger.debug(f"No strong links found for {source_entity_type} {source_entity_id} to propagate memory.")
-            return True  # Not an error if no links exist
-        
-        propagation_tasks = []
-        for link in strong_links:
-            e1_type, e1_id, e2_type, e2_id = link['entity1_type'], str(link['entity1_id']), link['entity2_type'], str(link['entity2_id'])
-            
-            # Determine target based on source
-            if e1_type == source_entity_type and e1_id == str(source_entity_id):
-                target_type, target_id = e2_type, e2_id
-            else:
-                target_type, target_id = e1_type, e1_id
-            
-            if target_type != "npc":  # Don't propagate back to player this way
-                continue
-            if target_id == str(source_entity_id) and target_type == source_entity_type:  # Skip self
-                continue
-            
-            # Create modified memory for target's perspective
-            target_memory = EnhancedMemory(
-                f"I heard that {memory.text}",
-                memory_type=MemoryType.OBSERVATION,
-                significance=max(MemorySignificance.LOW, memory.significance - 2),
-                emotional_valence=int(memory.emotional_valence * 0.7),  # Keep as int
-                tags=memory.tags + ["secondhand"]
+    @staticmethod
+    async def generate_flashback(user_id: int, conversation_id: int, npc_id: int, current_context: str) -> Optional[dict]: # Changed to async def
+        """Generate a flashback moment for an NPC based on relevant memories."""
+        try:
+            # Retrieve memories using the async method
+            memories = await MemoryManager.retrieve_relevant_memories(
+                user_id, conversation_id, npc_id, "npc",
+                context=current_context, limit=3
             )
-            
-            # Create a task to add the memory to the target NPC
-            # Avoid awaiting each add_memory sequentially inside the loop
-            propagation_tasks.append(
-                MemoryManager.add_memory(
-                    user_id, conversation_id,
-                    int(target_id) if target_id.isdigit() else target_id,  # Convert back to int if needed
-                    target_type,
-                    target_memory.text,
-                    target_memory.memory_type,
-                    target_memory.significance,
-                    target_memory.emotional_valence,
-                    target_memory.tags
-                )
-            )
-        
-        # Run all propagation additions concurrently
-        if propagation_tasks:
-            results = await asyncio.gather(*propagation_tasks, return_exceptions=True)
-            # Log any errors from propagation attempts
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"Error propagating memory during gather task {i}: {result}", exc_info=result)
-            logger.info(f"Attempted to propagate memory to {len(propagation_tasks)} linked NPCs.")
-        
-        return True  # Indicate propagation attempt finished
     
-    except asyncpg.PostgresError as e:
-        logger.error(f"Database error propagating memory from {source_entity_type} {source_entity_id}: {e}", exc_info=True)
-        return False
-    except ConnectionError as e:
-        logger.error(f"Pool error propagating memory: {e}", exc_info=True)
-        return False
-    except asyncio.TimeoutError:
-        logger.error(f"Timeout getting DB connection for propagating memory", exc_info=True)
-        return False
-    except Exception as e:
-        logger.error(f"Unexpected error propagating memory: {e}", exc_info=True)
-        return False
+            if not memories:
+                return None
     
-@staticmethod
-async def retrieve_relevant_memories(user_id: int, conversation_id: int, entity_id: Union[int, str], entity_type: str,
-                                     context: Optional[str] = None, tags: Optional[list] = None, limit: int = 5) -> list[EnhancedMemory]: # Changed to async def
-    """Retrieve and score relevant memories using asyncpg, updating recall counts."""
-    try:
-        async with get_db_connection_context() as conn:
-             # Use transaction to ensure read and update consistency for recall counts
-             async with conn.transaction():
-                # 1. Get all memories
-                current_memories_json = None
-                if entity_type == "npc":
-                    current_memories_json = await conn.fetchval("""
-                        SELECT memory FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3 FOR UPDATE
-                    """, user_id, conversation_id, entity_id)
-                elif entity_type == "player":
-                    current_memories_json = await conn.fetchval("""
-                        SELECT memories FROM PlayerStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 FOR UPDATE
-                    """, user_id, conversation_id, entity_id)
-                else:
-                     logger.error(f"Invalid entity_type '{entity_type}' in retrieve_relevant_memories")
-                     return []
-
-                if not current_memories_json:
-                    return []
-
-                memories_data = []
-                if isinstance(current_memories_json, list):
-                    memories_data = current_memories_json
-                elif isinstance(current_memories_json, str):
-                     try:
-                         memories_data = json.loads(current_memories_json)
-                         if not isinstance(memories_data, list): memories_data = []
-                     except json.JSONDecodeError:
-                          logger.warning(f"Could not decode memories for retrieve_relevant_memories {entity_type} {entity_id}")
-                          memories_data = []
-                else:
-                     logger.warning(f"Unexpected type for memories data: {type(current_memories_json)}")
-                     memories_data = []
-
-                if not memories_data:
-                     return []
-
-                # 2. Convert to EnhancedMemory objects and score (Sync logic)
-                memory_objects = [EnhancedMemory.from_dict(m) for m in memories_data]
-                # (Filter by tags - sync)
-                if tags:
-                    memory_objects = [m for m in memory_objects if any(tag in m.tags for tag in tags)]
-                # (Score memories - sync)
-                scored_memories = []
-                for memory in memory_objects:
-                    # Scoring logic remains the same (sync)
-                    score = memory.significance
-                    try: # Recency bonus
-                        memory_date = datetime.fromisoformat(memory.timestamp)
-                        days_old = (datetime.now(memory_date.tzinfo) - memory_date).days # Timezone aware if possible
-                        recency_score = max(0, 10 - days_old / 30)
-                        score += recency_score
-                    except (ValueError, TypeError): pass
-                    if context: # Context bonus
-                        context_words = set(context.lower().split())
-                        memory_words = set(memory.text.lower().split())
-                        common_words = context_words.intersection(memory_words)
-                        context_score = len(common_words) * 0.5
-                        score += context_score
-                    score += abs(memory.emotional_valence) * 0.3 # Emotion bonus
-                    score -= min(memory.recall_count * 0.2, 2) # Recall penalty
-                    scored_memories.append((memory, score))
-                # (Sort and limit - sync)
-                scored_memories.sort(key=lambda x: x[1], reverse=True)
-                top_memory_tuples = scored_memories[:limit]
-
-                # 3. Update recall counts for the selected memories
-                updated_memory_dict = {m.timestamp: m for m in memory_objects} # Map for quick lookup
-                top_memories_list = []
-                now_iso = datetime.now().isoformat()
-                for memory, score in top_memory_tuples:
-                    if memory.timestamp in updated_memory_dict:
-                         mem_obj = updated_memory_dict[memory.timestamp]
-                         mem_obj.recall_count += 1
-                         mem_obj.last_recalled = now_iso
-                         top_memories_list.append(mem_obj) # Add the updated object
-
-                # 4. Convert all back to dicts for storage
-                updated_memories_for_db = [m.to_dict() for m in updated_memory_dict.values()]
-                updated_memories_json = json.dumps(updated_memories_for_db)
-
-                # 5. Save updated memories back to DB
-                if entity_type == "npc":
-                    await conn.execute("""
-                        UPDATE NPCStats SET memory = $1
-                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                    """, updated_memories_json, user_id, conversation_id, entity_id)
-                else: # player
-                    await conn.execute("""
-                        UPDATE PlayerStats SET memories = $1
-                        WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
-                    """, updated_memories_json, user_id, conversation_id, entity_id)
-
-             # Transaction commits here automatically on successful exit
-             return top_memories_list # Return the list of EnhancedMemory objects
-
-    except asyncpg.PostgresError as e:
-        logger.error(f"Database error retrieving memories for {entity_type} {entity_id}: {e}", exc_info=True)
-        return []
-    except ConnectionError as e:
-        logger.error(f"Pool error retrieving memories: {e}", exc_info=True)
-        return []
-    except asyncio.TimeoutError:
-        logger.error(f"Timeout getting DB connection for retrieving memories", exc_info=True)
-        return []
-    except Exception as e:
-        logger.error(f"Unexpected error retrieving memories: {e}", exc_info=True)
-        return []
-            
-@staticmethod
-async def generate_flashback(user_id: int, conversation_id: int, npc_id: int, current_context: str) -> Optional[dict]: # Changed to async def
-    """Generate a flashback moment for an NPC based on relevant memories."""
-    try:
-        # Retrieve memories using the async method
-        memories = await MemoryManager.retrieve_relevant_memories(
-            user_id, conversation_id, npc_id, "npc",
-            context=current_context, limit=3
-        )
-
-        if not memories:
+            # Select memory (sync logic)
+            emotional_memories = [m for m in memories if m.memory_type in [MemoryType.EMOTIONAL, MemoryType.TRAUMATIC]]
+            selected_memory = random.choice(emotional_memories) if emotional_memories else random.choice(memories)
+    
+            # Get NPC name (async DB call)
+            npc_name = "the NPC" # Default
+            async with get_db_connection_context() as conn:
+                 name_record = await conn.fetchval("""
+                    SELECT npc_name FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                 """, user_id, conversation_id, npc_id)
+                 if name_record:
+                      npc_name = name_record
+    
+            # Format flashback (sync logic)
+            flashback_text = f"{npc_name}'s expression shifts momentarily, a distant look crossing their face. \"This reminds me of... {selected_memory.text}\""
+            if selected_memory.emotional_valence < -5:
+                flashback_text += " A shadow crosses their face at the memory."
+            elif selected_memory.emotional_valence > 5:
+                flashback_text += " Their eyes seem to light up for a moment."
+    
+            return {
+                "type": "flashback",
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "text": flashback_text,
+                "memory": selected_memory.text # Include the raw memory text
+            }
+    
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error during flashback generation for NPC {npc_id}: {db_err}", exc_info=True)
             return None
-
-        # Select memory (sync logic)
-        emotional_memories = [m for m in memories if m.memory_type in [MemoryType.EMOTIONAL, MemoryType.TRAUMATIC]]
-        selected_memory = random.choice(emotional_memories) if emotional_memories else random.choice(memories)
-
-        # Get NPC name (async DB call)
-        npc_name = "the NPC" # Default
-        async with get_db_connection_context() as conn:
-             name_record = await conn.fetchval("""
-                SELECT npc_name FROM NPCStats
-                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-             """, user_id, conversation_id, npc_id)
-             if name_record:
-                  npc_name = name_record
-
-        # Format flashback (sync logic)
-        flashback_text = f"{npc_name}'s expression shifts momentarily, a distant look crossing their face. \"This reminds me of... {selected_memory.text}\""
-        if selected_memory.emotional_valence < -5:
-            flashback_text += " A shadow crosses their face at the memory."
-        elif selected_memory.emotional_valence > 5:
-            flashback_text += " Their eyes seem to light up for a moment."
-
-        return {
-            "type": "flashback",
-            "npc_id": npc_id,
-            "npc_name": npc_name,
-            "text": flashback_text,
-            "memory": selected_memory.text # Include the raw memory text
-        }
-
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"Database error during flashback generation for NPC {npc_id}: {db_err}", exc_info=True)
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error during flashback generation for NPC {npc_id}: {e}", exc_info=True)
-        return None
+        except Exception as e:
+            logger.error(f"Unexpected error during flashback generation for NPC {npc_id}: {e}", exc_info=True)
+            return None
 
 class RevealType:
     """Types of revelations for progressive character development"""
