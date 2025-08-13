@@ -215,8 +215,10 @@ class AgentGovernanceMixin:
                     from story_agent.world_director_agent import CompleteWorldDirector
                     world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
                     agent_id = f"world_director_{self.conversation_id}"
-                    registrations.append((agent_type, agent_id))
-                    logger.info(f"[discover] queued {agent_type.value} → {agent_id}")
+                    # Store as string value
+                    agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
+                    registrations.append((agent_type_str, agent_id))
+                    logger.info(f"[discover] queued {agent_type_str} → {agent_id}")
                 except ImportError as e:
                     logger.error(f"[discover] Failed to import world director: {e}")
                 continue
@@ -227,8 +229,10 @@ class AgentGovernanceMixin:
                     from logic.universal_updater_agent import UniversalUpdaterAgent
                     universal_updater = UniversalUpdaterAgent(self.user_id, self.conversation_id)
                     agent_id = f"universal_updater_{self.conversation_id}"
-                    registrations.append((agent_type, agent_id))
-                    logger.info(f"[discover] queued {agent_type.value} → {agent_id}")
+                    # Store as string value
+                    agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
+                    registrations.append((agent_type_str, agent_id))
+                    logger.info(f"[discover] queued {agent_type_str} → {agent_id}")
                 except ImportError as e:
                     logger.error(f"[discover] Failed to import universal updater: {e}")
                 continue
@@ -252,7 +256,9 @@ class AgentGovernanceMixin:
                         conflict_system = result.get("integration")
                         if conflict_system:
                             agent_id = f"conflict_system_{self.conversation_id}"
-                            registrations.append((agent_type, agent_id))
+                            # Store as string value
+                            agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
+                            registrations.append((agent_type_str, agent_id))
                             logger.info(f"[discover] queued conflict_system → {agent_id}")
                     else:
                         logger.error(f"[discover] Failed to register conflict system: {result.get('message', 'Unknown error')}")
@@ -276,6 +282,9 @@ class AgentGovernanceMixin:
                 agent_id = f"{key}_{self.conversation_id}"
                 # Note: These are slice-of-life agents, not conflict agents
                 # They handle daily life, relationships, etc.
+                # Since these don't have a specific AgentType enum, we use the key as agent_type
+                registrations.append((key, agent_id))
+                logger.info(f"[discover] queued specialized agent {key} → {agent_id}")
         except ImportError as e:
             logger.error(f"[discover] Failed to load specialized agents: {e}")
         except Exception as e:
@@ -289,7 +298,9 @@ class AgentGovernanceMixin:
         
         for agent_name, agent_type in sdk_agents:
             agent_id = f"{agent_name}_{self.conversation_id}"
-            registrations.append((agent_type, agent_id))
+            # Store as string value
+            agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
+            registrations.append((agent_type_str, agent_id))
             logger.info(f"[discover] queued SDK agent {agent_name} → {agent_id}")
         
         # 4. Discover NPC agents
@@ -305,7 +316,9 @@ class AgentGovernanceMixin:
                 
                 for npc in npcs:
                     agent_id = f"npc_{npc['npc_id']}"
-                    registrations.append((AgentType.NPC, agent_id))
+                    # Store as string value
+                    agent_type_str = AgentType.NPC.value if hasattr(AgentType.NPC, 'value') else str(AgentType.NPC)
+                    registrations.append((agent_type_str, agent_id))
                     logger.info(f"[discover] queued NPC {npc['npc_name']} → {agent_id}")
                     
         except Exception as e:
@@ -316,7 +329,9 @@ class AgentGovernanceMixin:
             from logic.relationship_integration import RelationshipIntegration
             rel_manager = RelationshipIntegration(self.user_id, self.conversation_id)
             agent_id = f"relationship_manager_{self.conversation_id}"
-            registrations.append((AgentType.RELATIONSHIP_MANAGER, agent_id))
+            # Store as string value
+            agent_type_str = AgentType.RELATIONSHIP_MANAGER.value if hasattr(AgentType.RELATIONSHIP_MANAGER, 'value') else str(AgentType.RELATIONSHIP_MANAGER)
+            registrations.append((agent_type_str, agent_id))
             logger.info(f"[discover] queued relationship_manager → {agent_id}")
         except ImportError as e:
             logger.error(f"[discover] Failed to import relationship manager: {e}")
@@ -326,7 +341,9 @@ class AgentGovernanceMixin:
             from logic.resource_optimizer import ResourceOptimizer
             optimizer = ResourceOptimizer(self.user_id, self.conversation_id)
             agent_id = f"resource_optimizer_{self.conversation_id}"
-            registrations.append((AgentType.RESOURCE_OPTIMIZER, agent_id))
+            # Store as string value
+            agent_type_str = AgentType.RESOURCE_OPTIMIZER.value if hasattr(AgentType.RESOURCE_OPTIMIZER, 'value') else str(AgentType.RESOURCE_OPTIMIZER)
+            registrations.append((agent_type_str, agent_id))
             logger.info(f"[discover] queued resource_optimizer → {agent_id}")
         except ImportError:
             # Resource optimizer is optional
@@ -335,7 +352,7 @@ class AgentGovernanceMixin:
         # 7. Register all discovered agents
         for agent_type, agent_id in registrations:
             await self.register_agent(
-                agent_type=agent_type,
+                agent_type=agent_type,  # Now this is always a string
                 agent_id=agent_id,
                 agent_instance=None  # Will be created lazily
             )
