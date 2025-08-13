@@ -1,3 +1,27 @@
+"""
+logic/chatgpt_integration.py
+
+This module provides integration with OpenAI's Responses API (formerly Chat Completions).
+
+Migration Cheatsheet:
+---------------------
+Chat Completions API → Responses API
+- chat.completions.create() → responses.create()
+- messages=[...] → input=[...]
+- functions=[...] → tools=[{"type":"function", "function": {...}}]
+- function_call={"name":"..."} → tool_choice={"type":"tool","name":"..."}
+- max_tokens → max_output_tokens
+- choices[0].message.content → response.output_text
+- usage.total_tokens → usage.input_tokens + usage.output_tokens
+- stop → stop (unchanged)
+
+Key Changes in this implementation:
+- Token usage calculated from input_tokens + output_tokens
+- Temperature only sent for models that support it (see ALLOWS_TEMPERATURE)
+- Conservative token limits used instead of API probing
+- Tool schemas have minimal required fields for better reliability
+"""
+
 # logic/chatgpt_integration.py
 import os
 import json
@@ -60,6 +84,18 @@ TEMPERATURE_SETTINGS = {
     "abstraction": 0.4,
     "introspection": 0.6,
     "memory": 0.3
+}
+
+# Models that support temperature parameter in Responses API
+ALLOWS_TEMPERATURE = {"gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo"}  # Add models as confirmed
+
+# Conservative token limits per model (avoids brittle API probing)
+MODEL_TOKEN_LIMITS = {
+    "gpt-5-nano": 4096,
+    "gpt-4o": 8192,
+    "gpt-4o-mini": 8192,
+    "gpt-4-turbo": 8192,
+    "default": 4096
 }
 
 # Updated schema with arrays instead of object maps
@@ -525,29 +561,106 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
             }
         },
         "required": [
-            "narrative",
-            "roleplay_updates",
-            "ChaseSchedule",
-            "MainQuest",
-            "PlayerRole",
-            "npc_creations",
-            "npc_updates",
-            "character_stat_updates",
-            "relationship_updates",
-            "npc_introductions",
-            "location_creations",
-            "event_list_updates",
-            "inventory_updates",
-            "quest_updates",
-            "social_links",
-            "perk_unlocks",
-            "activity_updates",
-            "journal_updates",
-            "image_generation"
+            "narrative"  # Only narrative is truly required
         ],
         
     }
 }
+
+
+# =====================================================
+# Tool Schema Management
+# =====================================================
+
+class ToolSchemaManager:
+    """Centralized management of tool schemas for consistency."""
+    
+    # Schema version for tracking changes
+    SCHEMA_VERSION = "2.1.0"
+    
+    @staticmethod
+    def get_universal_update_schema() -> dict:
+        """Get the universal update function schema."""
+        return UNIVERSAL_UPDATE_FUNCTION_SCHEMA
+    
+    @staticmethod
+    def get_all_tools() -> list[dict]:
+        """Get all available tools wrapped for Responses API."""
+        return _to_responses_tools([UNIVERSAL_UPDATE_FUNCTION_SCHEMA])
+    
+    @staticmethod
+    def get_tool_by_name(name: str) -> Optional[dict]:
+        """Get a specific tool schema by name."""
+        if name == "apply_universal_update":
+            return UNIVERSAL_UPDATE_FUNCTION_SCHEMA
+        return None
+    
+    @staticmethod
+    def get_schema_version() -> str:
+        """Get current schema version for tracking changes."""
+        return ToolSchemaManager.SCHEMA_VERSION
+
+
+# =====================================================
+# Helper functions for Responses API tool parsing
+# =====================================================
+
+def _calculate_token_usage(response) -> int:
+    """
+    Calculate total token usage from Responses API response.
+    
+    Args:
+        response: Responses API response object
+        
+    Returns:
+        Total tokens used (input_tokens + output_tokens)
+    """
+    usage = getattr(response, "usage", None)
+    return (
+        (getattr(usage, "input_tokens", 0) or 0) + 
+        (getattr(usage, "output_tokens", 0) or 0)
+    )
+
+
+def _to_responses_tools(functions: list[dict]) -> list[dict]:
+    """Wrap Chat Completions-style functions into Responses tools."""
+    return [{"type": "function", "function": f} for f in functions]
+
+
+def _extract_first_tool_call(resp) -> tuple[str | None, str | dict | None]:
+    """
+    Return (tool_name, arguments) from a Responses API result, or (None, None).
+    Walks typed items directly to avoid shape change issues.
+    """
+    # Get output items safely
+    items = getattr(resp, "output", []) or []
+    
+    # Primary: top-level tool_call items
+    for item in items:
+        if getattr(item, "type", None) == "tool_call":
+            return getattr(item, "tool_name", None), getattr(item, "arguments", None)
+    
+    # Fallback: tool use embedded in messages
+    for item in items:
+        if getattr(item, "type", None) == "message":
+            for c in getattr(item, "content", []):
+                if getattr(c, "type", None) in ("tool_call", "tool_use"):
+                    name = getattr(c, "name", None) or getattr(c, "tool_name", None)
+                    args = getattr(c, "arguments", None) or getattr(c, "input", None)
+                    return name, args
+    
+    return None, None
+
+
+def _get_tool_choice(tool_name: str) -> dict:
+    """
+    Get tool_choice dict for forcing a specific tool.
+    Tries "tool" type first, can fallback to "function" if needed.
+    """
+    # Default to "tool" type (newer format)
+    # If you get "invalid tool_choice" errors, change this to:
+    # return {"type": "function", "name": tool_name}
+    return {"type": "tool", "name": tool_name}
 
 
 # =====================================================
@@ -896,10 +1009,10 @@ def get_agents_openai_model():
 
 async def _safe_max_tokens(client, model: str, reserve: int = 256, hard_cap: int = 10000) -> int:
     """
-    Safely calculate max tokens for a model.
+    Get safe max tokens for a model using conservative constants.
     
     Args:
-        client: OpenAI async client
+        client: OpenAI async client (unused, kept for compatibility)
         model: Model name
         reserve: Tokens to reserve for prompt (default: 256)
         hard_cap: Maximum tokens to return (default: 10000)
@@ -907,14 +1020,9 @@ async def _safe_max_tokens(client, model: str, reserve: int = 256, hard_cap: int
     Returns:
         Safe max tokens value
     """
-    try:
-        model_info = await client.models.retrieve(id=model)
-        context_window = getattr(model_info, "context_window", 8192)
-    except Exception as e:
-        logger.warning(f"Could not retrieve model info for {model}: {e}")
-        context_window = 8192
-    
-    return min(context_window - reserve, hard_cap)
+    # Use conservative constants instead of probing API
+    max_tokens = MODEL_TOKEN_LIMITS.get(model, MODEL_TOKEN_LIMITS["default"])
+    return min(max_tokens - reserve, hard_cap)
 
 
 async def build_message_history(conversation_id: int, aggregator_text: str, user_input: str, limit: int = 15):
@@ -1135,7 +1243,7 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
                     "type": "function_call",
                     "function_name": "apply_universal_update",
                     "function_args": function_args,
-                    "tokens_used": nyx_result.get("performance", {}).get("tokens_used", 0),
+                    "tokens_used": nyx_result.get("performance", {}).get("tokens_used", 0),  # Use Nyx's token count
                     "nyx_metrics": nyx_result.get("performance", {}),
                     "preset_story_id": preset_info.get("story_id") if preset_info else None
                 }
@@ -1174,7 +1282,7 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
     # Get async client from centralized manager
     client = _client_manager.async_client
 
-    # If reflection is OFF, do the single-step call
+    # If reflection is OFF, do the single-step call (RESPONSES API)
     if not reflection_enabled:
         messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
         
@@ -1183,31 +1291,29 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
             messages[0]['content'] = primary_system_prompt
 
         model = "gpt-5-nano"
-        max_tokens = await _safe_max_tokens(client, model)
         
-        response = await client.chat.completions.create(
+        response = await client.responses.create(
             model=model,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=max_tokens,
-            frequency_penalty=0.0,
-            functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
-            function_call={"name": "apply_universal_update"},
+            input=messages,  # Changed from 'messages' to 'input'
+            tools=ToolSchemaManager.get_all_tools(),  # Use centralized tool manager
+            tool_choice=_get_tool_choice("apply_universal_update"),  # Use helper for tool choice
+            max_output_tokens=2048,  # Changed from 'max_tokens' to 'max_output_tokens'
         )
 
-        msg = response.choices[0].message
-        tokens_used = response.usage.total_tokens
+        tool_name, tool_args = _extract_first_tool_call(response)
+        tokens_used = _calculate_token_usage(response)
 
-        if msg.function_call is not None:
-            fn_name = msg.function_call.name
-            fn_args_str = msg.function_call.arguments or "{}"
-            cleaned_args = _clean_function_args(fn_args_str)
-
-            parsed_args = {}
-            try:
-                parsed_args = safe_json_loads(cleaned_args)
-            except Exception:
-                logger.exception("Error parsing function call arguments")
+        if tool_name:
+            # tool_args may be str (JSON) or dict; normalize to dict
+            if isinstance(tool_args, str):
+                cleaned_args = _clean_function_args(tool_args)
+                try:
+                    parsed_args = safe_json_loads(cleaned_args)
+                except Exception:
+                    logger.exception("Error parsing tool arguments")
+                    parsed_args = {}
+            else:
+                parsed_args = tool_args or {}
 
             # Validate narrative if preset is active
             if preset_info and parsed_args.get("narrative"):
@@ -1220,7 +1326,7 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
 
             return {
                 "type": "function_call",
-                "function_name": fn_name,
+                "function_name": tool_name,
                 "function_args": parsed_args,
                 "tokens_used": tokens_used,
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
@@ -1230,14 +1336,14 @@ All information exists in four layers: PUBLIC|SEMI-PRIVATE|HIDDEN|DEEP SECRET
                 "type": "text",
                 "function_name": None,
                 "function_args": None,
-                "response": msg.content,
-                "tokens_used": tokens_used,
+                "response": (response.output_text or ""),  # Use output_text for text
+                "tokens_used": tokens_used,  # Already calculated above
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
 
-    # If reflection is ON, do a two-step approach
+    # If reflection is ON, do a two-step approach (RESPONSES API)
     else:
-        # Step A: Reflection Request
+        # Step A: Reflection Request (no tools; just text)
         reflection_messages = [
             {"role": "system", "content": primary_system_prompt},
             {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
@@ -1262,17 +1368,13 @@ DO NOT produce user-facing text here; only the JSON.
             }
         ]
 
-        reflection_response = await client.chat.completions.create(
+        reflection_response = await client.responses.create(
             model="gpt-5-nano",
-            messages=reflection_messages,
-            temperature=0.2,
-            max_tokens=2500,
-            frequency_penalty=0.0,
-            functions=[],
-            function_call="none"
+            input=reflection_messages,  # Changed from 'messages' to 'input'
+            max_output_tokens=1024  # Changed from 'max_tokens' to 'max_output_tokens'
         )
-        reflection_msg = reflection_response.choices[0].message.content
-        reflection_tokens_used = reflection_response.usage.total_tokens
+        reflection_msg = reflection_response.output_text or ""
+        reflection_tokens_used = _calculate_token_usage(reflection_response)
 
         # Parse reflection JSON
         reflection_notes = ""
@@ -1304,7 +1406,7 @@ DO NOT produce user-facing text here; only the JSON.
         except Exception as e:
             logger.warning(f"Could not store reflection in memory: {e}")
 
-        # Step B: Final (Public) Answer
+        # Step B: Final (Public) Answer (RESPONSES API)
         final_messages = [
             {"role": "system", "content": primary_system_prompt},
             {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
@@ -1319,29 +1421,29 @@ DO NOT produce user-facing text here; only the JSON.
         ]
 
         model = "gpt-5-nano"
-        max_tokens = await _safe_max_tokens(client, model)
         
-        final_response = await client.chat.completions.create(
+        final_response = await client.responses.create(
             model=model,
-            messages=final_messages,
-            temperature=0.2,
-            max_tokens=max_tokens,
-            frequency_penalty=0.0,
-            functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
-            function_call={"name": "apply_universal_update"}
+            input=final_messages,  # Changed from 'messages' to 'input'
+            tools=ToolSchemaManager.get_all_tools(),  # Use centralized tool manager
+            tool_choice=_get_tool_choice("apply_universal_update"),  # Use helper for tool choice
+            max_output_tokens=2048,  # Changed from 'max_tokens' to 'max_output_tokens'
         )
-        final_msg = final_response.choices[0].message
-        final_tokens_used = final_response.usage.total_tokens
+        
+        tool_name, tool_args = _extract_first_tool_call(final_response)
+        final_tokens_used = _calculate_token_usage(final_response)
 
-        if final_msg.function_call is not None:
-            fn_name = final_msg.function_call.name
-            fn_args_str = final_msg.function_call.arguments or "{}"
-            cleaned_args = _clean_function_args(fn_args_str)
-            parsed_args = {}
-            try:
-                parsed_args = safe_json_loads(cleaned_args)
-            except Exception:
-                logger.exception("Error parsing function call arguments")
+        if tool_name:
+            # tool_args may be str (JSON) or dict; normalize to dict
+            if isinstance(tool_args, str):
+                cleaned_args = _clean_function_args(tool_args)
+                try:
+                    parsed_args = safe_json_loads(cleaned_args)
+                except Exception:
+                    logger.exception("Error parsing tool arguments")
+                    parsed_args = {}
+            else:
+                parsed_args = tool_args or {}
 
             # Validate if preset active
             if preset_info and parsed_args.get("narrative"):
@@ -1354,7 +1456,7 @@ DO NOT produce user-facing text here; only the JSON.
 
             return {
                 "type": "function_call",
-                "function_name": fn_name,
+                "function_name": tool_name,
                 "function_args": parsed_args,
                 "tokens_used": (reflection_tokens_used + final_tokens_used),
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
@@ -1364,7 +1466,7 @@ DO NOT produce user-facing text here; only the JSON.
                 "type": "text",
                 "function_name": None,
                 "function_args": None,
-                "response": final_msg.content,
+                "response": (final_response.output_text or ""),  # Use output_text for text
                 "tokens_used": (reflection_tokens_used + final_tokens_used),
                 "preset_story_id": preset_info.get("story_id") if preset_info else None
             }
@@ -1470,7 +1572,7 @@ def _ensure_default_scene_data(parsed_args: dict) -> None:
 
 
 # ===========================================
-# Utility functions using centralized client
+# Utility functions using centralized client (UPDATED TO RESPONSES API)
 # ===========================================
 
 async def generate_text_completion(
@@ -1480,13 +1582,26 @@ async def generate_text_completion(
     max_tokens: int = 1000,
     stop_sequences: List[str] | None = None,
     task_type: str = "decision",
+    response_format: Optional[str] = None,  # Added for JSON mode
+    model: str = "gpt-5-nano",  # Added model parameter
 ) -> str:
     """
     Generate text completion using the centralized ChatGPT integration.
+    Now uses Responses API.
+    
+    Args:
+        system_prompt: System prompt for the model
+        user_prompt: User's input prompt
+        temperature: Optional temperature override
+        max_tokens: Maximum output tokens
+        stop_sequences: Optional stop sequences
+        task_type: Task type for default temperature
+        response_format: Optional response format ("json" for strict JSON)
+        model: Model to use (default: gpt-5-nano)
+    
+    Returns:
+        Generated text response
     """
-    temperature = temperature if temperature is not None else \
-                  TEMPERATURE_SETTINGS.get(task_type, 0.7)
-
     # Use prepare_context if available
     if PREPARE_CONTEXT_AVAILABLE:
         system_prompt = await prepare_context(system_prompt, user_prompt)
@@ -1501,19 +1616,31 @@ async def generate_text_completion(
     client = _client_manager.async_client
     
     try:
-        # Build extra parameters for stop sequences
-        extra_params = {"stop": stop_sequences} if stop_sequences else {}
+        # Build parameters for Responses API
+        params = {
+            "model": model,
+            "input": messages,
+            "max_output_tokens": max_tokens,
+        }
         
-        response = await client.chat.completions.create(
-            model="gpt-5-nano",
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            frequency_penalty=0.0,
-            **extra_params
-        )
+        # Only add temperature if model supports it
+        if temperature is not None and model in ALLOWS_TEMPERATURE:
+            params["temperature"] = temperature
+        elif task_type in TEMPERATURE_SETTINGS and task_type != "decision" and model in ALLOWS_TEMPERATURE:
+            # Only set temperature for non-default task types if model supports it
+            params["temperature"] = TEMPERATURE_SETTINGS[task_type]
         
-        return response.choices[0].message.content.strip()
+        # Add stop sequences if provided
+        if stop_sequences:
+            params["stop"] = stop_sequences
+        
+        # Add response format if specified (for JSON mode)
+        if response_format == "json":
+            params["response_format"] = {"type": "json_object"}  # Responses JSON mode
+        
+        response = await client.responses.create(**params)
+        
+        return (response.output_text or "").strip()
         
     except Exception as e:
         logger.error(f"Error in generate_text_completion: {e}")
@@ -1817,8 +1944,22 @@ async def _responses_json_call(
     user_prompt: str,
     max_output_tokens: int = 1024,
     temperature: float | None = None,
+    response_format: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Call the *Responses* API and return parsed JSON (or raw text fallback)."""
+    """
+    Call the *Responses* API and return parsed JSON (or raw text fallback).
+    
+    Args:
+        model: Model name to use
+        system_prompt: System prompt
+        user_prompt: User prompt
+        max_output_tokens: Maximum output tokens
+        temperature: Optional temperature (only used for models that support it)
+        response_format: Optional format ("json" for strict JSON mode)
+        
+    Returns:
+        Parsed JSON dict or {"raw_response": text} if parsing fails
+    """
     client = _client_manager.get_responses_client()
     params: dict[str, Any] = {
         "model": model,
@@ -1828,11 +1969,18 @@ async def _responses_json_call(
         ],
         "max_output_tokens": max_output_tokens,
     }
-    if temperature is not None:
+    
+    # Only add temperature if model supports it
+    if temperature is not None and model in ALLOWS_TEMPERATURE:
         params["temperature"] = temperature
+    
+    # Add response format for strict JSON if requested
+    if response_format == "json":
+        params["response_format"] = {"type": "json_object"}  # Responses JSON mode
+    
     resp = await client.responses.create(**params)
 
-    # Accept both new (`output_text`) and legacy (`output`) attributes.
+    # Accept both new (`output_text`) and legacy (`output`) attributes
     raw_text = getattr(resp, "output_text", None) or getattr(resp, "output", "")
     raw_text = raw_text.strip()
 
