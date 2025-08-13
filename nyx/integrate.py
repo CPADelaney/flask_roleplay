@@ -1391,35 +1391,33 @@ class GameEventManager:
     async def _get_event_context(self, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Get context for an event.
-        
-        Args:
-            event_type: Type of event
-            event_data: Event data
-            
-        Returns:
-            Event context
         """
         try:
             # Get location context
             location = event_data.get("location", "")
-            location_info = await self.governor.get_location_info(location) if self.governor else {}
+            # FIX: get_location_info might not exist, use a safe check
+            location_info = {}
+            if self.governor and hasattr(self.governor, 'get_location_info'):
+                location_info = await self.governor.get_location_info(location)
             
             # Get NPC context
             npc_ids = event_data.get("npc_ids", [])
             npc_info = []
             for npc_id in npc_ids:
-                npc_data = await self.npc_coordinator.get_npc_info(npc_id)
+                npc_data = await self._get_npc_info(npc_id)  # Use internal method
                 npc_info.append(npc_data)
                 
             # Get memory context
-            memory_manager = await self.governor.get_memory_manager() if self.governor else None
+            # FIX: get_memory_manager doesn't exist on governor - use memory_system directly
             memories = []
-            if memory_manager:
-                memories = await memory_manager.recall(
-                    entity_type="event",
-                    entity_id=event_data.get("id", 0),
-                    limit=5
-                )
+            if self.governor and hasattr(self.governor, 'memory_system'):
+                memory_system = self.governor.memory_system  # Direct attribute access, not a method
+                if memory_system:
+                    memories = await memory_system.recall(
+                        entity_type="event",
+                        entity_id=event_data.get("id", 0),
+                        limit=5
+                    )
             
             return {
                 "location": location_info,
@@ -1510,8 +1508,8 @@ class GameEventManager:
                     aware_npcs.append(awareness_context)
                     
             # Let Nyx make final determination
-            nyx_agent = await self.get_nyx_agent()
-            awareness_analysis = await nyx_agent.analyze_npc_awareness(
+            nyx_agent = self.get_nyx_agent()
+            awareness_analysis = nyx_agent.analyze_npc_awareness(
                 event_type=event_type,
                 event_data=event_data,
                 potential_aware_npcs=aware_npcs
@@ -1571,8 +1569,8 @@ class GameEventManager:
             )
             
             # Let Nyx adjust the impact
-            nyx_agent = await self.get_nyx_agent()
-            nyx_adjustment = await nyx_agent.adjust_impact_calculation(
+            nyx_agent = self.get_nyx_agent()
+            nyx_adjustment = nyx_agent.adjust_impact_calculation(
                 impact_type="immediate",
                 base_impact=impact,
                 event_data=event_data
