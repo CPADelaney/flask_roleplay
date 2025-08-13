@@ -186,159 +186,162 @@ class AgentGovernanceMixin:
         return await asyncio.to_thread(importlib.import_module, module_path)
     
     
-    async def discover_and_register_agents(self):
-        """Non-blocking agent discovery with protection against repeated calls"""
+    async def discover_and_register_agents(self) -> None:
+        """
+        Discover and register available agents with the governance system.
+        This method automatically finds and registers agents from various sources.
+        """
         if self._discovery_completed:
-            logger.debug("Agent discovery already completed, skipping")
-            return True
-            
+            logger.info("[discover] already completed, skipping")
+            return
+        
         logger.info(f"[discover] starting for user={self.user_id}, conv={self.conversation_id}")
         
-        start_ts = asyncio.get_event_loop().time()
-        registered = 0
-    
-        # ============= HANDLE CLASS-BASED AGENTS =============
-        class_based_agents = [
-            ("story_agent.world_director_agent", "CompleteWorldDirector", AgentType.WORLD_DIRECTOR),
-            ("logic.universal_updater_agent", "UniversalUpdaterAgent", AgentType.UNIVERSAL_UPDATER),
+        registrations = []
+        
+        # 1. Core story agents
+        story_agent_types = [
+            AgentType.WORLD_DIRECTOR,
+            AgentType.UNIVERSAL_UPDATER,
+            AgentType.CONFLICT_ANALYST,
+            AgentType.SCENE_MANAGER,
+            AgentType.NARRATIVE_CRAFTER,
         ]
         
-        for module_path, class_name, agent_type in class_based_agents:
-            # --- fail-safe for the whole discovery loop
-            if asyncio.get_event_loop().time() - start_ts > MAX_TOTAL_DISCOVERY:
-                logger.warning("[discover] hard stop – hit MAX_TOTAL_DISCOVERY")
-                break
-    
-            # 1) import with timeout
-            try:
-                with suppress(asyncio.TimeoutError):
-                    module = await asyncio.wait_for(
-                        self._safe_import(module_path),
-                        timeout=ASYNC_IMPORT_TIMEOUT
-                    )
-            except Exception as e:
-                logger.debug(f"[discover] import failed {module_path}: {e!r}")
+        for agent_type in story_agent_types:
+            # Special case: World Director
+            if agent_type == AgentType.WORLD_DIRECTOR:
+                try:
+                    from story_agent.world_director_agent import CompleteWorldDirector
+                    world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
+                    agent_id = f"world_director_{self.conversation_id}"
+                    registrations.append((agent_type, agent_id))
+                    logger.info(f"[discover] queued {agent_type.value} → {agent_id}")
+                except ImportError as e:
+                    logger.error(f"[discover] Failed to import world director: {e}")
                 continue
-    
-            agent_cls = getattr(module, class_name, None)
-            if not agent_cls:
-                logger.warning(f"[discover] {class_name} missing in {module_path}")
+            
+            # Special case: Universal Updater
+            if agent_type == AgentType.UNIVERSAL_UPDATER:
+                try:
+                    from logic.universal_updater_agent import UniversalUpdaterAgent
+                    universal_updater = UniversalUpdaterAgent(self.user_id, self.conversation_id)
+                    agent_id = f"universal_updater_{self.conversation_id}"
+                    registrations.append((agent_type, agent_id))
+                    logger.info(f"[discover] queued {agent_type.value} → {agent_id}")
+                except ImportError as e:
+                    logger.error(f"[discover] Failed to import universal updater: {e}")
                 continue
-    
-            # 2) instantiate (can be heavy)
-            try:
-                with suppress(asyncio.TimeoutError):
-                    agent_instance = await asyncio.wait_for(
-                        asyncio.to_thread(agent_cls, self.user_id, self.conversation_id),
-                        timeout=AGENT_INIT_TIMEOUT
+            
+            # Special case: Conflict system agents
+            if agent_type == AgentType.CONFLICT_ANALYST:
+                try:
+                    # Import conflict system integration
+                    from logic.conflict_system.conflict_integration import (
+                        ConflictSystemIntegration,
+                        register_enhanced_integration
                     )
-            except Exception as e:
-                logger.debug(f"[discover] init failed {class_name}: {e!r}")
+                    
+                    # Create and register conflict system
+                    logger.info(f"[discover] initializing conflict system integration")
+                    
+                    # Use the static registration method
+                    result = await register_enhanced_integration(self.user_id, self.conversation_id)
+                    
+                    if result.get("success"):
+                        conflict_system = result.get("integration")
+                        if conflict_system:
+                            agent_id = f"conflict_system_{self.conversation_id}"
+                            registrations.append((agent_type, agent_id))
+                            logger.info(f"[discover] queued conflict_system → {agent_id}")
+                    else:
+                        logger.error(f"[discover] Failed to register conflict system: {result.get('message', 'Unknown error')}")
+                        
+                except ImportError as e:
+                    logger.error(f"[discover] Failed to import conflict system: {e}")
+                except Exception as e:
+                    logger.error(f"[discover] Failed to initialize conflict system: {e}")
                 continue
-    
-            # 3) queue for registration
-            agent_id = f"{agent_type}_{self.conversation_id}"
-            try:
-                asyncio.create_task(
-                    self.register_agent(
-                        agent_type=agent_type,
-                        agent_id=agent_id,
-                        agent_instance=agent_instance
-                    )
-                )
-                registered += 1
-                logger.info(f"[discover] queued {agent_type} → {agent_id}")
-            except Exception as e:
-                logger.debug(f"[discover] queue failed {agent_id}: {e!r}")
-    
-        # ============= HANDLE SDK-BASED AGENTS =============
-        # Import SDK agents with timeout protection
-        sdk_agents = []
         
+        # 2. Specialized open-world agents (from story_agent.specialized_agents)
         try:
-            with suppress(asyncio.TimeoutError):
-                # Import specialized agents factory
-                specialized_module = await asyncio.wait_for(
-                    self._safe_import("story_agent.specialized_agents"),
-                    timeout=ASYNC_IMPORT_TIMEOUT
-                )
-                if specialized_module:
-                    initialize_func = getattr(specialized_module, "initialize_specialized_agents", None)
-                    if initialize_func:
-                        # Run initialization in thread to avoid blocking
-                        specialized = await asyncio.wait_for(
-                            asyncio.to_thread(initialize_func),
-                            timeout=AGENT_INIT_TIMEOUT
-                        )
-                        sdk_agents.extend([
-                            (AgentType.CONFLICT_ANALYST, specialized["conflict_analyst"]),
-                            (AgentType.NARRATIVE_CRAFTER, specialized["narrative_crafter"]),
-                            (AgentType.RESOURCE_OPTIMIZER, specialized["resource_optimizer"]),
-                            (AgentType.RELATIONSHIP_MANAGER, specialized["relationship_manager"]),
-                            (AgentType.ACTIVITY_ANALYZER, specialized["activity_analyzer"]),
-                        ])
+            from story_agent.specialized_agents import (
+                initialize_specialized_agents,
+                OpenWorldAgentType
+            )
+            
+            specialized = initialize_specialized_agents()
+            for key, agent_instance in specialized.items():
+                # Map to governance agent types if available
+                agent_id = f"{key}_{self.conversation_id}"
+                # Note: These are slice-of-life agents, not conflict agents
+                # They handle daily life, relationships, etc.
+        except ImportError as e:
+            logger.error(f"[discover] Failed to load specialized agents: {e}")
         except Exception as e:
             logger.error(f"[discover] Failed to load specialized agents: {e}")
-    
+        
+        # 3. SDK-based agents
+        sdk_agents = [
+            ("memory_manager", AgentType.MEMORY_MANAGER),
+            ("scene_manager", AgentType.SCENE_MANAGER),
+        ]
+        
+        for agent_name, agent_type in sdk_agents:
+            agent_id = f"{agent_name}_{self.conversation_id}"
+            registrations.append((agent_type, agent_id))
+            logger.info(f"[discover] queued SDK agent {agent_name} → {agent_id}")
+        
+        # 4. Discover NPC agents
         try:
-            with suppress(asyncio.TimeoutError):
-                # Import memory agent
-                memory_module = await asyncio.wait_for(
-                    self._safe_import("context.memory_manager"),
-                    timeout=ASYNC_IMPORT_TIMEOUT
-                )
-                if memory_module:
-                    create_memory = getattr(memory_module, "create_memory_agent", None)
-                    if create_memory:
-                        memory_agent = await asyncio.wait_for(
-                            asyncio.to_thread(create_memory),
-                            timeout=AGENT_INIT_TIMEOUT
-                        )
-                        sdk_agents.append((AgentType.MEMORY_MANAGER, memory_agent))
-        except Exception as e:
-            logger.error(f"[discover] Failed to load memory agent: {e}")
-    
-        try:
-            with suppress(asyncio.TimeoutError):
-                # Import scene manager
-                scene_module = await asyncio.wait_for(
-                    self._safe_import("nyx.scene_manager_sdk"),
-                    timeout=ASYNC_IMPORT_TIMEOUT
-                )
-                if scene_module:
-                    scene_manager = getattr(scene_module, "scene_manager_agent", None)
-                    if scene_manager:
-                        sdk_agents.append((AgentType.SCENE_MANAGER, scene_manager))
-        except Exception as e:
-            logger.error(f"[discover] Failed to load scene manager: {e}")
-    
-        # Register SDK agents
-        for agent_type, agent_instance in sdk_agents:
-            # Check timeout
-            if asyncio.get_event_loop().time() - start_ts > MAX_TOTAL_DISCOVERY:
-                logger.warning("[discover] hard stop – hit MAX_TOTAL_DISCOVERY")
-                break
+            async with get_db_connection_context() as conn:
+                # Get active NPCs
+                npcs = await conn.fetch("""
+                    SELECT npc_id, npc_name FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND introduced = true
+                    LIMIT 10
+                """, self.user_id, self.conversation_id)
                 
-            agent_id = f"{agent_type}_{self.conversation_id}"
-            try:
-                asyncio.create_task(
-                    self.register_agent(
-                        agent_type=agent_type,
-                        agent_id=agent_id,
-                        agent_instance=agent_instance
-                    )
-                )
-                registered += 1
-                logger.info(f"[discover] queued SDK agent {agent_type} → {agent_id}")
-            except Exception as e:
-                logger.debug(f"[discover] queue failed for SDK agent {agent_id}: {e!r}")
-    
-        # 4) NPC-agents – run in background to avoid blocking init
-        asyncio.create_task(self._discover_npc_agents())
-    
+                for npc in npcs:
+                    agent_id = f"npc_{npc['npc_id']}"
+                    registrations.append((AgentType.NPC, agent_id))
+                    logger.info(f"[discover] queued NPC {npc['npc_name']} → {agent_id}")
+                    
+        except Exception as e:
+            logger.error(f"[discover] Failed to discover NPC agents: {e}")
+        
+        # 5. Relationship manager
+        try:
+            from logic.relationship_integration import RelationshipIntegration
+            rel_manager = RelationshipIntegration(self.user_id, self.conversation_id)
+            agent_id = f"relationship_manager_{self.conversation_id}"
+            registrations.append((AgentType.RELATIONSHIP_MANAGER, agent_id))
+            logger.info(f"[discover] queued relationship_manager → {agent_id}")
+        except ImportError as e:
+            logger.error(f"[discover] Failed to import relationship manager: {e}")
+        
+        # 6. Resource optimizer (if available)
+        try:
+            from logic.resource_optimizer import ResourceOptimizer
+            optimizer = ResourceOptimizer(self.user_id, self.conversation_id)
+            agent_id = f"resource_optimizer_{self.conversation_id}"
+            registrations.append((AgentType.RESOURCE_OPTIMIZER, agent_id))
+            logger.info(f"[discover] queued resource_optimizer → {agent_id}")
+        except ImportError:
+            # Resource optimizer is optional
+            pass
+        
+        # 7. Register all discovered agents
+        for agent_type, agent_id in registrations:
+            await self.register_agent(
+                agent_type=agent_type,
+                agent_id=agent_id,
+                agent_instance=None  # Will be created lazily
+            )
+        
         self._discovery_completed = True
-        logger.info(f"[discover] completed – {registered} agents queued")
-        return registered > 0
+        logger.info(f"[discover] completed – {len(registrations)} agents queued")
     
     
     async def _discover_npc_agents(governor):
