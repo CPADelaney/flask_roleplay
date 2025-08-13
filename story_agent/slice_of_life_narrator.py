@@ -476,7 +476,7 @@ class NarratorContext:
     id_from_context=lambda ctx: f"narrator_{ctx.context.conversation_id}"
 )
 async def narrate_slice_of_life_scene(
-    ctx: RunContextWrapper[NarratorContext],
+    ctx,  # Remove type hint - SDK handles ctx specially
     payload: NarrateSliceOfLifeInput
 ) -> str:
     """
@@ -621,7 +621,7 @@ async def narrate_slice_of_life_scene(
     
 @function_tool
 async def generate_npc_dialogue(
-    ctx: RunContextWrapper,
+    ctx,  # Remove type hint - SDK handles ctx specially
     npc_id: int,
     situation: str,
     world_state: WorldState,
@@ -749,7 +749,7 @@ async def generate_npc_dialogue(
 
 @function_tool
 async def narrate_power_exchange(
-    ctx: RunContextWrapper,
+    ctx,  # Remove type hint - SDK handles ctx specially
     exchange: PowerExchange,
     world_state: WorldState
 ) -> PowerMomentNarration:
@@ -836,7 +836,7 @@ async def narrate_power_exchange(
 
 @function_tool
 async def narrate_daily_routine(
-    ctx: RunContextWrapper,
+    ctx,  # Remove type hint - SDK handles ctx specially
     activity: str,
     world_state: WorldState,
     involved_npcs: List[int] = None
@@ -889,7 +889,7 @@ async def narrate_daily_routine(
 
 @function_tool
 async def generate_ambient_narration(
-    ctx: RunContextWrapper,
+    ctx,  # Remove type hint - SDK handles ctx specially
     focus: str,
     world_state: WorldState,
     intensity: float = 0.5
@@ -939,7 +939,7 @@ async def generate_ambient_narration(
 
 @function_tool
 async def narrate_player_action(
-    ctx: RunContextWrapper,
+    ctx,  # Remove type hint - SDK handles ctx specially
     action: str,
     world_state: WorldState,
     scene_context: Optional[SliceOfLifeEvent] = None
