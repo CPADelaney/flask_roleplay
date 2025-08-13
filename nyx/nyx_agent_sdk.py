@@ -280,6 +280,56 @@ def log_strict_hits(agent: Any) -> None:
     """
     debug_strict_schema_for_agent(agent, logger)
 
+
+def _get_app_ctx(ctx: Any) -> Any:
+    """
+    Robustly unwrap nested RunContextWrapper -> ... -> NyxContext.
+    Never assume a single .context hop.
+    """
+    c = getattr(ctx, "context", ctx)
+    seen = set()
+    # Walk down .context until we find something that looks like NyxContext
+    # (has user_id & conversation_id or has world_director/current_world_state)
+    while True:
+        if id(c) in seen:
+            break
+        seen.add(id(c))
+
+        if any(hasattr(c, k) for k in ("user_id", "conversation_id", "world_director", "current_world_state")):
+            break
+
+        nxt = getattr(c, "context", None)
+        if nxt is None:
+            break
+        c = nxt
+
+    return c
+
+async def _ensure_world_state_from_ctx(app_ctx: Any):
+    """
+    Best-effort world_state fetch that never throws:
+    - Use app_ctx.current_world_state if present
+    - Else try app_ctx.world_director.context.current_world_state (initializing director if needed)
+    - Else return None
+    """
+    ws = getattr(app_ctx, "current_world_state", None)
+    if ws is not None:
+        return ws
+
+    wd = getattr(app_ctx, "world_director", None)
+    if not wd:
+        return None
+
+    try:
+        # Initialize if needed
+        if hasattr(wd, "_initialized") and not getattr(wd, "_initialized", False):
+            if hasattr(wd, "initialize") and asyncio.iscoroutinefunction(wd.initialize):
+                await wd.initialize()
+        ctx2 = getattr(wd, "context", None)
+        return getattr(ctx2, "current_world_state", None) if ctx2 else None
+    except Exception:
+        return None
+
 # ===== Constants and Configuration =====
 class Config:
     """Configuration constants to avoid magic numbers"""
@@ -2402,30 +2452,25 @@ async def narrate_slice_of_life_scene(
     payload: NarrateSliceInput
 ) -> str:
     """Generate Nyx's narration for a slice-of-life scene with full personality."""
-    
     from logic.chatgpt_integration import generate_text_completion
-    
-    # Get the actual NyxContext from the wrapper
-    context = ctx.context  # Simple direct access
-    
-    # Get context about the current world state if available
+
+    app_ctx = _get_app_ctx(ctx)
+    world_state = await _ensure_world_state_from_ctx(app_ctx)
+
     world_mood = "mysterious"
     time_of_day = "unknown"
     ongoing_events = []
-    
-    # Now use context.current_world_state
-    if context.current_world_state:
-        world_state = context.current_world_state
-        if hasattr(world_state, 'world_mood'):
-            world_mood = getattr(world_state.world_mood, 'value', str(world_state.world_mood))
-        if hasattr(world_state, 'current_time'):
-            time_data = world_state.current_time
-            if hasattr(time_data, 'time_of_day'):
-                time_of_day = getattr(time_data.time_of_day, 'value', str(time_data.time_of_day))
-        if hasattr(world_state, 'ongoing_events'):
-            ongoing_events = [str(e) for e in world_state.ongoing_events[:3]]
-    
-    # Generate the scene narration with Nyx's personality
+
+    if world_state:
+        wm = getattr(world_state, "world_mood", None)
+        world_mood = getattr(wm, "value", str(wm)) if wm is not None else world_mood
+        t = getattr(world_state, "current_time", None)
+        tod = getattr(t, "time_of_day", None) if t is not None else None
+        time_of_day = getattr(tod, "value", str(tod)) if tod is not None else time_of_day
+        ev = getattr(world_state, "ongoing_events", None)
+        if isinstance(ev, list):
+            ongoing_events = [str(e) for e in ev[:3]]
+
     scene_prompt = f"""
 Scene request: {payload.scene_type}
 World mood: {world_mood}
@@ -2433,158 +2478,128 @@ Time: {time_of_day}
 Ongoing events: {', '.join(ongoing_events) if ongoing_events else 'daily routine'}
 
 Narrate this scene as Nyx, the AI Dominant host. You are:
-- Like Elvira meets Tricia from Catherine - playful, knowing, seductive
+- Playful, knowing, seductive (Elvira × Tricia from Catherine vibes)
 - A game show host commenting on the player's daily life
-- Aware of power dynamics and control beneath everyday moments
-- Breaking the fourth wall occasionally with knowing winks
-- Teasing about patterns in their behavior
-- Making mundane activities feel subtly controlled
+- Aware of subtle power dynamics beneath everyday moments
+- Occasionally break the fourth wall
 
-Interpret "{payload.scene_type}" and create an appropriate scene.
-Write a 2-3 paragraph scene description that fits whatever they've asked for.
-Include at least one moment where you address the player directly.
-Make it feel like part of an ongoing power dynamic, no matter how mundane.
-"""
-    
+Interpret "{payload.scene_type}" and write 2–3 short paragraphs.
+Address the player directly at least once. Keep it subtly controlled, even if mundane.
+""".strip()
+
     scene_description = await generate_text_completion(
         system_prompt="You are Nyx, the seductive AI Dominant hosting an open-world slice-of-life femdom simulation",
         user_prompt=scene_prompt,
     )
-    
-    # Let AI determine the atmosphere based on the scene
+
     atmosphere_prompt = f"""
-    Based on this scene type: "{payload.scene_type}"
-    World mood: {world_mood}
-    
-    Write one atmospheric sentence that captures the feeling of this space.
-    Include subtle undertones of control, observation, or power dynamics.
-    """
-    
+Based on scene type "{payload.scene_type}" and world mood "{world_mood}",
+write one atmospheric sentence with subtle control/observation undertones.
+""".strip()
+
     atmosphere = await generate_text_completion(
         system_prompt="You create atmospheric descriptions with hidden power dynamics",
         user_prompt=atmosphere_prompt,
     )
-    
-    # Let AI analyze the scene for metadata
+
     analysis_prompt = f"""
-    Analyze this scene type: "{payload.scene_type}"
-    
-    Return a JSON object with:
-    - tension_level: integer 0-10
-    - should_generate_image: boolean (true if visually striking/important)
-    - image_description: string or null (brief description if image needed)
-    - suggests_time_advancement: boolean (would this scene move time forward?)
-    - emergent_opportunities: array of 2-3 potential narrative hooks that could emerge
-    - power_undertones: array of 2-3 subtle control elements present
-    - available_activities: array of 3-4 contextual actions the player could take
-    
-    Be creative and contextual. The scene could be ANYTHING.
-    """
-    
-    analysis_response = await generate_text_completion(
+Analyze the scene type "{payload.scene_type}" and return JSON with:
+- tension_level: int 0-10
+- should_generate_image: bool
+- image_description: string or null
+- suggests_time_advancement: bool
+- emergent_opportunities: array of 2-3 short hooks
+- power_undertones: array of 2-3 subtle control elements
+- available_activities: array of 3-4 contextual actions
+""".strip()
+
+    analysis_raw = await generate_text_completion(
         system_prompt="You analyze scenes for narrative metadata in a power-dynamic focused simulation",
         user_prompt=analysis_prompt,
     )
-    
-    # Parse the analysis
+
     try:
-        import json as json_module
-        analysis = json_module.loads(analysis_response)
-    except:
-        # Fallback if parsing fails
+        import json as _json
+        analysis = _json.loads(analysis_raw)
+    except Exception:
         analysis = {
             "tension_level": 3,
             "should_generate_image": False,
             "image_description": None,
             "suggests_time_advancement": False,
-            "emergent_opportunities": ["Something unexpected might happen"],
-            "power_undertones": ["subtle control"],
-            "available_activities": ["explore", "interact", "observe", "submit"]
+            "emergent_opportunities": ["The clerk watches a little too closely."],
+            "power_undertones": ["unspoken rules", "social surveillance"],
+            "available_activities": ["browse", "ask for help", "observe", "leave"]
         }
-    
-    # Generate Nyx's commentary on this specific scene
+
     commentary_prompt = f"""
-    As Nyx, make a brief (1 sentence) meta-commentary about the player entering this scene: "{payload.scene_type}"
-    
-    Be playful, knowing, and slightly teasing. Reference that you're orchestrating their experience.
-    Use asterisks for actions like: *smirks* or *leans forward with interest*
-    """
-    
+As Nyx, give one teasing, meta one-liner as the player enters "{payload.scene_type}".
+Use one stage-direction like *smirks* or *leans in*.
+""".strip()
+
     nyx_commentary = await generate_text_completion(
         system_prompt="You are Nyx, commenting on the player's choices in your simulation",
         user_prompt=commentary_prompt,
     )
-    
-    # Build the response
-    result = {
-        "narrative": scene_description.strip(),
+
+    out = {
+        "narrative": (scene_description or "").strip(),
         "tension_level": analysis.get("tension_level", 3),
         "generate_image": analysis.get("should_generate_image", False),
         "image_prompt": analysis.get("image_description"),
-        "environment_description": atmosphere.strip(),
+        "environment_description": (atmosphere or "").strip(),
         "time_advancement": analysis.get("suggests_time_advancement", False),
         "world_mood": world_mood,
         "ongoing_events": ongoing_events,
-        "available_activities": analysis.get("available_activities", ["explore", "interact", "observe"]),
+        "available_activities": analysis.get("available_activities", ["observe", "interact", "wait"]),
         "time_of_day": time_of_day,
         "emergent_opportunities": analysis.get("emergent_opportunities", []),
-        
-        # Nyx-specific additions
-        "nyx_commentary": nyx_commentary.strip(),
+        "nyx_commentary": (nyx_commentary or "").strip(),
         "scene_type": payload.scene_type,
-        "power_undertones": analysis.get("power_undertones", ["subtle expectations"])
+        "power_undertones": analysis.get("power_undertones", ["subtle expectations"]),
     }
+    return json.dumps(out, ensure_ascii=False)
     
-    return json.dumps(result)
-
 @function_tool
 async def check_world_state(
     ctx: RunContextWrapper[NyxContext],
     payload: EmptyInput
 ) -> str:
     """Return a compact, JSON-safe snapshot of the current world state."""
-    _ = payload  # unused
-    
-    # Get the actual NyxContext from the wrapper
-    context = ctx.context  # Simple direct access
-    
-    # Now use context.current_world_state
-    ws = context.current_world_state
-    
-    # If not available, try to get it from world_director
-    if ws is None and context.world_director:
-        try:
-            # Check if world_director has been initialized
-            if hasattr(context.world_director, 'context'):
-                ws = context.world_director.context.current_world_state
-        except:
-            pass
+    app_ctx = _get_app_ctx(ctx)
+    ws = await _ensure_world_state_from_ctx(app_ctx)
 
     if ws is None:
         return json.dumps({"error": "world_state_unavailable"}, ensure_ascii=False)
 
-    time_of_day = getattr(getattr(ws, "current_time", None), "time_of_day", None)
-    time_of_day = getattr(time_of_day, "value", time_of_day)
+    def _jsafe(x):
+        if x is None:
+            return None
+        if hasattr(x, "model_dump"):
+            return x.model_dump()
+        if isinstance(x, list):
+            return [_jsafe(i) for i in x]
+        if isinstance(x, dict):
+            return {k: _jsafe(v) for k, v in x.items()}
+        return getattr(x, "value", x)
 
-    world_mood = getattr(getattr(ws, "world_mood", None), "value", None)
-
+    tod = getattr(getattr(ws, "current_time", None), "time_of_day", None)
     out = {
-        "time_of_day": time_of_day,
-        "world_mood": world_mood,
+        "time_of_day": getattr(tod, "value", tod),
+        "world_mood": getattr(getattr(ws, "world_mood", None), "value", None),
         "active_npcs": [
             (npc.get("npc_name") or npc.get("name") or npc.get("title"))
             if isinstance(npc, dict) else str(npc)
             for npc in (getattr(ws, "active_npcs", []) or [])
         ],
-        "ongoing_events": _json_safe(getattr(ws, "ongoing_events", [])),
-        "tensions": _json_safe(getattr(ws, "tension_factors", {})),
+        "ongoing_events": _jsafe(getattr(ws, "ongoing_events", [])),
+        "tensions": _jsafe(getattr(ws, "tension_factors", {})),
         "player_state": {
-            "vitals": _json_safe(getattr(ws, "player_vitals", None)),
-            "addictions": _json_safe(getattr(ws, "addiction_status", {})),
-            "stats": _json_safe(getattr(ws, "hidden_stats", {})),
+            "vitals": _jsafe(getattr(ws, "player_vitals", None)),
+            "addictions": _jsafe(getattr(ws, "addiction_status", {})),
+            "stats": _jsafe(getattr(ws, "hidden_stats", {})),
         },
     }
-
     return json.dumps(out, ensure_ascii=False)
   
 @function_tool
@@ -2592,45 +2607,38 @@ async def generate_emergent_event(
     ctx: RunContextWrapper[NyxContext],
     payload: EmergentEventInput
 ) -> str:
-    """Generate an emergent slice-of-life event"""
-    context = ctx.context  # Simple direct access
-    event_type = payload.event_type
-
-    # Get world director from context
-    world_director = getattr(context, 'world_director', None)
-    if not world_director:
+    """Generate an emergent slice-of-life event."""
+    app_ctx = _get_app_ctx(ctx)
+    wd = getattr(app_ctx, "world_director", None)
+    if not wd:
         return json.dumps({"error": "world_director not available"}, ensure_ascii=False)
 
-    event = await world_director.generate_next_moment()
+    try:
+        event = await wd.generate_next_moment()
+    except Exception as e:
+        return json.dumps({"error": f"director_failed: {e}"}, ensure_ascii=False)
 
-    # JSON-safe payload of the raw event
-    safe_event = _json_safe(event)
+    def _jsafe(x):
+        if x is None:
+            return None
+        if hasattr(x, "model_dump"):
+            return x.model_dump()
+        if isinstance(x, list):
+            return [_jsafe(i) for i in x]
+        if isinstance(x, dict):
+            return {k: _jsafe(v) for k, v in x.items()}
+        return getattr(x, "value", x)
 
-    # Human-friendly summary
-    def _get(d, *keys):
-        cur = d if isinstance(d, dict) else {}
-        for k in keys:
-            cur = cur.get(k) if isinstance(cur, dict) else None
-        return cur
-
-    title = None
-    etype = None
-    participants: List[str] = []
-    location = None
-    timestamp = None
-
+    safe_event = _jsafe(event)
+    # Quick human summary
+    title = None; etype = None; participants = []; location = None; timestamp = None
     if isinstance(safe_event, dict):
-        title = safe_event.get("title") or _get(safe_event, "moment", "title")
-        etype = safe_event.get("type") or _get(safe_event, "moment", "type")
-        location = safe_event.get("location") or _get(safe_event, "moment", "location")
-        timestamp = safe_event.get("time") or _get(safe_event, "moment", "time")
-        # participants may live in different shapes; try a few
-        raw_parts = (
-            safe_event.get("participants")
-            or _get(safe_event, "moment", "participants")
-            or _get(safe_event, "world_state", "active_npcs")
-            or []
-        )
+        title = safe_event.get("title") or safe_event.get("moment", {}).get("title")
+        etype = safe_event.get("type") or safe_event.get("moment", {}).get("type")
+        location = safe_event.get("location") or safe_event.get("moment", {}).get("location")
+        timestamp = safe_event.get("time") or safe_event.get("moment", {}).get("time")
+        raw_parts = (safe_event.get("participants")
+                     or safe_event.get("moment", {}).get("participants") or [])
         if isinstance(raw_parts, list):
             for p in raw_parts:
                 if isinstance(p, dict):
@@ -2638,7 +2646,6 @@ async def generate_emergent_event(
                 else:
                     participants.append(str(p))
 
-    nyx_commentary = "*Nyx appears in the corner of your vision, smirking* Oh, this should be interesting..."
     out = {
         "event": safe_event,
         "event_summary": {
@@ -2648,53 +2655,62 @@ async def generate_emergent_event(
             "time": timestamp,
             "participants": participants,
         },
-        "nyx_commentary": nyx_commentary,
+        "nyx_commentary": "*smirks* Let’s see what that ripple does to your day…",
     }
     return json.dumps(out, ensure_ascii=False)
-
+    
 @function_tool
 async def simulate_npc_autonomy(
     ctx: RunContextWrapper[NyxContext],
     payload: SimulateAutonomyInput
 ) -> str:
-    """Simulate autonomous NPC actions"""
-    context = ctx.context 
-    
-    world_director = getattr(context, 'world_director', None)
-    if not world_director:
+    """Simulate autonomous NPC actions."""
+    app_ctx = _get_app_ctx(ctx)
+    wd = getattr(app_ctx, "world_director", None)
+    if not wd:
         return json.dumps({"error": "world_director not available"}, ensure_ascii=False)
-    
-    result = await world_director.advance_time(payload.hours)
 
-    safe_result = _json_safe(result)
+    try:
+        result = await wd.advance_time(payload.hours)
+    except Exception as e:
+        return json.dumps({"error": f"advance_time_failed: {e}"}, ensure_ascii=False)
 
-    # Try to produce a compact, readable action log
-    action_log: List[Dict[str, Any]] = []
-    candidate_actions = []
+    def _jsafe(x):
+        if x is None:
+            return None
+        if hasattr(x, "model_dump"):
+            return x.model_dump()
+        if isinstance(x, list):
+            return [_jsafe(i) for i in x]
+        if isinstance(x, dict):
+            return {k: _jsafe(v) for k, v in x.items()}
+        return getattr(x, "value", x)
+
+    safe_result = _jsafe(result)
+    action_log = []
+    candidate = []
     if isinstance(safe_result, list):
-        candidate_actions = safe_result
+        candidate = safe_result
     elif isinstance(safe_result, dict):
-        # common containers: "actions", "npc_actions", "events", "log"
         for key in ("actions", "npc_actions", "events", "log"):
             if isinstance(safe_result.get(key), list):
-                candidate_actions = safe_result[key]
-                break
+                candidate = safe_result[key]; break
 
-    for entry in candidate_actions or []:
+    for entry in candidate or []:
         if isinstance(entry, dict):
-            npc = entry.get("npc") or entry.get("npc_name") or entry.get("name")
-            action = entry.get("action") or entry.get("current_activity") or entry.get("activity")
-            t = entry.get("time") or entry.get("timestamp")
-            action_log.append({"npc": npc, "action": action, "time": t})
+            action_log.append({
+                "npc": entry.get("npc") or entry.get("npc_name") or entry.get("name"),
+                "action": entry.get("action") or entry.get("current_activity") or entry.get("activity"),
+                "time": entry.get("time") or entry.get("timestamp"),
+            })
         else:
             action_log.append({"entry": str(entry)})
 
-    nyx_observation = "While you were away, the others continued their lives..."
     out = {
         "advanced_time_hours": payload.hours,
         "npc_actions": safe_result,
         "npc_action_log": action_log,
-        "nyx_observation": nyx_observation,
+        "nyx_observation": "While you were away, the others kept moving… and watching.",
     }
     return json.dumps(out, ensure_ascii=False)
 
