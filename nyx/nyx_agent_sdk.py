@@ -2405,13 +2405,17 @@ async def narrate_slice_of_life_scene(
     
     from logic.chatgpt_integration import generate_text_completion
     
+    # Get the actual NyxContext from the wrapper
+    context = ctx.context  # Simple direct access
+    
     # Get context about the current world state if available
     world_mood = "mysterious"
     time_of_day = "unknown"
     ongoing_events = []
     
-    if ctx.context.current_world_state:
-        world_state = ctx.context.current_world_state
+    # Now use context.current_world_state
+    if context.current_world_state:
+        world_state = context.current_world_state
         if hasattr(world_state, 'world_mood'):
             world_mood = getattr(world_state.world_mood, 'value', str(world_state.world_mood))
         if hasattr(world_state, 'current_time'):
