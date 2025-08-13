@@ -115,7 +115,7 @@ async def fetch_inventory_item(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="inventory_system",
         action_type="fetch_item",
-        context={"item": item_name, "player": player_name}
+        action_details={"item": item_name, "player": player_name}
     )
     if not permission["approved"]:
         return {"error": permission["reasoning"], "success": False}
@@ -198,7 +198,7 @@ async def add_item_to_inventory(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="inventory_system",
         action_type="add_item",
-        context={"item": item_name, "player": player_name}
+        action_details={"item": item_name, "player": player_name, "quantity": quantity}
     )
     if not permission["approved"]:
         return InventoryOperation(
@@ -299,7 +299,7 @@ async def remove_item_from_inventory(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="inventory_system",
         action_type="remove_item",
-        context={"item": item_name, "player": player_name}
+        action_details={"item": item_name, "player": player_name, "quantity": quantity}
     )
     if not permission["approved"]:
         return InventoryOperation(
@@ -400,7 +400,7 @@ async def get_player_inventory(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="inventory_system",
         action_type="get_inventory",
-        context={"player": player_name}
+        action_details={"player": player_name}
     )
     if not permission["approved"]:
         return InventoryList(items=[], player_name=player_name, total_items=0, error=permission["reasoning"]).model_dump()
@@ -470,7 +470,7 @@ async def update_item_effect(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="inventory_system",
         action_type="update_item",
-        context={"item": item_name, "player": player_name}
+        action_details={"item": item_name, "player": player_name, "new_effect": new_effect}
     )
     if not permission["approved"]:
         return InventoryOperation(
@@ -574,7 +574,7 @@ async def categorize_items(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="inventory_system",
         action_type="categorize_items",
-        context={"player": player_name, "items_count": len(category_mapping)}
+        action_details={"player": player_name, "items_count": len(category_mapping)}
     )
     if not permission["approved"]:
         return {
@@ -671,7 +671,8 @@ async def inventory_operation_safety(ctx, agent, input_data):
         
         Flag operations that seem potentially harmful or exploitative.
         """,
-        output_type=InventorySafety
+        output_type=InventorySafety,
+        model="gpt-5-nano"
     )
     
     result = await Runner.run(safety_agent, input_data, context=ctx.context)
@@ -707,7 +708,8 @@ item_management_agent = Agent[InventoryContext](
         remove_item_from_inventory,
         update_item_effect
     ],
-    output_type=InventoryOperation
+    output_type=InventoryOperation,
+    model="gpt-5-nano"
 )
 
 # Inventory Analysis Agent
@@ -729,7 +731,8 @@ inventory_analysis_agent = Agent[InventoryContext](
         get_player_inventory,
         categorize_items
     ],
-    output_type=InventoryList
+    output_type=InventoryList,
+    model="gpt-5-nano"
 )
 
 # Main Inventory System Agent
@@ -763,7 +766,7 @@ inventory_system_agent = Agent[InventoryContext](
     input_guardrails=[
         InputGuardrail(guardrail_function=inventory_operation_safety),
     ],
-    model_settings=ModelSettings(temperature=0.3)
+    model="gpt-5-nano"
 )
 
 # -------------------------------------------------------------------------------
