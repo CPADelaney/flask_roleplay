@@ -362,17 +362,15 @@ class NarratorContext:
         if self._event_system is None:
             self._event_system = EventSystem(self.user_id, self.conversation_id)
         return self._event_system
-    
+
     @property
     def memory_manager(self):
-        if self._memory_manager is None:
-            self._memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+        # Don't do async initialization here - just return what we have
         return self._memory_manager
     
     @property
     def nyx_governance(self):
-        if self._nyx_governance is None:
-            self._nyx_governance = await get_central_governance(self.user_id, self.conversation_id)
+        # Don't do async initialization here - just return what we have
         return self._nyx_governance
     
     async def initialize(self):
