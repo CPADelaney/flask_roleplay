@@ -509,7 +509,7 @@ async def create_all_tables():
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
-                '''
+                ''',
                 '''
                 CREATE TABLE IF NOT EXISTS PlayerInventory (
                     item_id SERIAL PRIMARY KEY,
@@ -518,7 +518,9 @@ async def create_all_tables():
                     player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
                     item_name VARCHAR(100) NOT NULL,
                     item_description TEXT,
+                    item_effect TEXT,  -- Added this
                     item_category VARCHAR(50) NOT NULL,
+                    category VARCHAR(50),  -- Added for compatibility
                     item_properties JSONB,
                     quantity INT DEFAULT 1,
                     equipped BOOLEAN DEFAULT FALSE,
