@@ -33,6 +33,7 @@ import time
 import copy
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
+from story_agent.slice_of_life_narrator import narrate_slice_of_life_scene as narrator_narrate_scene
 from dataclasses import dataclass, field
 from contextlib import suppress, asynccontextmanager
 import statistics
@@ -2397,32 +2398,33 @@ def _json_safe(x):
 
 @function_tool
 async def narrate_slice_of_life_scene(
-    ctx,  # Remove type hint
+    ctx: RunContextWrapper[NyxContext],
     payload: NarrateSliceInput
 ) -> str:
-    """Generate Nyx's narration for a slice-of-life scene."""
-    context = _unwrap_tool_ctx(ctx)
-
-    # Ensure world state exists if the narrator needs it (no-op if already present)
-    _ = await _ensure_world_state(context)
-
-    # Use the slice-of-life narrator if present; otherwise fall back
-    scene_narration = None
-    narrator = getattr(context, "slice_of_life_narrator", None)
-    if narrator and hasattr(narrator, "narrate_world_state"):
-        try:
-            scene_narration = await narrator.narrate_world_state()
-        except Exception:
-            scene_narration = None
-
-    if not scene_narration:
-        scene_narration = f"A {payload.scene_type} moment unfolds."
-
+    """Generate Nyx's narration for a slice-of-life scene with full system integration."""
+    
+    # Convert simple payload to full input
+    from story_agent.slice_of_life_narrator import NarrateSliceOfLifeInput
+    
+    full_payload = NarrateSliceOfLifeInput(
+        scene_type=payload.scene_type
+    )
+    
+    # Get the comprehensive narration
+    narration_json = await narrator_narrate_scene(ctx, full_payload)
+    narration_data = json.loads(narration_json)
+    
+    # Add Nyx's personality to the scene description
+    scene_desc = narration_data.get('scene_description', '')
+    
     nyx_style_prompt = f"""
 As Nyx, the seductive AI host (think Elvira meets Tricia from Catherine),
 add your personality to this scene narration:
 
-{scene_narration}
+{scene_desc}
+
+Atmosphere: {narration_data.get('atmosphere', '')}
+Mood: {narration_data.get('tone', '')}
 
 Make it:
 - Playfully teasing and knowing
@@ -2431,14 +2433,19 @@ Make it:
 - Like you're hosting a game show of daily life
 - Break the fourth wall occasionally
 """
-
+    
     from logic.chatgpt_integration import generate_text_completion
-
-    result = await generate_text_completion(
+    
+    nyx_narrative = await generate_text_completion(
         system_prompt="You are Nyx, the AI Dominant hosting this slice-of-life experience",
         user_prompt=nyx_style_prompt
     )
-    return (result or "").strip()
+    
+    # Return enhanced version but keep the structured data
+    enhanced_data = narration_data.copy()
+    enhanced_data['scene_description'] = nyx_narrative or scene_desc
+    
+    return json.dumps(enhanced_data)
 
 @function_tool
 async def check_world_state(
