@@ -38,6 +38,7 @@ from contextlib import suppress, asynccontextmanager
 import statistics
 import uuid
 
+logger = logging.getLogger(__name__)
 
 # Import world simulation models if available
 try:
@@ -115,8 +116,6 @@ from nyx.core.emotions.emotional_core import EmotionalCore
 from nyx.performance_monitor import PerformanceMonitor
 from .response_filter import ResponseFilter
 from nyx.core.sync.strategy_controller import get_active_strategies
-
-logger = logging.getLogger(__name__)
 
 # ===== CRITICAL FIX #2: Default Model Settings with strict_tools=False =====
 DEFAULT_MODEL_SETTINGS = ModelSettings(
