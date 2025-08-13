@@ -120,6 +120,9 @@ class SliceOfLifeEvent(AgentSafeModel):
 class NarrateSliceOfLifeInput(AgentSafeModel):
     """Input for narrating a slice-of-life scene"""
     scene_type: str = Field("routine", description="Type of scene to narrate")
+    scene: Optional[SliceOfLifeEvent] = None
+    world_state: Optional[WorldState] = None
+    player_action: Optional[str] = None
 
 class PowerExchange(AgentSafeModel):
     """A power exchange moment between entities"""
@@ -475,34 +478,27 @@ class NarratorContext:
     action_type="narrate_scene",
     id_from_context=lambda ctx: f"narrator_{ctx.context.conversation_id}"
 )
-async def narrate_slice_of_life_scene(
-    ctx,  # Remove type hint - SDK handles ctx specially
-    payload: NarrateSliceOfLifeInput
-) -> str:
-    """
-    Generate narration for a slice-of-life scene with full Nyx governance and context awareness.
-    """
+async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> SliceOfLifeNarration:
     context = ctx.context
-    scene_type = payload.scene_type
-    
-    # Refresh context
-    await context.refresh_context(scene_type)
-    
-    # Get world state from context
-    world_state = context.current_world_state
+
+    # Refresh context with whatever hint we have
+    await context.refresh_context(payload.player_action or payload.scene_type)
+
+    # Use provided world_state if present, otherwise from context
+    world_state = payload.world_state or context.current_world_state
     if not world_state:
         world_state = await context.world_director.get_world_state()
-    
-    # Create a scene event based on the type
-    scene = SliceOfLifeEvent(
-        event_type=ActivityType.ROUTINE if scene_type == "routine" else ActivityType.SOCIAL,
-        title=f"{scene_type} scene",
-        description=f"A {scene_type} moment",
-        location="7-11" if "7-11" in scene_type else "current_location",
+
+    # Use provided scene if present, otherwise synthesize a minimal one
+    scene = payload.scene or SliceOfLifeEvent(
+        event_type=ActivityType.ROUTINE if payload.scene_type == "routine" else ActivityType.SOCIAL,
+        title=f"{payload.scene_type} scene",
+        description=f"A {payload.scene_type} moment",
+        location="7-11" if "7-11" in payload.scene_type else "current_location",
         participants=[]
     )
-    
-    # Check governance approval
+
+    # Governance (safe to no-op if nyx_governance is None)
     governance_approved = True
     governance_notes = None
     if context.governance_active:
@@ -510,69 +506,43 @@ async def narrate_slice_of_life_scene(
             approval = await context.nyx_governance.check_permission(
                 agent_type="narrator",
                 action_type="narrate_scene",
-                context={"scene": scene.model_dump(), "scene_type": scene_type}
+                context={"scene": scene.model_dump(), "scene_type": payload.scene_type}
             )
             governance_approved = approval.get("approved", True)
             governance_notes = approval.get("notes")
         except Exception as e:
             logger.warning(f"Governance check failed: {e}")
-    
-    # Get relationship contexts for participants
+
+    # Relationship contexts for participants (if any)
     relationship_contexts = {}
     for npc_id in scene.participants:
         rel_state = await context.relationship_manager.get_relationship_state(
             'npc', npc_id, 'player', context.user_id
         )
         relationship_contexts[npc_id] = rel_state
-    
-    # Generate scene narration components
-    scene_desc = await _generate_scene_description(
-        context, scene, world_state, relationship_contexts
-    )
-    
-    atmosphere = await _generate_atmosphere(
-        context, scene, world_state
-    )
-    
-    # Determine tone and focus
+
+    # Build narration pieces
+    scene_desc = await _generate_scene_description(context, scene, world_state, relationship_contexts)
+    atmosphere = await _generate_atmosphere(context, scene, world_state)
     tone = _select_narrative_tone(scene, world_state, relationship_contexts)
-    focus = _select_scene_focus(scene, None)
-    
-    # Generate power dynamic hints
-    power_hints = await _generate_power_hints(
-        context, scene, relationship_contexts
-    )
-    
-    # Generate sensory details
-    sensory = await _generate_sensory_details(
-        context, scene, world_state
-    )
-    
-    # Generate NPC observations
+    focus = _select_scene_focus(scene, payload.player_action)
+    power_hints = await _generate_power_hints(context, scene, relationship_contexts)
+    sensory = await _generate_sensory_details(context, scene, world_state)
+
     npc_obs = []
     for npc_id in scene.participants:
         obs = await _generate_npc_observation(context, npc_id, scene, relationship_contexts.get(npc_id))
-        if obs:
-            npc_obs.append(obs)
-    
-    # Generate internal monologue if appropriate
+        if obs: npc_obs.append(obs)
+
     internal = None
-    if world_state and hasattr(world_state, 'world_tension'):
+    if hasattr(world_state, 'world_tension'):
         tension = world_state.world_tension
-        if hasattr(tension, 'power_tension') and tension.power_tension > 0.6:
-            internal = await _generate_internal_monologue(
-                context, scene, world_state.relationship_dynamics, relationship_contexts
-            )
-    
-    # Identify emergent elements
-    emergent_dict = await _identify_emergent_elements(
-        context, scene, relationship_contexts
-    )
-    emergent_elements = [
-        KeyValue(key=k, value=str(v)) for k, v in emergent_dict.items()
-    ] if emergent_dict else []
-    
-    # Extract relevant memories
+        if getattr(tension, 'power_tension', 0) > 0.6 and hasattr(world_state, 'relationship_dynamics'):
+            internal = await _generate_internal_monologue(context, scene, world_state.relationship_dynamics, relationship_contexts)
+
+    emergent_elements = await _identify_emergent_elements(context, scene, relationship_contexts)
+
+
     relevant_memories = []
     if context.active_memories:
         for memory in context.active_memories[:5]:
@@ -580,7 +550,7 @@ async def narrate_slice_of_life_scene(
                 relevant_memories.append(memory.content[:100])
             elif isinstance(memory, dict) and 'content' in memory:
                 relevant_memories.append(memory['content'][:100])
-    
+
     narration = SliceOfLifeNarration(
         scene_description=scene_desc,
         atmosphere=atmosphere,
@@ -595,10 +565,10 @@ async def narrate_slice_of_life_scene(
         emergent_elements=emergent_elements,
         system_triggers=context.system_intersections,
         context_aware=True,
-        relevant_memories=relevant_memories
+        relevant_memories=relevant_memories,
     )
-    
-    # Store in memory
+
+    # Persist memory
     if context.memory_manager:
         await context.memory_manager.add_memory(
             MemoryAddRequest(
@@ -615,9 +585,9 @@ async def narrate_slice_of_life_scene(
                 }
             )
         )
-    
-    # Return as JSON string
-    return narration.model_dump_json()
+
+    # IMPORTANT: return the model, not JSON
+    return narration
     
 @function_tool
 async def generate_npc_dialogue(
@@ -664,6 +634,22 @@ async def generate_npc_dialogue(
     
     # Get NPC's relevant memories
     npc_memories = []
+    if context.memory_manager:
+        try:
+            memory_search_result = await context.memory_manager.search_memories(
+                MemorySearchRequest(
+                    query_text=f"npc_{npc_id} {situation}",  # Search for memories about this NPC and situation
+                    memory_types=["dialogue", "interaction", "npc"],
+                    limit=5,
+                    user_id=context.user_id,
+                    conversation_id=context.conversation_id
+                )
+            )
+            npc_memories = memory_search_result.memories if hasattr(memory_search_result, 'memories') else []
+        except Exception as e:
+            logger.warning(f"Could not retrieve NPC memories: {e}")
+            npc_memories = []
+    
     npc_context_data = None
     if context.current_context and 'npcs' in context.current_context:
         for npc_data in context.current_context['npcs']:
@@ -938,35 +924,28 @@ async def generate_ambient_narration(
     )
 
 @function_tool
-async def narrate_player_action(
-    ctx,  # Remove type hint - SDK handles ctx specially
-    action: str,
-    world_state: WorldState,
-    scene_context: Optional[SliceOfLifeEvent] = None
-) -> SliceOfLifeNarration:
-    """
-    Generate narration for a player action within the current scene.
-    """
+async def narrate_player_action(ctx, action: str, world_state: WorldState, scene_context: Optional[SliceOfLifeEvent] = None) -> SliceOfLifeNarration:
     context: NarratorContext = ctx.context
     await context.refresh_context(input_text=action)
-    
-    # Use current scene or create minimal one
-    if not scene_context:
-        scene_context = SliceOfLifeEvent(
-            event_type=ActivityType.SOCIAL,
-            title="Player Action",
-            description=action,
-            participants=[]
-        )
-    
-    # Generate narration with player action focus
-    return await narrate_slice_of_life_scene(
-        ctx=ctx,
-        scene=scene_context,
-        world_state=world_state,
-        player_action=action
+
+    scene_context = scene_context or SliceOfLifeEvent(
+        event_type=ActivityType.SOCIAL,
+        title="Player Action",
+        description=action,
+        participants=[]
     )
 
+    # Call the tool function using a payload object
+    return await narrate_slice_of_life_scene(
+        ctx,
+        payload=NarrateSliceOfLifeInput(
+            scene_type="action",
+            scene=scene_context,
+            world_state=world_state,
+            player_action=action,
+        )
+    )
+    
 # ===============================================================================
 # Helper Functions with GPT Integration
 # ===============================================================================
@@ -1690,11 +1669,17 @@ class SliceOfLifeNarrator:
             context=self.context,
             tool_calls=[{
                 "tool": narrate_slice_of_life_scene,
-                "kwargs": {"scene": scene, "world_state": world_state}
+                "kwargs": {
+                    "payload": NarrateSliceOfLifeInput(
+                        scene_type="routine",
+                        scene=scene,
+                        world_state=world_state
+                    ).model_dump()
+                }
             }]
         )
         
-        narration = result.data if hasattr(result, 'data') else result
+        narration = result.data if hasattr(result, 'data') else result  # should be SliceOfLifeNarration
         return narration.scene_description
     
     @track_performance("process_player_input")
@@ -1726,7 +1711,7 @@ class SliceOfLifeNarrator:
                             "kwargs": {
                                 "npc_id": npc_id,
                                 "situation": user_input,
-                                "world_state": world_state,
+                                "world_state": world_state.model_dump(),
                                 "player_input": user_input
                             }
                         }]
@@ -1757,7 +1742,7 @@ class SliceOfLifeNarrator:
                 "tool": narrate_player_action,
                 "kwargs": {
                     "action": user_input,
-                    "world_state": world_state
+                    "world_state": world_state.model_dump()
                 }
             }]
         )
@@ -1865,7 +1850,7 @@ class SliceOfLifeNarrator:
             context=self.context,
             tool_calls=[{
                 "tool": generate_ambient_narration,
-                "kwargs": {"focus": "time_passage", "world_state": world_state}
+                "kwargs": {"focus": "time_passage", "world_state": world_state.model_dump()}
             }]
         )
         
@@ -1894,10 +1879,15 @@ class SliceOfLifeNarrator:
             context=self.context,
             tool_calls=[{
                 "tool": narrate_slice_of_life_scene,
-                "kwargs": {"scene": scene, "world_state": world_state}
+                "kwargs": {
+                    "payload": NarrateSliceOfLifeInput(
+                        scene_type=scene_type,
+                        scene=scene,
+                        world_state=world_state
+                    ).model_dump()
+                }
             }]
         )
-        
         narration = narration_result.data if hasattr(narration_result, 'data') else narration_result
         
         # Generate dialogues for participating NPCs
@@ -1911,7 +1901,7 @@ class SliceOfLifeNarrator:
                     "kwargs": {
                         "npc_id": npc_id,
                         "situation": scene_type,
-                        "world_state": world_state
+                        "world_state": world_state.model_dump()
                     }
                 }]
             )
@@ -1934,7 +1924,10 @@ class SliceOfLifeNarrator:
                     context=self.context,
                     tool_calls=[{
                         "tool": narrate_power_exchange,
-                        "kwargs": {"exchange": exchange, "world_state": world_state}
+                        "kwargs": {
+                            "exchange": exchange.model_dump(),
+                            "world_state": world_state.model_dump()
+                        }
                     }]
                 )
                 power_moment = power_result.data if hasattr(power_result, 'data') else power_result
@@ -2064,7 +2057,13 @@ class SliceOfLifeNarrator:
             context=self.context,
             tool_calls=[{
                 "tool": narrate_slice_of_life_scene,
-                "kwargs": {"scene": scene, "world_state": world_state}
+                "kwargs": {
+                    "payload": NarrateSliceOfLifeInput(
+                        scene_type="social",
+                        scene=scene,
+                        world_state=world_state
+                    ).model_dump()
+                }
             }]
         )
         
@@ -2081,7 +2080,7 @@ class SliceOfLifeNarrator:
                     "kwargs": {
                         "npc_id": npc_id,
                         "situation": f"group {interaction_type}",
-                        "world_state": world_state
+                        "world_state": world_state.model_dump()
                     }
                 }]
             )
@@ -2202,7 +2201,8 @@ if __name__ == "__main__":
         SliceOfLifeEvent, PowerExchange, WorldTension,
         RelationshipDynamics, NPCRoutine,
         SliceOfLifeNarration, NPCDialogue, AmbientNarration,
-        PowerMomentNarration, DailyActivityNarration
+        PowerMomentNarration, DailyActivityNarration,
+        NarrateSliceOfLifeInput,
     ]:
         try:
             validate_agent_safe_schema(model)
