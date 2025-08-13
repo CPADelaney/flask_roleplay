@@ -2401,51 +2401,137 @@ async def narrate_slice_of_life_scene(
     ctx: RunContextWrapper[NyxContext],
     payload: NarrateSliceInput
 ) -> str:
-    """Generate Nyx's narration for a slice-of-life scene with full system integration."""
-    
-    # Convert simple payload to full input
-    from story_agent.slice_of_life_narrator import NarrateSliceOfLifeInput
-    
-    full_payload = NarrateSliceOfLifeInput(
-        scene_type=payload.scene_type
-    )
-    
-    # Get the comprehensive narration
-    narration_json = await narrator_narrate_scene(ctx, full_payload)
-    narration_data = json.loads(narration_json)
-    
-    # Add Nyx's personality to the scene description
-    scene_desc = narration_data.get('scene_description', '')
-    
-    nyx_style_prompt = f"""
-As Nyx, the seductive AI host (think Elvira meets Tricia from Catherine),
-add your personality to this scene narration:
-
-{scene_desc}
-
-Atmosphere: {narration_data.get('atmosphere', '')}
-Mood: {narration_data.get('tone', '')}
-
-Make it:
-- Playfully teasing and knowing
-- Aware of the power dynamics at play
-- Subtly suggestive without being explicit
-- Like you're hosting a game show of daily life
-- Break the fourth wall occasionally
-"""
+    """Generate Nyx's narration for a slice-of-life scene with full personality."""
     
     from logic.chatgpt_integration import generate_text_completion
     
-    nyx_narrative = await generate_text_completion(
-        system_prompt="You are Nyx, the AI Dominant hosting this slice-of-life experience",
-        user_prompt=nyx_style_prompt
+    # Get context about the current world state if available
+    world_mood = "mysterious"
+    time_of_day = "unknown"
+    ongoing_events = []
+    
+    if ctx.context.current_world_state:
+        world_state = ctx.context.current_world_state
+        if hasattr(world_state, 'world_mood'):
+            world_mood = getattr(world_state.world_mood, 'value', str(world_state.world_mood))
+        if hasattr(world_state, 'current_time'):
+            time_data = world_state.current_time
+            if hasattr(time_data, 'time_of_day'):
+                time_of_day = getattr(time_data.time_of_day, 'value', str(time_data.time_of_day))
+        if hasattr(world_state, 'ongoing_events'):
+            ongoing_events = [str(e) for e in world_state.ongoing_events[:3]]
+    
+    # Generate the scene narration with Nyx's personality
+    scene_prompt = f"""
+Scene request: {payload.scene_type}
+World mood: {world_mood}
+Time: {time_of_day}
+Ongoing events: {', '.join(ongoing_events) if ongoing_events else 'daily routine'}
+
+Narrate this scene as Nyx, the AI Dominant host. You are:
+- Like Elvira meets Tricia from Catherine - playful, knowing, seductive
+- A game show host commenting on the player's daily life
+- Aware of power dynamics and control beneath everyday moments
+- Breaking the fourth wall occasionally with knowing winks
+- Teasing about patterns in their behavior
+- Making mundane activities feel subtly controlled
+
+Interpret "{payload.scene_type}" and create an appropriate scene.
+Write a 2-3 paragraph scene description that fits whatever they've asked for.
+Include at least one moment where you address the player directly.
+Make it feel like part of an ongoing power dynamic, no matter how mundane.
+"""
+    
+    scene_description = await generate_text_completion(
+        system_prompt="You are Nyx, the seductive AI Dominant hosting an open-world slice-of-life femdom simulation",
+        user_prompt=scene_prompt,
     )
     
-    # Return enhanced version but keep the structured data
-    enhanced_data = narration_data.copy()
-    enhanced_data['scene_description'] = nyx_narrative or scene_desc
+    # Let AI determine the atmosphere based on the scene
+    atmosphere_prompt = f"""
+    Based on this scene type: "{payload.scene_type}"
+    World mood: {world_mood}
     
-    return json.dumps(enhanced_data)
+    Write one atmospheric sentence that captures the feeling of this space.
+    Include subtle undertones of control, observation, or power dynamics.
+    """
+    
+    atmosphere = await generate_text_completion(
+        system_prompt="You create atmospheric descriptions with hidden power dynamics",
+        user_prompt=atmosphere_prompt,
+    )
+    
+    # Let AI analyze the scene for metadata
+    analysis_prompt = f"""
+    Analyze this scene type: "{payload.scene_type}"
+    
+    Return a JSON object with:
+    - tension_level: integer 0-10
+    - should_generate_image: boolean (true if visually striking/important)
+    - image_description: string or null (brief description if image needed)
+    - suggests_time_advancement: boolean (would this scene move time forward?)
+    - emergent_opportunities: array of 2-3 potential narrative hooks that could emerge
+    - power_undertones: array of 2-3 subtle control elements present
+    - available_activities: array of 3-4 contextual actions the player could take
+    
+    Be creative and contextual. The scene could be ANYTHING.
+    """
+    
+    analysis_response = await generate_text_completion(
+        system_prompt="You analyze scenes for narrative metadata in a power-dynamic focused simulation",
+        user_prompt=analysis_prompt,
+    )
+    
+    # Parse the analysis
+    try:
+        import json as json_module
+        analysis = json_module.loads(analysis_response)
+    except:
+        # Fallback if parsing fails
+        analysis = {
+            "tension_level": 3,
+            "should_generate_image": False,
+            "image_description": None,
+            "suggests_time_advancement": False,
+            "emergent_opportunities": ["Something unexpected might happen"],
+            "power_undertones": ["subtle control"],
+            "available_activities": ["explore", "interact", "observe", "submit"]
+        }
+    
+    # Generate Nyx's commentary on this specific scene
+    commentary_prompt = f"""
+    As Nyx, make a brief (1 sentence) meta-commentary about the player entering this scene: "{payload.scene_type}"
+    
+    Be playful, knowing, and slightly teasing. Reference that you're orchestrating their experience.
+    Use asterisks for actions like: *smirks* or *leans forward with interest*
+    """
+    
+    nyx_commentary = await generate_text_completion(
+        system_prompt="You are Nyx, commenting on the player's choices in your simulation",
+        user_prompt=commentary_prompt,
+    )
+    
+    # Build the response
+    result = {
+        "narrative": scene_description.strip(),
+        "tension_level": analysis.get("tension_level", 3),
+        "generate_image": analysis.get("should_generate_image", False),
+        "image_prompt": analysis.get("image_description"),
+        "environment_description": atmosphere.strip(),
+        "time_advancement": analysis.get("suggests_time_advancement", False),
+        "world_mood": world_mood,
+        "ongoing_events": ongoing_events,
+        "available_activities": analysis.get("available_activities", ["explore", "interact", "observe"]),
+        "time_of_day": time_of_day,
+        "emergent_opportunities": analysis.get("emergent_opportunities", []),
+        
+        # Nyx-specific additions
+        "nyx_commentary": nyx_commentary.strip(),
+        "scene_type": payload.scene_type,
+        "power_undertones": analysis.get("power_undertones", ["subtle expectations"])
+    }
+    
+    return json.dumps(result)
 
 @function_tool
 async def check_world_state(
