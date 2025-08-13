@@ -2449,7 +2449,7 @@ Make it:
 
 @function_tool
 async def check_world_state(
-    ctx,  # Remove type hint here to avoid hashing issues
+    ctx: RunContextWrapper[NyxContext],
     payload: EmptyInput
 ) -> str:
     """Return a compact, JSON-safe snapshot of the current world state."""
@@ -2486,7 +2486,7 @@ async def check_world_state(
   
 @function_tool
 async def generate_emergent_event(
-    ctx,  # Remove type hint
+    ctx: RunContextWrapper[NyxContext],
     payload: EmergentEventInput
 ) -> str:
     """Generate an emergent slice-of-life event"""
@@ -2551,7 +2551,7 @@ async def generate_emergent_event(
 
 @function_tool
 async def simulate_npc_autonomy(
-    ctx,  # Remove type hint
+    ctx: RunContextWrapper[NyxContext],
     payload: SimulateAutonomyInput
 ) -> str:
     """Simulate autonomous NPC actions"""
