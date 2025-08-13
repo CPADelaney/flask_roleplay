@@ -366,13 +366,13 @@ class NarratorContext:
     @property
     def memory_manager(self):
         if self._memory_manager is None:
-            self._memory_manager = get_memory_manager(self.user_id, self.conversation_id)
+            self._memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
         return self._memory_manager
     
     @property
     def nyx_governance(self):
         if self._nyx_governance is None:
-            self._nyx_governance = get_central_governance(self.user_id, self.conversation_id)
+            self._nyx_governance = await get_central_governance(self.user_id, self.conversation_id)
         return self._nyx_governance
     
     async def initialize(self):
@@ -389,13 +389,13 @@ class NarratorContext:
             self._event_system = EventSystem(self.user_id, self.conversation_id)
         
         if self._memory_manager is None:
-            self._memory_manager = get_memory_manager(self.user_id, self.conversation_id)
+            self._memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
         
         if self._context_service is None:
             self._context_service = await get_context_service(self.user_id, self.conversation_id)
         
         if self._nyx_governance is None:
-            self._nyx_governance = get_central_governance(self.user_id, self.conversation_id)
+            self._nyx_governance = await get_central_governance(self.user_id, self.conversation_id)
         
         if self._performance_monitor is None:
             self._performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
