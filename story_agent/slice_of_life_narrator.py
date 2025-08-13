@@ -22,13 +22,6 @@ from agents.model_settings import ModelSettings
 # Database
 from db.connection import get_db_connection_context
 
-def _coerce_model(model_cls, value):
-    if value is None or isinstance(value, model_cls):
-        return value
-    if isinstance(value, dict):
-        return model_cls(**value)
-    return value
-
 # ===============================================================================
 # CRITICAL FIX: Agent-Safe Base Model
 # ===============================================================================
@@ -479,19 +472,14 @@ class NarratorContext:
 # Core Narration Functions with Governance & Context
 # ===============================================================================
 
+@function_tool
 @with_governance_permission(
     agent_type="narrator",
     action_type="narrate_scene",
-    id_from_context=lambda ctx: f"narrator_{ctx.context.conversation_id}",
+    id_from_context=lambda ctx: f"narrator_{ctx.context.conversation_id}"
 )
-@function_tool
-async def narrate_slice_of_life_scene(
-    ctx: RunContextWrapper | None = None,
-    payload: NarrateSliceOfLifeInput | dict | None = None,
-) -> SliceOfLifeNarration:
-    # Coerce payload if JSON came in
-    payload = _coerce_model(NarrateSliceOfLifeInput, payload) or NarrateSliceOfLifeInput()
-    context: NarratorContext = ctx.context if ctx else None
+async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> SliceOfLifeNarration:
+    context = ctx.context
 
     # Refresh context with whatever hint we have
     await context.refresh_context(payload.player_action or payload.scene_type)
@@ -507,7 +495,7 @@ async def narrate_slice_of_life_scene(
         title=f"{payload.scene_type} scene",
         description=f"A {payload.scene_type} moment",
         location="7-11" if "7-11" in payload.scene_type else "current_location",
-        participants=[],
+        participants=[]
     )
 
     # Governance (safe to no-op if nyx_governance is None)
@@ -518,7 +506,7 @@ async def narrate_slice_of_life_scene(
             approval = await context.nyx_governance.check_permission(
                 agent_type="narrator",
                 action_type="narrate_scene",
-                context={"scene": scene.model_dump(), "scene_type": payload.scene_type},
+                context={"scene": scene.model_dump(), "scene_type": payload.scene_type}
             )
             governance_approved = approval.get("approved", True)
             governance_notes = approval.get("notes")
@@ -529,7 +517,7 @@ async def narrate_slice_of_life_scene(
     relationship_contexts = {}
     for npc_id in scene.participants:
         rel_state = await context.relationship_manager.get_relationship_state(
-            "npc", npc_id, "player", context.user_id
+            'npc', npc_id, 'player', context.user_id
         )
         relationship_contexts[npc_id] = rel_state
 
@@ -544,26 +532,24 @@ async def narrate_slice_of_life_scene(
     npc_obs = []
     for npc_id in scene.participants:
         obs = await _generate_npc_observation(context, npc_id, scene, relationship_contexts.get(npc_id))
-        if obs:
-            npc_obs.append(obs)
+        if obs: npc_obs.append(obs)
 
     internal = None
-    if hasattr(world_state, "world_tension"):
+    if hasattr(world_state, 'world_tension'):
         tension = world_state.world_tension
-        if getattr(tension, "power_tension", 0) > 0.6 and hasattr(world_state, "relationship_dynamics"):
-            internal = await _generate_internal_monologue(
-                context, scene, world_state.relationship_dynamics, relationship_contexts
-            )
+        if getattr(tension, 'power_tension', 0) > 0.6 and hasattr(world_state, 'relationship_dynamics'):
+            internal = await _generate_internal_monologue(context, scene, world_state.relationship_dynamics, relationship_contexts)
 
     emergent_elements = await _identify_emergent_elements(context, scene, relationship_contexts)
+
 
     relevant_memories = []
     if context.active_memories:
         for memory in context.active_memories[:5]:
-            if hasattr(memory, "content"):
+            if hasattr(memory, 'content'):
                 relevant_memories.append(memory.content[:100])
-            elif isinstance(memory, dict) and "content" in memory:
-                relevant_memories.append(memory["content"][:100])
+            elif isinstance(memory, dict) and 'content' in memory:
+                relevant_memories.append(memory['content'][:100])
 
     narration = SliceOfLifeNarration(
         scene_description=scene_desc,
@@ -595,102 +581,130 @@ async def narrate_slice_of_life_scene(
                 metadata={
                     "scene_type": scene.event_type.value,
                     "location": scene.location,
-                    "participants": scene.participants,
-                },
+                    "participants": scene.participants
+                }
             )
         )
 
+    # IMPORTANT: return the model, not JSON
     return narration
     
 @function_tool
 async def generate_npc_dialogue(
-    ctx: RunContextWrapper | None = None,
-    npc_id: int = 0,
-    situation: str = "",
-    world_state: WorldState | dict | None = None,
-    player_input: str | None = None,
+    ctx,  # Remove type hint - SDK handles ctx specially
+    npc_id: int,
+    situation: str,
+    world_state: WorldState,
+    player_input: Optional[str] = None
 ) -> NPCDialogue:
-    context: NarratorContext = ctx.context if ctx else None
-    world_state = _coerce_model(WorldState, world_state)
-
+    """
+    Generate contextual NPC dialogue with power dynamics awareness.
+    """
+    context: NarratorContext = ctx.context
+    
     # Refresh context if player input provided
     if player_input:
         await context.refresh_context(player_input)
-
+    
     # Get NPC details and relationship state
     async with get_db_connection_context() as conn:
-        npc = await conn.fetchrow(
-            """
+        npc = await conn.fetchrow("""
             SELECT npc_id, npc_name, dominance, personality_traits
             FROM NPCStats
             WHERE npc_id = $1
-            """,
-            npc_id,
-        )
-
+        """, npc_id)
+    
     if not npc:
         return NPCDialogue(
-            npc_id=npc_id, npc_name="Unknown", dialogue="...", tone="neutral", subtext="", body_language="still"
+            npc_id=npc_id,
+            npc_name="Unknown",
+            dialogue="...",
+            tone="neutral",
+            subtext="",
+            body_language="still"
         )
-
+    
+    # Get narrative stage
     stage = await get_npc_narrative_stage(context.user_id, context.conversation_id, npc_id)
-
+    
+    # Get relationship context
     relationship_context = await context.relationship_manager.get_relationship_state(
-        "npc", npc_id, "player", context.user_id
+        'npc', npc_id, 'player', context.user_id
     )
-
+    
+    # Get NPC's relevant memories
     npc_memories = []
     if context.memory_manager:
         try:
             memory_search_result = await context.memory_manager.search_memories(
                 MemorySearchRequest(
-                    query_text=f"npc_{npc_id} {situation}",
+                    query_text=f"npc_{npc_id} {situation}",  # Search for memories about this NPC and situation
                     memory_types=["dialogue", "interaction", "npc"],
                     limit=5,
                     user_id=context.user_id,
-                    conversation_id=context.conversation_id,
+                    conversation_id=context.conversation_id
                 )
             )
-            npc_memories = memory_search_result.memories if hasattr(memory_search_result, "memories") else []
+            npc_memories = memory_search_result.memories if hasattr(memory_search_result, 'memories') else []
         except Exception as e:
             logger.warning(f"Could not retrieve NPC memories: {e}")
             npc_memories = []
-
+    
     npc_context_data = None
-    if context.current_context and "npcs" in context.current_context:
-        for npc_data in context.current_context["npcs"]:
-            if npc_data.get("npc_id") == npc_id:
+    if context.current_context and 'npcs' in context.current_context:
+        for npc_data in context.current_context['npcs']:
+            if npc_data.get('npc_id') == npc_id:
                 npc_context_data = npc_data
                 break
-
+    
+    # Check governance approval
     governance_approved = True
     if context.governance_active:
         try:
             approval = await context.nyx_governance.check_permission(
-                agent_type="narrator", action_type="npc_dialogue", context={"npc_id": npc_id, "stage": stage.name}
+                agent_type="narrator",
+                action_type="npc_dialogue",
+                context={"npc_id": npc_id, "stage": stage.name}
             )
             governance_approved = approval.get("approved", True)
         except:
             pass
-
-    dialogue = await _generate_dialogue_content(context, npc, situation, stage, player_input, relationship_context)
-    tone = await _generate_dialogue_tone(context, npc["dominance"], stage.name, situation)
-    subtext = await _generate_dialogue_subtext(context, dialogue, npc["dominance"], stage.name, context.active_addictions)
-    body_language = await _generate_body_language(context, npc["dominance"], tone, stage.name)
-
+    
+    # Generate dialogue components
+    dialogue = await _generate_dialogue_content(
+        context, npc, situation, stage, player_input, relationship_context
+    )
+    
+    tone = await _generate_dialogue_tone(
+        context, npc['dominance'], stage.name, situation
+    )
+    
+    subtext = await _generate_dialogue_subtext(
+        context, dialogue, npc['dominance'], stage.name, context.active_addictions
+    )
+    
+    body_language = await _generate_body_language(
+        context, npc['dominance'], tone, stage.name
+    )
+    
+    # Determine if power dynamic is present
     power_dynamic = None
-    if npc["dominance"] > 60 and stage.name != "Innocent Beginning":
-        power_dynamic = _select_dialogue_power_dynamic(situation, npc["dominance"])
-
-    hidden_triggers = await _identify_dialogue_triggers(context, dialogue, npc_id, relationship_context)
-
+    if npc['dominance'] > 60 and stage.name != "Innocent Beginning":
+        power_dynamic = _select_dialogue_power_dynamic(situation, npc['dominance'])
+    
+    # Identify hidden triggers
+    hidden_triggers = await _identify_dialogue_triggers(
+        context, dialogue, npc_id, relationship_context
+    )
+    
+    # Determine memory influence
     memory_influence = None
-    if npc_memories:
+    if npc_memories and len(npc_memories) > 0:
         memory_influence = f"Influenced by {len(npc_memories)} past interactions"
-
+    
     dialogue_obj = NPCDialogue(
         npc_id=npc_id,
-        npc_name=npc["npc_name"],
+        npc_name=npc['npc_name'],
         dialogue=dialogue,
         tone=tone,
         subtext=subtext,
@@ -700,9 +714,10 @@ async def generate_npc_dialogue(
         hidden_triggers=hidden_triggers,
         memory_influence=memory_influence,
         governance_approved=governance_approved,
-        context_informed=bool(npc_context_data),
+        context_informed=bool(npc_context_data)
     )
-
+    
+    # Store dialogue in memory
     if context.memory_manager:
         await context.memory_manager.add_memory(
             MemoryAddRequest(
@@ -712,37 +727,35 @@ async def generate_npc_dialogue(
                 memory_type="dialogue",
                 importance=0.6,
                 tags=["dialogue", f"npc_{npc_id}", stage.name],
-                metadata={"npc_id": str(npc_id), "tone": tone, "stage": stage.name},
+                metadata={"npc_id": str(npc_id), "tone": tone, "stage": stage.name}
             )
         )
-
+    
     return dialogue_obj
-
 
 @function_tool
 async def narrate_power_exchange(
-    ctx: RunContextWrapper | None = None,
-    exchange: PowerExchange | dict | None = None,
-    world_state: WorldState | dict | None = None,
+    ctx,  # Remove type hint - SDK handles ctx specially
+    exchange: PowerExchange,
+    world_state: WorldState
 ) -> PowerMomentNarration:
-    context: NarratorContext = ctx.context if ctx else None
-    exchange = _coerce_model(PowerExchange, exchange) or PowerExchange(
-        initiator_npc_id=0, initiator_id=0, exchange_type=PowerDynamicType.SUBTLE_CONTROL, intensity=0.5
-    )
-    world_state = _coerce_model(WorldState, world_state)
-
+    """
+    Generate narration for a power exchange moment with Nyx tracking and memory.
+    """
+    context: NarratorContext = ctx.context
+    
+    # Refresh context for power exchange
     await context.refresh_context(input_text=f"Power exchange: {exchange.exchange_type.value}")
-
+    
+    # Get NPC details
     async with get_db_connection_context() as conn:
-        npc = await conn.fetchrow(
-            """
+        npc = await conn.fetchrow("""
             SELECT npc_name, dominance, personality_traits
             FROM NPCStats
             WHERE npc_id = $1
-            """,
-            exchange.initiator_npc_id,
-        )
-
+        """, exchange.initiator_npc_id)
+    
+    # Track with Nyx governance if active
     governance_tracking = []
     if context.governance_active and context.nyx_governance:
         try:
@@ -750,23 +763,33 @@ async def narrate_power_exchange(
                 npc_id=exchange.initiator_npc_id,
                 exchange_type=exchange.exchange_type.value,
                 intensity=exchange.intensity,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(timezone.utc)
             )
-            governance_tracking = [KeyValue(key=k, value=str(v)) for k, v in tracking_data.items()] if tracking_data else []
+            governance_tracking = [
+                KeyValue(key=k, value=str(v)) for k, v in tracking_data.items()
+            ] if tracking_data else []
         except Exception as e:
             logger.warning(f"Could not track power exchange with governance: {e}")
-
+    
+    # Get relationship state
     rel_state = await context.relationship_manager.get_relationship_state(
-        "npc", exchange.initiator_npc_id, "player", context.user_id
+        'npc', exchange.initiator_npc_id, 'player', context.user_id
     )
-
+    
+    # Generate narration components
     setup = await _generate_power_moment_setup(context, exchange, npc, world_state)
     moment = await _generate_power_moment_description(context, exchange, npc)
     aftermath = await _generate_power_moment_aftermath(context, exchange, world_state.relationship_dynamics)
     player_feelings = await _generate_player_feelings(context, exchange, world_state.relationship_dynamics)
-    options = await _generate_power_response_options(context, exchange, npc["dominance"], rel_state)
+    
+    # Generate response options
+    options = await _generate_power_response_options(
+        context, exchange, npc['dominance'], rel_state
+    )
+    
+    # Calculate potential consequences
     consequences = await _calculate_power_consequences(context, exchange, world_state)
-
+    
     narration = PowerMomentNarration(
         setup=setup,
         moment=moment,
@@ -774,9 +797,10 @@ async def narrate_power_exchange(
         player_feelings=player_feelings,
         options_presentation=options,
         potential_consequences=consequences,
-        governance_tracking=governance_tracking,
+        governance_tracking=governance_tracking
     )
-
+    
+    # Store in memory as significant event
     if context.memory_manager:
         await context.memory_manager.add_memory(
             MemoryAddRequest(
@@ -789,63 +813,82 @@ async def narrate_power_exchange(
                 metadata={
                     "npc_id": str(exchange.initiator_npc_id),
                     "type": exchange.exchange_type.value,
-                    "intensity": exchange.intensity,
-                },
+                    "intensity": exchange.intensity
+                }
             )
         )
-
-    return narration
     
+    return narration
+
 @function_tool
 async def narrate_daily_routine(
-    ctx: RunContextWrapper | None = None,
-    activity: str = "",
-    world_state: WorldState | dict | None = None,
-    involved_npcs: List[int] | None = None,
+    ctx,  # Remove type hint - SDK handles ctx specially
+    activity: str,
+    world_state: WorldState,
+    involved_npcs: List[int] = None
 ) -> DailyActivityNarration:
-    context: NarratorContext = ctx.context if ctx else None
-    world_state = _coerce_model(WorldState, world_state)
+    """
+    Generate narration for daily routine activities with subtle power dynamics.
+    """
+    context: NarratorContext = ctx.context
     await context.refresh_context(input_text=f"Daily activity: {activity}")
-
+    
     involved_npcs = involved_npcs or []
-
+    
+    # Generate base description
     description = await _generate_routine_description(context, activity, world_state)
-    routine_with_dynamics = await _generate_routine_with_dynamics(context, activity, involved_npcs, world_state)
-
+    
+    # Add power dynamics layer
+    routine_with_dynamics = await _generate_routine_with_dynamics(
+        context, activity, involved_npcs, world_state
+    )
+    
+    # Generate NPC involvement
     npc_involvement = []
     for npc_id in involved_npcs:
-        involvement = await _generate_npc_routine_involvement(context, npc_id, activity)
+        involvement = await _generate_npc_routine_involvement(
+            context, npc_id, activity
+        )
         if involvement:
             npc_involvement.append(involvement)
-
-    control_elements = await _identify_control_elements(context, activity, involved_npcs, world_state)
-
+    
+    # Identify subtle control elements
+    control_elements = await _identify_control_elements(
+        context, activity, involved_npcs, world_state
+    )
+    
+    # Generate emergent variations based on systems
     emergent_variations = None
     if context.system_intersections:
-        emergent_variations = await _generate_emergent_variations(context, activity, context.system_intersections)
-
+        emergent_variations = await _generate_emergent_variations(
+            context, activity, context.system_intersections
+        )
+    
     return DailyActivityNarration(
         activity=activity,
         description=description,
         routine_with_dynamics=routine_with_dynamics,
         npc_involvement=npc_involvement,
         subtle_control_elements=control_elements,
-        emergent_variations=emergent_variations,
+        emergent_variations=emergent_variations
     )
-
 
 @function_tool
 async def generate_ambient_narration(
-    ctx: RunContextWrapper | None = None,
-    focus: str = "",
-    world_state: WorldState | dict | None = None,
-    intensity: float = 0.5,
+    ctx,  # Remove type hint - SDK handles ctx specially
+    focus: str,
+    world_state: WorldState,
+    intensity: float = 0.5
 ) -> AmbientNarration:
-    context: NarratorContext = ctx.context if ctx else None
-    world_state = _coerce_model(WorldState, world_state)
-
+    """
+    Generate ambient world narration to establish atmosphere.
+    """
+    context: NarratorContext = ctx.context
+    
+    # Refresh context if needed
     await context.refresh_context()
-
+    
+    # Determine specific narration based on focus
     if focus == "time_passage":
         time_data = await get_current_time_model(context.user_id, context.conversation_id)
         if time_data:
@@ -861,32 +904,38 @@ async def generate_ambient_narration(
     elif focus == "ambient":
         description = await _narrate_ambient_detail(context, world_state)
     else:
-        description = await _generate_ambient_description(context, focus, world_state, intensity)
-
+        # General ambient description
+        description = await _generate_ambient_description(
+            context, focus, world_state, intensity
+        )
+    
+    # Determine if it affects mood
     affects_mood = intensity > 0.7 or focus in ["tension", "power", "control"]
+    
+    # Identify which systems it reflects
     reflects_systems = await _identify_reflected_systems(context, focus, description)
-
+    
     return AmbientNarration(
-        description=description, focus=focus, intensity=intensity, affects_mood=affects_mood, reflects_systems=reflects_systems
+        description=description,
+        focus=focus,
+        intensity=intensity,
+        affects_mood=affects_mood,
+        reflects_systems=reflects_systems
     )
-
 
 @function_tool
-async def narrate_player_action(
-    ctx: RunContextWrapper | None = None,
-    action: str = "",
-    world_state: WorldState | dict | None = None,
-    scene_context: SliceOfLifeEvent | dict | None = None,
-) -> SliceOfLifeNarration:
-    context: NarratorContext = ctx.context if ctx else None
-    world_state = _coerce_model(WorldState, world_state)
-    scene_context = _coerce_model(SliceOfLifeEvent, scene_context) or SliceOfLifeEvent(
-        event_type=ActivityType.SOCIAL, title="Player Action", description=action, participants=[]
-    )
-
+async def narrate_player_action(ctx, action: str, world_state: WorldState, scene_context: Optional[SliceOfLifeEvent] = None) -> SliceOfLifeNarration:
+    context: NarratorContext = ctx.context
     await context.refresh_context(input_text=action)
 
-    # Call the tool function using a payload object (works for both direct and tool-invoked calls)
+    scene_context = scene_context or SliceOfLifeEvent(
+        event_type=ActivityType.SOCIAL,
+        title="Player Action",
+        description=action,
+        participants=[]
+    )
+
+    # Call the tool function using a payload object
     return await narrate_slice_of_life_scene(
         ctx,
         payload=NarrateSliceOfLifeInput(
@@ -894,7 +943,7 @@ async def narrate_player_action(
             scene=scene_context,
             world_state=world_state,
             player_action=action,
-        ),
+        )
     )
     
 # ===============================================================================
