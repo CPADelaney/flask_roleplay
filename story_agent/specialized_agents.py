@@ -430,7 +430,7 @@ def create_conflict_analysis_agent():
     make informed decisions about conflict progression and resolution.
     """
     
-    from story_agent.tools import conflict_tools
+    from logic.conflict_system import conflict_tools
     
     agent = Agent(
         name="Conflict Analyst",
@@ -439,8 +439,6 @@ def create_conflict_analysis_agent():
         tools=conflict_tools,
         model=DEFAULT_MODEL,
         model_settings=ModelSettings(
-            temperature=0.2,  # Lower temperature for more analytical responses
-            max_tokens=2048
         )
     )
     
