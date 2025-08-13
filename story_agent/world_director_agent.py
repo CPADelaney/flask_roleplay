@@ -378,9 +378,9 @@ class CompleteWorldDirectorContext:
                 flashback = await self._safe_generate_flashback()
             
             # Check for NPC reveals
-            pending_reveals = await ProgressiveRevealManager(
+            pending_reveals = await ProgressiveRevealManager.check_for_automated_reveals(
                 self.user_id, self.conversation_id
-            ).check_for_automated_reveals()
+            )
             
             # Dreams and Revelations
             revelation = await self._safe_check_revelations()
