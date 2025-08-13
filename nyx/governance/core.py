@@ -1254,7 +1254,7 @@ class NyxUnifiedGovernor(
         Args:
             agent_type: Type of the agent (e.g., 'npc', 'story', 'world')
             agent_id: Unique identifier for the agent
-            agent_instance: The agent instance to register
+            agent_instance: The agent instance to register (can be None for lazy creation)
             
         Raises:
             GovernanceError: If governor not initialized
@@ -1278,10 +1278,15 @@ class NyxUnifiedGovernor(
             agent_id = kwargs.get('agent_id', args[1] if len(args) > 1 else None)
             agent_instance = kwargs.get('agent_instance', args[2] if len(args) > 2 else None)
         
-        if not all([agent_type, agent_id, agent_instance]):
-            raise ValueError("agent_type, agent_id, and agent_instance are required")
+        # Only require agent_type and agent_id; agent_instance can be None for lazy creation
+        if not agent_type or not agent_id:
+            raise ValueError("agent_type and agent_id are required")
         
-        logger.info(f"Queueing agent registration: type={agent_type}, id={agent_id}")
+        # Log if registering with None instance (lazy creation)
+        if agent_instance is None:
+            logger.info(f"Registering agent {agent_type}/{agent_id} for lazy creation")
+        else:
+            logger.info(f"Queueing agent registration: type={agent_type}, id={agent_id}")
         
         # Check if initialized
         if not hasattr(self, '_registration_task') or self._registration_task is None:
@@ -1294,7 +1299,7 @@ class NyxUnifiedGovernor(
         except Exception as e:
             logger.error(f"Failed to queue agent registration", exc_info=True)
             raise AgentRegistrationError(f"Failed to register agent {agent_id}: {str(e)}") from e
-
+        
     async def get_resource_limit(self, resource_type: str, agent_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Get resource limits from the resource manager.
