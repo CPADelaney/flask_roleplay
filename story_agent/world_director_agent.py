@@ -85,7 +85,6 @@ from logic.memory_logic import (
     RevealType,
     RevealSeverity,
     NPCMask,
-    check_for_automated_reveals,
     get_shared_memory,
     propagate_shared_memories,
     fetch_formatted_locations
@@ -379,9 +378,9 @@ class CompleteWorldDirectorContext:
                 flashback = await self._safe_generate_flashback()
             
             # Check for NPC reveals
-            pending_reveals = await check_for_automated_reveals(
+            pending_reveals = await ProgressiveRevealManager(
                 self.user_id, self.conversation_id
-            )
+            ).check_for_automated_reveals()
             
             # Dreams and Revelations
             revelation = await self._safe_check_revelations()
