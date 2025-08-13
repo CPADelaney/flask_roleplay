@@ -192,36 +192,24 @@ class AgentGovernanceMixin:
             logger.debug("Agent discovery already completed, skipping")
             return True
             
-        logger.info(
-            f"[discover] starting for user={self.user_id}, conv={self.conversation_id}"
-        )
-    
+        logger.info(f"[discover] starting for user={self.user_id}, conv={self.conversation_id}")
+        
         start_ts = asyncio.get_event_loop().time()
         registered = 0
     
-        agent_modules = [
-            # Switched to world director for open-world orchestration
+        # ============= HANDLE CLASS-BASED AGENTS =============
+        class_based_agents = [
             ("story_agent.world_director_agent", "CompleteWorldDirector", AgentType.WORLD_DIRECTOR),
             ("logic.universal_updater_agent", "UniversalUpdaterAgent", AgentType.UNIVERSAL_UPDATER),
-            ("agents.scene_manager", "SceneManagerAgent", AgentType.SCENE_MANAGER),
-            ("agents.conflict_analyst", "ConflictAnalystAgent", AgentType.CONFLICT_ANALYST),
-            ("agents.narrative_crafter", "NarrativeCrafterAgent", AgentType.NARRATIVE_CRAFTER),
-            ("agents.resource_optimizer", "ResourceOptimizerAgent", AgentType.RESOURCE_OPTIMIZER),
-            ("agents.relationship_manager", "RelationshipManagerAgent", AgentType.RELATIONSHIP_MANAGER),
-            ("agents.activity_analyzer", "ActivityAnalyzerAgent", AgentType.ACTIVITY_ANALYZER),
-            ("agents.memory_manager", "MemoryManagerAgent", AgentType.MEMORY_MANAGER),
         ]
-    
-        for module_path, class_name, agent_type in agent_modules:
-    
+        
+        for module_path, class_name, agent_type in class_based_agents:
             # --- fail-safe for the whole discovery loop
             if asyncio.get_event_loop().time() - start_ts > MAX_TOTAL_DISCOVERY:
                 logger.warning("[discover] hard stop – hit MAX_TOTAL_DISCOVERY")
                 break
     
-            # ------------------------------------------------------------
-            # 1) import
-            # ------------------------------------------------------------
+            # 1) import with timeout
             try:
                 with suppress(asyncio.TimeoutError):
                     module = await asyncio.wait_for(
@@ -237,9 +225,7 @@ class AgentGovernanceMixin:
                 logger.warning(f"[discover] {class_name} missing in {module_path}")
                 continue
     
-            # ------------------------------------------------------------
             # 2) instantiate (can be heavy)
-            # ------------------------------------------------------------
             try:
                 with suppress(asyncio.TimeoutError):
                     agent_instance = await asyncio.wait_for(
@@ -250,12 +236,9 @@ class AgentGovernanceMixin:
                 logger.debug(f"[discover] init failed {class_name}: {e!r}")
                 continue
     
-            # ------------------------------------------------------------
-            # 3) queue for registration – no blocking I/O here
-            # ------------------------------------------------------------
+            # 3) queue for registration
             agent_id = f"{agent_type}_{self.conversation_id}"
             try:
-                # NOTE: governor.register_agent is the queued version, so this is O(µs)
                 asyncio.create_task(
                     self.register_agent(
                         agent_type=agent_type,
@@ -268,13 +251,93 @@ class AgentGovernanceMixin:
             except Exception as e:
                 logger.debug(f"[discover] queue failed {agent_id}: {e!r}")
     
-        # ------------------------------------------------------------
+        # ============= HANDLE SDK-BASED AGENTS =============
+        # Import SDK agents with timeout protection
+        sdk_agents = []
+        
+        try:
+            with suppress(asyncio.TimeoutError):
+                # Import specialized agents factory
+                specialized_module = await asyncio.wait_for(
+                    self._safe_import("story_agent.specialized_agents"),
+                    timeout=ASYNC_IMPORT_TIMEOUT
+                )
+                if specialized_module:
+                    initialize_func = getattr(specialized_module, "initialize_specialized_agents", None)
+                    if initialize_func:
+                        # Run initialization in thread to avoid blocking
+                        specialized = await asyncio.wait_for(
+                            asyncio.to_thread(initialize_func),
+                            timeout=AGENT_INIT_TIMEOUT
+                        )
+                        sdk_agents.extend([
+                            (AgentType.CONFLICT_ANALYST, specialized["conflict_analyst"]),
+                            (AgentType.NARRATIVE_CRAFTER, specialized["narrative_crafter"]),
+                            (AgentType.RESOURCE_OPTIMIZER, specialized["resource_optimizer"]),
+                            (AgentType.RELATIONSHIP_MANAGER, specialized["relationship_manager"]),
+                            (AgentType.ACTIVITY_ANALYZER, specialized["activity_analyzer"]),
+                        ])
+        except Exception as e:
+            logger.error(f"[discover] Failed to load specialized agents: {e}")
+    
+        try:
+            with suppress(asyncio.TimeoutError):
+                # Import memory agent
+                memory_module = await asyncio.wait_for(
+                    self._safe_import("context.memory_manager"),
+                    timeout=ASYNC_IMPORT_TIMEOUT
+                )
+                if memory_module:
+                    create_memory = getattr(memory_module, "create_memory_agent", None)
+                    if create_memory:
+                        memory_agent = await asyncio.wait_for(
+                            asyncio.to_thread(create_memory),
+                            timeout=AGENT_INIT_TIMEOUT
+                        )
+                        sdk_agents.append((AgentType.MEMORY_MANAGER, memory_agent))
+        except Exception as e:
+            logger.error(f"[discover] Failed to load memory agent: {e}")
+    
+        try:
+            with suppress(asyncio.TimeoutError):
+                # Import scene manager
+                scene_module = await asyncio.wait_for(
+                    self._safe_import("nyx.scene_manager_sdk"),
+                    timeout=ASYNC_IMPORT_TIMEOUT
+                )
+                if scene_module:
+                    scene_manager = getattr(scene_module, "scene_manager_agent", None)
+                    if scene_manager:
+                        sdk_agents.append((AgentType.SCENE_MANAGER, scene_manager))
+        except Exception as e:
+            logger.error(f"[discover] Failed to load scene manager: {e}")
+    
+        # Register SDK agents
+        for agent_type, agent_instance in sdk_agents:
+            # Check timeout
+            if asyncio.get_event_loop().time() - start_ts > MAX_TOTAL_DISCOVERY:
+                logger.warning("[discover] hard stop – hit MAX_TOTAL_DISCOVERY")
+                break
+                
+            agent_id = f"{agent_type}_{self.conversation_id}"
+            try:
+                asyncio.create_task(
+                    self.register_agent(
+                        agent_type=agent_type,
+                        agent_id=agent_id,
+                        agent_instance=agent_instance
+                    )
+                )
+                registered += 1
+                logger.info(f"[discover] queued SDK agent {agent_type} → {agent_id}")
+            except Exception as e:
+                logger.debug(f"[discover] queue failed for SDK agent {agent_id}: {e!r}")
+    
         # 4) NPC-agents – run in background to avoid blocking init
-        # ------------------------------------------------------------
         asyncio.create_task(self._discover_npc_agents())
     
         self._discovery_completed = True
-        logger.info(f"[discover] completed – {registered} static agents queued")
+        logger.info(f"[discover] completed – {registered} agents queued")
         return registered > 0
     
     
