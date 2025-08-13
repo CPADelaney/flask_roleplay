@@ -38,6 +38,39 @@ from contextlib import suppress, asynccontextmanager
 import statistics
 import uuid
 
+
+# Import world simulation models if available
+try:
+    from story_agent.world_simulation_models import (
+        CompleteWorldState,
+        WorldState,
+        WorldMood,
+        TimeOfDay,
+        ActivityType,
+        PowerDynamicType,
+        SliceOfLifeEvent,
+        PowerExchange,
+        WorldTension,
+        RelationshipDynamics,
+        NPCRoutine,
+        CurrentTimeData,
+        VitalsData,
+        AddictionCravingData,
+        DreamData,
+        RevelationData,
+        ChoiceData,
+        ChoiceProcessingResult,
+    )
+
+    from story_agent.world_director_agent import (
+        CompleteWorldDirector,
+        WorldDirector,
+        CompleteWorldDirectorContext,
+        WorldDirectorContext,
+    )
+except ImportError:
+    logger.warning("World simulation models not available - slice-of-life features disabled")
+
 # ===== CRITICAL FIX #1: Monkey patch Pydantic BEFORE any imports =====
 import pydantic.json_schema
 
@@ -4019,34 +4052,3 @@ __all__ = [
     'process_user_input_standalone',
 ]
 
-# Import world simulation models if available
-try:
-    from story_agent.world_simulation_models import (
-        CompleteWorldState,
-        WorldState,
-        WorldMood,
-        TimeOfDay,
-        ActivityType,
-        PowerDynamicType,
-        SliceOfLifeEvent,
-        PowerExchange,
-        WorldTension,
-        RelationshipDynamics,
-        NPCRoutine,
-        CurrentTimeData,
-        VitalsData,
-        AddictionCravingData,
-        DreamData,
-        RevelationData,
-        ChoiceData,
-        ChoiceProcessingResult,
-    )
-
-    from story_agent.world_director_agent import (
-        CompleteWorldDirector,
-        WorldDirector,
-        CompleteWorldDirectorContext,
-        WorldDirectorContext,
-    )
-except ImportError:
-    logger.warning("World simulation models not available - slice-of-life features disabled")
