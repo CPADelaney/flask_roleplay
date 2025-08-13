@@ -2927,9 +2927,20 @@ async def process_user_input(
         logger.debug(f"[{trace_id}] Step 3: Integrating world systems...")
         try:
             if nyx_context.world_director and nyx_context.world_director.context:
-                world_state = await nyx_context.world_director.context.current_world_state
+                # FIX: Remove 'await' - current_world_state is a regular attribute, not a coroutine
+                world_state = nyx_context.world_director.context.current_world_state
                 nyx_context.current_world_state = world_state
-                logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.keys())}")
+                
+                # Also fix the debug log - world_state might be None or an object, not a dict
+                if world_state:
+                    if hasattr(world_state, 'model_dump'):
+                        logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.model_dump().keys())}")
+                    elif hasattr(world_state, '__dict__'):
+                        logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.__dict__.keys())}")
+                    else:
+                        logger.debug(f"[{trace_id}] ✓ World state integrated: {type(world_state)}")
+                else:
+                    logger.debug(f"[{trace_id}] ✓ World state is None/empty")
             else:
                 logger.debug(f"[{trace_id}] - No world director available")
         except Exception as e:
