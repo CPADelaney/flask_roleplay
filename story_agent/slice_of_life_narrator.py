@@ -117,6 +117,10 @@ class SliceOfLifeEvent(AgentSafeModel):
     addiction_triggers: List[str] = Field(default_factory=list)
     memory_tags: List[str] = Field(default_factory=list)
 
+class NarrateSliceOfLifeInput(AgentSafeModel):
+    """Input for narrating a slice-of-life scene"""
+    scene_type: str = Field("routine", description="Type of scene to narrate")
+
 class PowerExchange(AgentSafeModel):
     """A power exchange moment between entities"""
     initiator_npc_id: int  # For compatibility
@@ -474,19 +478,31 @@ class NarratorContext:
     id_from_context=lambda ctx: f"narrator_{ctx.context.conversation_id}"
 )
 async def narrate_slice_of_life_scene(
-    ctx: RunContextWrapper,
-    scene: SliceOfLifeEvent,
-    world_state: WorldState,
-    player_action: Optional[str] = None
-) -> SliceOfLifeNarration:
+    ctx: RunContextWrapper[NarratorContext],
+    payload: NarrateSliceOfLifeInput
+) -> str:
     """
     Generate narration for a slice-of-life scene with full Nyx governance and context awareness.
     """
-    context: NarratorContext = ctx.context
+    context = ctx.context
+    scene_type = payload.scene_type
     
-    # Refresh context with player action if provided
-    if player_action:
-        await context.refresh_context(player_action)
+    # Refresh context
+    await context.refresh_context(scene_type)
+    
+    # Get world state from context
+    world_state = context.current_world_state
+    if not world_state:
+        world_state = await context.world_director.get_world_state()
+    
+    # Create a scene event based on the type
+    scene = SliceOfLifeEvent(
+        event_type=ActivityType.ROUTINE if scene_type == "routine" else ActivityType.SOCIAL,
+        title=f"{scene_type} scene",
+        description=f"A {scene_type} moment",
+        location="7-11" if "7-11" in scene_type else "current_location",
+        participants=[]
+    )
     
     # Check governance approval
     governance_approved = True
@@ -496,7 +512,7 @@ async def narrate_slice_of_life_scene(
             approval = await context.nyx_governance.check_permission(
                 agent_type="narrator",
                 action_type="narrate_scene",
-                context={"scene": scene.model_dump(), "player_action": player_action}
+                context={"scene": scene.model_dump(), "scene_type": scene_type}
             )
             governance_approved = approval.get("approved", True)
             governance_notes = approval.get("notes")
@@ -522,7 +538,7 @@ async def narrate_slice_of_life_scene(
     
     # Determine tone and focus
     tone = _select_narrative_tone(scene, world_state, relationship_contexts)
-    focus = _select_scene_focus(scene, player_action)
+    focus = _select_scene_focus(scene, None)
     
     # Generate power dynamic hints
     power_hints = await _generate_power_hints(
@@ -543,12 +559,14 @@ async def narrate_slice_of_life_scene(
     
     # Generate internal monologue if appropriate
     internal = None
-    if world_state.world_tension.power_tension > 0.6 or (governance_notes and "add_internal" in governance_notes):
-        internal = await _generate_internal_monologue(
-            context, scene, world_state.relationship_dynamics, relationship_contexts
-        )
+    if world_state and hasattr(world_state, 'world_tension'):
+        tension = world_state.world_tension
+        if hasattr(tension, 'power_tension') and tension.power_tension > 0.6:
+            internal = await _generate_internal_monologue(
+                context, scene, world_state.relationship_dynamics, relationship_contexts
+            )
     
-    # Identify emergent elements (converted to KeyValue list)
+    # Identify emergent elements
     emergent_dict = await _identify_emergent_elements(
         context, scene, relationship_contexts
     )
@@ -591,7 +609,7 @@ async def narrate_slice_of_life_scene(
                 content=scene_desc,
                 memory_type="scene",
                 importance=0.7,
-                tags=["scene", scene.event_type.value, *[f"npc_{npc_id}" for npc_id in scene.participants]],
+                tags=["scene", scene.event_type.value],
                 metadata={
                     "scene_type": scene.event_type.value,
                     "location": scene.location,
@@ -600,8 +618,9 @@ async def narrate_slice_of_life_scene(
             )
         )
     
-    return narration
-
+    # Return as JSON string
+    return narration.model_dump_json()
+    
 @function_tool
 async def generate_npc_dialogue(
     ctx: RunContextWrapper,
