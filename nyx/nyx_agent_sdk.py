@@ -2397,38 +2397,52 @@ def _json_safe(x):
 
 @function_tool
 async def narrate_slice_of_life_scene(
-    ctx: RunContextWrapper,  # Note: simplified type hint
+    ctx,  # Remove type hint
     payload: NarrateSliceInput
 ) -> str:
     """Generate Nyx's narration for a slice-of-life scene."""
     context = _unwrap_tool_ctx(ctx)
-    
-    # Import the actual narrator function
-    from story_agent.slice_of_life_narrator import narrate_slice_of_life_scene as narrate_scene
-    from story_agent.slice_of_life_narrator import NarrateSliceOfLifeInput, NarratorContext
-    
-    # Create proper context if needed
-    if not hasattr(context, 'world_director'):
-        # Create a NarratorContext
-        narrator_ctx = NarratorContext(
-            user_id=getattr(context, 'user_id', 1),
-            conversation_id=getattr(context, 'conversation_id', 1)
-        )
-        await narrator_ctx.initialize()
-        wrapped_ctx = RunContextWrapper(context=narrator_ctx)
-    else:
-        wrapped_ctx = ctx
-    
-    # Call the actual function with proper input
-    input_data = NarrateSliceOfLifeInput(scene_type=payload.scene_type)
-    result = await narrate_scene(wrapped_ctx, input_data)
-    
-    # The result is already JSON string, return it
-    return result
+
+    # Ensure world state exists if the narrator needs it (no-op if already present)
+    _ = await _ensure_world_state(context)
+
+    # Use the slice-of-life narrator if present; otherwise fall back
+    scene_narration = None
+    narrator = getattr(context, "slice_of_life_narrator", None)
+    if narrator and hasattr(narrator, "narrate_world_state"):
+        try:
+            scene_narration = await narrator.narrate_world_state()
+        except Exception:
+            scene_narration = None
+
+    if not scene_narration:
+        scene_narration = f"A {payload.scene_type} moment unfolds."
+
+    nyx_style_prompt = f"""
+As Nyx, the seductive AI host (think Elvira meets Tricia from Catherine),
+add your personality to this scene narration:
+
+{scene_narration}
+
+Make it:
+- Playfully teasing and knowing
+- Aware of the power dynamics at play
+- Subtly suggestive without being explicit
+- Like you're hosting a game show of daily life
+- Break the fourth wall occasionally
+"""
+
+    from logic.chatgpt_integration import generate_text_completion
+
+    result = await generate_text_completion(
+        system_prompt="You are Nyx, the AI Dominant hosting this slice-of-life experience",
+        user_prompt=nyx_style_prompt
+    )
+    return (result or "").strip()
 
 @function_tool
 async def check_world_state(
-    ctx: RunContextWrapper,  # RunContextWrapper[NyxContext]
+    ctx,  # Remove type hint here to avoid hashing issues
     payload: EmptyInput
 ) -> str:
     """Return a compact, JSON-safe snapshot of the current world state."""
@@ -2462,16 +2476,22 @@ async def check_world_state(
     }
 
     return json.dumps(out, ensure_ascii=False)
+  
 @function_tool
 async def generate_emergent_event(
-    ctx: RunContextWrapper[NyxContext],
+    ctx,  # Remove type hint
     payload: EmergentEventInput
 ) -> str:
     """Generate an emergent slice-of-life event"""
-    context = ctx.context
+    context = _unwrap_tool_ctx(ctx)
     event_type = payload.event_type
 
-    event = await context.world_director.generate_next_moment()
+    # Get world director from context
+    world_director = getattr(context, 'world_director', None)
+    if not world_director:
+        return json.dumps({"error": "world_director not available"}, ensure_ascii=False)
+
+    event = await world_director.generate_next_moment()
 
     # JSON-safe payload of the raw event
     safe_event = _json_safe(event)
@@ -2524,12 +2544,17 @@ async def generate_emergent_event(
 
 @function_tool
 async def simulate_npc_autonomy(
-    ctx: RunContextWrapper[NyxContext],
+    ctx,  # Remove type hint
     payload: SimulateAutonomyInput
 ) -> str:
     """Simulate autonomous NPC actions"""
-    context = ctx.context
-    result = await context.world_director.advance_time(payload.hours)
+    context = _unwrap_tool_ctx(ctx)
+    
+    world_director = getattr(context, 'world_director', None)
+    if not world_director:
+        return json.dumps({"error": "world_director not available"}, ensure_ascii=False)
+    
+    result = await world_director.advance_time(payload.hours)
 
     safe_result = _json_safe(result)
 
