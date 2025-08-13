@@ -472,10 +472,7 @@ class NarratorContext:
 # ===============================================================================
 
 @function_tool
-async def narrate_slice_of_life_scene(
-    ctx,  # Add type annotation
-    payload: NarrateSliceOfLifeInput
-) -> SliceOfLifeNarration:
+async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> str:
     context = ctx.context
 
     # Refresh context with whatever hint we have
@@ -491,7 +488,7 @@ async def narrate_slice_of_life_scene(
         event_type=ActivityType.ROUTINE if payload.scene_type == "routine" else ActivityType.SOCIAL,
         title=f"{payload.scene_type} scene",
         description=f"A {payload.scene_type} moment",
-        location="7-11" if "7-11" in payload.scene_type else "current_location",
+        location="current_location",
         participants=[]
     )
 
@@ -539,7 +536,6 @@ async def narrate_slice_of_life_scene(
 
     emergent_elements = await _identify_emergent_elements(context, scene, relationship_contexts)
 
-
     relevant_memories = []
     if context.active_memories:
         for memory in context.active_memories[:5]:
@@ -583,21 +579,19 @@ async def narrate_slice_of_life_scene(
             )
         )
 
-    # IMPORTANT: return the model, not JSON
-    return narration
+    # IMPORTANT: Return JSON string, not the model!
+    return narration.model_dump_json()
     
 @function_tool
 async def generate_npc_dialogue(
-    ctx,  # Add type annotation
+    ctx,
     npc_id: int,
     situation: str,
     world_state: WorldState,
     player_input: Optional[str] = None
-) -> NPCDialogue:
-    """
-    Generate contextual NPC dialogue with power dynamics awareness.
-    """
-    context: NarratorContext = ctx.context
+) -> str:
+    """Generate contextual NPC dialogue with power dynamics awareness."""
+    context = ctx.context
     
     # Refresh context if player input provided
     if player_input:
@@ -619,7 +613,7 @@ async def generate_npc_dialogue(
             tone="neutral",
             subtext="",
             body_language="still"
-        )
+        ).model_dump_json()  # Return JSON even for fallback
     
     # Get narrative stage
     stage = await get_npc_narrative_stage(context.user_id, context.conversation_id, npc_id)
@@ -728,18 +722,17 @@ async def generate_npc_dialogue(
             )
         )
     
-    return dialogue_obj
+    # Return JSON string
+    return dialogue_obj.model_dump_json()
 
 @function_tool
 async def narrate_power_exchange(
-    ctx,  # Add type annotation
+    ctx,
     exchange: PowerExchange,
     world_state: WorldState
-) -> PowerMomentNarration:
-    """
-    Generate narration for a power exchange moment with Nyx tracking and memory.
-    """
-    context: NarratorContext = ctx.context
+) -> str:
+    """Generate narration for a power exchange moment with Nyx tracking and memory."""
+    context = ctx.context
     
     # Refresh context for power exchange
     await context.refresh_context(input_text=f"Power exchange: {exchange.exchange_type.value}")
@@ -815,19 +808,18 @@ async def narrate_power_exchange(
             )
         )
     
-    return narration
+    # Return JSON string
+    return narration.model_dump_json()
 
 @function_tool
 async def narrate_daily_routine(
-    ctx,  # Add type annotation
+    ctx,
     activity: str,
     world_state: WorldState,
     involved_npcs: List[int] = None
-) -> DailyActivityNarration:
-    """
-    Generate narration for daily routine activities with subtle power dynamics.
-    """
-    context: NarratorContext = ctx.context
+) -> str:
+    """Generate narration for daily routine activities with subtle power dynamics."""
+    context = ctx.context
     await context.refresh_context(input_text=f"Daily activity: {activity}")
     
     involved_npcs = involved_npcs or []
@@ -861,7 +853,7 @@ async def narrate_daily_routine(
             context, activity, context.system_intersections
         )
     
-    return DailyActivityNarration(
+    result = DailyActivityNarration(
         activity=activity,
         description=description,
         routine_with_dynamics=routine_with_dynamics,
@@ -869,18 +861,19 @@ async def narrate_daily_routine(
         subtle_control_elements=control_elements,
         emergent_variations=emergent_variations
     )
+    
+    # Return JSON string
+    return result.model_dump_json()
 
 @function_tool
 async def generate_ambient_narration(
-    ctx,  # Add type annotation
+    ctx,
     focus: str,
     world_state: WorldState,
     intensity: float = 0.5
-) -> AmbientNarration:
-    """
-    Generate ambient world narration to establish atmosphere.
-    """
-    context: NarratorContext = ctx.context
+) -> str:
+    """Generate ambient world narration to establish atmosphere."""
+    context = ctx.context
     
     # Refresh context if needed
     await context.refresh_context()
@@ -912,22 +905,25 @@ async def generate_ambient_narration(
     # Identify which systems it reflects
     reflects_systems = await _identify_reflected_systems(context, focus, description)
     
-    return AmbientNarration(
+    result = AmbientNarration(
         description=description,
         focus=focus,
         intensity=intensity,
         affects_mood=affects_mood,
         reflects_systems=reflects_systems
     )
+    
+    # Return JSON string
+    return result.model_dump_json()
 
 @function_tool
 async def narrate_player_action(
-    ctx,  # Add type annotation
+    ctx,
     action: str,
     world_state: WorldState,
     scene_context: Optional[SliceOfLifeEvent] = None
-) -> SliceOfLifeNarration:
-    context: NarratorContext = ctx.context
+) -> str:
+    context = ctx.context
     await context.refresh_context(input_text=action)
 
     scene_context = scene_context or SliceOfLifeEvent(
@@ -938,7 +934,7 @@ async def narrate_player_action(
     )
 
     # Call the tool function using a payload object
-    return await narrate_slice_of_life_scene(
+    result = await narrate_slice_of_life_scene(
         ctx,
         payload=NarrateSliceOfLifeInput(
             scene_type="action",
@@ -947,6 +943,9 @@ async def narrate_player_action(
             player_action=action,
         )
     )
+    
+    # Result is already a JSON string from narrate_slice_of_life_scene
+    return result
     
 # ===============================================================================
 # Helper Functions with GPT Integration
