@@ -2345,9 +2345,9 @@ def _unwrap_tool_ctx(ctx):
     c = getattr(ctx, "context", ctx)
     # Unwrap while the object looks like a wrapper and doesn't have our expected fields
     expected = ("world_director", "slice_of_life_narrator", "current_world_state", "user_id", "conversation_id")
-    seen = set()
-    while hasattr(c, "context") and not any(hasattr(c, k) for k in expected) and c not in seen:
-        seen.add(c)
+    seen_ids = set()  # Use object IDs instead of objects themselves
+    while hasattr(c, "context") and not any(hasattr(c, k) for k in expected) and id(c) not in seen_ids:
+        seen_ids.add(id(c))  # Use id() which returns a hashable integer
         c = getattr(c, "context")
     return c
 
@@ -2540,8 +2540,21 @@ async def check_world_state(
 ) -> str:
     """Return a compact, JSON-safe snapshot of the current world state."""
     _ = payload  # unused
-    context = _unwrap_tool_ctx(ctx)
-    ws = await _ensure_world_state(context)
+    
+    # Get the actual NyxContext from the wrapper
+    context = ctx.context  # Simple direct access
+    
+    # Now use context.current_world_state
+    ws = context.current_world_state
+    
+    # If not available, try to get it from world_director
+    if ws is None and context.world_director:
+        try:
+            # Check if world_director has been initialized
+            if hasattr(context.world_director, 'context'):
+                ws = context.world_director.context.current_world_state
+        except:
+            pass
 
     if ws is None:
         return json.dumps({"error": "world_state_unavailable"}, ensure_ascii=False)
@@ -2576,7 +2589,7 @@ async def generate_emergent_event(
     payload: EmergentEventInput
 ) -> str:
     """Generate an emergent slice-of-life event"""
-    context = _unwrap_tool_ctx(ctx)
+    context = ctx.context  # Simple direct access
     event_type = payload.event_type
 
     # Get world director from context
@@ -2641,7 +2654,7 @@ async def simulate_npc_autonomy(
     payload: SimulateAutonomyInput
 ) -> str:
     """Simulate autonomous NPC actions"""
-    context = _unwrap_tool_ctx(ctx)
+    context = ctx.context 
     
     world_director = getattr(context, 'world_director', None)
     if not world_director:
