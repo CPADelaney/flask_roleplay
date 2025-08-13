@@ -806,7 +806,7 @@ async def add_item(
     # Create trace for monitoring
     with trace(
         workflow_name="Inventory System",
-        trace_id=f"inventory-add-{conversation_id}-{int(datetime.now().timestamp())}",
+        trace_id=f"trace_inventory-add-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
         # Create prompt
@@ -887,7 +887,7 @@ async def remove_item(
     # Create trace for monitoring
     with trace(
         workflow_name="Inventory System",
-        trace_id=f"inventory-remove-{conversation_id}-{int(datetime.now().timestamp())}",
+        trace_id=f"trace_trace_inventory-remove-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
         # Create prompt
@@ -958,7 +958,7 @@ async def get_inventory(
     # Create trace for monitoring
     with trace(
         workflow_name="Inventory System",
-        trace_id=f"inventory-get-{conversation_id}-{int(datetime.now().timestamp())}",
+        trace_id=f"trace_inventory-get-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
         # Create prompt
