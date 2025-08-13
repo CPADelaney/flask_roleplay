@@ -1147,25 +1147,44 @@ class NyxUnifiedGovernor(
         if use_openai_sdk:
             try:
                 client = await self._get_openai_client()
-                # Only pass Assistant-supported params
-                assistant_kwargs = {k: v for k, v in sdk_defaults.items() if k in getattr(self, "VALID_OPENAI_PARAMS", set())}
+            
+                # --- FIX: ensure we keep 'model' and other valid fields ---
+                allowed = getattr(self, "VALID_OPENAI_PARAMS", None)
+                if not allowed:
+                    # sensible default whitelist for Assistants.create
+                    allowed = {
+                        "model", "name", "instructions", "tools", "metadata",
+                        "temperature", "top_p", "response_format", "tool_resources",
+                        "tool_choice", "timeout_ms",  # include any you support
+                    }
+            
+                assistant_kwargs = {k: v for k, v in sdk_defaults.items()
+                                    if k in allowed and v is not None}
+            
+                # Guarantee 'model' survives even if external config forgot to whitelist it
+                assistant_kwargs.setdefault("model", sdk_defaults["model"])
+            
+                # (Optional) debug what you're actually sending
+                logger.debug("assistant.create kwargs: %s", {k: type(v).__name__ for k,v in assistant_kwargs.items()})
+            
                 assistant = await client.beta.assistants.create(**assistant_kwargs)
-                # Store any custom params you want to remember (non-OpenAI keys)
-                custom = {k: v for k, v in sdk_defaults.items() if k not in getattr(self, "VALID_OPENAI_PARAMS", set())}
+            
+                # keep custom params
+                custom = {k: v for k, v in sdk_defaults.items() if k not in allowed}
                 setattr(assistant, "_custom_params", custom)
+            
                 self._assistants[agent_id] = assistant
                 logger.info("Assistant %s created (id=%s)", assistant.name, assistant.id)
                 return assistant
-    
+            
             except BadRequestError as e:
-                # If the model isn't allowed on Assistants, fall back to Responses
+                # Fall back to Responses only when the model is unsupported for Assistants
                 if _is_unsupported_model(e):
                     logger.warning(
                         "Model %s not supported on Assistants; falling back to Responses for %s/%s",
                         sdk_defaults["model"], agent_type, agent_id
                     )
                 else:
-                    # Other 400s still bubble up with your existing categorization
                     emsg = str(e).lower()
                     if "invalid" in emsg or "bad request" in emsg or "400" in emsg:
                         logger.error("Assistant creation failed (bad request): %s", e, exc_info=True)
@@ -1177,7 +1196,6 @@ class NyxUnifiedGovernor(
                         f"Failed to create Assistant {agent_type}/{agent_id}: {e}"
                     ) from e
             except Exception as e:
-                # Non-400 errors (auth/rate/etc.) keep your original handling
                 s = str(e).lower()
                 if "unauthorized" in s or "api key" in s or "401" in s:
                     logger.error("Assistant creation failed (auth): %s", e, exc_info=True)
