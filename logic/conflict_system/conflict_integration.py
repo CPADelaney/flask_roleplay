@@ -1512,12 +1512,17 @@ class ConflictSystemIntegration:
 
     async def _should_auto_monitor(self) -> bool:
         """Check if automatic monitoring should be enabled"""
-        async with get_db_connection_context() as conn:
-            auto_monitor = await conn.fetchval("""
-                SELECT value FROM Settings
-                WHERE name = 'auto_conflict_monitoring'
-            """)
-            return auto_monitor == "true" if auto_monitor else True
+        try:
+            async with get_db_connection_context() as conn:
+                auto_monitor = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 
+                    AND key = 'auto_conflict_monitoring'
+                """, self.user_id, self.conversation_id)
+                return auto_monitor == "true" if auto_monitor else True
+        except Exception as e:
+            logger.warning(f"Could not check auto_monitor setting: {e}")
+            return True  # Default to enabled
 
     async def _monitoring_loop(self):
         """Background monitoring loop"""
