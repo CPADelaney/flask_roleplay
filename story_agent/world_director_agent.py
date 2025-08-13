@@ -429,11 +429,12 @@ class CompleteWorldDirectorContext:
                 addiction_status, rel_overview
             )
             
+            # FIXED: Convert model instances to dicts for Pydantic
             return CompleteWorldState(
-                current_time=current_time,
+                current_time=current_time.model_dump() if hasattr(current_time, 'model_dump') else current_time.dict(),
                 calendar_names=self.calendar_names or {},
                 calendar_events=calendar_events,
-                player_vitals=vitals,
+                player_vitals=vitals.model_dump() if hasattr(vitals, 'model_dump') else vitals.dict(),
                 visible_stats=visible_stats,
                 hidden_stats=hidden_stats,
                 active_stat_combinations=stat_combinations,
