@@ -17,128 +17,33 @@ class ConflictGovernanceMixin:
     """Handles conflict-related governance functions."""
     
     async def create_conflict(self, conflict_data: Dict[str, Any], reason: str) -> Dict[str, Any]:
-        """
-        Create a new conflict in the world through the LoreSystem.
-        Conflicts can be any scale: interpersonal disagreements, local issues, or international disputes.
-        
-        Args:
-            conflict_data: Data for the conflict including:
-                - name: Conflict name (e.g., "Library Noise Complaint", "Trade War")
-                - conflict_type: Type (e.g., "interpersonal", "community", "political", "economic")
-                - scale: Scale of conflict ("personal", "local", "regional", "national", "global")
-                - involved_parties: List of involved parties (can be NPCs, factions, nations, locations)
-                - description: Description of the conflict
-                - stakes: What's at stake (e.g., "friendship", "local business", "territory")
-            reason: Narrative reason for the conflict
-        
-        Returns:
-            Result of conflict creation
-        """
+        """Create conflict through synthesizer"""
         if not self._initialized:
             await self.initialize()
-    
-        logger.info(f"NYX: Creating new conflict: {conflict_data.get('name', 'Unnamed')}")
-    
-        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
-    
-        # Handle different types of involved parties
-        scale = conflict_data.get("scale", "local")
-        involved_parties = conflict_data.get("involved_parties", [])
         
-        # Process stakeholders based on conflict scale
-        stakeholders = []
+        from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
         
-        for party in involved_parties:
-            if isinstance(party, dict):
-                party_type = party.get("type", "npc")
-                party_name = party.get("name")
-                
-                if party_type == "npc":
-                    npc_id = await self._get_npc_id_by_name(party_name)
-                    if npc_id:
-                        stakeholders.append({
-                            "npc_id": npc_id,
-                            "role": party.get("role", "participant"),
-                            "stance": party.get("stance", "neutral")
-                        })
-                elif party_type == "faction":
-                    # Could be student club, local group, etc.
-                    stakeholders.append({
-                        "faction_name": party_name,
-                        "faction_type": party.get("faction_type", "community"),
-                        "stance": party.get("stance", "neutral")
-                    })
-                elif party_type == "location":
-                    # For conflicts about places (e.g., "coffee shop closing")
-                    stakeholders.append({
-                        "location_name": party_name,
-                        "stake": party.get("stake", "affected")
-                    })
-            elif isinstance(party, str):
-                # Assume it's an NPC name
-                npc_id = await self._get_npc_id_by_name(party)
-                if npc_id:
-                    stakeholders.append({"npc_id": npc_id})
-    
-        # Create the conflict with appropriate scale
-        async with get_db_connection_context() as conn:
-            conflict_id = await conn.fetchval("""
-                INSERT INTO Conflicts (
-                    user_id, conversation_id, conflict_name, conflict_type,
-                    description, phase, is_active, 
-                    progress, estimated_duration
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                RETURNING conflict_id
-            """, 
-            self.user_id, self.conversation_id, 
-            conflict_data.get("name", "Unknown Conflict"),
-            conflict_data.get("conflict_type", "interpersonal"),
-            conflict_data.get("description", ""),
-            conflict_data.get("phase", "brewing"),
-            True,
-            0.0,
-            conflict_data.get("estimated_duration", 1) if scale == "personal" else 30)
-    
-            # Add stakeholders with scale-appropriate details
-            for stakeholder in stakeholders:
-                if "npc_id" in stakeholder:
-                    await conn.execute("""
-                        INSERT INTO ConflictStakeholders (
-                            conflict_id, npc_id, faction_name, 
-                            public_motivation, private_motivation,
-                            involvement_level
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                    """, 
-                    conflict_id, 
-                    stakeholder["npc_id"],
-                    stakeholder.get("faction_name"),
-                    stakeholder.get("public_motivation", "Personal reasons"),
-                    stakeholder.get("private_motivation", "Unknown"),
-                    stakeholder.get("involvement_level", 5 if scale == "personal" else 3))
-    
-        # Log appropriate event based on scale
-        significance = {
-            "personal": 3,
-            "local": 5,
-            "regional": 7,
-            "national": 9,
-            "global": 10
-        }.get(scale, 5)
+        logger.info(f"NYX: Creating conflict through synthesizer: {conflict_data.get('name', 'Unnamed')}")
         
+        synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
+        
+        # Add Nyx governance metadata
+        conflict_data["governance_reason"] = reason
+        conflict_data["created_by"] = "nyx_governance"
+        
+        result = await synthesizer.create_conflict(conflict_data)
+        
+        # Record in governance
         await self._record_narrative_event(
-            event_type=f"{scale}_conflict",
+            event_type="conflict_created",
             details={
-                "conflict_id": conflict_id,
-                "name": conflict_data.get("name"),
-                "type": conflict_data.get("conflict_type"),
-                "scale": scale,
-                "stakes": conflict_data.get("stakes", "unspecified")
+                "conflict_id": result.get("conflict_id"),
+                "synthesis_active": result.get("synthesis_active", True),
+                "reason": reason
             }
         )
         
-        return {"status": "committed", "conflict_id": conflict_id}
+        return result
 
     async def handle_agent_conflict(self, agent1_type: str, agent1_id: str, 
                                   agent2_type: str, agent2_id: str,
