@@ -705,6 +705,16 @@ class ConflictSystemIntegration:
                 f"Conflict {conflict_id}: {narrative_text}"
             )
 
+    async def process_event(self, conflict_id: int, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Process conflict events for this subsystem"""
+        event_type = event.get('type', 'unknown')
+        
+        # Route to appropriate handler
+        if event_type == 'your_specific_type':
+            return await self.handle_specific_event(conflict_id, event)
+        
+        return {'processed': True, 'subsystem': 'module_name'}
+
 # ===============================================================================
 # PUBLIC API FUNCTIONS (Enhanced with LLM)
 # ===============================================================================
