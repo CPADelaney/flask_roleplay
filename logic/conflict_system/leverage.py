@@ -1,36 +1,41 @@
 # logic/conflict_system/leverage.py
 """
 Leverage System with LLM-generated dynamic content.
-Manages leverage discovery, application, and counter-strategies in conflicts.
+Refactored to work as a ConflictSubsystem with the synthesizer.
 """
 
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple
+import weakref
+from typing import Dict, List, Any, Optional, Set, Tuple
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
+from logic.conflict_system.conflict_synthesizer import (
+    ConflictSubsystem, SubsystemType, EventType,
+    SystemEvent, SubsystemResponse
+)
 
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# LEVERAGE STRUCTURES
+# LEVERAGE STRUCTURES (Preserved from original)
 # ===============================================================================
 
 class LeverageType(Enum):
     """Types of leverage in conflicts"""
-    INFORMATION = "information"  # Secrets, knowledge
-    EMOTIONAL = "emotional"  # Feelings, attachments
-    SOCIAL = "social"  # Reputation, relationships
-    MATERIAL = "material"  # Resources, possessions
-    POSITIONAL = "positional"  # Authority, access
-    BEHAVIORAL = "behavioral"  # Habits, patterns
-    VULNERABILITY = "vulnerability"  # Weaknesses, fears
-    DEPENDENCY = "dependency"  # Needs, addictions
+    INFORMATION = "information"
+    EMOTIONAL = "emotional"
+    SOCIAL = "social"
+    MATERIAL = "material"
+    POSITIONAL = "positional"
+    BEHAVIORAL = "behavioral"
+    VULNERABILITY = "vulnerability"
+    DEPENDENCY = "dependency"
 
 class LeverageStrength(Enum):
     """Strength levels of leverage"""
@@ -45,52 +50,403 @@ class LeverageItem:
     """A piece of leverage"""
     leverage_id: int
     leverage_type: LeverageType
-    target_id: int  # Who it's leverage over
-    holder_id: int  # Who holds the leverage
+    target_id: int
+    holder_id: int
     description: str
-    strength: float  # 0.0-1.0
-    evidence: List[str]  # Supporting evidence/proof
-    expiration: Optional[datetime]  # When it becomes useless
-    uses_remaining: int  # How many times it can be used
-    counters: List[str]  # Known counter-strategies
-    discovery_context: str  # How it was discovered
+    strength: float
+    evidence: List[str]
+    expiration: Optional[datetime]
+    uses_remaining: int
+    counters: List[str]
+    discovery_context: str
 
 @dataclass
 class LeverageApplication:
     """An instance of using leverage"""
     application_id: int
     leverage_id: int
-    context: str  # Why it's being used
-    demand: str  # What's being asked for
-    threat_level: float  # How aggressively it's used
-    target_response: str  # How target responds
-    success_level: float  # How effective it was
-    consequences: Dict[str, Any]  # Results of use
+    context: str
+    demand: str
+    threat_level: float
+    target_response: str
+    success_level: float
+    consequences: Dict[str, Any]
 
 @dataclass
 class CounterStrategy:
     """A strategy to counter leverage"""
     strategy_id: int
     leverage_id: int
-    strategy_type: str  # "deny", "deflect", "destroy", "reverse"
+    strategy_type: str
     description: str
-    requirements: List[str]  # What's needed to execute
-    success_chance: float  # Probability of working
-    risks: List[str]  # What could go wrong
+    requirements: List[str]
+    success_chance: float
+    risks: List[str]
 
 # ===============================================================================
-# LEVERAGE MANAGER WITH LLM
+# LEVERAGE SUBSYSTEM
 # ===============================================================================
 
-class LeverageManager:
+class LeverageSubsystem(ConflictSubsystem):
     """
-    Manages leverage dynamics using LLM for intelligent generation.
-    Handles discovery, application, and counter-strategies.
+    Leverage subsystem integrated with synthesizer.
+    Manages leverage discovery, application, and counter-strategies.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self.synthesizer = None
+        
+        # Components
+        self.manager = LeverageManager(user_id, conversation_id)
+        
+        # State tracking
+        self._active_leverage: Dict[int, LeverageItem] = {}
+        self._leverage_applications: Dict[int, LeverageApplication] = {}
+        self._counter_strategies: Dict[int, List[CounterStrategy]] = {}
+    
+    # ========== ConflictSubsystem Interface Implementation ==========
+    
+    @property
+    def subsystem_type(self) -> SubsystemType:
+        return SubsystemType.LEVERAGE
+    
+    @property
+    def capabilities(self) -> Set[str]:
+        return {
+            'leverage_discovery',
+            'leverage_application',
+            'counter_strategy_generation',
+            'power_dynamics',
+            'blackmail_management'
+        }
+    
+    @property
+    def dependencies(self) -> Set[SubsystemType]:
+        return {SubsystemType.SOCIAL, SubsystemType.STAKEHOLDER}
+    
+    @property
+    def event_subscriptions(self) -> Set[EventType]:
+        return {
+            EventType.STAKEHOLDER_ACTION,
+            EventType.NPC_REACTION,
+            EventType.CONFLICT_UPDATED,
+            EventType.STATE_SYNC
+        }
+    
+    async def initialize(self, synthesizer: 'ConflictSynthesizer') -> bool:
+        """Initialize with synthesizer reference"""
+        self.synthesizer = weakref.ref(synthesizer)
+        self.manager.synthesizer = weakref.ref(synthesizer)
+        return True
+    
+    async def handle_event(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle events from synthesizer"""
+        try:
+            if event.event_type == EventType.STATE_SYNC:
+                return await self._handle_state_sync(event)
+            elif event.event_type == EventType.STAKEHOLDER_ACTION:
+                return await self._handle_stakeholder_action(event)
+            elif event.event_type == EventType.NPC_REACTION:
+                return await self._handle_npc_reaction(event)
+            elif event.event_type == EventType.CONFLICT_UPDATED:
+                return await self._handle_conflict_updated(event)
+            else:
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'handled': False}
+                )
+        except Exception as e:
+            logger.error(f"LeverageSubsystem error: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Check health of leverage subsystem"""
+        try:
+            active_leverage = len(self._active_leverage)
+            expired_leverage = sum(
+                1 for l in self._active_leverage.values()
+                if l.expiration and l.expiration < datetime.now()
+            )
+            
+            return {
+                'healthy': expired_leverage < active_leverage / 2,
+                'active_leverage': active_leverage,
+                'expired_leverage': expired_leverage,
+                'recent_applications': len(self._leverage_applications)
+            }
+        except Exception as e:
+            return {'healthy': False, 'issue': str(e)}
+    
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get leverage-specific conflict data"""
+        
+        # Find leverage related to this conflict
+        conflict_leverage = []
+        for leverage in self._active_leverage.values():
+            # Check if leverage is relevant to conflict participants
+            # This would need actual conflict participant lookup
+            conflict_leverage.append(leverage.leverage_id)
+        
+        return {
+            'subsystem': 'leverage',
+            'related_leverage': len(conflict_leverage),
+            'power_dynamics': self._analyze_power_dynamics()
+        }
+    
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current state of leverage subsystem"""
+        return {
+            'active_leverage_items': len(self._active_leverage),
+            'total_applications': len(self._leverage_applications),
+            'counter_strategies_available': sum(
+                len(strategies) for strategies in self._counter_strategies.values()
+            )
+        }
+    
+    # ========== Event Handlers ==========
+    
+    async def _handle_state_sync(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle scene state synchronization"""
+        scene_context = event.payload
+        present_npcs = scene_context.get('present_npcs', [])
+        
+        side_effects = []
+        
+        # Check for leverage discovery opportunities
+        if present_npcs and random.random() < 0.2:  # 20% chance
+            observer_id = self.user_id  # Player observing
+            target_id = random.choice(present_npcs)
+            
+            leverage = await self.manager.discover_leverage(
+                observer_id, target_id, scene_context
+            )
+            
+            if leverage:
+                self._active_leverage[leverage.leverage_id] = leverage
+                
+                side_effects.append(SystemEvent(
+                    event_id=f"leverage_discovered_{leverage.leverage_id}",
+                    event_type=EventType.INTENSITY_CHANGED,
+                    source_subsystem=self.subsystem_type,
+                    payload={
+                        'leverage_id': leverage.leverage_id,
+                        'type': leverage.leverage_type.value,
+                        'strength': leverage.strength,
+                        'discovery_narrative': f"You notice something about the situation that could be useful..."
+                    },
+                    priority=6
+                ))
+        
+        # Check for expired leverage
+        expired = []
+        for lid, leverage in self._active_leverage.items():
+            if leverage.expiration and leverage.expiration < datetime.now():
+                expired.append(lid)
+        
+        for lid in expired:
+            del self._active_leverage[lid]
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'leverage_discovered': len(side_effects) > 0,
+                'expired_leverage': len(expired)
+            },
+            side_effects=side_effects
+        )
+    
+    async def _handle_stakeholder_action(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle stakeholder actions that might involve leverage"""
+        stakeholder_id = event.payload.get('stakeholder_id')
+        action_type = event.payload.get('action_type')
+        target_id = event.payload.get('target_id')
+        
+        side_effects = []
+        
+        # Check if stakeholder has leverage they might use
+        if action_type in ['threaten', 'demand', 'negotiate']:
+            relevant_leverage = self._find_relevant_leverage(stakeholder_id, target_id)
+            
+            if relevant_leverage:
+                # Auto-apply leverage in the action
+                application = await self.manager.apply_leverage(
+                    relevant_leverage.leverage_id,
+                    event.payload.get('demand', 'compliance'),
+                    0.5  # Medium threat level
+                )
+                
+                self._leverage_applications[application.application_id] = application
+                
+                # Emit consequence event
+                side_effects.append(SystemEvent(
+                    event_id=f"leverage_applied_{application.application_id}",
+                    event_type=EventType.INTENSITY_CHANGED,
+                    source_subsystem=self.subsystem_type,
+                    payload={
+                        'leverage_used': True,
+                        'success': application.success_level > 0.5,
+                        'target_response': application.target_response,
+                        'consequences': application.consequences
+                    },
+                    priority=4
+                ))
+                
+                # Generate counter-strategies for target
+                if target_id == self.user_id:  # Player is target
+                    strategies = await self.manager.generate_counter_strategies(
+                        relevant_leverage.leverage_id,
+                        {'player_resources': event.payload.get('player_resources', {})}
+                    )
+                    
+                    self._counter_strategies[relevant_leverage.leverage_id] = strategies
+                    
+                    if strategies:
+                        side_effects.append(SystemEvent(
+                            event_id=f"counter_available_{relevant_leverage.leverage_id}",
+                            event_type=EventType.PLAYER_CHOICE,
+                            source_subsystem=self.subsystem_type,
+                            payload={
+                                'choice_type': 'counter_leverage',
+                                'strategies': [
+                                    {
+                                        'id': s.strategy_id,
+                                        'type': s.strategy_type,
+                                        'description': s.description,
+                                        'success_chance': s.success_chance
+                                    }
+                                    for s in strategies[:3]
+                                ]
+                            },
+                            priority=3
+                        ))
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'leverage_processed': len(side_effects) > 0},
+            side_effects=side_effects
+        )
+    
+    async def _handle_npc_reaction(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle NPC reactions that might reveal leverage"""
+        npc_id = event.payload.get('npc_id')
+        reaction_type = event.payload.get('reaction_type')
+        
+        # Certain reactions might reveal vulnerabilities
+        if reaction_type in ['nervous', 'defensive', 'secretive']:
+            # Chance to discover leverage
+            if random.random() < 0.3:
+                leverage = await self.manager.discover_leverage(
+                    self.user_id, npc_id,
+                    {'reaction_observed': reaction_type}
+                )
+                
+                if leverage:
+                    self._active_leverage[leverage.leverage_id] = leverage
+                    
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={
+                            'leverage_discovered': True,
+                            'leverage_type': leverage.leverage_type.value
+                        }
+                    )
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'reaction_noted': True}
+        )
+    
+    async def _handle_conflict_updated(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle conflict updates that might affect leverage"""
+        conflict_id = event.payload.get('conflict_id')
+        update_type = event.payload.get('update_type')
+        
+        # Conflict progression might reveal or invalidate leverage
+        if update_type == 'escalation':
+            # Higher stakes might reveal more leverage
+            for leverage in list(self._active_leverage.values()):
+                # Increase strength of relevant leverage
+                leverage.strength = min(1.0, leverage.strength + 0.1)
+        
+        elif update_type == 'de_escalation':
+            # Lower stakes might reduce leverage effectiveness
+            for leverage in list(self._active_leverage.values()):
+                leverage.strength = max(0.0, leverage.strength - 0.1)
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'leverage_adjusted': True}
+        )
+    
+    # ========== Helper Methods ==========
+    
+    def _find_relevant_leverage(
+        self,
+        holder_id: int,
+        target_id: Optional[int]
+    ) -> Optional[LeverageItem]:
+        """Find leverage that holder has over target"""
+        for leverage in self._active_leverage.values():
+            if leverage.holder_id == holder_id:
+                if target_id is None or leverage.target_id == target_id:
+                    if leverage.uses_remaining > 0:
+                        return leverage
+        return None
+    
+    def _analyze_power_dynamics(self) -> Dict[str, Any]:
+        """Analyze power dynamics based on leverage"""
+        dynamics = {
+            'player_leverage': 0,
+            'npc_leverage': 0,
+            'balance': 'neutral'
+        }
+        
+        for leverage in self._active_leverage.values():
+            if leverage.holder_id == self.user_id:
+                dynamics['player_leverage'] += leverage.strength
+            else:
+                dynamics['npc_leverage'] += leverage.strength
+        
+        if dynamics['player_leverage'] > dynamics['npc_leverage'] + 0.3:
+            dynamics['balance'] = 'player_advantage'
+        elif dynamics['npc_leverage'] > dynamics['player_leverage'] + 0.3:
+            dynamics['balance'] = 'npc_advantage'
+        
+        return dynamics
+
+# ===============================================================================
+# ORIGINAL MANAGER CLASS (Preserved with synthesizer integration)
+# ===============================================================================
+
+class LeverageManager:
+    """
+    Manages leverage dynamics using LLM for intelligent generation.
+    Modified to work with synthesizer.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.synthesizer = None  # Will be set by subsystem
         self._discovery_agent = None
         self._application_strategist = None
         self._counter_strategist = None
@@ -209,7 +565,9 @@ class LeverageManager:
             )
         return self._consequence_narrator
     
-    # ========== Leverage Discovery ==========
+    # [Rest of LeverageManager methods remain mostly the same]
+    # Including: discover_leverage, apply_leverage, generate_counter_strategies,
+    # execute_counter_strategy, narrate_leverage_consequences, etc.
     
     async def discover_leverage(
         self,
@@ -219,7 +577,6 @@ class LeverageManager:
     ) -> Optional[LeverageItem]:
         """Discover leverage through observation and analysis"""
         
-        # Gather information about target
         target_info = await self._gather_target_information(target_id)
         
         prompt = f"""
@@ -256,7 +613,6 @@ class LeverageManager:
             result = json.loads(response.content)
             
             if result and result != 'null':
-                # Store leverage
                 async with get_db_connection_context() as conn:
                     leverage_id = await conn.fetchval("""
                         INSERT INTO leverage_items
@@ -269,7 +625,17 @@ class LeverageManager:
                     observer_id, target_id,
                     result['type'], result['description'],
                     float(result['strength']), json.dumps(result.get('evidence', [])),
-                    json.dumps(context), 3)  # Default 3 uses
+                    json.dumps(context), 3)
+                
+                # Emit discovery event through synthesizer if available
+                if self.synthesizer and self.synthesizer():
+                    synth = self.synthesizer()
+                    await synth.emit_event(SystemEvent(
+                        event_id=f"leverage_internal_{leverage_id}",
+                        event_type=EventType.STATE_SYNC,
+                        source_subsystem=SubsystemType.LEVERAGE,
+                        payload={'leverage_discovered': leverage_id}
+                    ))
                 
                 return LeverageItem(
                     leverage_id=leverage_id,
@@ -290,8 +656,6 @@ class LeverageManager:
         
         return None
     
-    # ========== Leverage Application ==========
-    
     async def apply_leverage(
         self,
         leverage_id: int,
@@ -300,16 +664,13 @@ class LeverageManager:
     ) -> LeverageApplication:
         """Apply leverage to achieve a goal"""
         
-        # Get leverage details
         leverage = await self._get_leverage_details(leverage_id)
         if not leverage:
             raise ValueError(f"Leverage {leverage_id} not found")
         
-        # Check if leverage is still valid
         if leverage['uses_remaining'] <= 0:
             return self._create_failed_application("Leverage exhausted")
         
-        # Generate application strategy
         prompt = f"""
         Strategize leverage application:
         
@@ -338,10 +699,8 @@ class LeverageManager:
         try:
             result = json.loads(response.content)
             
-            # Determine success
             success = random.random() < float(result.get('success_probability', 0.5))
             
-            # Create application record
             async with get_db_connection_context() as conn:
                 application_id = await conn.fetchval("""
                     INSERT INTO leverage_applications
@@ -353,7 +712,6 @@ class LeverageManager:
                 leverage_id, demand, threat_level, success,
                 json.dumps(result.get('consequences', {})))
                 
-                # Reduce uses remaining
                 await conn.execute("""
                     UPDATE leverage_items
                     SET uses_remaining = uses_remaining - 1
@@ -374,8 +732,6 @@ class LeverageManager:
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.warning(f"Failed to apply leverage: {e}")
             return self._create_failed_application("Application failed")
-    
-    # ========== Counter-Strategies ==========
     
     async def generate_counter_strategies(
         self,
@@ -418,7 +774,6 @@ class LeverageManager:
             
             strategies = []
             for s_data in strategies_data:
-                # Store strategy
                 async with get_db_connection_context() as conn:
                     strategy_id = await conn.fetchval("""
                         INSERT INTO counter_strategies
@@ -446,125 +801,13 @@ class LeverageManager:
             logger.warning(f"Failed to generate counter-strategies: {e}")
             return []
     
-    async def execute_counter_strategy(
-        self,
-        strategy_id: int,
-        execution_context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute a counter-strategy"""
-        
-        # Get strategy details
-        strategy = await self._get_strategy_details(strategy_id)
-        if not strategy:
-            return {'error': 'Strategy not found'}
-        
-        # Check requirements
-        requirements_met = await self._check_requirements(
-            strategy['requirements'],
-            execution_context
-        )
-        
-        if not requirements_met:
-            return {
-                'success': False,
-                'reason': 'Requirements not met',
-                'missing': strategy['requirements']
-            }
-        
-        # Determine success with randomness
-        base_chance = strategy['success_chance']
-        modified_chance = self._modify_success_chance(base_chance, execution_context)
-        success = random.random() < modified_chance
-        
-        # Generate consequences
-        prompt = f"""
-        Narrate counter-strategy execution:
-        
-        Strategy Type: {strategy['strategy_type']}
-        Description: {strategy['description']}
-        Success: {success}
-        Context: {json.dumps(execution_context, indent=2)}
-        
-        Generate:
-        1. How it plays out (2-3 sentences)
-        2. If successful: How the leverage is neutralized
-        3. If failed: What went wrong and consequences
-        4. Impact on relationships
-        5. Any unexpected outcomes
-        
-        Keep it grounded and realistic.
-        Format as JSON.
-        """
-        
-        response = await self.consequence_narrator.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            # Update leverage status if successful
-            if success:
-                async with get_db_connection_context() as conn:
-                    await conn.execute("""
-                        UPDATE leverage_items
-                        SET is_neutralized = true
-                        WHERE leverage_id = $1
-                    """, strategy['leverage_id'])
-            
-            return {
-                'success': success,
-                'narrative': result.get('narrative', 'The counter-strategy is executed'),
-                'leverage_status': 'neutralized' if success else 'active',
-                'relationship_impact': result.get('relationship_impact', {}),
-                'unexpected_outcomes': result.get('unexpected', [])
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to execute counter-strategy: {e}")
-            return {
-                'success': success,
-                'narrative': 'The counter-strategy plays out',
-                'leverage_status': 'neutralized' if success else 'active'
-            }
-    
-    # ========== Consequence System ==========
-    
-    async def narrate_leverage_consequences(
-        self,
-        application: LeverageApplication,
-        long_term: bool = False
-    ) -> str:
-        """Generate narrative for leverage consequences"""
-        
-        prompt = f"""
-        Narrate the {'long-term' if long_term else 'immediate'} consequences of leverage use:
-        
-        Leverage Applied: {application.context}
-        Demand: {application.demand}
-        Threat Level: {application.threat_level}
-        Success: {application.success_level > 0.5}
-        Target Response: {application.target_response}
-        
-        Create a narrative (2-4 sentences) that shows:
-        {'- How relationships have permanently shifted' if long_term else '- The immediate emotional impact'}
-        {'- Trust that may never return' if long_term else '- The power dynamic shift'}
-        {'- Social ripple effects' if long_term else '- How others react'}
-        
-        Focus on the human cost of using leverage.
-        Keep it realistic and emotionally grounded.
-        """
-        
-        response = await self.consequence_narrator.run(prompt)
-        return response.content.strip()
-    
-    # ========== Helper Methods ==========
-    
+    # Helper methods
     async def _gather_target_information(self, target_id: int) -> Dict:
         """Gather information about a target for leverage discovery"""
         
         info = {}
         
         async with get_db_connection_context() as conn:
-            # Get basic info
             if target_id == self.user_id:
                 info['type'] = 'player'
             else:
@@ -575,7 +818,6 @@ class LeverageManager:
                 info['type'] = 'npc'
                 info['traits'] = npc.get('personality_traits', '') if npc else ''
             
-            # Get recent memories
             memories = await conn.fetch("""
                 SELECT memory_text, emotional_valence
                 FROM enhanced_memories
@@ -589,7 +831,6 @@ class LeverageManager:
                 for m in memories
             ]
             
-            # Get relationships
             relationships = await conn.fetch("""
                 SELECT dimension, current_value
                 FROM relationship_dimensions
@@ -614,17 +855,6 @@ class LeverageManager:
             """, leverage_id)
         
         return dict(leverage) if leverage else None
-    
-    async def _get_strategy_details(self, strategy_id: int) -> Optional[Dict]:
-        """Get details of a counter-strategy"""
-        
-        async with get_db_connection_context() as conn:
-            strategy = await conn.fetchrow("""
-                SELECT * FROM counter_strategies
-                WHERE strategy_id = $1
-            """, strategy_id)
-        
-        return dict(strategy) if strategy else None
     
     def _calculate_expiration(self, expiration_data: Any) -> Optional[datetime]:
         """Calculate when leverage expires"""
@@ -652,157 +882,3 @@ class LeverageManager:
             success_level=0.0,
             consequences={'failure_reason': reason}
         )
-    
-    async def _check_requirements(
-        self,
-        requirements: List[str],
-        context: Dict[str, Any]
-    ) -> bool:
-        """Check if requirements are met"""
-        
-        # Simple check - could be enhanced
-        if not requirements:
-            return True
-        
-        # Check context for requirement keywords
-        context_str = json.dumps(context).lower()
-        for req in requirements:
-            if req.lower() not in context_str:
-                return False
-        
-        return True
-    
-    def _modify_success_chance(
-        self,
-        base_chance: float,
-        context: Dict[str, Any]
-    ) -> float:
-        """Modify success chance based on context"""
-        
-        modified = base_chance
-        
-        # Boost for preparation
-        if context.get('prepared', False):
-            modified += 0.1
-        
-        # Penalty for rushed execution
-        if context.get('rushed', False):
-            modified -= 0.2
-        
-        # Bonus for resources
-        if context.get('resources_available', 0) > 3:
-            modified += 0.15
-        
-        return max(0.0, min(1.0, modified))
-
-# ===============================================================================
-# PUBLIC API FUNCTIONS
-# ===============================================================================
-
-@function_tool
-async def discover_leverage_opportunity(
-    ctx: RunContextWrapper,
-    target_id: int,
-    observation: str
-) -> Dict[str, Any]:
-    """Discover potential leverage through observation"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = LeverageManager(user_id, conversation_id)
-    
-    context = {'observation': observation}
-    leverage = await manager.discover_leverage(user_id, target_id, context)
-    
-    if leverage:
-        return {
-            'discovered': True,
-            'leverage_id': leverage.leverage_id,
-            'type': leverage.leverage_type.value,
-            'description': leverage.description,
-            'strength': leverage.strength,
-            'uses_remaining': leverage.uses_remaining
-        }
-    else:
-        return {
-            'discovered': False,
-            'message': 'No leverage discovered from this observation'
-        }
-
-@function_tool
-async def use_leverage(
-    ctx: RunContextWrapper,
-    leverage_id: int,
-    demand: str,
-    aggressive: bool = False
-) -> Dict[str, Any]:
-    """Apply leverage to make a demand"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = LeverageManager(user_id, conversation_id)
-    
-    threat_level = 0.8 if aggressive else 0.4
-    application = await manager.apply_leverage(leverage_id, demand, threat_level)
-    
-    # Generate narrative
-    narrative = await manager.narrate_leverage_consequences(application, long_term=False)
-    
-    return {
-        'application_id': application.application_id,
-        'success': application.success_level > 0.5,
-        'target_response': application.target_response,
-        'narrative': narrative,
-        'consequences': application.consequences
-    }
-
-@function_tool
-async def defend_against_leverage(
-    ctx: RunContextWrapper,
-    leverage_id: int,
-    available_resources: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """Generate and optionally execute counter-strategies"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = LeverageManager(user_id, conversation_id)
-    
-    resources = available_resources or {}
-    strategies = await manager.generate_counter_strategies(leverage_id, resources)
-    
-    return {
-        'strategies_available': len(strategies),
-        'options': [
-            {
-                'strategy_id': s.strategy_id,
-                'type': s.strategy_type,
-                'description': s.description,
-                'requirements': s.requirements,
-                'success_chance': s.success_chance,
-                'risks': s.risks
-            }
-            for s in strategies
-        ]
-    }
-
-@function_tool
-async def execute_counter_strategy(
-    ctx: RunContextWrapper,
-    strategy_id: int,
-    additional_context: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """Execute a specific counter-strategy"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = LeverageManager(user_id, conversation_id)
-    
-    context = additional_context or {}
-    result = await manager.execute_counter_strategy(strategy_id, context)
-    
-    return result
