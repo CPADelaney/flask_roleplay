@@ -1,16 +1,20 @@
 # logic/conflict_system/conflict_synthesizer.py
 """
-Conflict Synthesizer with LLM-generated merging and complexity management
-Intelligently combines multiple conflicts into coherent narrative experiences
+Conflict Synthesizer - Central Orchestration System
+
+This module acts as the central orchestrator for all conflict-related operations,
+ensuring all conflict subsystems work together in harmony. It doesn't merge conflicts
+narratively, but rather synthesizes the various conflict modules into a cohesive system.
 """
 
 import logging
 import json
-import random
-from typing import Dict, List, Any, Optional, Tuple, Set
+import asyncio
+from typing import Dict, List, Any, Optional, Tuple, Set, Union
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
+from collections import defaultdict
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
@@ -18,549 +22,793 @@ from db.connection import get_db_connection_context
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# SYNTHESIS TYPES
+# ORCHESTRATION TYPES
 # ===============================================================================
 
-class SynthesisType(Enum):
-    """Ways conflicts can be synthesized"""
-    MERGE = "merge"  # Conflicts become one
-    LAYER = "layer"  # Conflicts stack on top of each other
-    CHAIN = "chain"  # One conflict leads to another
-    PARALLEL = "parallel"  # Conflicts run simultaneously
-    NESTED = "nested"  # One conflict contains another
-    COMPETING = "competing"  # Conflicts compete for attention
-    AMPLIFYING = "amplifying"  # Conflicts make each other worse
-    RESOLVING = "resolving"  # One conflict solves another
+class OrchestrationMode(Enum):
+    """How conflict modules are orchestrated"""
+    SEQUENTIAL = "sequential"  # Process through modules one by one
+    PARALLEL = "parallel"  # Process through modules simultaneously
+    SELECTIVE = "selective"  # Only use specific modules
+    ADAPTIVE = "adaptive"  # Dynamically choose based on context
+    PRIORITY = "priority"  # Process by priority order
+
+
+class ConflictPhase(Enum):
+    """Unified conflict phases across all modules"""
+    BREWING = "brewing"
+    ACTIVE = "active"
+    CLIMAX = "climax"
+    RESOLUTION = "resolution"
+    AFTERMATH = "aftermath"
 
 
 @dataclass
-class SynthesizedConflict:
-    """A synthesized multi-conflict narrative"""
-    synthesis_id: int
-    primary_conflict_id: int
-    component_conflicts: List[int]
-    synthesis_type: SynthesisType
-    complexity_score: float
-    narrative_structure: Dict[str, Any]
-    interaction_points: List[Dict[str, Any]]
-    emergent_properties: List[str]
+class ConflictState:
+    """Unified state representation across all modules"""
+    conflict_id: int
+    phase: ConflictPhase
+    intensity: float
+    complexity: float
+    stakeholder_states: Dict[int, Any]
+    resolution_paths: List[Dict[str, Any]]
+    active_events: List[Dict[str, Any]]
+    module_states: Dict[str, Any]
+
+
+@dataclass
+class OrchestrationResult:
+    """Result of orchestrating conflict operations"""
+    success: bool
+    mode: OrchestrationMode
+    modules_engaged: List[str]
+    primary_result: Dict[str, Any]
+    module_results: Dict[str, Any]
+    cascade_effects: List[Dict[str, Any]]
+    state_changes: Dict[str, Any]
+    narrative_impact: float
 
 
 # ===============================================================================
-# CONFLICT SYNTHESIZER
+# CONFLICT SYNTHESIZER - CENTRAL ORCHESTRATOR
 # ===============================================================================
 
 class ConflictSynthesizer:
-    """Synthesizes multiple conflicts into coherent experiences"""
+    """
+    Central orchestrator for all conflict subsystems.
+    Ensures all conflict modules work together seamlessly.
+    """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
         
-        # Lazy-loaded agents
-        self._synthesis_architect = None
-        self._complexity_manager = None
-        self._interaction_designer = None
-        self._emergence_detector = None
-        self._narrative_weaver = None
+        # Conflict subsystems (lazy loaded)
+        self._subsystems = {}
+        self._subsystem_loaders = {
+            'resolution': self._load_resolution_system,
+            'generation': self._load_generation_system,
+            'stakeholders': self._load_stakeholder_system,
+            'integration': self._load_integration_system,
+            'analysis': self._load_analysis_system,
+            'rewards': self._load_rewards_system
+        }
+        
+        # Orchestration state
+        self.active_conflicts = {}
+        self.orchestration_history = []
+        self.module_performance = defaultdict(lambda: {'calls': 0, 'successes': 0, 'failures': 0})
+        
+        # Coordination agents (lazy loaded)
+        self._orchestration_director = None
+        self._state_coordinator = None
+        self._complexity_monitor = None
+        self._cascade_analyzer = None
+        
+        # Cache for performance
+        self._state_cache = {}
+        self._cache_ttl = 300  # 5 minutes
+        
+    # ========== Subsystem Loading ==========
+    
+    async def _load_resolution_system(self):
+        """Load conflict resolution system"""
+        from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
+        system = ConflictResolutionSystem(self.user_id, self.conversation_id)
+        await system.initialize()
+        return system
+    
+    async def _load_generation_system(self):
+        """Load conflict generation system"""
+        from logic.conflict_system.enhanced_conflict_generation import EnhancedConflictGenerator
+        return EnhancedConflictGenerator(self.user_id, self.conversation_id)
+    
+    async def _load_stakeholder_system(self):
+        """Load stakeholder autonomy system"""
+        from logic.conflict_system.dynamic_stakeholder_agents import StakeholderAutonomySystem
+        return StakeholderAutonomySystem(self.user_id, self.conversation_id)
+    
+    async def _load_integration_system(self):
+        """Load conflict integration system"""
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        system = ConflictSystemIntegration(self.user_id, self.conversation_id)
+        await system.initialize()
+        return system
+    
+    async def _load_analysis_system(self):
+        """Load conflict analysis system"""
+        # This would load your conflict analysis agents
+        from logic.conflict_system.conflict_agents import initialize_conflict_agents
+        return await initialize_conflict_agents(self.user_id, self.conversation_id)
+    
+    async def _load_rewards_system(self):
+        """Load player rewards system"""
+        # This manages rewards from conflicts
+        return {
+            'calculate_rewards': self._calculate_conflict_rewards,
+            'grant_rewards': self._grant_conflict_rewards
+        }
+    
+    async def get_subsystem(self, name: str):
+        """Get or load a subsystem"""
+        if name not in self._subsystems:
+            if name in self._subsystem_loaders:
+                self._subsystems[name] = await self._subsystem_loaders[name]()
+            else:
+                raise ValueError(f"Unknown subsystem: {name}")
+        return self._subsystems[name]
     
     # ========== Agent Properties ==========
     
     @property
-    def synthesis_architect(self) -> Agent:
-        if self._synthesis_architect is None:
-            self._synthesis_architect = Agent(
-                name="Conflict Synthesis Architect",
+    def orchestration_director(self) -> Agent:
+        """Agent that directs orchestration strategy"""
+        if self._orchestration_director is None:
+            self._orchestration_director = Agent(
+                name="Conflict Orchestration Director",
                 instructions="""
-                Design how multiple conflicts combine into unified experiences.
+                You orchestrate how different conflict subsystems work together.
                 
-                Create syntheses that:
-                - Maintain each conflict's integrity
-                - Create emergent complexity
-                - Generate meaningful interactions
-                - Build narrative coherence
-                - Avoid overwhelming players
+                Your responsibilities:
+                - Determine which modules to engage for each operation
+                - Decide processing order (sequential/parallel/priority)
+                - Identify dependencies between modules
+                - Optimize for narrative coherence and performance
+                - Prevent module conflicts and redundancies
                 
-                Focus on creating richer experiences, not just more complicated ones.
+                Consider the current game state and active conflicts when making decisions.
                 """,
                 model="gpt-5-nano",
             )
-        return self._synthesis_architect
+        return self._orchestration_director
     
     @property
-    def complexity_manager(self) -> Agent:
-        if self._complexity_manager is None:
-            self._complexity_manager = Agent(
-                name="Complexity Manager",
+    def state_coordinator(self) -> Agent:
+        """Agent that maintains consistent state across modules"""
+        if self._state_coordinator is None:
+            self._state_coordinator = Agent(
+                name="Conflict State Coordinator",
                 instructions="""
-                Manage the complexity of synthesized conflicts.
+                You maintain consistent state across all conflict modules.
                 
-                Ensure that:
-                - Complexity serves narrative purpose
-                - Players can track what matters
-                - Choices remain meaningful
-                - Cognitive load is manageable
-                - Depth doesn't become confusion
+                Your responsibilities:
+                - Reconcile conflicting state updates from different modules
+                - Ensure state consistency across subsystems
+                - Track state transitions and validate them
+                - Detect and resolve state conflicts
+                - Maintain state history for rollback if needed
                 
-                Complexity should enhance, not obscure, the experience.
+                Prioritize data consistency and narrative coherence.
                 """,
                 model="gpt-5-nano",
             )
-        return self._complexity_manager
+        return self._state_coordinator
     
     @property
-    def interaction_designer(self) -> Agent:
-        if self._interaction_designer is None:
-            self._interaction_designer = Agent(
-                name="Conflict Interaction Designer",
+    def complexity_monitor(self) -> Agent:
+        """Agent that monitors and manages system complexity"""
+        if self._complexity_monitor is None:
+            self._complexity_monitor = Agent(
+                name="Complexity Monitor",
                 instructions="""
-                Design how conflicts interact with each other.
+                You monitor the complexity of the conflict system.
                 
-                Create interactions that:
-                - Feel organic and logical
-                - Generate interesting dynamics
-                - Create cascade effects
-                - Enable creative solutions
-                - Produce unexpected outcomes
+                Track:
+                - Number of active conflicts
+                - Interconnections between conflicts
+                - Cognitive load on the player
+                - System resource usage
+                - Narrative complexity
                 
-                Make conflicts feel like a living ecosystem.
+                Alert when complexity becomes unmanageable and suggest simplifications.
                 """,
                 model="gpt-5-nano",
             )
-        return self._interaction_designer
+        return self._complexity_monitor
     
     @property
-    def emergence_detector(self) -> Agent:
-        if self._emergence_detector is None:
-            self._emergence_detector = Agent(
-                name="Emergent Property Detector",
+    def cascade_analyzer(self) -> Agent:
+        """Agent that analyzes cascade effects across modules"""
+        if self._cascade_analyzer is None:
+            self._cascade_analyzer = Agent(
+                name="Cascade Effect Analyzer",
                 instructions="""
-                Detect emergent properties from conflict combinations.
+                You analyze how actions in one module cascade to others.
                 
                 Identify:
-                - New dynamics that emerge
-                - Unexpected opportunities
-                - Hidden connections
-                - Synergistic effects
-                - Narrative possibilities
+                - Direct effects of module operations
+                - Secondary effects across subsystems
+                - Potential feedback loops
+                - Unintended consequences
+                - Opportunities for emergent gameplay
                 
-                Find the magic that happens when conflicts combine.
+                Help prevent negative cascades while enabling interesting ones.
                 """,
                 model="gpt-5-nano",
             )
-        return self._emergence_detector
+        return self._cascade_analyzer
     
-    @property
-    def narrative_weaver(self) -> Agent:
-        if self._narrative_weaver is None:
-            self._narrative_weaver = Agent(
-                name="Narrative Weaver",
-                instructions="""
-                Weave multiple conflicts into coherent narratives.
-                
-                Create stories that:
-                - Unite disparate conflicts
-                - Build dramatic tension
-                - Provide satisfying arcs
-                - Maintain character consistency
-                - Generate memorable moments
-                
-                Turn conflict chaos into narrative gold.
-                """,
-                model="gpt-5-nano",
+    # ========== Core Orchestration Methods ==========
+    
+    async def create_conflict(self, conflict_data: Dict[str, Any]) -> OrchestrationResult:
+        """
+        Create a new conflict through orchestrated subsystems.
+        
+        This coordinates:
+        1. Generation system for enhanced conflict data
+        2. Resolution system for conflict structure
+        3. Stakeholder system for NPC involvement
+        4. Integration system for world state
+        """
+        try:
+            # Determine orchestration strategy
+            strategy = await self._determine_orchestration_strategy('create', conflict_data)
+            
+            module_results = {}
+            cascade_effects = []
+            
+            # Phase 1: Generate enhanced conflict
+            if 'generation' in strategy['modules']:
+                generation = await self.get_subsystem('generation')
+                enhanced_data = await generation.generate_conflict(conflict_data)
+                module_results['generation'] = enhanced_data
+                conflict_data.update(enhanced_data)
+            
+            # Phase 2: Create conflict structure
+            if 'resolution' in strategy['modules']:
+                resolution = await self.get_subsystem('resolution')
+                conflict_id = await resolution.create_conflict(conflict_data)
+                module_results['resolution'] = {'conflict_id': conflict_id}
+            else:
+                # Fallback to direct DB creation
+                conflict_id = await self._create_basic_conflict(conflict_data)
+            
+            # Phase 3: Initialize stakeholders (parallel with phase 4)
+            tasks = []
+            
+            if 'stakeholders' in strategy['modules']:
+                stakeholders = await self.get_subsystem('stakeholders')
+                tasks.append(stakeholders.initialize_stakeholders(
+                    conflict_id, 
+                    conflict_data.get('stakeholders', [])
+                ))
+            
+            # Phase 4: Integrate with world state
+            if 'integration' in strategy['modules']:
+                integration = await self.get_subsystem('integration')
+                tasks.append(integration.register_conflict(conflict_id, conflict_data))
+            
+            # Execute parallel tasks
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Subsystem error: {result}")
+                    else:
+                        module_results[f'parallel_{i}'] = result
+            
+            # Analyze cascade effects
+            cascade_effects = await self._analyze_cascade_effects('create', conflict_id, module_results)
+            
+            # Cache the conflict state
+            state = await self._get_unified_conflict_state(conflict_id)
+            self.active_conflicts[conflict_id] = state
+            
+            # Update performance metrics
+            self._update_performance_metrics(strategy['modules'], success=True)
+            
+            return OrchestrationResult(
+                success=True,
+                mode=OrchestrationMode(strategy['mode']),
+                modules_engaged=strategy['modules'],
+                primary_result={'conflict_id': conflict_id},
+                module_results=module_results,
+                cascade_effects=cascade_effects,
+                state_changes={'created': conflict_id},
+                narrative_impact=self._calculate_narrative_impact(module_results)
             )
-        return self._narrative_weaver
+            
+        except Exception as e:
+            logger.error(f"Error in orchestrated conflict creation: {e}")
+            self._update_performance_metrics(strategy.get('modules', []), success=False)
+            
+            return OrchestrationResult(
+                success=False,
+                mode=OrchestrationMode.SEQUENTIAL,
+                modules_engaged=[],
+                primary_result={'error': str(e)},
+                module_results={},
+                cascade_effects=[],
+                state_changes={},
+                narrative_impact=0.0
+            )
     
-    # ========== Synthesis Methods ==========
-    
-    async def analyze_conflicts_for_synthesis(
+    async def resolve_conflict(
         self,
-        conflict_ids: List[int]
-    ) -> Dict[str, Any]:
-        """Analyze if and how conflicts should be synthesized"""
-        
-        # Get conflict details
-        conflicts = []
-        async with get_db_connection_context() as conn:
-            for conflict_id in conflict_ids:
-                conflict = await conn.fetchrow("""
-                    SELECT * FROM Conflicts WHERE conflict_id = $1
-                """, conflict_id)
-                
-                stakeholders = await conn.fetch("""
-                    SELECT * FROM conflict_stakeholders
-                    WHERE conflict_id = $1
-                """, conflict_id)
-                
-                conflicts.append({
-                    'id': conflict_id,
-                    'type': conflict['conflict_type'],
-                    'name': conflict['conflict_name'],
-                    'intensity': conflict['intensity'],
-                    'phase': conflict['phase'],
-                    'stakeholder_count': len(stakeholders),
-                    'stakeholder_ids': [s['npc_id'] for s in stakeholders]
-                })
-        
-        # Check for synthesis potential
-        prompt = f"""
-        Analyze these conflicts for synthesis potential:
-        
-        Conflicts: {json.dumps(conflicts)}
-        
-        Determine:
-        - Should they be synthesized?
-        - What synthesis type works best?
-        - What emerges from combination?
-        - What complexity this creates?
-        
-        Return JSON:
-        {{
-            "should_synthesize": true/false,
-            "reason": "Why or why not",
-            "synthesis_type": "merge/layer/chain/parallel/nested/competing/amplifying",
-            "expected_complexity": 0.0 to 1.0,
-            "shared_elements": ["common stakeholders/themes/locations"],
-            "interaction_potential": ["how they could interact"],
-            "emergent_opportunities": ["what new possibilities emerge"],
-            "risks": ["potential problems from synthesis"]
-        }}
+        conflict_id: int,
+        resolution_data: Dict[str, Any]
+    ) -> OrchestrationResult:
         """
+        Resolve a conflict through orchestrated subsystems.
         
-        response = await Runner.run(self.synthesis_architect, prompt)
-        return json.loads(response.output)
-    
-    async def synthesize_conflicts(
-        self,
-        conflict_ids: List[int],
-        synthesis_type: SynthesisType
-    ) -> SynthesizedConflict:
-        """Synthesize multiple conflicts into one experience"""
-        
-        # Get detailed conflict data
-        conflicts_data = await self._get_detailed_conflicts(conflict_ids)
-        
-        # Design the synthesis structure
-        structure = await self._design_synthesis_structure(
-            conflicts_data,
-            synthesis_type
-        )
-        
-        # Identify interaction points
-        interactions = await self._identify_interaction_points(
-            conflicts_data,
-            structure
-        )
-        
-        # Detect emergent properties
-        emergent = await self._detect_emergent_properties(
-            conflicts_data,
-            structure,
-            interactions
-        )
-        
-        # Calculate complexity
-        complexity = await self._calculate_synthesis_complexity(
-            conflicts_data,
-            structure,
-            interactions,
-            emergent
-        )
-        
-        # Store synthesis
-        synthesis_id = await self._store_synthesis(
-            conflict_ids[0],  # Primary conflict
-            conflict_ids,
-            synthesis_type,
-            complexity,
-            structure,
-            interactions,
-            emergent
-        )
-        
-        return SynthesizedConflict(
-            synthesis_id=synthesis_id,
-            primary_conflict_id=conflict_ids[0],
-            component_conflicts=conflict_ids,
-            synthesis_type=synthesis_type,
-            complexity_score=complexity,
-            narrative_structure=structure,
-            interaction_points=interactions,
-            emergent_properties=emergent
-        )
-    
-    async def _get_detailed_conflicts(
-        self,
-        conflict_ids: List[int]
-    ) -> List[Dict[str, Any]]:
-        """Get detailed data for conflicts"""
-        
-        conflicts = []
-        async with get_db_connection_context() as conn:
-            for conflict_id in conflict_ids:
-                conflict = await conn.fetchrow("""
-                    SELECT * FROM Conflicts WHERE conflict_id = $1
-                """, conflict_id)
-                
-                stakeholders = await conn.fetch("""
-                    SELECT cs.*, n.npc_name
-                    FROM conflict_stakeholders cs
-                    JOIN NPCStats n ON cs.npc_id = n.npc_id
-                    WHERE cs.conflict_id = $1
-                """, conflict_id)
-                
-                conflicts.append({
-                    'conflict': dict(conflict),
-                    'stakeholders': [dict(s) for s in stakeholders]
-                })
-        
-        return conflicts
-    
-    async def _design_synthesis_structure(
-        self,
-        conflicts: List[Dict[str, Any]],
-        synthesis_type: SynthesisType
-    ) -> Dict[str, Any]:
-        """Design the structure of synthesized conflicts"""
-        
-        prompt = f"""
-        Design a synthesis structure for these conflicts:
-        
-        Conflicts: {json.dumps([c['conflict'] for c in conflicts])}
-        Synthesis Type: {synthesis_type.value}
-        
-        Create a structure that:
-        - Unifies the conflicts coherently
-        - Maintains individual conflict identity
-        - Creates natural flow
-        - Enables meaningful choices
-        
-        Return JSON:
-        {{
-            "primary_thread": "Main narrative thread",
-            "secondary_threads": ["supporting narratives"],
-            "connection_points": ["where conflicts connect"],
-            "narrative_flow": {{
-                "opening": "How it begins",
-                "development": "How it develops",
-                "climax": "Peak moment",
-                "resolution_paths": ["possible endings"]
-            }},
-            "player_agency_points": ["where player choices matter most"],
-            "dramatic_beats": ["key dramatic moments"]
-        }}
+        Coordinates:
+        1. Resolution system for outcome
+        2. Stakeholder system for NPC reactions
+        3. Rewards system for player rewards
+        4. Integration system for world state updates
         """
-        
-        response = await Runner.run(self.narrative_weaver, prompt)
-        return json.loads(response.output)
+        try:
+            strategy = await self._determine_orchestration_strategy('resolve', {
+                'conflict_id': conflict_id,
+                'resolution_data': resolution_data
+            })
+            
+            module_results = {}
+            
+            # Phase 1: Execute resolution
+            if 'resolution' in strategy['modules']:
+                resolution = await self.get_subsystem('resolution')
+                result = await resolution.resolve_conflict(conflict_id, resolution_data)
+                module_results['resolution'] = result
+            
+            # Phase 2: Update stakeholders
+            if 'stakeholders' in strategy['modules']:
+                stakeholders = await self.get_subsystem('stakeholders')
+                reactions = await stakeholders.process_resolution(conflict_id, resolution_data)
+                module_results['stakeholders'] = reactions
+            
+            # Phase 3: Calculate and grant rewards
+            if 'rewards' in strategy['modules']:
+                rewards = await self.get_subsystem('rewards')
+                player_rewards = await rewards['calculate_rewards'](conflict_id, resolution_data)
+                await rewards['grant_rewards'](self.user_id, self.conversation_id, player_rewards)
+                module_results['rewards'] = player_rewards
+            
+            # Phase 4: Update world state
+            if 'integration' in strategy['modules']:
+                integration = await self.get_subsystem('integration')
+                world_updates = await integration.handle_resolution(conflict_id, resolution_data)
+                module_results['integration'] = world_updates
+            
+            # Analyze cascade effects
+            cascade_effects = await self._analyze_cascade_effects('resolve', conflict_id, module_results)
+            
+            # Update conflict state
+            if conflict_id in self.active_conflicts:
+                self.active_conflicts[conflict_id].phase = ConflictPhase.AFTERMATH
+            
+            return OrchestrationResult(
+                success=True,
+                mode=OrchestrationMode(strategy['mode']),
+                modules_engaged=strategy['modules'],
+                primary_result={'resolved': True, 'conflict_id': conflict_id},
+                module_results=module_results,
+                cascade_effects=cascade_effects,
+                state_changes={'resolved': conflict_id},
+                narrative_impact=self._calculate_narrative_impact(module_results)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in orchestrated conflict resolution: {e}")
+            return OrchestrationResult(
+                success=False,
+                mode=OrchestrationMode.SEQUENTIAL,
+                modules_engaged=[],
+                primary_result={'error': str(e)},
+                module_results={},
+                cascade_effects=[],
+                state_changes={},
+                narrative_impact=0.0
+            )
     
-    async def _identify_interaction_points(
+    async def process_event(
         self,
-        conflicts: List[Dict[str, Any]],
-        structure: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Identify where conflicts interact"""
-        
-        # Find shared stakeholders
-        stakeholder_map = {}
-        for conflict in conflicts:
-            for stakeholder in conflict['stakeholders']:
-                npc_id = stakeholder['npc_id']
-                if npc_id not in stakeholder_map:
-                    stakeholder_map[npc_id] = []
-                stakeholder_map[npc_id].append(conflict['conflict']['conflict_id'])
-        
-        shared_stakeholders = {
-            npc_id: conflicts_list
-            for npc_id, conflicts_list in stakeholder_map.items()
-            if len(conflicts_list) > 1
-        }
-        
-        prompt = f"""
-        Identify interaction points between conflicts:
-        
-        Conflicts: {json.dumps([c['conflict']['conflict_name'] for c in conflicts])}
-        Structure: {json.dumps(structure)}
-        Shared Stakeholders: {json.dumps(shared_stakeholders)}
-        
-        Create interaction points that:
-        - Feel organic
-        - Create interesting dynamics
-        - Enable cascade effects
-        - Generate drama
-        
-        Return JSON:
-        {{
-            "interactions": [
-                {{
-                    "type": "cascade/interference/resonance/contradiction",
-                    "conflicts_involved": [conflict_ids],
-                    "trigger": "What causes interaction",
-                    "effect": "What happens",
-                    "player_influence": "How player affects it",
-                    "narrative_impact": "Story consequences"
-                }}
-            ]
-        }}
+        conflict_id: int,
+        event: Dict[str, Any]
+    ) -> OrchestrationResult:
         """
+        Process an event through relevant conflict subsystems.
         
-        response = await Runner.run(self.interaction_designer, prompt)
-        data = json.loads(response.output)
-        return data['interactions']
-    
-    async def _detect_emergent_properties(
-        self,
-        conflicts: List[Dict[str, Any]],
-        structure: Dict[str, Any],
-        interactions: List[Dict[str, Any]]
-    ) -> List[str]:
-        """Detect emergent properties from synthesis"""
-        
-        prompt = f"""
-        Detect emergent properties from this conflict synthesis:
-        
-        Conflicts: {json.dumps([c['conflict']['conflict_name'] for c in conflicts])}
-        Structure: {json.dumps(structure)}
-        Interactions: {json.dumps(interactions)}
-        
-        Identify emergent properties - things that arise from
-        the combination that don't exist in individual conflicts:
-        
-        - New dynamics
-        - Unexpected opportunities
-        - Hidden themes
-        - Synergistic effects
-        - Novel solutions
-        
-        Return JSON:
-        {{
-            "emergent_properties": [
-                "List of emergent properties as strings"
-            ]
-        }}
+        Routes events to appropriate modules based on type and context.
         """
-        
-        response = await Runner.run(self.emergence_detector, prompt)
-        data = json.loads(response.output)
-        return data['emergent_properties']
+        try:
+            event_type = event.get('type', 'unknown')
+            
+            # Determine which modules should handle this event
+            strategy = await self._determine_orchestration_strategy('event', {
+                'conflict_id': conflict_id,
+                'event': event
+            })
+            
+            module_results = {}
+            
+            # Route to appropriate modules
+            for module_name in strategy['modules']:
+                try:
+                    module = await self.get_subsystem(module_name)
+                    
+                    # Each module has a process_event method
+                    if hasattr(module, 'process_event'):
+                        result = await module.process_event(conflict_id, event)
+                        module_results[module_name] = result
+                    elif hasattr(module, 'handle_event'):
+                        result = await module.handle_event(conflict_id, event)
+                        module_results[module_name] = result
+                        
+                except Exception as e:
+                    logger.error(f"Module {module_name} failed to process event: {e}")
+                    module_results[module_name] = {'error': str(e)}
+            
+            # Coordinate state updates across modules
+            state_updates = await self._coordinate_state_updates(conflict_id, module_results)
+            
+            # Analyze cascade effects
+            cascade_effects = await self._analyze_cascade_effects('event', conflict_id, module_results)
+            
+            return OrchestrationResult(
+                success=True,
+                mode=OrchestrationMode(strategy['mode']),
+                modules_engaged=strategy['modules'],
+                primary_result={'event_processed': True, 'type': event_type},
+                module_results=module_results,
+                cascade_effects=cascade_effects,
+                state_changes=state_updates,
+                narrative_impact=self._calculate_narrative_impact(module_results)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing event through orchestration: {e}")
+            return OrchestrationResult(
+                success=False,
+                mode=OrchestrationMode.SEQUENTIAL,
+                modules_engaged=[],
+                primary_result={'error': str(e)},
+                module_results={},
+                cascade_effects=[],
+                state_changes={},
+                narrative_impact=0.0
+            )
     
-    async def _calculate_synthesis_complexity(
-        self,
-        conflicts: List[Dict[str, Any]],
-        structure: Dict[str, Any],
-        interactions: List[Dict[str, Any]],
-        emergent: List[str]
-    ) -> float:
-        """Calculate complexity score of synthesis"""
+    async def get_conflict_state(self, conflict_id: int) -> ConflictState:
+        """Get unified state of a conflict across all modules"""
+        
+        # Check cache
+        cache_key = f"state_{conflict_id}"
+        if cache_key in self._state_cache:
+            cached_time, cached_state = self._state_cache[cache_key]
+            if (datetime.now() - cached_time).seconds < self._cache_ttl:
+                return cached_state
+        
+        # Build unified state
+        state = await self._get_unified_conflict_state(conflict_id)
+        
+        # Cache it
+        self._state_cache[cache_key] = (datetime.now(), state)
+        
+        return state
+    
+    async def analyze_conflict_complexity(self) -> Dict[str, Any]:
+        """Analyze overall complexity of active conflicts"""
         
         prompt = f"""
-        Calculate complexity of this conflict synthesis:
+        Analyze the complexity of the current conflict system:
         
-        Number of Conflicts: {len(conflicts)}
-        Number of Stakeholders: {sum(len(c['stakeholders']) for c in conflicts)}
-        Number of Interactions: {len(interactions)}
-        Number of Emergent Properties: {len(emergent)}
-        Structure Complexity: {len(structure.get('dramatic_beats', []))} beats
+        Active Conflicts: {len(self.active_conflicts)}
+        Conflict States: {json.dumps([c.phase.value for c in self.active_conflicts.values()])}
         
-        Rate complexity from 0.0 to 1.0 considering:
-        - Cognitive load on player
+        Assess:
+        - Overall complexity (0.0 to 1.0)
+        - Player cognitive load
+        - System resource usage
         - Narrative coherence
-        - Decision complexity
-        - Tracking difficulty
-        - Emotional investment required
+        - Recommendations for managing complexity
         
         Return JSON:
         {{
             "complexity_score": 0.0 to 1.0,
-            "breakdown": {{
-                "structural": 0.0 to 1.0,
-                "interpersonal": 0.0 to 1.0,
-                "narrative": 0.0 to 1.0,
-                "decision": 0.0 to 1.0
-            }},
-            "player_burden": "low/medium/high",
-            "recommendation": "proceed/simplify/abort"
+            "cognitive_load": "low/medium/high",
+            "resource_usage": "low/medium/high",
+            "narrative_coherence": 0.0 to 1.0,
+            "recommendations": ["list of recommendations"],
+            "warning_level": "none/low/medium/high"
         }}
         """
         
-        response = await Runner.run(self.complexity_manager, prompt)
-        data = json.loads(response.output)
-        return data['complexity_score']
+        response = await Runner.run(self.complexity_monitor, prompt)
+        return json.loads(response.output)
     
-    async def _store_synthesis(
-        self,
-        primary_id: int,
-        all_ids: List[int],
-        synthesis_type: SynthesisType,
-        complexity: float,
-        structure: Dict[str, Any],
-        interactions: List[Dict[str, Any]],
-        emergent: List[str]
-    ) -> int:
-        """Store synthesis in database"""
-        
-        async with get_db_connection_context() as conn:
-            synthesis_id = await conn.fetchval("""
-                INSERT INTO conflict_synthesis
-                (primary_conflict_id, component_conflicts, synthesis_type,
-                 complexity_score, narrative_structure, interaction_points,
-                 emergent_properties, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
-                RETURNING synthesis_id
-            """, primary_id, json.dumps(all_ids), synthesis_type.value,
-            complexity, json.dumps(structure), json.dumps(interactions),
-            json.dumps(emergent))
-        
-        return synthesis_id
+    # ========== Internal Helper Methods ==========
     
-    async def manage_synthesis_progression(
+    async def _determine_orchestration_strategy(
         self,
-        synthesis_id: int,
-        event: Dict[str, Any]
+        operation: str,
+        context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Manage how synthesized conflicts progress"""
-        
-        # Get synthesis data
-        async with get_db_connection_context() as conn:
-            synthesis = await conn.fetchrow("""
-                SELECT * FROM conflict_synthesis WHERE synthesis_id = $1
-            """, synthesis_id)
-        
-        component_conflicts = json.loads(synthesis['component_conflicts'])
-        interactions = json.loads(synthesis['interaction_points'])
+        """Determine how to orchestrate modules for an operation"""
         
         prompt = f"""
-        Manage progression of synthesized conflicts:
+        Determine orchestration strategy for operation: {operation}
         
-        Synthesis Type: {synthesis['synthesis_type']}
-        Event: {json.dumps(event)}
-        Component Conflicts: {component_conflicts}
-        Current Interactions: {json.dumps(interactions)}
+        Context: {json.dumps(context)}
+        Available Modules: {list(self._subsystem_loaders.keys())}
         
-        Determine:
-        - How event affects each conflict
-        - New interactions triggered
-        - Cascade effects
-        - Complexity changes
+        Decide:
+        - Which modules to engage
+        - Processing mode (sequential/parallel/priority)
+        - Dependencies between modules
+        - Expected performance impact
         
         Return JSON:
         {{
-            "conflict_updates": {{
-                "conflict_id": {{
-                    "progress_change": -10 to +10,
-                    "phase_change": "new phase if applicable",
-                    "intensity_change": "increase/decrease/maintain"
-                }}
-            }},
-            "new_interactions": ["newly triggered interactions"],
-            "cascade_effects": ["secondary effects"],
-            "complexity_delta": -0.1 to +0.1,
-            "narrative_impact": "How this changes the overall story"
+            "modules": ["ordered list of modules to engage"],
+            "mode": "sequential/parallel/priority/adaptive",
+            "dependencies": {{"module": ["depends_on"]}},
+            "estimated_time": "milliseconds",
+            "priority_order": ["for priority mode"]
         }}
         """
         
-        response = await Runner.run(self.synthesis_architect, prompt)
+        response = await Runner.run(self.orchestration_director, prompt)
         return json.loads(response.output)
+    
+    async def _coordinate_state_updates(
+        self,
+        conflict_id: int,
+        module_results: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Coordinate state updates from multiple modules"""
+        
+        prompt = f"""
+        Coordinate state updates from multiple conflict modules:
+        
+        Conflict ID: {conflict_id}
+        Module Results: {json.dumps(module_results)}
+        
+        Reconcile any conflicts and produce unified state updates.
+        
+        Return JSON:
+        {{
+            "phase_change": "new phase if any",
+            "intensity_change": -1.0 to 1.0,
+            "progress_change": -100 to 100,
+            "stakeholder_updates": {{}},
+            "world_state_updates": {{}},
+            "conflicts_resolved": ["how conflicts were resolved"]
+        }}
+        """
+        
+        response = await Runner.run(self.state_coordinator, prompt)
+        updates = json.loads(response.output)
+        
+        # Apply updates to database
+        if any([updates.get('phase_change'), updates.get('intensity_change'), updates.get('progress_change')]):
+            async with get_db_connection_context() as conn:
+                query_parts = []
+                params = []
+                param_count = 1
+                
+                if updates.get('phase_change'):
+                    query_parts.append(f"phase = ${param_count}")
+                    params.append(updates['phase_change'])
+                    param_count += 1
+                
+                if updates.get('intensity_change'):
+                    query_parts.append(f"intensity = intensity + ${param_count}")
+                    params.append(updates['intensity_change'])
+                    param_count += 1
+                
+                if updates.get('progress_change'):
+                    query_parts.append(f"progress = progress + ${param_count}")
+                    params.append(updates['progress_change'])
+                    param_count += 1
+                
+                if query_parts:
+                    params.append(conflict_id)
+                    query = f"""
+                        UPDATE Conflicts 
+                        SET {', '.join(query_parts)}
+                        WHERE conflict_id = ${param_count}
+                    """
+                    await conn.execute(query, *params)
+        
+        return updates
+    
+    async def _analyze_cascade_effects(
+        self,
+        operation: str,
+        conflict_id: int,
+        module_results: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Analyze cascade effects across modules"""
+        
+        prompt = f"""
+        Analyze cascade effects from conflict operation:
+        
+        Operation: {operation}
+        Conflict ID: {conflict_id}
+        Module Results: {json.dumps(module_results)}
+        
+        Identify:
+        - Direct effects on other conflicts
+        - Effects on NPCs not directly involved
+        - World state changes
+        - Player experience impacts
+        - Potential future consequences
+        
+        Return JSON:
+        {{
+            "cascade_effects": [
+                {{
+                    "type": "conflict/npc/world/player",
+                    "target": "entity affected",
+                    "effect": "description of effect",
+                    "magnitude": "low/medium/high",
+                    "timing": "immediate/delayed",
+                    "reversible": true/false
+                }}
+            ]
+        }}
+        """
+        
+        response = await Runner.run(self.cascade_analyzer, prompt)
+        data = json.loads(response.output)
+        return data.get('cascade_effects', [])
+    
+    async def _get_unified_conflict_state(self, conflict_id: int) -> ConflictState:
+        """Build unified conflict state from all modules"""
+        
+        state_data = {}
+        
+        # Get base conflict data
+        async with get_db_connection_context() as conn:
+            conflict = await conn.fetchrow("""
+                SELECT * FROM Conflicts WHERE conflict_id = $1
+            """, conflict_id)
+            
+            if not conflict:
+                raise ValueError(f"Conflict {conflict_id} not found")
+            
+            # Get stakeholders
+            stakeholders = await conn.fetch("""
+                SELECT * FROM conflict_stakeholders WHERE conflict_id = $1
+            """, conflict_id)
+            
+            # Get resolution paths
+            paths = await conn.fetch("""
+                SELECT * FROM conflict_resolution_paths WHERE conflict_id = $1
+            """, conflict_id)
+        
+        # Build state object
+        return ConflictState(
+            conflict_id=conflict_id,
+            phase=ConflictPhase(conflict['phase']),
+            intensity=conflict['intensity'],
+            complexity=conflict.get('complexity', 0.5),
+            stakeholder_states={s['npc_id']: s for s in stakeholders},
+            resolution_paths=[dict(p) for p in paths],
+            active_events=[],  # Would be populated from event system
+            module_states={}  # Would be populated from each module
+        )
+    
+    async def _create_basic_conflict(self, conflict_data: Dict[str, Any]) -> int:
+        """Fallback method to create basic conflict in database"""
+        
+        async with get_db_connection_context() as conn:
+            conflict_id = await conn.fetchval("""
+                INSERT INTO Conflicts (
+                    user_id, conversation_id, conflict_name, conflict_type,
+                    description, phase, intensity, progress, is_active
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING conflict_id
+            """, 
+            self.user_id, self.conversation_id,
+            conflict_data.get('conflict_name', 'Unknown Conflict'),
+            conflict_data.get('conflict_type', 'generic'),
+            conflict_data.get('description', ''),
+            'brewing', 0.5, 0.0, True)
+        
+        return conflict_id
+    
+    async def _calculate_conflict_rewards(
+        self,
+        conflict_id: int,
+        resolution_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Calculate rewards from conflict resolution"""
+        
+        # This would integrate with your rewards system
+        return {
+            'experience': 100,
+            'items': [],
+            'reputation_changes': {},
+            'unlocks': []
+        }
+    
+    async def _grant_conflict_rewards(
+        self,
+        user_id: int,
+        conversation_id: int,
+        rewards: Dict[str, Any]
+    ) -> bool:
+        """Grant calculated rewards to player"""
+        
+        # This would integrate with your inventory/player stats system
+        return True
+    
+    def _calculate_narrative_impact(self, module_results: Dict[str, Any]) -> float:
+        """Calculate the narrative impact of module results"""
+        
+        impact = 0.0
+        
+        # Weight different types of results
+        weights = {
+            'generation': 0.3,
+            'resolution': 0.4,
+            'stakeholders': 0.2,
+            'integration': 0.1
+        }
+        
+        for module, weight in weights.items():
+            if module in module_results and not isinstance(module_results[module], dict):
+                continue
+            if module in module_results and 'narrative_impact' in module_results[module]:
+                impact += module_results[module]['narrative_impact'] * weight
+            elif module in module_results:
+                # Estimate impact based on result size/complexity
+                impact += min(len(str(module_results[module])) / 1000, 1.0) * weight * 0.5
+        
+        return min(impact, 1.0)
+    
+    def _update_performance_metrics(self, modules: List[str], success: bool):
+        """Update performance metrics for modules"""
+        
+        for module in modules:
+            self.module_performance[module]['calls'] += 1
+            if success:
+                self.module_performance[module]['successes'] += 1
+            else:
+                self.module_performance[module]['failures'] += 1
+    
+    async def get_performance_report(self) -> Dict[str, Any]:
+        """Get performance report of the orchestration system"""
+        
+        report = {
+            'active_conflicts': len(self.active_conflicts),
+            'module_performance': dict(self.module_performance),
+            'orchestration_history': len(self.orchestration_history),
+            'cache_size': len(self._state_cache),
+            'subsystems_loaded': list(self._subsystems.keys())
+        }
+        
+        # Calculate success rates
+        for module, stats in report['module_performance'].items():
+            if stats['calls'] > 0:
+                stats['success_rate'] = stats['successes'] / stats['calls']
+            else:
+                stats['success_rate'] = 0.0
+        
+        return report
 
 
 # ===============================================================================
@@ -568,89 +816,80 @@ class ConflictSynthesizer:
 # ===============================================================================
 
 @function_tool
-async def check_for_conflict_synthesis(
-    ctx: RunContextWrapper
+async def orchestrate_conflict_operation(
+    ctx: RunContextWrapper,
+    operation: str,
+    data: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Check if active conflicts should be synthesized"""
+    """
+    Main entry point for orchestrated conflict operations.
+    
+    Operations:
+    - create: Create new conflict
+    - resolve: Resolve existing conflict
+    - event: Process conflict event
+    - analyze: Analyze conflict state/complexity
+    """
     
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
     synthesizer = ConflictSynthesizer(user_id, conversation_id)
     
-    # Get active conflicts
-    async with get_db_connection_context() as conn:
-        conflicts = await conn.fetch("""
-            SELECT conflict_id FROM Conflicts
-            WHERE user_id = $1 AND conversation_id = $2
-            AND is_active = true
-        """, user_id, conversation_id)
-    
-    if len(conflicts) < 2:
-        return {'synthesis_possible': False, 'reason': 'Not enough active conflicts'}
-    
-    conflict_ids = [c['conflict_id'] for c in conflicts]
-    
-    # Analyze for synthesis
-    analysis = await synthesizer.analyze_conflicts_for_synthesis(conflict_ids)
-    
-    if analysis['should_synthesize']:
-        # Perform synthesis
-        synthesis = await synthesizer.synthesize_conflicts(
-            conflict_ids,
-            SynthesisType(analysis['synthesis_type'])
+    if operation == 'create':
+        result = await synthesizer.create_conflict(data)
+    elif operation == 'resolve':
+        conflict_id = data.get('conflict_id')
+        resolution_data = data.get('resolution_data', {})
+        result = await synthesizer.resolve_conflict(conflict_id, resolution_data)
+    elif operation == 'event':
+        conflict_id = data.get('conflict_id')
+        event = data.get('event', {})
+        result = await synthesizer.process_event(conflict_id, event)
+    elif operation == 'analyze':
+        result = await synthesizer.analyze_conflict_complexity()
+    else:
+        result = OrchestrationResult(
+            success=False,
+            mode=OrchestrationMode.SEQUENTIAL,
+            modules_engaged=[],
+            primary_result={'error': f'Unknown operation: {operation}'},
+            module_results={},
+            cascade_effects=[],
+            state_changes={},
+            narrative_impact=0.0
         )
-        
+    
+    # Convert to dict for JSON serialization
+    if isinstance(result, OrchestrationResult):
         return {
-            'synthesis_possible': True,
-            'synthesis_performed': True,
-            'synthesis_id': synthesis.synthesis_id,
-            'complexity': synthesis.complexity_score,
-            'emergent_properties': synthesis.emergent_properties
+            'success': result.success,
+            'mode': result.mode.value,
+            'modules_engaged': result.modules_engaged,
+            'primary_result': result.primary_result,
+            'module_results': result.module_results,
+            'cascade_effects': result.cascade_effects,
+            'state_changes': result.state_changes,
+            'narrative_impact': result.narrative_impact
         }
     
-    return {
-        'synthesis_possible': False,
-        'reason': analysis['reason']
-    }
+    return result
 
 
 @function_tool
-async def manage_synthesized_conflict(
-    ctx: RunContextWrapper,
-    synthesis_id: int,
-    player_action: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Manage player interaction with synthesized conflicts"""
+async def get_orchestration_status(ctx: RunContextWrapper) -> Dict[str, Any]:
+    """Get status of the conflict orchestration system"""
     
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
     synthesizer = ConflictSynthesizer(user_id, conversation_id)
     
-    # Process action through synthesis
-    result = await synthesizer.manage_synthesis_progression(
-        synthesis_id,
-        player_action
-    )
-    
-    # Apply updates to individual conflicts
-    async with get_db_connection_context() as conn:
-        for conflict_id, updates in result['conflict_updates'].items():
-            await conn.execute("""
-                UPDATE Conflicts
-                SET progress = progress + $1,
-                    phase = COALESCE($2, phase),
-                    intensity = COALESCE($3, intensity)
-                WHERE conflict_id = $4
-            """, updates['progress_change'],
-            updates.get('phase_change'),
-            updates.get('intensity_change'),
-            int(conflict_id))
-    
-    return {
-        'updates_applied': True,
-        'cascade_effects': result['cascade_effects'],
-        'narrative_impact': result['narrative_impact'],
-        'new_complexity': result.get('complexity_delta', 0)
+    status = {
+        'active_conflicts': len(synthesizer.active_conflicts),
+        'loaded_subsystems': list(synthesizer._subsystems.keys()),
+        'performance': await synthesizer.get_performance_report(),
+        'complexity': await synthesizer.analyze_conflict_complexity()
     }
+    
+    return status
