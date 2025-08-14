@@ -348,6 +348,8 @@ def with_transaction(func):
                     
                     elapsed = time.time() - start_time
                     await MemoryTelemetry.record(
+                        self.user_id,
+                        self.conversation_id,
                         operation=func.__name__,
                         success=True,
                         duration=elapsed,
@@ -359,6 +361,8 @@ def with_transaction(func):
                     
                     elapsed = time.time() - start_time
                     await MemoryTelemetry.record(
+                        self.user_id,
+                        self.conversation_id,
                         operation=func.__name__,
                         success=False,
                         duration=elapsed,
@@ -374,6 +378,8 @@ def with_transaction(func):
                 
                 elapsed = time.time() - start_time
                 await MemoryTelemetry.record(
+                    self.user_id,
+                    self.conversation_id,
                     operation=func.__name__,
                     success=True,
                     duration=elapsed,
@@ -383,6 +389,8 @@ def with_transaction(func):
             except Exception as e:
                 elapsed = time.time() - start_time
                 await MemoryTelemetry.record(
+                    self.user_id,
+                    self.conversation_id,
                     operation=func.__name__,
                     success=False,
                     duration=elapsed,

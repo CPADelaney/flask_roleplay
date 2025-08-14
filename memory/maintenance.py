@@ -82,6 +82,8 @@ class MemoryMaintenance:
                 stats["duration_seconds"] = duration
                 
                 await MemoryTelemetry.record(
+                    0,
+                    0,
                     operation="memory_cleanup",
                     success=True,
                     duration=duration,
@@ -97,6 +99,8 @@ class MemoryMaintenance:
         except Exception as e:
             logger.error(f"Error during memory cleanup: {e}")
             await MemoryTelemetry.record(
+                0,
+                0,
                 operation="memory_cleanup",
                 success=False,
                 error=str(e)
