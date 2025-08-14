@@ -1,8 +1,7 @@
 # logic/conflict_system/background_grand_conflicts.py
 """
-Background Grand Conflicts System
+Background Grand Conflicts System with LLM-generated content
 Maintains large-scale conflicts as ambient worldbuilding elements
-These run passively and create atmosphere without requiring player involvement
 """
 
 import logging
@@ -38,11 +37,11 @@ class GrandConflictType(Enum):
 
 class BackgroundIntensity(Enum):
     """How prominently the conflict features in daily life"""
-    DISTANT_RUMOR = "distant_rumor"  # Barely mentioned
-    OCCASIONAL_NEWS = "occasional_news"  # Comes up in conversation
-    REGULAR_TOPIC = "regular_topic"  # Frequently discussed
-    AMBIENT_TENSION = "ambient_tension"  # Affects mood
-    VISIBLE_EFFECTS = "visible_effects"  # Minor daily impacts
+    DISTANT_RUMOR = "distant_rumor"
+    OCCASIONAL_NEWS = "occasional_news"
+    REGULAR_TOPIC = "regular_topic"
+    AMBIENT_TENSION = "ambient_tension"
+    VISIBLE_EFFECTS = "visible_effects"
 
 
 @dataclass
@@ -53,12 +52,12 @@ class BackgroundConflict:
     name: str
     description: str
     intensity: BackgroundIntensity
-    progress: float  # 0-100
-    factions: List[str]  # Named factions involved
-    current_state: str  # LLM-generated current status
+    progress: float
+    factions: List[str]
+    current_state: str
     recent_developments: List[str]
     impact_on_daily_life: List[str]
-    player_awareness_level: float  # 0-1, how much player knows
+    player_awareness_level: float
 
 
 @dataclass
@@ -69,109 +68,147 @@ class WorldEvent:
     description: str
     faction_impacts: Dict[str, float]
     creates_opportunity: bool
-    opportunity_window: Optional[int]  # Days before opportunity expires
+    opportunity_window: Optional[int]
 
 
 # ===============================================================================
-# BACKGROUND CONFLICT ORCHESTRATOR
+# ENHANCED BACKGROUND CONFLICT ORCHESTRATOR
 # ===============================================================================
 
 class BackgroundConflictOrchestrator:
-    """Manages grand conflicts as background elements"""
+    """Manages grand conflicts with dynamic LLM generation"""
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.world_event_agent = self._create_world_event_agent()
-        self.news_agent = self._create_news_agent()
-        self.ripple_agent = self._create_ripple_agent()
         
-    def _create_world_event_agent(self) -> Agent:
+        # Lazy-loaded LLM agents
+        self._world_event_agent = None
+        self._news_agent = None
+        self._ripple_agent = None
+        self._faction_agent = None
+        self._development_agent = None
+    
+    # ========== Lazy-loaded Agent Properties ==========
+    
+    @property
+    def world_event_agent(self) -> Agent:
         """Agent for generating background world events"""
-        return Agent(
-            name="World Event Generator",
-            instructions="""
-            Generate grand conflict events that happen in the background of a slice-of-life game.
-            
-            These events should:
-            - Feel like distant but important world events
-            - Not directly involve the player
-            - Create atmosphere and context
-            - Occasionally provide conversation topics
-            - Suggest the world is alive beyond the player's daily life
-            
-            Focus on:
-            - Political maneuvering in distant capitals
-            - Economic shifts affecting regions
-            - Cultural movements gaining momentum
-            - Resource conflicts between factions
-            
-            Keep events feeling remote but consequential.
-            The player is living their daily life while history happens around them.
-            """,
-            model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8)
-        )
+        if self._world_event_agent is None:
+            self._world_event_agent = Agent(
+                name="World Event Generator",
+                instructions="""
+                Generate grand conflict events that happen in the background.
+                
+                Create events that:
+                - Feel like distant but important world events
+                - Not directly involve the player
+                - Create rich atmosphere and context
+                - Provide natural conversation topics
+                - Suggest the world is alive beyond daily life
+                
+                Focus on political intrigue, economic shifts, cultural movements,
+                and resource conflicts. Keep events remote but consequential.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._world_event_agent
     
-    def _create_news_agent(self) -> Agent:
-        """Agent for generating news and rumors about conflicts"""
-        return Agent(
-            name="News and Rumor Generator",
-            instructions="""
-            Generate news snippets, rumors, and gossip about background conflicts.
-            
-            Create content that would naturally come up in:
-            - Overheard conversations
-            - News broadcasts/papers
-            - Social media equivalents
-            - Casual gossip
-            - NPC commentary
-            
-            Vary the reliability and bias of information:
-            - Official news (mostly accurate)
-            - Rumors (partially true)
-            - Gossip (embellished)
-            - Propaganda (biased)
-            - Conspiracy theories (mostly false)
-            
-            Keep it atmospheric, not actionable.
-            """,
-            model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
+    @property
+    def news_agent(self) -> Agent:
+        """Agent for generating news and rumors"""
+        if self._news_agent is None:
+            self._news_agent = Agent(
+                name="News and Rumor Generator",
+                instructions="""
+                Generate news snippets, rumors, and gossip about background conflicts.
+                
+                Create varied content:
+                - Official news (mostly accurate)
+                - Rumors (partially true)
+                - Gossip (embellished)
+                - Propaganda (biased)
+                - Conspiracy theories (mostly false)
+                
+                Vary tone and reliability. Keep atmospheric, not actionable.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._news_agent
     
-    def _create_ripple_agent(self) -> Agent:
-        """Agent for determining how grand conflicts affect daily life"""
-        return Agent(
-            name="Ripple Effect Generator",
-            instructions="""
-            Determine subtle ways background conflicts affect daily life.
-            
-            Generate minor impacts like:
-            - Certain goods becoming expensive/scarce
-            - NPCs mentioning worried relatives
-            - Changes in social atmosphere
-            - Shifted NPC priorities or moods
-            - New conversation topics
-            - Subtle changes in routines
-            
-            Effects should be:
-            - Indirect and atmospheric
-            - Not requiring player action
-            - Adding texture to daily life
-            - Occasionally creating opportunities
-            
-            Never force player involvement.
-            """,
-            model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
-        )
+    @property
+    def faction_agent(self) -> Agent:
+        """Agent for generating faction dynamics"""
+        if self._faction_agent is None:
+            self._faction_agent = Agent(
+                name="Faction Dynamics Generator",
+                instructions="""
+                Generate complex faction behaviors and interactions.
+                
+                Create:
+                - Faction motivations and goals
+                - Alliance formations and betrayals
+                - Strategic moves and counter-moves
+                - Internal faction politics
+                - Public versus private agendas
+                
+                Make factions feel like real political entities with depth.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._faction_agent
+    
+    @property
+    def development_agent(self) -> Agent:
+        """Agent for progressing conflicts"""
+        if self._development_agent is None:
+            self._development_agent = Agent(
+                name="Conflict Development Generator",
+                instructions="""
+                Generate natural progressions for background conflicts.
+                
+                Create developments that:
+                - Feel organic and consequential
+                - Build on previous events
+                - Introduce unexpected twists
+                - Maintain narrative coherence
+                - Create ripple effects
+                
+                Balance predictable progression with surprises.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._development_agent
+    
+    @property
+    def ripple_agent(self) -> Agent:
+        """Agent for generating ripple effects"""
+        if self._ripple_agent is None:
+            self._ripple_agent = Agent(
+                name="Ripple Effect Generator",
+                instructions="""
+                Generate subtle ripple effects from grand conflicts.
+                
+                Create effects that:
+                - Subtly affect daily life
+                - Change ambient atmosphere
+                - Influence NPC behaviors
+                - Create conversation topics
+                - Suggest larger forces at work
+                
+                Keep effects indirect but noticeable.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._ripple_agent
+    
+    # ========== Dynamic Generation Methods ==========
     
     async def generate_background_conflict(
         self, 
         conflict_type: Optional[GrandConflictType] = None
     ) -> BackgroundConflict:
-        """Generate a new background conflict"""
+        """Generate a new background conflict with LLM"""
         
         if not conflict_type:
             conflict_type = random.choice(list(GrandConflictType))
@@ -179,28 +216,23 @@ class BackgroundConflictOrchestrator:
         prompt = f"""
         Generate a {conflict_type.value} conflict for background worldbuilding.
         
-        This should feel like a major world event that:
-        - Involves powerful factions/entities
-        - Has complex political/economic implications
-        - Would be on the news
-        - Doesn't directly involve a regular person's daily life
+        Context: This is happening in the wider world, not directly affecting
+        the player's daily life but creating atmosphere and context.
         
         Return JSON:
         {{
-            "name": "Conflict name (like a news headline)",
-            "description": "2-3 sentence overview",
-            "factions": ["Faction A", "Faction B", "Faction C"],
-            "initial_state": "Current situation",
-            "potential_developments": [
-                "Possible future event 1",
-                "Possible future event 2"
-            ],
-            "daily_life_impacts": [
-                "Subtle effect on everyday life"
-            ],
-            "conversation_hooks": [
-                "How NPCs might mention this"
-            ]
+            "name": "Compelling headline-style name",
+            "description": "2-3 sentence dramatic overview",
+            "factions": ["3-5 named factions with clear stakes"],
+            "initial_state": "Current tense situation",
+            "potential_developments": ["5 possible future events"],
+            "daily_life_impacts": ["3 subtle effects on everyday life"],
+            "conversation_hooks": ["3 ways NPCs might mention this"],
+            "faction_dynamics": {{
+                "alliances": ["current alliances"],
+                "tensions": ["current tensions"],
+                "wild_cards": ["unpredictable elements"]
+            }}
         }}
         """
         
@@ -246,366 +278,412 @@ class BackgroundConflictOrchestrator:
         self,
         conflict: BackgroundConflict
     ) -> WorldEvent:
-        """Advance a background conflict with a new event"""
+        """Advance conflict with dynamic development"""
         
         prompt = f"""
-        Current conflict: {conflict.name}
+        Advance this background conflict naturally:
+        
+        Conflict: {conflict.name}
         Type: {conflict.conflict_type.value}
-        Current state: {conflict.current_state}
+        Current State: {conflict.current_state}
         Progress: {conflict.progress}%
         Factions: {json.dumps(conflict.factions)}
+        Recent: {json.dumps(conflict.recent_developments[-3:] if conflict.recent_developments else [])}
         
-        Generate the next development in this conflict.
+        Generate the next development that:
+        - Builds on current state
+        - Feels consequential
+        - Could affect daily life subtly
+        - Introduces complexity
         
         Return JSON:
         {{
-            "event_type": "battle/negotiation/revelation/escalation/development",
-            "description": "What happened (2-3 sentences)",
-            "faction_impacts": {{"faction_name": impact_value}},
+            "event_type": "battle/negotiation/revelation/escalation/twist",
+            "description": "Dramatic 2-3 sentence event",
+            "faction_impacts": {{"faction": impact_value}},
             "new_state": "Updated conflict state",
             "progress_change": -10 to +20,
             "intensity_change": "increase/decrease/maintain",
             "creates_opportunity": true/false,
-            "opportunity_description": "Optional player opportunity"
+            "opportunity_description": "Optional player involvement",
+            "ripple_effects": ["3 subtle effects on the world"],
+            "npc_reactions": ["3 ways NPCs might react"]
         }}
-        
-        Keep it feeling distant but important.
         """
         
-        response = await Runner.run(self.world_event_agent, prompt)
-        event_data = json.loads(response.output)
+        response = await Runner.run(self.development_agent, prompt)
+        data = json.loads(response.output)
         
-        # Create world event
-        event = WorldEvent(
-            conflict_id=conflict.conflict_id,
-            event_type=event_data['event_type'],
-            description=event_data['description'],
-            faction_impacts=event_data['faction_impacts'],
-            creates_opportunity=event_data['creates_opportunity'],
-            opportunity_window=7 if event_data['creates_opportunity'] else None
-        )
-        
-        # Update conflict state
-        new_progress = min(100, max(0, conflict.progress + event_data['progress_change']))
-        
+        # Update database
         async with get_db_connection_context() as conn:
             await conn.execute("""
                 UPDATE BackgroundConflicts
-                SET progress = $1, current_state = $2, last_event_at = CURRENT_TIMESTAMP
-                WHERE conflict_id = $3
-            """, new_progress, event_data['new_state'], conflict.conflict_id)
-            
-            # Record event
-            await conn.execute("""
-                INSERT INTO BackgroundConflictEvents
-                (conflict_id, event_type, description, impact_data, game_day)
-                VALUES ($1, $2, $3, $4, $5)
-            """, conflict.conflict_id, event.event_type, event.description,
-            json.dumps(event_data), await get_current_game_day(self.user_id, self.conversation_id))
+                SET current_state = $1,
+                    progress = progress + $2,
+                    intensity = $3
+                WHERE conflict_id = $4
+            """, data['new_state'], data['progress_change'],
+            self._calculate_new_intensity(conflict.intensity, data['intensity_change']),
+            conflict.conflict_id)
         
-        # Update intensity if needed
-        if event_data['intensity_change'] == 'increase':
-            await self._increase_intensity(conflict)
-        elif event_data['intensity_change'] == 'decrease':
-            await self._decrease_intensity(conflict)
-        
-        return event
+        return WorldEvent(
+            conflict_id=conflict.conflict_id,
+            event_type=data['event_type'],
+            description=data['description'],
+            faction_impacts=data['faction_impacts'],
+            creates_opportunity=data['creates_opportunity'],
+            opportunity_window=7 if data['creates_opportunity'] else None
+        )
     
-    async def _increase_intensity(self, conflict: BackgroundConflict):
-        """Increase how prominent the conflict is"""
-        intensity_order = [
-            BackgroundIntensity.DISTANT_RUMOR,
-            BackgroundIntensity.OCCASIONAL_NEWS,
-            BackgroundIntensity.REGULAR_TOPIC,
-            BackgroundIntensity.AMBIENT_TENSION,
-            BackgroundIntensity.VISIBLE_EFFECTS
-        ]
+    def _calculate_new_intensity(self, current: BackgroundIntensity, change: str) -> str:
+        """Calculate new intensity level"""
+        intensities = list(BackgroundIntensity)
+        current_idx = intensities.index(current)
         
-        current_index = intensity_order.index(conflict.intensity)
-        if current_index < len(intensity_order) - 1:
-            new_intensity = intensity_order[current_index + 1]
-            
-            async with get_db_connection_context() as conn:
-                await conn.execute("""
-                    UPDATE BackgroundConflicts
-                    SET intensity = $1
-                    WHERE conflict_id = $2
-                """, new_intensity.value, conflict.conflict_id)
+        if change == "increase" and current_idx < len(intensities) - 1:
+            return intensities[current_idx + 1].value
+        elif change == "decrease" and current_idx > 0:
+            return intensities[current_idx - 1].value
+        return current.value
     
-    async def _decrease_intensity(self, conflict: BackgroundConflict):
-        """Decrease how prominent the conflict is"""
-        intensity_order = [
-            BackgroundIntensity.DISTANT_RUMOR,
-            BackgroundIntensity.OCCASIONAL_NEWS,
-            BackgroundIntensity.REGULAR_TOPIC,
-            BackgroundIntensity.AMBIENT_TENSION,
-            BackgroundIntensity.VISIBLE_EFFECTS
-        ]
+    async def generate_faction_move(
+        self,
+        conflict: BackgroundConflict,
+        faction_name: str
+    ) -> Dict[str, Any]:
+        """Generate a strategic move by a faction"""
         
-        current_index = intensity_order.index(conflict.intensity)
-        if current_index > 0:
-            new_intensity = intensity_order[current_index - 1]
-            
-            async with get_db_connection_context() as conn:
-                await conn.execute("""
-                    UPDATE BackgroundConflicts
-                    SET intensity = $1
-                    WHERE conflict_id = $2
-                """, new_intensity.value, conflict.conflict_id)
+        prompt = f"""
+        Generate a strategic move for this faction:
+        
+        Faction: {faction_name}
+        Conflict: {conflict.name}
+        Current State: {conflict.current_state}
+        Other Factions: {json.dumps([f for f in conflict.factions if f != faction_name])}
+        
+        Create a move that:
+        - Advances faction interests
+        - Creates new dynamics
+        - Could backfire
+        - Has hidden motives
+        
+        Return JSON:
+        {{
+            "move_type": "alliance/betrayal/maneuver/revelation/gambit",
+            "public_action": "What everyone sees",
+            "hidden_motive": "Real intention",
+            "targets": ["affected factions"],
+            "success_probability": 0.0 to 1.0,
+            "potential_backfire": "How this could go wrong",
+            "rumors_generated": ["3 rumors this creates"]
+        }}
+        """
+        
+        response = await Runner.run(self.faction_agent, prompt)
+        return json.loads(response.output)
 
 
 # ===============================================================================
-# NEWS AND RUMOR GENERATION
+# BACKGROUND NEWS GENERATOR
 # ===============================================================================
 
 class BackgroundNewsGenerator:
-    """Generates news, rumors, and gossip about background conflicts"""
+    """Generates dynamic news and rumors with LLM"""
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.news_agent = Agent(
-            name="News Generator",
-            instructions="""
-            Generate varied news content about background world events.
-            
-            Content types:
-            - Official news: Formal, mostly accurate
-            - Rumors: Informal, partially true
-            - Gossip: Personal, embellished
-            - Propaganda: Biased toward a faction
-            - Conspiracy: Wild speculation
-            
-            Match tone to content type.
-            Keep it atmospheric, not a call to action.
-            """,
-            model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.85)
-        )
+        self._news_generator = None
+        self._rumor_mill = None
+        self._propaganda_writer = None
+    
+    @property
+    def news_generator(self) -> Agent:
+        if self._news_generator is None:
+            self._news_generator = Agent(
+                name="News Article Generator",
+                instructions="""
+                Generate news articles about background conflicts.
+                Vary between:
+                - Official announcements (formal, careful)
+                - Independent reporting (balanced, investigative)
+                - Tabloid coverage (sensational, dramatic)
+                - Underground news (subversive, revealing)
+                
+                Match tone to source. Include bias and spin.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._news_generator
+    
+    @property
+    def rumor_mill(self) -> Agent:
+        if self._rumor_mill is None:
+            self._rumor_mill = Agent(
+                name="Rumor Mill",
+                instructions="""
+                Generate rumors and gossip about world events.
+                
+                Create rumors that are:
+                - Based on partial truths
+                - Embellished or distorted
+                - Revealing hidden dynamics
+                - Creating social tension
+                - Sometimes completely false
+                
+                Make them feel like organic gossip.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._rumor_mill
+    
+    @property
+    def propaganda_writer(self) -> Agent:
+        if self._propaganda_writer is None:
+            self._propaganda_writer = Agent(
+                name="Propaganda Writer",
+                instructions="""
+                Generate propaganda and biased messaging.
+                
+                Create content that:
+                - Serves faction interests
+                - Distorts truth cleverly
+                - Appeals to emotions
+                - Creates division
+                - Seems reasonable on surface
+                
+                Make propaganda feel authentic to its source.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._propaganda_writer
     
     async def generate_news_item(
         self,
         conflict: BackgroundConflict,
         news_type: str = "random"
     ) -> Dict[str, Any]:
-        """Generate a news item about a background conflict"""
+        """Generate dynamic news about a conflict"""
         
         if news_type == "random":
-            news_type = random.choice([
-                "official", "rumor", "gossip", "propaganda", "conspiracy"
-            ])
+            news_type = random.choice(["official", "independent", "tabloid", "rumor", "propaganda"])
+        
+        # Select appropriate agent
+        if news_type == "rumor":
+            agent = self.rumor_mill
+        elif news_type == "propaganda":
+            agent = self.propaganda_writer
+        else:
+            agent = self.news_generator
         
         prompt = f"""
-        Generate {news_type} news about: {conflict.name}
-        Current state: {conflict.current_state}
-        Recent developments: {json.dumps(conflict.recent_developments[-3:])}
+        Generate {news_type} news about this conflict:
+        
+        Conflict: {conflict.name}
+        Current State: {conflict.current_state}
+        Recent Development: {conflict.recent_developments[-1] if conflict.recent_developments else 'Initial stages'}
+        Factions: {json.dumps(conflict.factions)}
+        
+        Create news that:
+        - Matches {news_type} style perfectly
+        - Feels authentic to source
+        - Includes appropriate bias
+        - Creates atmosphere
+        - Could influence opinions
         
         Return JSON:
         {{
-            "headline": "Attention-grabbing title",
-            "content": "1-2 sentence news item",
-            "source": "Who's saying this",
-            "reliability": 0.0-1.0,
-            "npc_commentary": "How an NPC might mention this",
-            "mood_impact": "How this affects social atmosphere"
+            "headline": "Attention-grabbing headline",
+            "source": "News source name",
+            "content": "2-3 paragraph article/rumor",
+            "reliability": 0.0 to 1.0,
+            "bias": "faction or perspective bias",
+            "spin": "how truth is distorted",
+            "public_reaction": "How people might react",
+            "conversation_starter": "How NPCs might discuss this",
+            "hidden_truth": "What's really happening"
         }}
-        
-        Match the tone to the news type:
-        - Official: Formal and measured
-        - Rumor: "I heard that..."
-        - Gossip: Personal and dramatic
-        - Propaganda: Obviously biased
-        - Conspiracy: Wild and speculative
         """
         
-        response = await Runner.run(self.news_agent, prompt)
+        response = await Runner.run(agent, prompt)
         news_data = json.loads(response.output)
         
         # Store in database
         async with get_db_connection_context() as conn:
             await conn.execute("""
                 INSERT INTO BackgroundNews
-                (conflict_id, news_type, headline, content, source, 
-                 reliability, game_day, user_id, conversation_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            """, conflict.conflict_id, news_type, news_data['headline'],
-            news_data['content'], news_data['source'], news_data['reliability'],
-            await get_current_game_day(self.user_id, self.conversation_id),
-            self.user_id, self.conversation_id)
+                (user_id, conversation_id, conflict_id, headline, 
+                 source, content, reliability, game_day)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """, self.user_id, self.conversation_id, conflict.conflict_id,
+            news_data['headline'], news_data['source'], 
+            news_data['content'], news_data['reliability'],
+            await get_current_game_day(self.user_id, self.conversation_id))
         
         return news_data
-    
-    async def generate_npc_discussion(
-        self,
-        conflict: BackgroundConflict,
-        npc_personalities: List[Dict]
-    ) -> List[str]:
-        """Generate how NPCs discuss background conflicts"""
-        
-        prompt = f"""
-        Background conflict: {conflict.name}
-        Intensity: {conflict.intensity.value}
-        NPCs present: {json.dumps(npc_personalities)}
-        
-        Generate casual mentions of this conflict in conversation.
-        
-        Return JSON array of NPC comments:
-        [
-            {{
-                "npc_index": 0,
-                "comment": "Casual mention of the conflict",
-                "emotion": "worried/dismissive/interested/bored",
-                "follows_up": true/false
-            }}
-        ]
-        
-        Keep it natural - these are background topics, not main conversation.
-        People mention world events casually while living their lives.
-        """
-        
-        response = await Runner.run(self.news_agent, prompt)
-        discussions = json.loads(response.output)
-        
-        return [d['comment'] for d in discussions]
 
 
 # ===============================================================================
-# RIPPLE EFFECTS ON DAILY LIFE
+# BACKGROUND CONFLICT RIPPLES
 # ===============================================================================
 
 class BackgroundConflictRipples:
-    """Manages how background conflicts create ripples in daily life"""
+    """Manages how background conflicts affect daily life"""
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.ripple_agent = Agent(
-            name="Ripple Effect Generator",
-            instructions="""
-            Generate subtle effects of distant conflicts on daily life.
-            
-            Focus on:
-            - Minor inconveniences or changes
-            - Mood and atmosphere shifts
-            - Conversation topics
-            - NPC preoccupations
-            - Small economic effects
-            
-            Never create effects that demand player action.
-            Keep it atmospheric and textural.
-            """,
-            model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
-        )
+        self._ripple_generator = None
+        self._opportunity_creator = None
+    
+    @property
+    def ripple_generator(self) -> Agent:
+        if self._ripple_generator is None:
+            self._ripple_generator = Agent(
+                name="Ripple Effect Generator",
+                instructions="""
+                Generate subtle effects of grand conflicts on daily life.
+                
+                Create ripples that:
+                - Affect atmosphere and mood
+                - Change NPC behaviors subtly
+                - Alter available resources
+                - Create background tension
+                - Suggest larger forces
+                
+                Keep effects indirect but noticeable to observant players.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._ripple_generator
+    
+    @property
+    def opportunity_creator(self) -> Agent:
+        if self._opportunity_creator is None:
+            self._opportunity_creator = Agent(
+                name="Opportunity Creator",
+                instructions="""
+                Create optional opportunities from background conflicts.
+                
+                Generate opportunities that:
+                - Are completely optional
+                - Offer interesting choices
+                - Connect to larger events
+                - Have multiple approaches
+                - Create memorable moments
+                
+                Players should feel these are bonuses, not obligations.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._opportunity_creator
     
     async def generate_daily_ripples(
         self,
         active_conflicts: List[BackgroundConflict]
     ) -> Dict[str, Any]:
-        """Generate how background conflicts affect today"""
+        """Generate today's ripple effects"""
         
-        # Only process conflicts with sufficient intensity
-        relevant_conflicts = [
-            c for c in active_conflicts
-            if c.intensity not in [
-                BackgroundIntensity.DISTANT_RUMOR,
-                BackgroundIntensity.OCCASIONAL_NEWS
-            ]
+        if not active_conflicts:
+            return {"ripples": {}}
+        
+        conflicts_summary = [
+            {
+                "name": c.name,
+                "intensity": c.intensity.value,
+                "current_state": c.current_state
+            }
+            for c in active_conflicts
         ]
         
-        if not relevant_conflicts:
-            return {'ripples': [], 'mood_modifier': 0}
-        
         prompt = f"""
-        Active background conflicts affecting the world:
-        {json.dumps([{
-            'name': c.name,
-            'type': c.conflict_type.value,
-            'intensity': c.intensity.value
-        } for c in relevant_conflicts])}
+        Generate daily ripple effects from these background conflicts:
         
-        Generate subtle daily life effects.
+        Conflicts: {json.dumps(conflicts_summary)}
+        
+        Create subtle effects that:
+        - Change daily atmosphere
+        - Affect NPC moods
+        - Create overheard snippets
+        - Alter minor details
+        - Build tension
         
         Return JSON:
         {{
-            "item_availability": [
-                {{"item": "what's affected", "reason": "vague connection to conflict"}}
-            ],
-            "npc_mood_shifts": [
-                {{"mood_change": "worried/distracted/energized", "reason": "vague worry"}}
-            ],
-            "ambient_changes": [
-                "Description of subtle atmosphere change"
-            ],
-            "overheard_snippets": [
-                "Fragment of overheard conversation about conflicts"
-            ],
-            "price_changes": [
-                {{"category": "goods type", "change": 1.1, "reason": "supply chain"}}
-            ],
-            "optional_opportunities": [
-                {{"description": "Something player could do if they want",
-                  "reward_type": "information/connection/small_benefit"}}
-            ]
+            "ambient_mood": "overall atmosphere today",
+            "npc_mood_modifier": "how NPCs are affected",
+            "overheard_snippets": ["5 things player might overhear"],
+            "visual_cues": ["3 subtle environmental changes"],
+            "price_changes": {{"item": percentage_change}},
+            "crowd_behaviors": ["2 subtle crowd behaviors"],
+            "ambient_sounds": ["3 background sounds suggesting tension"]
         }}
-        
-        Keep all effects minor and atmospheric.
         """
         
-        response = await Runner.run(self.ripple_agent, prompt)
-        ripples = json.loads(response.output)
-        
-        # Calculate overall mood modifier
-        mood_modifier = len(relevant_conflicts) * 0.05  # Small tension increase
-        
-        return {
-            'ripples': ripples,
-            'mood_modifier': mood_modifier,
-            'affected_by_conflicts': [c.name for c in relevant_conflicts]
-        }
+        response = await Runner.run(self.ripple_generator, prompt)
+        return {"ripples": json.loads(response.output)}
     
     async def check_for_opportunities(
         self,
         active_conflicts: List[BackgroundConflict],
         player_skills: Dict[str, float]
     ) -> List[Dict[str, Any]]:
-        """Check if any background conflicts create optional opportunities"""
+        """Check if any conflicts create player opportunities"""
         
         opportunities = []
         
         for conflict in active_conflicts:
-            # Only conflicts with certain intensity create opportunities
-            if conflict.intensity not in [
-                BackgroundIntensity.REGULAR_TOPIC,
-                BackgroundIntensity.AMBIENT_TENSION,
-                BackgroundIntensity.VISIBLE_EFFECTS
-            ]:
-                continue
-            
-            # Check recent events for opportunities
-            async with get_db_connection_context() as conn:
-                recent_events = await conn.fetch("""
-                    SELECT * FROM BackgroundConflictEvents
-                    WHERE conflict_id = $1
-                    AND game_day > (SELECT current_day FROM game_calendar 
-                                   WHERE user_id = $2 AND conversation_id = $3) - 3
-                    ORDER BY game_day DESC
-                    LIMIT 3
-                """, conflict.conflict_id, self.user_id, self.conversation_id)
-            
-            for event in recent_events:
-                event_data = json.loads(event['impact_data'])
-                if event_data.get('creates_opportunity'):
-                    opportunities.append({
-                        'conflict_name': conflict.name,
-                        'opportunity': event_data.get('opportunity_description', 
-                                                     'A chance to learn more'),
-                        'window': 'A few days',
-                        'optional': True,
-                        'rewards': ['information', 'connections', 'minor_benefits']
-                    })
+            if conflict.intensity.value in ['regular_topic', 'ambient_tension', 'visible_effects']:
+                if random.random() < 0.2:  # 20% chance
+                    opportunity = await self._generate_opportunity(conflict, player_skills)
+                    if opportunity:
+                        opportunities.append(opportunity)
         
         return opportunities
+    
+    async def _generate_opportunity(
+        self,
+        conflict: BackgroundConflict,
+        player_skills: Dict[str, float]
+    ) -> Optional[Dict[str, Any]]:
+        """Generate a specific opportunity"""
+        
+        prompt = f"""
+        Generate an optional opportunity from this conflict:
+        
+        Conflict: {conflict.name}
+        Type: {conflict.conflict_type.value}
+        Current State: {conflict.current_state}
+        Player Skills: {json.dumps(player_skills)}
+        
+        Create an opportunity that:
+        - Is completely optional
+        - Relates to the conflict tangentially
+        - Offers interesting rewards
+        - Has multiple approaches
+        - Creates a memorable moment
+        
+        Return JSON:
+        {{
+            "title": "Intriguing opportunity name",
+            "description": "What the opportunity is",
+            "hook": "How player discovers it",
+            "approaches": [
+                {{
+                    "method": "approach type",
+                    "requirement": "skill or resource needed",
+                    "risk": "low/medium/high",
+                    "reward": "what player gains"
+                }}
+            ],
+            "window": "how long available (in days)",
+            "connection": "how it relates to the conflict",
+            "consequences": "potential long-term effects"
+        }}
+        """
+        
+        response = await Runner.run(self.opportunity_creator, prompt)
+        return json.loads(response.output)
 
 
 # ===============================================================================
@@ -621,7 +699,7 @@ class BackgroundConflictManager:
         self.orchestrator = BackgroundConflictOrchestrator(user_id, conversation_id)
         self.news_generator = BackgroundNewsGenerator(user_id, conversation_id)
         self.ripple_manager = BackgroundConflictRipples(user_id, conversation_id)
-        
+    
     async def daily_background_update(self) -> Dict[str, Any]:
         """Daily update of all background conflicts"""
         
@@ -650,7 +728,7 @@ class BackgroundConflictManager:
             ))
         
         # Generate new conflicts if needed
-        if len(active_conflicts) < 3:  # Maintain 3-5 background conflicts
+        if len(active_conflicts) < 3:
             new_conflict = await self.orchestrator.generate_background_conflict()
             active_conflicts.append(new_conflict)
         
@@ -685,7 +763,7 @@ class BackgroundConflictManager:
             'news': news_items[:3],  # Limit to 3 news items
             'ripple_effects': ripples,
             'optional_opportunities': opportunities,
-            'world_tension': sum(c.progress for c in active_conflicts) / (len(active_conflicts) * 100)
+            'world_tension': sum(c.progress for c in active_conflicts) / (len(active_conflicts) * 100) if active_conflicts else 0
         }
     
     async def get_conversation_topics(self) -> List[str]:
@@ -705,7 +783,7 @@ class BackgroundConflictManager:
         topics = []
         for news in recent_news:
             topics.append(f"Did you hear about {news['headline']}?")
-            topics.append(news['content'])
+            topics.append(news['content'][:100] + "...")
         
         return topics
 
@@ -774,93 +852,3 @@ async def get_daily_background_flavor(
     }
     
     return flavor
-
-
-@function_tool
-async def generate_npc_worldly_comment(
-    ctx: RunContextWrapper,
-    npc_id: int,
-    context: str = "casual"
-) -> str:
-    """Generate an NPC comment about background world events"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = BackgroundConflictManager(user_id, conversation_id)
-    
-    # Get conversation topics
-    topics = await manager.get_conversation_topics()
-    
-    if not topics:
-        return ""
-    
-    # Get NPC personality for appropriate comment style
-    async with get_db_connection_context() as conn:
-        npc = await conn.fetchrow("""
-            SELECT npc_name, personality_traits FROM NPCStats
-            WHERE npc_id = $1
-        """, npc_id)
-    
-    personality = json.loads(npc['personality_traits']) if npc else {}
-    
-    # Generate contextual comment
-    agent = Agent(
-        name="NPC Commenter",
-        instructions=f"""
-        Generate a casual comment about world events.
-        NPC personality: {json.dumps(personality)}
-        Context: {context}
-        
-        Make it feel natural, like someone mentioning the news in passing.
-        """,
-        model="gpt-5-nano",
-        model_settings=ModelSettings(temperature=0.8)
-    )
-    
-    prompt = f"""
-    Topic options: {random.choice(topics)}
-    
-    Generate a single casual comment (1 sentence) that this NPC might make.
-    Keep it conversational and match their personality.
-    """
-    
-    response = await Runner.run(agent, prompt)
-    return response.output
-
-
-# ===============================================================================
-# PLAYER ENGAGEMENT OPTIONS
-# ===============================================================================
-
-@function_tool
-async def check_background_engagement_options(
-    ctx: RunContextWrapper
-) -> List[Dict[str, Any]]:
-    """Check what background conflicts the player could engage with if they wanted"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    options = []
-    
-    async with get_db_connection_context() as conn:
-        # Get high-intensity conflicts
-        conflicts = await conn.fetch("""
-            SELECT * FROM BackgroundConflicts
-            WHERE user_id = $1 AND conversation_id = $2
-            AND is_active = true
-            AND intensity IN ('ambient_tension', 'visible_effects')
-        """, user_id, conversation_id)
-        
-        for conflict in conflicts:
-            options.append({
-                'conflict_name': conflict['name'],
-                'engagement_type': 'optional_investigation',
-                'description': f"You could look into {conflict['name']} if you're curious",
-                'commitment_level': 'minimal',
-                'potential_rewards': ['knowledge', 'connections'],
-                'completely_optional': True
-            })
-    
-    return options
