@@ -54,6 +54,8 @@ from npcs.dynamic_templates import (
     get_trauma_keywords,
 )
 
+from lore.core import canon
+
 logger = logging.getLogger(__name__)
 
 # Configuration
@@ -67,13 +69,15 @@ _DEFAULT_PERS_MODEL = os.getenv("OPENAI_PERS_MODEL", "gpt-5-nano")
 _DEFAULT_STATS_MODEL = os.getenv("OPENAI_STATS_MODEL", "gpt-5-nano")
 _DEFAULT_ARCH_MODEL  = os.getenv("OPENAI_ARCH_MODEL", "gpt-5-nano")
 
+def _mk_ctx(user_id: int, conversation_id: int):
+    """Light-weight context object compatible with canon helpers"""
+    return type("CanonCtx", (), {"user_id": user_id, "conversation_id": conversation_id})()
 
 async def _responses_json_call(
     *,
     model: str,
     system_prompt: str,
     user_prompt: str,
-    temperature: float = 0.7,
     max_output_tokens: int | None = None,
     previous_response_id: str | None = None,
 ) -> str:
@@ -89,7 +93,6 @@ async def _responses_json_call(
         "model": model,
         "instructions": system_prompt,                     # system prompt lives here
         "input": [{"role": "user", "content": user_prompt}],
-        "temperature": temperature,
         "max_output_tokens": max_output_tokens,
     }
     if previous_response_id:
@@ -904,8 +907,8 @@ class NPCCreationHandler:
             
             # Analyze emotional content
             emotion_analysis = await emotional_manager.analyze_emotional_content(traumatic_memory)
-
-            # Create trauma event
+            
+            # Create trauma event (removed redundant first dict)
             async with GameTimeContext(user_id, conversation_id) as game_time:
                 trauma_event = {
                     "memory_text": traumatic_memory,
@@ -955,12 +958,7 @@ class NPCCreationHandler:
         Since dynamic relationships already track evolution, this mainly sets up additional metadata.
         """
         try:
-            from lore.core import canon
-            
-            ctx = type("CanonCtx", (), {
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })()
+            ctx = _mk_ctx(user_id, conversation_id)
             
             # For compatibility, we'll still create RelationshipEvolution entries
             # but they'll be lighter weight since the dynamic system handles most tracking
@@ -996,20 +994,20 @@ class NPCCreationHandler:
                 
                 # Create a lightweight evolution tracker
                 async with get_db_connection_context() as conn:
-                    # Check if relationship evolution entry exists
+                    # Check if relationship evolution entry exists (fixed SQL)
                     check_query = """
                         SELECT 1 FROM RelationshipEvolution
                         WHERE user_id=$1 AND conversation_id=$2 AND npc1_id=$3
                         AND entity2_type=$4 AND entity2_id=$5
                     """
-
+    
                     exists = await conn.fetchrow(
                         check_query,
                         user_id, conversation_id, npc_id, entity_type, entity_id,
                     )
-
+    
                     if not exists:
-                        # Create new relationship evolution record
+                        # Create new relationship evolution record (fixed column list)
                         insert_query = """
                             INSERT INTO RelationshipEvolution (
                                 user_id, conversation_id, npc1_id, entity2_type, entity2_id,
@@ -1017,7 +1015,7 @@ class NPCCreationHandler:
                             )
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                         """
-
+    
                         async with GameTimeContext(user_id, conversation_id) as game_time:
                             history_entry = json.dumps([{
                                 "stage": "dynamic",
@@ -1028,16 +1026,16 @@ class NPCCreationHandler:
                                 "day": game_time.day,
                                 "time_of_day": game_time.time_of_day,
                             }])
-
+    
                         await conn.execute(
                             insert_query,
                             user_id, conversation_id, npc_id, entity_type, entity_id,
-                            relationship_label, "dynamic", 0,  # Mark as "dynamic" stage
+                            relationship_label, "dynamic", 0,
                             history_entry,
                         )
-
+    
                         tracked_count += 1
-
+    
                         # Log canonical event
                         target_name = "player" if entity_type == "player" else f"entity {entity_id}"
                         await canon.log_canonical_event(
@@ -1450,7 +1448,6 @@ class NPCCreationHandler:
                     openai_client=get_async_openai_client(),
                     # optional structured-output hints (if wrapper supports)
                 ),
-                model_settings=ModelSettings(temperature=0.8),
             )
         return self._memory_agent
     
@@ -2498,7 +2495,6 @@ class NPCCreationHandler:
         forbidden_names=None,
         *,
         model: str = _DEFAULT_NAME_MODEL,
-        temperature: float = 0.8,
         max_output_tokens: int = 50,
     ) -> str:
         """
@@ -2555,7 +2551,6 @@ class NPCCreationHandler:
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 
             )
@@ -2608,7 +2603,6 @@ class NPCCreationHandler:
         environment_desc: str | None = None,
         *,
         model: str = _DEFAULT_DESC_MODEL,
-        temperature: float = 0.7,
         max_output_tokens: int | None = None,
     ) -> str:
         """
@@ -2650,7 +2644,6 @@ class NPCCreationHandler:
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 
             )
@@ -2670,7 +2663,6 @@ class NPCCreationHandler:
         environment_desc: str | None = None,
         *,
         model: str = _DEFAULT_PERS_MODEL,
-        temperature: float = 0.7,
         max_output_tokens: int | None = None,
     ) -> NPCPersonalityData:
         """
@@ -2713,7 +2705,6 @@ class NPCCreationHandler:
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 
             )
@@ -2738,7 +2729,6 @@ class NPCCreationHandler:
         archetype_summary: str = "",
         *,
         model: str = _DEFAULT_STATS_MODEL,
-        temperature: float = 0.4,
         max_output_tokens: int | None = None,
     ) -> NPCStatsData:
         """
@@ -2775,7 +2765,6 @@ class NPCCreationHandler:
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 
             )
@@ -3256,7 +3245,6 @@ class NPCCreationHandler:
         npc_name: str = "",
         *,
         model: str = _DEFAULT_ARCH_MODEL,
-        temperature: float = 0.8,
         max_output_tokens: int | None = None,
     ) -> NPCArchetypeData:
         """
@@ -3298,7 +3286,6 @@ class NPCCreationHandler:
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 
             )
@@ -3322,7 +3309,6 @@ class NPCCreationHandler:
         day_names: list[str] | None = None,
         *,
         model: str = _DEFAULT_SCHED_MODEL,
-        temperature: float = 0.7,
         max_output_tokens: int | None = None,
     ) -> Dict[str, Any]:
         """
@@ -3403,7 +3389,6 @@ class NPCCreationHandler:
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 
             )
@@ -4356,7 +4341,6 @@ class NPCCreationHandler:
         reciprocal_type: str,
         *,
         model: str = "gpt-5-nano",
-        temperature: float = 0.7,
         max_output_tokens: int = 200,
     ) -> Optional[str]:
         """
@@ -4403,8 +4387,6 @@ class NPCCreationHandler:
                     ],
                     "max_output_tokens": max_output_tokens,
                 }
-                if temperature is not None:
-                    params["temperature"] = temperature
                 resp = await client.responses.create(**params)
     
                 # Preferred convenience accessor (unifies across content parts).
@@ -4606,10 +4588,9 @@ class NPCCreationHandler:
             The list of newly triggered cue dictionaries, or `None` on error.
         """
         try:
-            from lore.core import canon
-    
+            ctx = _mk_ctx(user_id, conversation_id)
+            
             # ── gather context ──────────────────────────────────────────────────
-            ctx = type("CanonCtx", (), {"user_id": user_id, "conversation_id": conversation_id})()
             async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(
                     """
@@ -4661,26 +4642,26 @@ class NPCCreationHandler:
     
             history_cues = {h["cue"] for h in history}
             newly_triggered: list[dict] = []
-
+    
             async with GameTimeContext(user_id, conversation_id) as game_time:
                 timestamp = await game_time.to_string()
                 year = game_time.year
                 month = game_time.month
                 day = game_time.day
                 time_of_day = game_time.time_of_day
-
+    
                 # ── evaluate each stat's ladder ─────────────────────────────────────
                 for stat, value in stats_current.items():
                     # Additional safety check (though shouldn't be needed with the fix above)
                     if value is None:
                         logging.warning(f"Stat {stat} is None for NPC {npc_id}, skipping")
                         continue
-
+    
                     for step in trigger_map[stat]:
                         cue = step["cue"]
                         if cue in history_cues:
                             continue                       # already fired
-
+    
                         if value >= step["threshold"]:
                             newly_triggered.append(
                                 {
@@ -4704,6 +4685,14 @@ class NPCCreationHandler:
             history.extend(newly_triggered)
     
             async with get_db_connection_context() as conn:
+                # Fetch npc_name if we need it (fixed to ensure npc_name is available)
+                if 'npc_name' not in locals():
+                    name_row = await conn.fetchrow(
+                        "SELECT npc_name FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3",
+                        user_id, conversation_id, npc_id
+                    )
+                    npc_name = name_row['npc_name'] if name_row else f"NPC {npc_id}"
+                
                 await canon.update_entity_canonically(
                     ctx,
                     conn,
