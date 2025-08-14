@@ -36,7 +36,6 @@ from nyx.governance_helpers import with_governance
 from db.connection import get_db_connection_context
 
 from logic.dynamic_relationships import OptimizedRelationshipManager
-from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
 from logic.artifact_system.artifact_manager import ArtifactManager
 from logic.event_logging import log_event
 from logic.game_time_helper import GameTimeContext
@@ -491,16 +490,60 @@ class EventSystem:
 
     async def _handle_conflict_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         try:
+            from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
+            
             data = event["data"]
             conflict_id = data.get("conflict_id")
+            
             if not conflict_id:
-                return {"error": "No conflict ID provided"}
-
-            conflict = await self.conflict_resolution.get_conflict_details(conflict_id)
-            if not conflict:
-                return {"error": f"Conflict {conflict_id} not found"}
-
-            return await self.conflict_resolution.process_conflict_event(conflict_id, data)
+                # Check if we should synthesize conflicts instead
+                ctx = RunContextWrapper({
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })
+                
+                from logic.conflict_system.conflict_synthesizer import check_for_conflict_synthesis
+                synthesis_result = await check_for_conflict_synthesis(ctx)
+                
+                if synthesis_result.get('synthesis_performed'):
+                    return {
+                        "event_type": "conflict_synthesis",
+                        "synthesis_id": synthesis_result['synthesis_id'],
+                        "complexity": synthesis_result['complexity'],
+                        "emergent_properties": synthesis_result['emergent_properties']
+                    }
+                
+                return {"error": "No conflict ID provided and no synthesis needed"}
+            
+            # Check if conflict is part of a synthesis
+            synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
+            
+            async with get_db_connection_context() as conn:
+                synthesis = await conn.fetchrow("""
+                    SELECT synthesis_id FROM conflict_synthesis
+                    WHERE $1 = ANY(component_conflicts::int[])
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, conflict_id)
+            
+            if synthesis:
+                # Route through synthesis manager
+                result = await synthesizer.manage_synthesis_progression(
+                    synthesis['synthesis_id'],
+                    data
+                )
+                return {
+                    "synthesis_managed": True,
+                    "updates": result
+                }
+            else:
+                # Original single conflict handling
+                conflict = await self.conflict_resolution.get_conflict_details(conflict_id)
+                if not conflict:
+                    return {"error": f"Conflict {conflict_id} not found"}
+                
+                return await self.conflict_resolution.process_conflict_event(conflict_id, data)
+                
         except Exception as e:
             logger.error(f"Error handling conflict event: {e}")
             return {"error": str(e)}
@@ -673,4 +716,5 @@ class EventSystem:
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
             return {"error": str(e)}
+
 
