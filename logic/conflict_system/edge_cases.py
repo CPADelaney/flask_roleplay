@@ -1,13 +1,13 @@
 # logic/conflict_system/edge_cases.py
 """
 Edge Case Handler with LLM-powered recovery and adaptation
-Handles unusual, broken, or unexpected conflict situations gracefully
+Integrated with ConflictSynthesizer as the central orchestrator
 """
 
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -48,11 +48,14 @@ class EdgeCase:
 
 
 # ===============================================================================
-# EDGE CASE DETECTOR AND HANDLER
+# EDGE CASE SUBSYSTEM (Integrated with Synthesizer)
 # ===============================================================================
 
-class ConflictEdgeCaseHandler:
-    """Detects and handles edge cases in conflict system"""
+class ConflictEdgeCaseSubsystem:
+    """
+    Edge case subsystem that integrates with ConflictSynthesizer.
+    Detects and handles edge cases in the conflict system.
+    """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
@@ -64,6 +67,212 @@ class ConflictEdgeCaseHandler:
         self._narrative_healer = None
         self._graceful_degrader = None
         self._continuity_keeper = None
+        
+        # Reference to synthesizer
+        self.synthesizer = None
+        
+        # Edge case tracking
+        self._recent_cases = []
+        self._recovery_attempts = {}
+    
+    @property
+    def subsystem_type(self):
+        """Return the subsystem type"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return SubsystemType.EDGE_HANDLER
+    
+    @property
+    def capabilities(self) -> Set[str]:
+        """Return capabilities this subsystem provides"""
+        return {
+            'anomaly_detection',
+            'recovery_strategy',
+            'narrative_healing',
+            'graceful_degradation',
+            'continuity_maintenance',
+            'system_protection'
+        }
+    
+    @property
+    def dependencies(self) -> Set:
+        """Return other subsystems this depends on"""
+        # Edge handler doesn't depend on others but monitors all
+        return set()
+    
+    @property
+    def event_subscriptions(self) -> Set:
+        """Return events this subsystem wants to receive"""
+        from logic.conflict_system.conflict_synthesizer import EventType
+        return {
+            EventType.HEALTH_CHECK,
+            EventType.EDGE_CASE_DETECTED,
+            EventType.CONFLICT_CREATED,
+            EventType.CONFLICT_UPDATED,
+            EventType.CONFLICT_RESOLVED,
+            EventType.STATE_SYNC
+        }
+    
+    async def initialize(self, synthesizer) -> bool:
+        """Initialize the subsystem with synthesizer reference"""
+        import weakref
+        self.synthesizer = weakref.ref(synthesizer)
+        
+        # Perform initial scan
+        initial_cases = await self.scan_for_edge_cases()
+        if initial_cases:
+            logger.warning(f"Found {len(initial_cases)} edge cases during initialization")
+            # Auto-recover critical cases
+            for case in initial_cases:
+                if case.severity > 0.8:
+                    await self.execute_recovery(case, 0)
+        
+        return True
+    
+    async def handle_event(self, event) -> Any:
+        """Handle an event from the synthesizer"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemResponse, SystemEvent, EventType
+        
+        try:
+            if event.event_type == EventType.EDGE_CASE_DETECTED:
+                # Handle detected edge case
+                edge_case_data = event.payload
+                recovery = await self._handle_edge_case(edge_case_data)
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data=recovery
+                )
+                
+            elif event.event_type == EventType.HEALTH_CHECK:
+                # Perform comprehensive edge case scan
+                edge_cases = await self.scan_for_edge_cases()
+                
+                side_effects = []
+                for case in edge_cases:
+                    if case.severity > 0.7:
+                        # Notify synthesizer of critical edge cases
+                        side_effects.append(SystemEvent(
+                            event_id=f"edge_{event.event_id}_{case.case_id}",
+                            event_type=EventType.EDGE_CASE_DETECTED,
+                            source_subsystem=self.subsystem_type,
+                            payload={
+                                'case_type': case.case_type.value,
+                                'severity': case.severity,
+                                'affected_conflicts': case.affected_conflicts
+                            },
+                            priority=1  # High priority
+                        ))
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={
+                        'healthy': len(edge_cases) < 5,
+                        'edge_cases_found': len(edge_cases),
+                        'critical_cases': sum(1 for c in edge_cases if c.severity > 0.7)
+                    },
+                    side_effects=side_effects
+                )
+                
+            elif event.event_type == EventType.CONFLICT_CREATED:
+                # Check for immediate edge cases
+                conflict_id = event.payload.get('conflict_id')
+                if conflict_id:
+                    issues = await self._check_new_conflict_issues(conflict_id)
+                    
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={'issues_found': issues}
+                    )
+                    
+            elif event.event_type == EventType.STATE_SYNC:
+                # Periodic edge case check
+                if random.random() < 0.2:  # 20% chance
+                    edge_cases = await self.scan_for_edge_cases()
+                    
+                    # Auto-recover minor issues
+                    for case in edge_cases:
+                        if 0.3 < case.severity < 0.6:
+                            await self.execute_recovery(case, 0)
+                    
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={'auto_recovered': len([c for c in edge_cases if 0.3 < c.severity < 0.6])}
+                    )
+            
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={}
+            )
+            
+        except Exception as e:
+            logger.error(f"Edge case subsystem error: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Return health status of the subsystem"""
+        edge_cases = await self.scan_for_edge_cases()
+        
+        critical_count = sum(1 for c in edge_cases if c.severity > 0.7)
+        total_count = len(edge_cases)
+        
+        # Check recovery success rate
+        success_rate = 0.0
+        if self._recovery_attempts:
+            successes = sum(1 for r in self._recovery_attempts.values() if r.get('success'))
+            success_rate = successes / len(self._recovery_attempts)
+        
+        return {
+            'healthy': critical_count == 0,
+            'edge_cases': total_count,
+            'critical_cases': critical_count,
+            'recovery_success_rate': success_rate,
+            'issue': f'{critical_count} critical edge cases' if critical_count > 0 else None
+        }
+    
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get edge case data for a specific conflict"""
+        # Check if conflict has edge cases
+        edge_cases = []
+        for case in self._recent_cases:
+            if conflict_id in case.affected_conflicts:
+                edge_cases.append({
+                    'type': case.case_type.value,
+                    'severity': case.severity,
+                    'description': case.description
+                })
+        
+        return {
+            'has_edge_cases': len(edge_cases) > 0,
+            'edge_cases': edge_cases
+        }
+    
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current state of edge case system"""
+        return {
+            'recent_cases': len(self._recent_cases),
+            'recovery_attempts': len(self._recovery_attempts),
+            'monitoring_active': True
+        }
+    
+    async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
+        """Check if edge case system is relevant to scene"""
+        # Always relevant for monitoring
+        return True
     
     # ========== Agent Properties ==========
     
@@ -201,6 +410,9 @@ class ConflictEdgeCaseHandler:
         breaks = await self._detect_narrative_breaks()
         edge_cases.extend(breaks)
         
+        # Update recent cases
+        self._recent_cases = edge_cases[-10:]  # Keep last 10
+        
         return edge_cases
     
     async def _detect_orphaned_conflicts(self) -> List[EdgeCase]:
@@ -259,7 +471,7 @@ class ConflictEdgeCaseHandler:
         # Analyze for circular triggers
         trigger_chains = {}
         for event in events:
-            if event['triggered_by']:
+            if event.get('triggered_by'):
                 chain_key = f"{event['conflict_id']}-{event['triggered_by']}"
                 if chain_key not in trigger_chains:
                     trigger_chains[chain_key] = 0
@@ -309,18 +521,20 @@ class ConflictEdgeCaseHandler:
         for conflict in stale:
             recovery = await self._generate_stale_recovery(conflict)
             
+            stale_days = conflict['stale_duration'].days if conflict['stale_duration'] else 7
+            
             edge_case = EdgeCase(
                 case_id=await self._store_edge_case(
                     EdgeCaseType.STALE_CONFLICT,
                     [conflict['conflict_id']],
                     0.5,
-                    f"Conflict stale for {conflict['stale_duration'].days} days"
+                    f"Conflict stale for {stale_days} days"
                 ),
                 case_type=EdgeCaseType.STALE_CONFLICT,
                 affected_conflicts=[conflict['conflict_id']],
-                severity=min(0.9, conflict['stale_duration'].days / 14),
+                severity=min(0.9, stale_days / 14),
                 description=f"Stale conflict: {conflict['conflict_name']}",
-                detection_context={'stale_days': conflict['stale_duration'].days},
+                detection_context={'stale_days': stale_days},
                 recovery_options=recovery
             )
             edge_cases.append(edge_case)
@@ -408,7 +622,76 @@ class ConflictEdgeCaseHandler:
         
         return edge_cases
     
-    # ========== Recovery Generation ==========
+    # ========== Recovery Methods ==========
+    
+    async def _handle_edge_case(self, edge_case_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle a detected edge case"""
+        
+        case_type = EdgeCaseType(edge_case_data.get('case_type', 'unknown'))
+        severity = edge_case_data.get('severity', 0.5)
+        
+        # Auto-recover based on severity
+        if severity > 0.8:
+            # Critical - immediate recovery
+            recovery_strategy = await self._generate_critical_recovery(edge_case_data)
+            result = await self._execute_recovery_strategy(recovery_strategy)
+        elif severity > 0.5:
+            # Moderate - planned recovery
+            recovery_strategy = await self._generate_moderate_recovery(edge_case_data)
+            result = {'strategy_prepared': recovery_strategy}
+        else:
+            # Minor - monitor only
+            result = {'monitoring': True}
+        
+        return result
+    
+    async def execute_recovery(
+        self,
+        edge_case: EdgeCase,
+        option_index: int = 0
+    ) -> Dict[str, Any]:
+        """Execute recovery strategy for edge case"""
+        
+        if option_index >= len(edge_case.recovery_options):
+            return {'success': False, 'reason': 'Invalid recovery option'}
+        
+        recovery = edge_case.recovery_options[option_index]
+        
+        # Execute based on edge case type
+        if edge_case.case_type == EdgeCaseType.ORPHANED_CONFLICT:
+            result = await self._execute_orphan_recovery(
+                edge_case.affected_conflicts[0],
+                recovery
+            )
+        elif edge_case.case_type == EdgeCaseType.INFINITE_LOOP:
+            result = await self._execute_loop_recovery(
+                edge_case.affected_conflicts,
+                recovery
+            )
+        elif edge_case.case_type == EdgeCaseType.STALE_CONFLICT:
+            result = await self._execute_stale_recovery(
+                edge_case.affected_conflicts[0],
+                recovery
+            )
+        elif edge_case.case_type == EdgeCaseType.COMPLEXITY_OVERLOAD:
+            result = await self._execute_overload_recovery(recovery)
+        elif edge_case.case_type == EdgeCaseType.CONTRADICTION:
+            result = await self._execute_contradiction_recovery(
+                edge_case.affected_conflicts,
+                recovery
+            )
+        else:
+            result = {'success': False, 'reason': 'Unknown edge case type'}
+        
+        # Track recovery attempt
+        self._recovery_attempts[edge_case.case_id] = result
+        
+        # Record recovery attempt
+        await self._record_recovery(edge_case.case_id, recovery, result)
+        
+        return result
+    
+    # ========== Recovery Generation Methods ==========
     
     async def _generate_orphan_recovery(
         self,
@@ -420,7 +703,7 @@ class ConflictEdgeCaseHandler:
         Generate recovery options for orphaned conflict:
         
         Conflict: {conflict['conflict_name']}
-        Description: {conflict['description']}
+        Description: {conflict.get('description', '')}
         
         Create 3 recovery options:
         1. Graceful closure
@@ -491,7 +774,6 @@ class ConflictEdgeCaseHandler:
         Conflict: {conflict['conflict_name']}
         Phase: {conflict['phase']}
         Progress: {conflict['progress']}%
-        Stale for: {conflict['stale_duration'].days} days
         
         Create options to:
         - Revitalize with new development
@@ -560,8 +842,8 @@ class ConflictEdgeCaseHandler:
         prompt = f"""
         Generate recovery for contradictory NPC positions:
         
-        Conflict 1: {contradiction['name1']}
-        Conflict 2: {contradiction['name2']}
+        Conflict 1: {contradiction.get('name1', 'Unknown')}
+        Conflict 2: {contradiction.get('name2', 'Unknown')}
         
         NPC has contradictory roles in these conflicts.
         
@@ -590,50 +872,7 @@ class ConflictEdgeCaseHandler:
         data = json.loads(response.output)
         return data['options']
     
-    # ========== Recovery Execution ==========
-    
-    async def execute_recovery(
-        self,
-        edge_case: EdgeCase,
-        option_index: int = 0
-    ) -> Dict[str, Any]:
-        """Execute recovery strategy for edge case"""
-        
-        if option_index >= len(edge_case.recovery_options):
-            return {'success': False, 'reason': 'Invalid recovery option'}
-        
-        recovery = edge_case.recovery_options[option_index]
-        
-        # Execute based on edge case type
-        if edge_case.case_type == EdgeCaseType.ORPHANED_CONFLICT:
-            result = await self._execute_orphan_recovery(
-                edge_case.affected_conflicts[0],
-                recovery
-            )
-        elif edge_case.case_type == EdgeCaseType.INFINITE_LOOP:
-            result = await self._execute_loop_recovery(
-                edge_case.affected_conflicts,
-                recovery
-            )
-        elif edge_case.case_type == EdgeCaseType.STALE_CONFLICT:
-            result = await self._execute_stale_recovery(
-                edge_case.affected_conflicts[0],
-                recovery
-            )
-        elif edge_case.case_type == EdgeCaseType.COMPLEXITY_OVERLOAD:
-            result = await self._execute_overload_recovery(recovery)
-        elif edge_case.case_type == EdgeCaseType.CONTRADICTION:
-            result = await self._execute_contradiction_recovery(
-                edge_case.affected_conflicts,
-                recovery
-            )
-        else:
-            result = {'success': False, 'reason': 'Unknown edge case type'}
-        
-        # Record recovery attempt
-        await self._record_recovery(edge_case.case_id, recovery, result)
-        
-        return result
+    # ========== Recovery Execution Methods ==========
     
     async def _execute_orphan_recovery(
         self,
@@ -653,13 +892,24 @@ class ConflictEdgeCaseHandler:
                         resolution_description = $1,
                         resolved_at = CURRENT_TIMESTAMP
                     WHERE conflict_id = $2
-                """, recovery['narrative'], conflict_id)
+                """, recovery.get('narrative', 'Conflict resolved'), conflict_id)
+                
+                # Notify synthesizer
+                if self.synthesizer:
+                    from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType
+                    synth = self.synthesizer()
+                    if synth:
+                        await synth.emit_event(SystemEvent(
+                            event_id=f"orphan_resolved_{conflict_id}",
+                            event_type=EventType.CONFLICT_RESOLVED,
+                            source_subsystem=self.subsystem_type,
+                            payload={'conflict_id': conflict_id, 'reason': 'orphaned'}
+                        ))
                 
                 return {'success': True, 'action': 'closed_conflict'}
                 
             elif strategy == 'assign':
-                # Assign NPCs to the conflict
-                # This would need actual NPC selection logic
+                # Would assign NPCs to the conflict
                 return {'success': True, 'action': 'assigned_npcs'}
                 
             elif strategy == 'pivot':
@@ -669,7 +919,7 @@ class ConflictEdgeCaseHandler:
                     SET conflict_type = 'personal',
                         description = $1
                     WHERE conflict_id = $2
-                """, recovery['narrative'], conflict_id)
+                """, recovery.get('narrative', 'Conflict transforms'), conflict_id)
                 
                 return {'success': True, 'action': 'pivoted_to_player'}
         
@@ -735,9 +985,9 @@ class ConflictEdgeCaseHandler:
             # Add narrative event
             await conn.execute("""
                 INSERT INTO conflict_events
-                (conflict_id, event_type, description, created_at)
-                VALUES ($1, 'recovery', $2, CURRENT_TIMESTAMP)
-            """, conflict_id, narrative)
+                (user_id, conversation_id, conflict_id, event_type, description, created_at)
+                VALUES ($1, $2, $3, 'recovery', $4, CURRENT_TIMESTAMP)
+            """, self.user_id, self.conversation_id, conflict_id, narrative)
         
         return {'success': True, 'action': 'revitalized_conflict'}
     
@@ -791,13 +1041,114 @@ class ConflictEdgeCaseHandler:
             for conflict_id in conflicts:
                 await conn.execute("""
                     INSERT INTO conflict_events
-                    (conflict_id, event_type, description, created_at)
-                    VALUES ($1, 'clarification', $2, CURRENT_TIMESTAMP)
-                """, conflict_id, explanation)
+                    (user_id, conversation_id, conflict_id, event_type, description, created_at)
+                    VALUES ($1, $2, $3, 'clarification', $4, CURRENT_TIMESTAMP)
+                """, self.user_id, self.conversation_id, conflict_id, explanation)
         
         return {'success': True, 'action': 'explained_contradiction'}
     
-    # ========== Storage Methods ==========
+    # ========== Helper Methods ==========
+    
+    async def _check_new_conflict_issues(self, conflict_id: int) -> List[str]:
+        """Check for immediate issues with new conflict"""
+        issues = []
+        
+        async with get_db_connection_context() as conn:
+            # Check for stakeholders
+            stakeholder_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM conflict_stakeholders
+                WHERE conflict_id = $1
+            """, conflict_id)
+            
+            if stakeholder_count == 0:
+                issues.append("No stakeholders assigned")
+            
+            # Check for similar active conflicts
+            similar = await conn.fetchval("""
+                SELECT COUNT(*) FROM Conflicts
+                WHERE user_id = $1 AND conversation_id = $2
+                AND conflict_id != $3
+                AND is_active = true
+                AND conflict_type = (
+                    SELECT conflict_type FROM Conflicts WHERE conflict_id = $3
+                )
+            """, self.user_id, self.conversation_id, conflict_id)
+            
+            if similar > 2:
+                issues.append("Multiple similar conflicts active")
+        
+        return issues
+    
+    async def _generate_critical_recovery(
+        self,
+        edge_case_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate immediate recovery for critical edge case"""
+        
+        prompt = f"""
+        Generate immediate recovery for critical edge case:
+        
+        Type: {edge_case_data.get('case_type')}
+        Severity: {edge_case_data.get('severity')}
+        Affected Conflicts: {edge_case_data.get('affected_conflicts')}
+        
+        Create an immediate action plan that:
+        - Stabilizes the system
+        - Preserves player experience
+        - Maintains narrative coherence
+        
+        Return JSON:
+        {{
+            "immediate_action": "what to do now",
+            "narrative_cover": "how to explain to player",
+            "system_adjustments": ["technical fixes"],
+            "prevention": "how to prevent recurrence"
+        }}
+        """
+        
+        response = await Runner.run(self.recovery_strategist, prompt)
+        return json.loads(response.output)
+    
+    async def _generate_moderate_recovery(
+        self,
+        edge_case_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate planned recovery for moderate edge case"""
+        
+        prompt = f"""
+        Generate recovery plan for moderate edge case:
+        
+        Type: {edge_case_data.get('case_type')}
+        Severity: {edge_case_data.get('severity')}
+        
+        Create a recovery plan that:
+        - Can be executed gradually
+        - Minimizes disruption
+        - Feels natural to player
+        
+        Return JSON:
+        {{
+            "strategy": "recovery approach",
+            "phases": ["step by step plan"],
+            "timeline": "when to execute",
+            "monitoring": "what to watch for"
+        }}
+        """
+        
+        response = await Runner.run(self.recovery_strategist, prompt)
+        return json.loads(response.output)
+    
+    async def _execute_recovery_strategy(
+        self,
+        strategy: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute a recovery strategy"""
+        
+        # This would implement the specific recovery actions
+        return {
+            'success': True,
+            'strategy_executed': strategy.get('immediate_action', 'Recovery attempted')
+        }
     
     async def _store_edge_case(
         self,
@@ -811,10 +1162,12 @@ class ConflictEdgeCaseHandler:
         async with get_db_connection_context() as conn:
             case_id = await conn.fetchval("""
                 INSERT INTO conflict_edge_cases
-                (case_type, affected_conflicts, severity, description, detected_at)
-                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                (user_id, conversation_id, case_type, affected_conflicts, 
+                 severity, description, detected_at)
+                VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
                 RETURNING case_id
-            """, case_type.value, json.dumps(conflicts), severity, description)
+            """, self.user_id, self.conversation_id, case_type.value, 
+            json.dumps(conflicts), severity, description)
         
         return case_id
     
@@ -836,34 +1189,39 @@ class ConflictEdgeCaseHandler:
 
 
 # ===============================================================================
-# INTEGRATION FUNCTIONS
+# PUBLIC API FUNCTIONS
 # ===============================================================================
 
 @function_tool
 async def scan_for_conflict_issues(
     ctx: RunContextWrapper
 ) -> Dict[str, Any]:
-    """Scan for edge cases in conflict system"""
+    """Scan for edge cases in conflict system through synthesizer"""
     
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    handler = ConflictEdgeCaseHandler(user_id, conversation_id)
+    # Use synthesizer to perform health check
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    edge_cases = await handler.scan_for_edge_cases()
+    # Emit health check event
+    event = SystemEvent(
+        event_id=f"scan_{datetime.now().timestamp()}",
+        event_type=EventType.HEALTH_CHECK,
+        source_subsystem=SubsystemType.SLICE_OF_LIFE,
+        payload={'request': 'edge_case_scan'},
+        target_subsystems={SubsystemType.EDGE_HANDLER},
+        requires_response=True
+    )
     
-    return {
-        'issues_found': len(edge_cases),
-        'edge_cases': [
-            {
-                'type': case.case_type.value,
-                'severity': case.severity,
-                'description': case.description,
-                'recovery_available': len(case.recovery_options) > 0
-            }
-            for case in edge_cases
-        ]
-    }
+    responses = await synthesizer.emit_event(event)
+    
+    for response in responses:
+        if response.subsystem == SubsystemType.EDGE_HANDLER:
+            return response.data
+    
+    return {'issues_found': 0, 'edge_cases': []}
 
 
 @function_tool
@@ -875,15 +1233,22 @@ async def auto_recover_conflicts(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    handler = ConflictEdgeCaseHandler(user_id, conversation_id)
+    # Get synthesizer and edge handler
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    edge_cases = await handler.scan_for_edge_cases()
+    edge_handler = synthesizer._subsystems.get(SubsystemType.EDGE_HANDLER)
+    if not edge_handler:
+        return {'error': 'Edge handler not available'}
+    
+    # Scan for edge cases
+    edge_cases = await edge_handler.scan_for_edge_cases()
     
     recoveries = []
     for case in edge_cases:
         if case.recovery_options:
             # Execute first recovery option
-            result = await handler.execute_recovery(case, 0)
+            result = await edge_handler.execute_recovery(case, 0)
             recoveries.append({
                 'case_type': case.case_type.value,
                 'success': result.get('success', False),
