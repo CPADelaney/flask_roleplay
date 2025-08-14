@@ -1530,17 +1530,23 @@ class ConflictSystemIntegration:
         
         while self.active_monitoring:
             try:
-                await self.monitor_and_generate_conflicts()
-                
+                # CREATE THE CONTEXT FIRST
                 ctx = RunContextWrapper({
                     "user_id": self.user_id,
                     "conversation_id": self.conversation_id
                 })
+                
+                # PASS THE CONTEXT TO monitor_and_generate_conflicts
+                await self.monitor_and_generate_conflicts(ctx)
+                
+                # Get active conflicts (ctx already created)
                 active_conflicts = await get_active_conflicts(ctx)
                 
                 for conflict in active_conflicts:
                     if await self._needs_evolution(conflict):
+                        # ALSO PASS CTX TO evolve_conflict
                         await self.evolve_conflict(
+                            ctx,  # Add ctx as first parameter
                             conflict["conflict_id"],
                             "natural_progression",
                             {"days_active": conflict.get("days_active", 1)}
