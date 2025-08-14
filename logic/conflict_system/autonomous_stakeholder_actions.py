@@ -107,7 +107,7 @@ class StakeholderStrategy:
 # AUTONOMOUS STAKEHOLDER MANAGER WITH LLM
 # ===============================================================================
 
-class AutonomousStakeholderManager:
+class StakeholderAutonomySystem:
     """
     Manages autonomous NPC actions using LLM for intelligent decision-making.
     Creates realistic, personality-driven stakeholder behaviors.
@@ -116,6 +116,7 @@ class AutonomousStakeholderManager:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self.manager = AutonomousStakeholderManager(user_id, conversation_id)
         self._decision_maker = None
         self._reaction_generator = None
         self._strategy_planner = None
@@ -379,6 +380,11 @@ class AutonomousStakeholderManager:
             return self._create_fallback_action(stakeholder)
     
     # ========== Reaction System ==========
+
+    async def process_event(self, conflict_id: int, event: Dict[str, Any]):
+        """Process events for stakeholder reactions"""
+        # Delegate to existing manager methods
+        return await self.manager.process_stakeholder_event(conflict_id, event)
     
     async def generate_reaction(
         self,
