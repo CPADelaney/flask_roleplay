@@ -207,18 +207,20 @@ class LoreError(Exception):
         self.status_code = status_code
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.timestamp: Optional[datetime] = None
-        self.timestamp_float: Optional[float] = None
+        # Initialized later by initialize_timestamps(); may remain None.
+        self.timestamp = None
+        self.timestamp_float = None
         super().__init__(self.message)
 
     async def initialize_timestamps(self):
         """Asynchronously initialize timestamp fields using game time."""
         if self.user_id is None or self.conversation_id is None:
-            self.timestamp = datetime.utcnow()
-            self.timestamp_float = self.timestamp.timestamp()
-        else:
-            self.timestamp = await get_game_datetime(self.user_id, self.conversation_id)
-            self.timestamp_float = await get_game_timestamp(self.user_id, self.conversation_id)
+            utc_now = datetime.utcnow()
+            self.timestamp = utc_now
+            self.timestamp_float = utc_now.timestamp()
+            return
+        self.timestamp = await get_game_datetime(self.user_id, self.conversation_id)
+        self.timestamp_float = await get_game_timestamp(self.user_id, self.conversation_id)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert error to dictionary for serialization."""
