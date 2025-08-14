@@ -21,6 +21,13 @@ from pydantic import BaseModel, Field
 
 import asyncpg
 
+# Game time helpers
+from logic.game_time_helper import (
+    get_game_datetime,
+    get_game_time_string,
+    get_current_time,
+)
+
 # Import core systems
 from lore.core import canon
 from lore.core.lore_system import LoreSystem
@@ -502,13 +509,27 @@ class CompactRelationshipHistory:
                 'diff': diff
             })
     
-    def add_interaction(self, interaction_type: str, context: str = "casual"):
-        """Store interaction efficiently"""
-        self.recent_interactions.append({
-            'timestamp': datetime.now(),
-            'type': interaction_type,
-            'context': context
-        })
+    async def record_interaction(
+        self,
+        user_id: int,
+        conversation_id: int,
+        interaction_type: str,
+        context: str = "casual",
+    ):
+        """Store interaction with game time context."""
+
+        timestamp = await get_game_datetime(user_id, conversation_id)
+        time_string = await get_game_time_string(user_id, conversation_id)
+
+        interaction = {
+            "timestamp": timestamp,
+            "time_string": time_string,
+            "type": interaction_type,
+            "context": context,
+            "game_time": await get_current_time(user_id, conversation_id),
+        }
+
+        self.recent_interactions.append(interaction)
 
 @dataclass
 class RelationshipState:
@@ -1323,9 +1344,13 @@ class OptimizedRelationshipManager:
         # Single clamp at the end
         state.dimensions.clamp()
         
-        # Update history
-        state.history.add_interaction(interaction.get('type', 'unknown'), 
-                                    interaction.get('context', 'casual'))
+        # Update history with game time
+        await state.history.record_interaction(
+            self.user_id,
+            self.conversation_id,
+            interaction.get('type', 'unknown'),
+            interaction.get('context', 'casual'),
+        )
         state.history.add_snapshot_if_significant(state.dimensions, old_dimensions)
         
         # Detect patterns
