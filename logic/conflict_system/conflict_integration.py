@@ -16,8 +16,8 @@ from lore.core import canon
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 from logic.conflict_system.enhanced_conflict_generation import (
     OrganicConflictGenerator, 
-    generate_organic_conflict_impl,  # Import implementation function
-    analyze_conflict_pressure_impl   # Import implementation function
+    generate_organic_conflict_impl,  # Implementation function
+    analyze_conflict_pressure_impl   # Implementation function
 )
 from logic.conflict_system.conflict_agents import (
     ConflictContext, 
