@@ -28,9 +28,10 @@ class EnvironmentData(BaseModel):
     """Data about the environment an NPC is in."""
     location: str = "Unknown"
     time_of_day: str = "Unknown"
+    day_name: Optional[str] = None     # e.g., "Moonday" (semantic day-of-week)
     year: Optional[int] = None
     month: Optional[int] = None
-    day: Optional[int] = None
+    day: Optional[int] = None          # day of month (numeric)
     timestamp: Optional[str] = None
     entities_present: List[Dict[str, Any]] = Field(default_factory=list)
     description: Optional[str] = None
@@ -415,9 +416,22 @@ class EnvironmentPerception:
                         "year": game_time.year,
                         "month": game_time.month,
                         "day": game_time.day,
+                        "day_name": None,  # Will populate if calendar available
                         "entities_present": []
                     }
-
+                
+                # Populate day_name from calendar if available
+                try:
+                    from logic.calendar import load_calendar_names
+                    calendar_data = await load_calendar_names(self.user_id, self.conversation_id)
+                    day_names = calendar_data.get("days", [])
+                    if day_names and environment_data["day"]:
+                        # Calculate which day of week it is
+                        day_index = (environment_data["day"] - 1) % len(day_names)
+                        environment_data["day_name"] = day_names[day_index]
+                except Exception as e:
+                    logger.debug(f"Could not load calendar day names: {e}")
+    
                 # Extract location from context if available
                 if context.location:
                     environment_data["location"] = context.location
@@ -439,7 +453,7 @@ class EnvironmentPerception:
                 if context.time_of_day:
                     environment_data["time_of_day"] = context.time_of_day
                 
-                # Fetch time of day from database if not in context
+                # Fetch time of day from database if not in context (fixed duplicate SELECT)
                 if environment_data["time_of_day"] == "Unknown":
                     async with get_db_connection_context() as conn:
                         row = await conn.fetchrow(
@@ -451,7 +465,7 @@ class EnvironmentPerception:
                         )
                         if row:
                             environment_data["time_of_day"] = row[0]
-
+    
                 # Use entities from context if available
                 if context.entities_present:
                     environment_data["entities_present"] = context.entities_present
@@ -493,11 +507,14 @@ class EnvironmentPerception:
                 
             except Exception as e:
                 logger.error(f"Error fetching environment data: {e}")
+                # Add timestamp for observability in error path
+                ts = await get_game_time_string(self.user_id, self.conversation_id)
                 return {
                     "location": "Unknown",
                     "time_of_day": "Unknown",
                     "entities_present": [],
-                    "error": str(e)
+                    "timestamp": ts,
+                    "error": str(e),
                 }
     
     async def fetch_time_context(self) -> Dict[str, Any]:
