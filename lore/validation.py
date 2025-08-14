@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps, lru_cache
 import hashlib
 from pydantic import BaseModel, ValidationError, Field
+from logic.game_time_helper import get_game_timestamp, get_game_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ class ErrorSeverity(str, Enum):
 
 class LoreError(Exception):
     """Base exception class for lore system errors"""
-    
+
     def __init__(
         self,
         message: str,
@@ -194,7 +195,9 @@ class LoreError(Exception):
         category: Optional[ErrorCategory] = None,
         severity: Optional[ErrorSeverity] = None,
         details: Optional[Dict[str, Any]] = None,
-        status_code: int = 500
+        status_code: int = 500,
+        user_id: Optional[int] = None,
+        conversation_id: Optional[int] = None
     ):
         self.message = message
         self.error_type = error_type
@@ -202,9 +205,21 @@ class LoreError(Exception):
         self.severity = severity or ErrorSeverity.ERROR
         self.details = details or {}
         self.status_code = status_code
-        self.timestamp = datetime.utcnow()
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.timestamp: Optional[datetime] = None
+        self.timestamp_float: Optional[float] = None
         super().__init__(self.message)
-    
+
+    async def initialize_timestamps(self):
+        """Asynchronously initialize timestamp fields using game time."""
+        if self.user_id is None or self.conversation_id is None:
+            self.timestamp = datetime.utcnow()
+            self.timestamp_float = self.timestamp.timestamp()
+        else:
+            self.timestamp = await get_game_datetime(self.user_id, self.conversation_id)
+            self.timestamp_float = await get_game_timestamp(self.user_id, self.conversation_id)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert error to dictionary for serialization."""
         return {
@@ -213,7 +228,8 @@ class LoreError(Exception):
             "category": self.category,
             "severity": self.severity,
             "details": self.details,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "timestamp_float": self.timestamp_float,
             "status_code": self.status_code
         }
 

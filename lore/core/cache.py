@@ -2,11 +2,11 @@
 
 import asyncio
 import re
-from datetime import datetime
 from typing import Dict, Any, Optional, List, Set, Tuple
 from dataclasses import dataclass
 import json
 import logging
+from logic.game_time_helper import get_game_timestamp
 
 from agents import Agent, function_tool, Runner, trace, ModelSettings
 from agents.run import RunConfig
@@ -29,20 +29,21 @@ class CacheAnalytics:
 
 class CacheItem:
     """Enhanced cache item with metadata for optimization."""
-    
-    def __init__(self, value: Any, expiry: float, size_bytes: int = 0, priority: int = 0):
+
+    def __init__(self, value: Any, expiry: float, size_bytes: int = 0, priority: int = 0,
+                 creation_time: float = 0.0):
         self.value = value
         self.expiry = expiry
         self.size_bytes = size_bytes
         self.access_count = 0
-        self.last_access_time = datetime.now().timestamp()
-        self.creation_time = datetime.now().timestamp()
+        self.last_access_time = creation_time
+        self.creation_time = creation_time
         self.priority = priority  # 0-10, higher means more important
-    
-    def access(self):
+
+    def access(self, current_time: float):
         """Record an access to this item."""
         self.access_count += 1
-        self.last_access_time = datetime.now().timestamp()
+        self.last_access_time = current_time
     
     def get_access_frequency(self, current_time: float) -> float:
         """Calculate access frequency (accesses per hour)."""
@@ -81,60 +82,63 @@ class LoreCache:
     
     async def get(self, namespace, key, user_id=None, conversation_id=None):
         """Get an item from the cache with async support and analytics."""
-        start_time = datetime.now().timestamp()
+        start_time = await get_game_timestamp(user_id or 0, conversation_id or 0)
         full_key = self._create_key(namespace, key, user_id, conversation_id)
-        
+
         async with self._lock:
             if full_key in self.cache:
                 cache_item = self.cache[full_key]
-                if cache_item.expiry > datetime.now().timestamp():
+                current_time = await get_game_timestamp(user_id or 0, conversation_id or 0)
+                if cache_item.expiry > current_time:
                     # Update access statistics
-                    cache_item.access()
-                    
+                    cache_item.access(current_time)
+
                     # Record hit in analytics
                     self.analytics.hit_count += 1
-                    
+
                     # Calculate access time for analytics
-                    access_time = datetime.now().timestamp() - start_time
+                    access_time = current_time - start_time
                     self._update_avg_access_time(access_time)
-                    
+
                     return cache_item.value
-                
+
                 # Remove expired item
                 self._remove_key(full_key)
                 self.analytics.eviction_count += 1
-        
+
         # Record miss in analytics
         self.analytics.miss_count += 1
-        
+
         # Add to warm-up candidates
         self._add_warm_up_candidate(namespace, key, user_id, conversation_id)
-        
+
         return None
     
     async def set(self, namespace, key, value, ttl=None, user_id=None, conversation_id=None, priority=0):
         """Set an item in the cache with async support, priority, and size tracking."""
         full_key = self._create_key(namespace, key, user_id, conversation_id)
-        expiry = datetime.now().timestamp() + (ttl or self.default_ttl)
-        
+        current_time = await get_game_timestamp(user_id or 0, conversation_id or 0)
+        expiry = current_time + (ttl or self.default_ttl)
+
         # Estimate size in bytes (rough approximation)
         size_bytes = self._estimate_size(value)
-        
+
         async with self._lock:
             # Manage cache size - use priority-aware eviction strategy
             if len(self.cache) >= self.max_size:
-                await self._evict_items(size_bytes)
-                
+                await self._evict_items(size_bytes, user_id, conversation_id)
+
             # Create cache item with metadata
             cache_item = CacheItem(
                 value=value,
                 expiry=expiry,
                 size_bytes=size_bytes,
-                priority=priority
+                priority=priority,
+                creation_time=current_time
             )
-            
+
             self.cache[full_key] = cache_item
-            
+
             # Update analytics
             self.analytics.size_bytes += size_bytes
             self.analytics.keys_count = len(self.cache)
@@ -188,13 +192,13 @@ class LoreCache:
             del self.cache[full_key]
             self.analytics.keys_count = len(self.cache)
     
-    async def _evict_items(self, required_space=0):
+    async def _evict_items(self, required_space=0, user_id=None, conversation_id=None):
         """
         Evict items based on priority, expiry, and access patterns.
         This is a more sophisticated eviction strategy than basic LRU.
         """
         # First, remove any expired items
-        current_time = datetime.now().timestamp()
+        current_time = await get_game_timestamp(user_id or 0, conversation_id or 0)
         expired_keys = [k for k, v in self.cache.items() if v.expiry <= current_time]
         for key in expired_keys:
             self.analytics.size_bytes -= self.cache[key].size_bytes
@@ -337,9 +341,9 @@ class LoreCache:
                     if re.search(pattern, key_part):
                         item.priority = new_priority
     
-    async def _adjust_item_ttls(self, pattern, namespace, new_ttl):
+    async def _adjust_item_ttls(self, pattern, namespace, new_ttl, user_id=0, conversation_id=0):
         """Adjust TTLs for cache items matching a pattern."""
-        current_time = datetime.now().timestamp()
+        current_time = await get_game_timestamp(user_id, conversation_id)
         async with self._lock:
             namespace_prefix = f"{namespace}:"
             for key, item in self.cache.items():
