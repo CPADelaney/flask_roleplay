@@ -489,6 +489,7 @@ class EventSystem:
     # ---- default handlers ---------------------------------------------------------
 
     async def _handle_conflict_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
+        """Route all conflict events through synthesizer"""
         try:
             from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
             
@@ -496,54 +497,12 @@ class EventSystem:
             conflict_id = data.get("conflict_id")
             
             if not conflict_id:
-                # Check if we should synthesize conflicts instead
-                ctx = RunContextWrapper({
-                    "user_id": self.user_id,
-                    "conversation_id": self.conversation_id
-                })
-                
-                from logic.conflict_system.conflict_synthesizer import check_for_conflict_synthesis
-                synthesis_result = await check_for_conflict_synthesis(ctx)
-                
-                if synthesis_result.get('synthesis_performed'):
-                    return {
-                        "event_type": "conflict_synthesis",
-                        "synthesis_id": synthesis_result['synthesis_id'],
-                        "complexity": synthesis_result['complexity'],
-                        "emergent_properties": synthesis_result['emergent_properties']
-                    }
-                
-                return {"error": "No conflict ID provided and no synthesis needed"}
+                return {"error": "No conflict ID provided"}
             
-            # Check if conflict is part of a synthesis
+            # Route through synthesizer
             synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
+            return await synthesizer.process_conflict_event(conflict_id, data)
             
-            async with get_db_connection_context() as conn:
-                synthesis = await conn.fetchrow("""
-                    SELECT synthesis_id FROM conflict_synthesis
-                    WHERE $1 = ANY(component_conflicts::int[])
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, conflict_id)
-            
-            if synthesis:
-                # Route through synthesis manager
-                result = await synthesizer.manage_synthesis_progression(
-                    synthesis['synthesis_id'],
-                    data
-                )
-                return {
-                    "synthesis_managed": True,
-                    "updates": result
-                }
-            else:
-                # Original single conflict handling
-                conflict = await self.conflict_resolution.get_conflict_details(conflict_id)
-                if not conflict:
-                    return {"error": f"Conflict {conflict_id} not found"}
-                
-                return await self.conflict_resolution.process_conflict_event(conflict_id, data)
-                
         except Exception as e:
             logger.error(f"Error handling conflict event: {e}")
             return {"error": str(e)}
@@ -716,5 +675,6 @@ class EventSystem:
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
             return {"error": str(e)}
+
 
 
