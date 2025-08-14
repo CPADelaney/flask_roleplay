@@ -263,7 +263,6 @@ class ReligionManager(BaseLoreManager):
             You identify elements that might contradict a female-dominant religious structure.
             Focus on power dynamics, gender roles, and divine hierarchy.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.2),
             output_type=MatriarchalThemeValidation
         )
         
@@ -275,7 +274,6 @@ class ReligionManager(BaseLoreManager):
             Male deities should exist but in supporting or specialized roles.
             Ensure the cosmic structure reinforces matriarchal principles.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=GeneratedPantheon,
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._matriarchal_theme_guardrail)
@@ -289,7 +287,6 @@ class ReligionManager(BaseLoreManager):
             Design rituals, ceremonies, and observances that emphasize feminine divine authority.
             Ensure practices reflect the power dynamics of the society.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=List[ReligiousPracticeParams]
         )
         
@@ -300,7 +297,6 @@ class ReligionManager(BaseLoreManager):
             Focus on architecture and features that emphasize feminine divine power.
             Consider how the sites reinforce social hierarchies.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=List[HolySiteParams]
         )
         
@@ -311,7 +307,6 @@ class ReligionManager(BaseLoreManager):
             Ensure teachings emphasize feminine divine supremacy and proper gender roles.
             Create varied text types including scripture, commentary, and hymns.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=List[ReligiousTextParams]
         )
         
@@ -322,7 +317,6 @@ class ReligionManager(BaseLoreManager):
             Emphasize female leadership and gender-appropriate hierarchies.
             Design distinct orders with unique purposes and practices.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=List[ReligiousOrderParams]
         )
         
@@ -333,7 +327,6 @@ class ReligionManager(BaseLoreManager):
             Focus on theological disputes that don't threaten the matriarchal order.
             Design conflicts that add depth while maintaining core power structures.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=List[ReligiousConflictParams]
         )
         
@@ -344,7 +337,6 @@ class ReligionManager(BaseLoreManager):
             Create realistic religious demographics and state religion policies.
             Ensure distribution reflects cultural and political realities.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=NationReligionDistribution
         )
         
@@ -355,7 +347,6 @@ class ReligionManager(BaseLoreManager):
             You maintain orthodoxy while allowing for legitimate theological diversity.
             Your judgments uphold the matriarchal religious order.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=DisputeConclusion
         )
         
@@ -366,7 +357,6 @@ class ReligionManager(BaseLoreManager):
             Maintain core matriarchal themes while allowing for organic development.
             Consider how local customs influence religious practice.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=ReligiousEvolution
         )
         
@@ -377,7 +367,6 @@ class ReligionManager(BaseLoreManager):
             Focus on symbolism, required components, and theological significance.
             Design rituals that reinforce feminine divine authority.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=CompleteRitual
         )
         
@@ -388,7 +377,6 @@ class ReligionManager(BaseLoreManager):
             Consider how local culture influences religious expression.
             Maintain core theological principles while allowing variation.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=RegionalPracticeVariation
         )
         
@@ -399,7 +387,6 @@ class ReligionManager(BaseLoreManager):
             Design theological divisions that don't threaten matriarchal order.
             Focus on interpretive differences rather than fundamental challenges.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
         )
         
         # Setup handoffs between agents
@@ -1786,7 +1773,6 @@ class ReligionManager(BaseLoreManager):
                 Defend your interpretation using scripture and tradition.
                 Maintain respect for the matriarchal religious order.""",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9)
             )
             debate_agents.append({"agent": agent, "position": position})
         
@@ -1933,7 +1919,6 @@ class ReligionManager(BaseLoreManager):
             Value tradition, hierarchy, literal interpretation.
             Strongly matriarchal, preserving established order.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=SectarianPosition
         )
         
@@ -1943,7 +1928,6 @@ class ReligionManager(BaseLoreManager):
             Seek adaptation while maintaining core beliefs.
             Still matriarchal but more flexible interpretation.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=SectarianPosition
         )
         
@@ -1953,7 +1937,6 @@ class ReligionManager(BaseLoreManager):
             Focus on direct divine experience over dogma.
             Strongly feminine-focused spirituality.""",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=SectarianPosition
         )
         
