@@ -231,7 +231,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Return JSON like: { \"count\": 5 }, or something relevant. "
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.0)
         )
         
         # Specialized agents for different region types
@@ -243,7 +242,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "would develop in such terrain."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
         )
         
         self.coastal_region_agent = Agent(
@@ -254,7 +252,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "would leverage maritime advantages."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
         )
         
         self.plains_region_agent = Agent(
@@ -265,7 +262,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "would organize in open territories."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
         )
         
         # Conflict simulation agent
@@ -277,7 +273,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "and social cohesion. Produce detailed timelines with multiple possible outcomes."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
         )
         
         # Border dispute resolution agent
@@ -289,7 +284,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Suggest multiple resolution paths with their implications."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
         )
         
         # Time evolution prediction agent
@@ -301,7 +295,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Show how matriarchal power structures might develop or respond to changes."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8)
         )
         
         # Create a region agent with handoffs
@@ -309,7 +302,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
             name="RegionCreationAgent",
             instructions="You create detailed geographic regions, adapting to terrain types.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             handoffs=[
                 handoff(
                     self.mountainous_region_agent,
@@ -334,7 +326,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
             name="EconomicTradeModelingAgent",
             instructions="Simulate trade relations between two nations, considering trade routes, goods, and economic impact.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=EconomicTradeSimulation
         )
         
@@ -342,7 +333,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
             name="ClimateGeographyEffectAgent",
             instructions="Simulate the effects of climate and geography on political development.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=ClimateGeographyEffect
         )
         
@@ -350,7 +340,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
             name="CovertOperationsSimulator",
             instructions="Simulate espionage and covert operations between nations.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=CovertOperation
         )
 
@@ -675,7 +664,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 name="NationGenerationAgent",
                 instructions="You create detailed nations for matriarchal fantasy worlds.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9),
                 output_type=List[PoliticalEntity]
             )
     
