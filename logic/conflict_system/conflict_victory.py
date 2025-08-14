@@ -1,484 +1,591 @@
-# Domestic Power Struggles & Victory Conditions Systems
+# logic/conflict_system/conflict_victory.py
+"""
+Victory Conditions System with LLM-generated dynamic content
+Manages victory conditions, achievements, and resolution narratives
+"""
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Set
-from enum import Enum
-from datetime import datetime, timedelta
+import logging
 import json
+import random
+from typing import Dict, List, Any, Optional, Tuple
+from enum import Enum
+from dataclasses import dataclass
 
-class PowerDomain(Enum):
-    """Areas where domestic power can be exercised"""
-    SCHEDULE = "schedule"  # Who decides when things happen
-    SPACE = "space"  # Who controls which spaces
-    RESOURCES = "resources"  # Who allocates shared resources
-    SOCIAL = "social"  # Who makes social decisions
-    ROUTINE = "routine"  # Who sets daily patterns
-    PREFERENCES = "preferences"  # Whose preferences become defaults
-    DECISIONS = "decisions"  # Who has final say
+from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
+from db.connection import get_db_connection_context
 
-class TakeoverStage(Enum):
-    """Stages of gradual control takeover"""
-    TESTING = "testing"  # Initial boundary probing
-    ESTABLISHING = "establishing"  # Setting precedents
-    NORMALIZING = "normalizing"  # Making it routine
-    CONSOLIDATING = "consolidating"  # Reinforcing control
-    DOMINANT = "dominant"  # Accepted as normal
+logger = logging.getLogger(__name__)
 
-@dataclass
-class PowerStruggle:
-    """Represents an ongoing domestic power struggle"""
-    struggle_id: str
-    domain: PowerDomain
-    instigator_id: str
-    target_id: str
-    current_stage: TakeoverStage
-    control_percentage: float  # 0-100, how much control instigator has
-    precedents: List[str] = field(default_factory=list)
-    resistance_events: List[Dict] = field(default_factory=list)
-    started_at: datetime = field(default_factory=datetime.now)
-    last_action: datetime = field(default_factory=datetime.now)
-    
-class DomesticPowerSystem:
-    """Manages gradual power takeovers in domestic settings"""
-    
-    def __init__(self, db_connection):
-        self.db = db_connection
-        self.active_struggles = {}
-        self._load_active_struggles()
-    
-    def initiate_takeover(self, instigator_id: str, target_id: str, domain: PowerDomain, context: Dict) -> PowerStruggle:
-        """Start a gradual takeover attempt in a specific domain"""
-        struggle_id = f"{instigator_id}_{target_id}_{domain.value}_{datetime.now().timestamp()}"
-        
-        # Check if there's already an active struggle in this domain
-        existing = self._check_existing_struggle(instigator_id, target_id, domain)
-        if existing:
-            return self._escalate_existing_struggle(existing, context)
-        
-        struggle = PowerStruggle(
-            struggle_id=struggle_id,
-            domain=domain,
-            instigator_id=instigator_id,
-            target_id=target_id,
-            current_stage=TakeoverStage.TESTING,
-            control_percentage=20.0  # Start with small foothold
-        )
-        
-        # Record initial takeover action
-        initial_action = self._generate_initial_action(domain, context)
-        struggle.precedents.append(initial_action)
-        
-        self.active_struggles[struggle_id] = struggle
-        self._save_struggle(struggle)
-        
-        return struggle
-    
-    def _generate_initial_action(self, domain: PowerDomain, context: Dict) -> str:
-        """Generate the first move in a takeover attempt"""
-        actions = {
-            PowerDomain.SCHEDULE: [
-                "Started deciding bedtime without asking",
-                "Began setting meal times unilaterally",
-                "Started scheduling shared activities alone"
-            ],
-            PowerDomain.SPACE: [
-                "Rearranged shared space without consultation",
-                "Claimed the best spot as 'theirs'",
-                "Started storing personal items in shared areas"
-            ],
-            PowerDomain.RESOURCES: [
-                "Started managing the household budget",
-                "Began rationing shared supplies",
-                "Took control of streaming service choices"
-            ],
-            PowerDomain.ROUTINE: [
-                "Established new morning routine for both",
-                "Started enforcing quiet hours",
-                "Began dictating weekend patterns"
-            ]
-        }
-        
-        import random
-        return random.choice(actions.get(domain, ["Made initial power move"]))
-    
-    def advance_takeover(self, struggle_id: str, action: str, success: bool) -> Dict:
-        """Progress a takeover attempt based on action outcome"""
-        struggle = self.active_struggles.get(struggle_id)
-        if not struggle:
-            return {"error": "Struggle not found"}
-        
-        if success:
-            # Successful action advances control
-            struggle.control_percentage = min(100, struggle.control_percentage + self._calculate_gain(struggle))
-            struggle.precedents.append(action)
-            
-            # Check for stage advancement
-            new_stage = self._determine_stage(struggle.control_percentage)
-            if new_stage != struggle.current_stage:
-                struggle.current_stage = new_stage
-                event = {
-                    "type": "stage_advancement",
-                    "from": struggle.current_stage.value,
-                    "to": new_stage.value,
-                    "timestamp": datetime.now().isoformat()
-                }
-                self._trigger_stage_event(struggle, event)
-        else:
-            # Failed action records resistance
-            struggle.resistance_events.append({
-                "action": action,
-                "timestamp": datetime.now().isoformat(),
-                "impact": "blocked"
-            })
-            struggle.control_percentage = max(0, struggle.control_percentage - 5)
-        
-        struggle.last_action = datetime.now()
-        self._save_struggle(struggle)
-        
-        return self._generate_status_report(struggle)
-    
-    def _calculate_gain(self, struggle: PowerStruggle) -> float:
-        """Calculate control gain from successful action"""
-        base_gain = 10.0
-        
-        # Modify based on stage
-        stage_modifiers = {
-            TakeoverStage.TESTING: 1.5,
-            TakeoverStage.ESTABLISHING: 1.2,
-            TakeoverStage.NORMALIZING: 1.0,
-            TakeoverStage.CONSOLIDATING: 0.8,
-            TakeoverStage.DOMINANT: 0.5
-        }
-        
-        gain = base_gain * stage_modifiers[struggle.current_stage]
-        
-        # Reduce gain if many recent resistance events
-        recent_resistance = len([r for r in struggle.resistance_events 
-                                if datetime.fromisoformat(r['timestamp']) > datetime.now() - timedelta(days=3)])
-        if recent_resistance > 2:
-            gain *= 0.6
-            
-        return gain
-    
-    def _determine_stage(self, control_percentage: float) -> TakeoverStage:
-        """Determine takeover stage based on control percentage"""
-        if control_percentage < 30:
-            return TakeoverStage.TESTING
-        elif control_percentage < 50:
-            return TakeoverStage.ESTABLISHING
-        elif control_percentage < 70:
-            return TakeoverStage.NORMALIZING
-        elif control_percentage < 90:
-            return TakeoverStage.CONSOLIDATING
-        else:
-            return TakeoverStage.DOMINANT
-    
-    def execute_coup(self, instigator_id: str, domain: PowerDomain, context: Dict) -> Dict:
-        """Attempt a sudden coup in a specific domain"""
-        # Coups can only succeed if groundwork has been laid
-        existing_control = self._calculate_existing_control(instigator_id, domain)
-        
-        if existing_control < 40:
-            return {
-                "success": False,
-                "reason": "Insufficient groundwork",
-                "message": "The sudden attempt to take control was easily rebuffed"
-            }
-        
-        # Calculate coup success chance
-        success_chance = existing_control / 100.0
-        success_chance *= self._get_context_modifier(context)
-        
-        import random
-        if random.random() < success_chance:
-            # Successful coup
-            self._establish_dominance(instigator_id, domain)
-            return {
-                "success": True,
-                "message": f"Successfully took control of {domain.value}",
-                "new_reality": self._generate_new_normal(instigator_id, domain)
-            }
-        else:
-            # Failed coup creates backlash
-            self._create_backlash(instigator_id, domain)
-            return {
-                "success": False,
-                "reason": "Resistance succeeded",
-                "message": "The coup attempt failed and created resentment",
-                "consequence": "Lost progress in this domain"
-            }
-    
-    def _establish_dominance(self, controller_id: str, domain: PowerDomain):
-        """Establish accepted dominance in a domain"""
-        self.db.execute("""
-            INSERT OR REPLACE INTO established_dominance
-            (controller_id, domain, established_date, acceptance_level)
-            VALUES (?, ?, ?, ?)
-        """, (controller_id, domain.value, datetime.now(), "accepted"))
-        
-        # Create lasting precedents
-        self._create_permanent_precedents(controller_id, domain)
-    
-    def establish_default_preference(self, npc_id: str, category: str, preference: str) -> Dict:
-        """Set an NPC's preference as the household default"""
-        existing_default = self._get_current_default(category)
-        
-        if existing_default and existing_default['controller_id'] != npc_id:
-            # There's already a different default
-            return self._challenge_default(npc_id, category, preference, existing_default)
-        
-        # Establish new default
-        self.db.execute("""
-            INSERT OR REPLACE INTO default_preferences
-            (category, preference, controller_id, established_date, challenge_count)
-            VALUES (?, ?, ?, ?, 0)
-        """, (category, preference, npc_id, datetime.now()))
-        
-        return {
-            "success": True,
-            "message": f"{preference} is now the household default for {category}",
-            "impact": "Everyone is expected to accommodate this preference"
-        }
-    
-    def _challenge_default(self, challenger_id: str, category: str, new_preference: str, existing: Dict) -> Dict:
-        """Challenge an existing default preference"""
-        # Check challenger's power in relevant domain
-        challenger_power = self._calculate_domain_power(challenger_id, PowerDomain.PREFERENCES)
-        defender_power = self._calculate_domain_power(existing['controller_id'], PowerDomain.PREFERENCES)
-        
-        if challenger_power > defender_power * 1.2:  # Need significant advantage
-            # Successful challenge
-            self.db.execute("""
-                UPDATE default_preferences
-                SET preference = ?, controller_id = ?, established_date = ?
-                WHERE category = ?
-            """, (new_preference, challenger_id, datetime.now(), category))
-            
-            return {
-                "success": True,
-                "message": f"Successfully changed {category} default to {new_preference}",
-                "previous": existing['preference']
-            }
-        else:
-            # Failed challenge
-            self.db.execute("""
-                UPDATE default_preferences
-                SET challenge_count = challenge_count + 1
-                WHERE category = ?
-            """, (category,))
-            
-            return {
-                "success": False,
-                "message": f"Failed to change the default from {existing['preference']}",
-                "consequence": "The existing default is reinforced"
-            }
-
-# Victory Conditions System
+# ===============================================================================
+# VICTORY TYPES
+# ===============================================================================
 
 class VictoryType(Enum):
-    """Types of social victories"""
-    NORM_ESTABLISHMENT = "norm_establishment"
-    COMFORT_ZONE = "comfort_zone"
-    SOCIAL_POSITION = "social_position"
-    RELATIONSHIP_DEFINITION = "relationship_definition"
-    PRECEDENT_CHAIN = "precedent_chain"
-    PYRRHIC = "pyrrhic"  # Won but at great cost
+    """Types of conflict victories"""
+    DOMINANCE = "dominance"
+    SUBMISSION = "submission"
+    COMPROMISE = "compromise"
+    PYRRHIC = "pyrrhic"
+    TACTICAL = "tactical"
+    MORAL = "moral"
+    ESCAPE = "escape"
+    TRANSFORMATION = "transformation"
+    STALEMATE = "stalemate"
+    NARRATIVE = "narrative"
+
 
 @dataclass
 class VictoryCondition:
-    """Defines what constitutes a victory in social conflicts"""
-    condition_id: str
+    """Defines what constitutes victory in a conflict"""
+    condition_id: int
+    conflict_id: int
+    stakeholder_id: int
     victory_type: VictoryType
     description: str
-    requirements: Dict  # Specific requirements for this victory
-    value_gained: Dict  # What is gained from this victory
-    value_lost: Dict  # What is lost (for pyrrhic victories)
-    duration: Optional[int] = None  # How long the victory lasts (days)
+    requirements: Dict[str, Any]
+    progress: float
+    is_achieved: bool
+    achievement_impact: Dict[str, float]
 
-class VictoryConditionSystem:
-    """Reframes victories as established norms and social positions"""
+
+# ===============================================================================
+# VICTORY MANAGER
+# ===============================================================================
+
+class ConflictVictoryManager:
+    """Manages victory conditions and resolutions with LLM generation"""
     
-    def __init__(self, db_connection):
-        self.db = db_connection
-        self.tracked_victories = {}
-    
-    def define_victory_condition(self, conflict_id: str, stakeholder_id: str) -> VictoryCondition:
-        """Define what victory means for a stakeholder in a conflict"""
-        conflict = self._get_conflict(conflict_id)
-        stakeholder_goals = self._analyze_stakeholder_goals(stakeholder_id, conflict)
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
         
-        # Generate appropriate victory condition
-        if stakeholder_goals['type'] == 'control':
-            return self._create_control_victory(stakeholder_id, conflict)
-        elif stakeholder_goals['type'] == 'recognition':
-            return self._create_recognition_victory(stakeholder_id, conflict)
-        elif stakeholder_goals['type'] == 'precedent':
-            return self._create_precedent_victory(stakeholder_id, conflict)
-        else:
-            return self._create_generic_victory(stakeholder_id, conflict)
+        # Lazy-loaded agents
+        self._victory_generator = None
+        self._achievement_narrator = None
+        self._consequence_calculator = None
+        self._epilogue_writer = None
     
-    def _create_control_victory(self, stakeholder_id: str, conflict: Dict) -> VictoryCondition:
-        """Create a control-based victory condition"""
-        return VictoryCondition(
-            condition_id=f"victory_{conflict['id']}_{stakeholder_id}",
-            victory_type=VictoryType.NORM_ESTABLISHMENT,
-            description=f"Establish control over {conflict['domain']}",
-            requirements={
-                "acceptance_count": 3,  # Need 3 instances of acceptance
-                "resistance_level": "minimal",  # Less than 20% resistance
-                "time_elapsed": 7  # Over at least 7 days
-            },
-            value_gained={
-                "authority": f"Recognized authority over {conflict['domain']}",
-                "precedent": "Future decisions in this area defer to you",
-                "social_capital": 10
-            },
-            value_lost={},
-            duration=30  # Lasts 30 days before can be challenged
+    # ========== Agent Properties ==========
+    
+    @property
+    def victory_generator(self) -> Agent:
+        if self._victory_generator is None:
+            self._victory_generator = Agent(
+                name="Victory Condition Generator",
+                instructions="""
+                Generate nuanced victory conditions for conflicts.
+                
+                Create conditions that:
+                - Reflect complex power dynamics
+                - Allow multiple paths to victory
+                - Include psychological victories
+                - Consider pyrrhic outcomes
+                - Enable narrative satisfaction
+                
+                Victory isn't always about winning - sometimes it's about
+                changing the game, maintaining dignity, or transforming relationships.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._victory_generator
+    
+    @property
+    def achievement_narrator(self) -> Agent:
+        if self._achievement_narrator is None:
+            self._achievement_narrator = Agent(
+                name="Achievement Narrator",
+                instructions="""
+                Narrate victory achievements with emotional depth.
+                
+                Create narratives that:
+                - Capture the complexity of victory
+                - Show character growth
+                - Acknowledge costs and consequences
+                - Build on established dynamics
+                - Set up future developments
+                
+                Focus on psychological and emotional impact over simple win/loss.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._achievement_narrator
+    
+    @property
+    def consequence_calculator(self) -> Agent:
+        if self._consequence_calculator is None:
+            self._consequence_calculator = Agent(
+                name="Victory Consequence Calculator",
+                instructions="""
+                Calculate the ripple effects of victory/defeat.
+                
+                Consider:
+                - Relationship changes
+                - Power balance shifts
+                - Reputation impacts
+                - Emotional consequences
+                - Long-term implications
+                - Unintended effects
+                
+                Victory shapes future dynamics - make consequences meaningful.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._consequence_calculator
+    
+    @property
+    def epilogue_writer(self) -> Agent:
+        if self._epilogue_writer is None:
+            self._epilogue_writer = Agent(
+                name="Conflict Epilogue Writer",
+                instructions="""
+                Write epilogues that provide closure while opening new possibilities.
+                
+                Create epilogues that:
+                - Provide emotional resolution
+                - Acknowledge all participants
+                - Hint at future dynamics
+                - Reflect on lessons learned
+                - Set new status quo
+                
+                The end of one conflict is the seed of future stories.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._epilogue_writer
+    
+    # ========== Dynamic Victory Generation ==========
+    
+    async def generate_victory_conditions(
+        self,
+        conflict_id: int,
+        conflict_type: str,
+        stakeholders: List[Dict[str, Any]]
+    ) -> List[VictoryCondition]:
+        """Generate dynamic victory conditions for each stakeholder"""
+        
+        conditions = []
+        
+        for stakeholder in stakeholders:
+            prompt = f"""
+            Generate victory conditions for this stakeholder:
+            
+            Conflict Type: {conflict_type}
+            Stakeholder: {stakeholder.get('name', 'Unknown')}
+            Role: {stakeholder.get('role', 'participant')}
+            Personality: {json.dumps(stakeholder.get('personality', {}))}
+            Goals: {json.dumps(stakeholder.get('goals', []))}
+            
+            Create 2-3 different victory conditions that reflect different
+            ways they could "win" - not just defeating others, but achieving
+            their deeper goals or maintaining their values.
+            
+            Return JSON:
+            {{
+                "conditions": [
+                    {{
+                        "victory_type": "dominance/submission/compromise/etc",
+                        "description": "What this victory looks like",
+                        "requirements": {{
+                            "specific": "measurable requirements",
+                            "narrative": "story requirements"
+                        }},
+                        "impact": {{
+                            "relationship": -1.0 to 1.0,
+                            "power": -1.0 to 1.0,
+                            "satisfaction": 0.0 to 1.0
+                        }},
+                        "hidden_cost": "What winning this way costs"
+                    }}
+                ]
+            }}
+            """
+            
+            response = await Runner.run(self.victory_generator, prompt)
+            data = json.loads(response.output)
+            
+            # Store conditions in database
+            async with get_db_connection_context() as conn:
+                for cond in data['conditions']:
+                    condition_id = await conn.fetchval("""
+                        INSERT INTO victory_conditions
+                        (conflict_id, stakeholder_id, victory_type, description,
+                         requirements, progress, is_achieved)
+                        VALUES ($1, $2, $3, $4, $5, 0.0, false)
+                        RETURNING condition_id
+                    """, conflict_id, stakeholder['id'], cond['victory_type'],
+                    cond['description'], json.dumps(cond['requirements']))
+                    
+                    conditions.append(VictoryCondition(
+                        condition_id=condition_id,
+                        conflict_id=conflict_id,
+                        stakeholder_id=stakeholder['id'],
+                        victory_type=VictoryType(cond['victory_type']),
+                        description=cond['description'],
+                        requirements=cond['requirements'],
+                        progress=0.0,
+                        is_achieved=False,
+                        achievement_impact=cond['impact']
+                    ))
+        
+        return conditions
+    
+    async def check_victory_conditions(
+        self,
+        conflict_id: int,
+        current_state: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Check if any victory conditions have been met"""
+        
+        # Get all conditions for conflict
+        async with get_db_connection_context() as conn:
+            conditions = await conn.fetch("""
+                SELECT * FROM victory_conditions
+                WHERE conflict_id = $1 AND NOT is_achieved
+            """, conflict_id)
+        
+        achievements = []
+        
+        for condition in conditions:
+            requirements = json.loads(condition['requirements'])
+            progress = self._calculate_progress(requirements, current_state)
+            
+            # Update progress
+            await conn.execute("""
+                UPDATE victory_conditions
+                SET progress = $1
+                WHERE condition_id = $2
+            """, progress, condition['condition_id'])
+            
+            if progress >= 1.0:
+                # Victory achieved!
+                achievement = await self._process_victory_achievement(
+                    condition, current_state
+                )
+                achievements.append(achievement)
+                
+                # Mark as achieved
+                await conn.execute("""
+                    UPDATE victory_conditions
+                    SET is_achieved = true, achieved_at = CURRENT_TIMESTAMP
+                    WHERE condition_id = $1
+                """, condition['condition_id'])
+        
+        return achievements
+    
+    def _calculate_progress(
+        self,
+        requirements: Dict[str, Any],
+        current_state: Dict[str, Any]
+    ) -> float:
+        """Calculate progress toward victory requirements"""
+        
+        total_progress = 0.0
+        requirement_count = 0
+        
+        # Check specific requirements
+        specific = requirements.get('specific', {})
+        for key, target in specific.items():
+            if key in current_state:
+                current = current_state[key]
+                if isinstance(target, (int, float)):
+                    progress = min(1.0, current / target)
+                else:
+                    progress = 1.0 if current == target else 0.0
+                total_progress += progress
+                requirement_count += 1
+        
+        # Check narrative requirements (simplified)
+        narrative = requirements.get('narrative', {})
+        if narrative:
+            # This would normally check story flags
+            narrative_progress = current_state.get('narrative_progress', 0.5)
+            total_progress += narrative_progress
+            requirement_count += 1
+        
+        return total_progress / requirement_count if requirement_count > 0 else 0.0
+    
+    async def _process_victory_achievement(
+        self,
+        condition: Dict[str, Any],
+        current_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Process a victory achievement"""
+        
+        # Generate victory narration
+        narration = await self.generate_victory_narration(
+            VictoryType(condition['victory_type']),
+            condition['description'],
+            current_state
         )
-    
-    def evaluate_victory(self, conflict_id: str, resolution_data: Dict) -> Dict:
-        """Evaluate if anyone achieved victory and what kind"""
-        victories = []
         
-        for stakeholder_id in resolution_data['stakeholders']:
-            condition = self.define_victory_condition(conflict_id, stakeholder_id)
-            if self._check_victory_achieved(condition, resolution_data):
-                victory_result = self._process_victory(stakeholder_id, condition, resolution_data)
-                victories.append(victory_result)
-        
-        # Check for pyrrhic victories
-        for victory in victories:
-            if self._is_pyrrhic(victory, resolution_data):
-                victory['type'] = VictoryType.PYRRHIC
-                victory['cost'] = self._calculate_pyrrhic_cost(victory, resolution_data)
+        # Calculate consequences
+        consequences = await self.calculate_victory_consequences(
+            condition,
+            current_state
+        )
         
         return {
-            "victories": victories,
-            "new_norms": self._extract_new_norms(victories),
-            "power_shift": self._calculate_power_shift(victories)
+            'condition_id': condition['condition_id'],
+            'stakeholder_id': condition['stakeholder_id'],
+            'victory_type': condition['victory_type'],
+            'narration': narration,
+            'consequences': consequences,
+            'timestamp': datetime.now()
         }
     
-    def _check_victory_achieved(self, condition: VictoryCondition, resolution_data: Dict) -> bool:
-        """Check if victory requirements are met"""
-        for req_key, req_value in condition.requirements.items():
-            if req_key not in resolution_data or resolution_data[req_key] < req_value:
-                return False
-        return True
+    async def generate_victory_narration(
+        self,
+        victory_type: VictoryType,
+        description: str,
+        context: Dict[str, Any]
+    ) -> str:
+        """Generate dynamic victory narration"""
+        
+        prompt = f"""
+        Narrate this victory achievement:
+        
+        Victory Type: {victory_type.value}
+        Description: {description}
+        Context: {json.dumps(context)}
+        
+        Create a powerful 2-3 paragraph narration that:
+        - Captures the emotional weight of victory
+        - Acknowledges what was gained and lost
+        - Shows character development
+        - Sets up future dynamics
+        - Feels earned and meaningful
+        
+        Focus on psychological and relational impact.
+        """
+        
+        response = await Runner.run(self.achievement_narrator, prompt)
+        return response.output
     
-    def _is_pyrrhic(self, victory: Dict, resolution_data: Dict) -> bool:
-        """Check if victory came at too great a cost"""
-        # Victory is pyrrhic if:
-        # - Damaged important relationships
-        # - Lost more social capital than gained
-        # - Created lasting resentment
-        # - Exhausted resources achieving it
+    async def calculate_victory_consequences(
+        self,
+        condition: Dict[str, Any],
+        current_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Calculate consequences of victory"""
         
-        relationship_damage = resolution_data.get('relationship_damage', 0)
-        resentment_created = resolution_data.get('resentment_level', 0)
-        resource_cost = resolution_data.get('resource_expenditure', 0)
+        prompt = f"""
+        Calculate consequences of this victory:
         
-        pyrrhic_score = (relationship_damage * 2 + resentment_created + resource_cost) / 4
-        return pyrrhic_score > 0.6  # Threshold for pyrrhic victory
+        Victory Type: {condition['victory_type']}
+        Description: {condition['description']}
+        Current State: {json.dumps(current_state)}
+        
+        Return JSON with immediate and long-term consequences:
+        {{
+            "immediate": {{
+                "relationship_changes": {{"entity": change_value}},
+                "power_shifts": {{"entity": change_value}},
+                "emotional_impact": {{"entity": "impact description"}},
+                "reputation_change": -1.0 to 1.0
+            }},
+            "long_term": {{
+                "new_dynamics": ["future relationship patterns"],
+                "seeds_of_conflict": ["potential future tensions"],
+                "character_growth": ["how characters changed"],
+                "world_changes": ["how the world shifted"]
+            }},
+            "hidden_consequences": ["unexpected results that emerge later"]
+        }}
+        """
+        
+        response = await Runner.run(self.consequence_calculator, prompt)
+        return json.loads(response.output)
     
-    def establish_comfort_zone(self, npc_id: str, boundaries: List[str]) -> Dict:
-        """Establish an NPC's comfort zone as social fact"""
-        comfort_zone = {
-            "owner_id": npc_id,
-            "boundaries": boundaries,
-            "established_date": datetime.now(),
-            "respect_level": 0.5,  # Starts at neutral
-            "violations": []
-        }
+    async def generate_conflict_epilogue(
+        self,
+        conflict_id: int,
+        resolution_data: Dict[str, Any]
+    ) -> str:
+        """Generate an epilogue for resolved conflict"""
         
-        self.db.execute("""
-            INSERT INTO comfort_zones
-            (owner_id, boundaries, established_date, respect_level)
-            VALUES (?, ?, ?, ?)
-        """, (npc_id, json.dumps(boundaries), datetime.now(), 0.5))
+        # Get conflict details
+        async with get_db_connection_context() as conn:
+            conflict = await conn.fetchrow("""
+                SELECT * FROM Conflicts WHERE conflict_id = $1
+            """, conflict_id)
+            
+            achievements = await conn.fetch("""
+                SELECT * FROM victory_conditions
+                WHERE conflict_id = $1 AND is_achieved = true
+            """, conflict_id)
+        
+        prompt = f"""
+        Write an epilogue for this resolved conflict:
+        
+        Conflict: {conflict['conflict_name']}
+        Type: {conflict['conflict_type']}
+        Description: {conflict['description']}
+        Achievements: {json.dumps([dict(a) for a in achievements])}
+        Resolution: {json.dumps(resolution_data)}
+        
+        Create a meaningful epilogue that:
+        - Provides emotional closure
+        - Acknowledges all participants' journeys
+        - Reflects on what was learned
+        - Hints at how relationships have changed
+        - Suggests future possibilities
+        - Captures the bittersweet nature of resolution
+        
+        Write 3-4 paragraphs that feel like the end of a chapter,
+        not the end of the story.
+        """
+        
+        response = await Runner.run(self.epilogue_writer, prompt)
+        return response.output
+    
+    async def evaluate_partial_victories(
+        self,
+        conflict_id: int
+    ) -> List[Dict[str, Any]]:
+        """Evaluate partial victories when conflict ends without clear winner"""
+        
+        async with get_db_connection_context() as conn:
+            conditions = await conn.fetch("""
+                SELECT * FROM victory_conditions
+                WHERE conflict_id = $1
+                ORDER BY progress DESC
+            """, conflict_id)
+        
+        partial_victories = []
+        
+        for condition in conditions:
+            if 0.3 <= condition['progress'] < 1.0:
+                partial_victory = {
+                    'stakeholder_id': condition['stakeholder_id'],
+                    'victory_type': f"partial_{condition['victory_type']}",
+                    'progress': condition['progress'],
+                    'description': f"Partially achieved: {condition['description']}",
+                    'consolation': await self._generate_consolation(condition)
+                }
+                partial_victories.append(partial_victory)
+        
+        return partial_victories
+    
+    async def _generate_consolation(self, condition: Dict[str, Any]) -> str:
+        """Generate consolation for partial victory"""
+        
+        prompt = f"""
+        Generate a consolation for this partial victory:
+        
+        Victory Type: {condition['victory_type']}
+        Progress: {condition['progress']:.1%}
+        Description: {condition['description']}
+        
+        Write a single paragraph that:
+        - Acknowledges the effort
+        - Recognizes partial achievement
+        - Suggests growth occurred
+        - Leaves dignity intact
+        
+        Be encouraging but realistic.
+        """
+        
+        response = await Runner.run(self.achievement_narrator, prompt)
+        return response.output
+
+
+# ===============================================================================
+# INTEGRATION FUNCTIONS
+# ===============================================================================
+
+@function_tool
+async def check_for_victory(
+    ctx: RunContextWrapper,
+    conflict_id: int
+) -> Dict[str, Any]:
+    """Check if any victory conditions have been met"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    manager = ConflictVictoryManager(user_id, conversation_id)
+    
+    # Get current conflict state
+    async with get_db_connection_context() as conn:
+        conflict = await conn.fetchrow("""
+            SELECT * FROM Conflicts WHERE conflict_id = $1
+        """, conflict_id)
+    
+    current_state = {
+        'progress': conflict['progress'],
+        'phase': conflict['phase'],
+        'intensity': conflict['intensity']
+        # Add more state data as needed
+    }
+    
+    # Check victory conditions
+    achievements = await manager.check_victory_conditions(conflict_id, current_state)
+    
+    if achievements:
+        # Generate epilogue if conflict is resolved
+        epilogue = await manager.generate_conflict_epilogue(
+            conflict_id,
+            {'achievements': achievements}
+        )
         
         return {
-            "success": True,
-            "comfort_zone": comfort_zone,
-            "message": f"Established comfort zone with {len(boundaries)} boundaries",
-            "enforcement": "Violations will create automatic friction"
+            'victory_achieved': True,
+            'achievements': achievements,
+            'epilogue': epilogue
         }
+    else:
+        # Check for partial victories
+        partial = await manager.evaluate_partial_victories(conflict_id)
+        
+        return {
+            'victory_achieved': False,
+            'partial_victories': partial,
+            'conflict_continues': True
+        }
+
+
+@function_tool
+async def generate_victory_paths(
+    ctx: RunContextWrapper,
+    conflict_id: int
+) -> Dict[str, Any]:
+    """Generate possible victory paths for a conflict"""
     
-    def track_long_term_consequences(self, victory_id: str, days_elapsed: int):
-        """Track the long-term consequences of victories"""
-        victory = self._get_victory(victory_id)
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    manager = ConflictVictoryManager(user_id, conversation_id)
+    
+    # Get conflict and stakeholders
+    async with get_db_connection_context() as conn:
+        conflict = await conn.fetchrow("""
+            SELECT * FROM Conflicts WHERE conflict_id = $1
+        """, conflict_id)
         
-        consequences = {
-            "immediate": self._get_immediate_consequences(victory),
-            "short_term": self._get_short_term_consequences(victory, days_elapsed),
-            "long_term": self._get_long_term_consequences(victory, days_elapsed),
-            "relationships": self._get_relationship_consequences(victory, days_elapsed)
-        }
-        
-        # Check if victory benefits are fading
-        if days_elapsed > victory.get('duration', 30):
-            consequences['status'] = 'fading'
-            consequences['challenge_possible'] = True
-        
-        return consequences
-
-# Database Schemas
-POWER_STRUGGLE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS domestic_power_struggles (
-    struggle_id TEXT PRIMARY KEY,
-    domain TEXT NOT NULL,
-    instigator_id TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    current_stage TEXT,
-    control_percentage REAL,
-    precedents JSON,
-    resistance_events JSON,
-    started_at TIMESTAMP,
-    last_action TIMESTAMP,
-    active BOOLEAN DEFAULT TRUE
-);
-
-CREATE TABLE IF NOT EXISTS established_dominance (
-    controller_id TEXT,
-    domain TEXT,
-    established_date TIMESTAMP,
-    acceptance_level TEXT,
-    PRIMARY KEY (controller_id, domain)
-);
-
-CREATE TABLE IF NOT EXISTS default_preferences (
-    category TEXT PRIMARY KEY,
-    preference TEXT NOT NULL,
-    controller_id TEXT NOT NULL,
-    established_date TIMESTAMP,
-    challenge_count INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS victory_conditions (
-    condition_id TEXT PRIMARY KEY,
-    victory_type TEXT,
-    description TEXT,
-    requirements JSON,
-    value_gained JSON,
-    value_lost JSON,
-    duration INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS achieved_victories (
-    victory_id TEXT PRIMARY KEY,
-    stakeholder_id TEXT NOT NULL,
-    condition_id TEXT NOT NULL,
-    achieved_date TIMESTAMP,
-    active_until TIMESTAMP,
-    consequences JSON,
-    FOREIGN KEY (condition_id) REFERENCES victory_conditions(condition_id)
-);
-
-CREATE TABLE IF NOT EXISTS comfort_zones (
-    owner_id TEXT PRIMARY KEY,
-    boundaries JSON NOT NULL,
-    established_date TIMESTAMP,
-    respect_level REAL,
-    violations JSON
-);
-"""
+        stakeholders = await conn.fetch("""
+            SELECT cs.*, n.npc_name as name
+            FROM conflict_stakeholders cs
+            JOIN NPCStats n ON cs.npc_id = n.npc_id
+            WHERE cs.conflict_id = $1
+        """, conflict_id)
+    
+    # Generate victory conditions
+    conditions = await manager.generate_victory_conditions(
+        conflict_id,
+        conflict['conflict_type'],
+        [dict(s) for s in stakeholders]
+    )
+    
+    return {
+        'conflict_id': conflict_id,
+        'victory_paths': [
+            {
+                'stakeholder': c.stakeholder_id,
+                'type': c.victory_type.value,
+                'description': c.description,
+                'requirements': c.requirements,
+                'current_progress': c.progress
+            }
+            for c in conditions
+        ]
+    }
