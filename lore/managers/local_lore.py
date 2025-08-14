@@ -321,7 +321,6 @@ class SpecializedAgents:
                 "Always maintain the core identity while enhancing folkloric qualities."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=str,
             input_guardrails=[theme_guardrail],
             output_guardrails=[coherence_guardrail]
@@ -335,7 +334,6 @@ class SpecializedAgents:
                 "Make myths seem like real historical events while preserving core elements."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=str,
             input_guardrails=[theme_guardrail],
             output_guardrails=[coherence_guardrail]
@@ -349,7 +347,6 @@ class SpecializedAgents:
                 "Emphasize matriarchal spiritual authority and cosmic feminine forces."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=str,
             input_guardrails=[theme_guardrail],
             output_guardrails=[coherence_guardrail]
@@ -364,7 +361,6 @@ class SpecializedAgents:
                 "Always highlight matriarchal power dynamics in connections."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=NarrativeConnection,
             input_guardrails=[theme_guardrail],
             output_guardrails=[coherence_guardrail],
@@ -378,7 +374,6 @@ class SpecializedAgents:
                 "Emphasize the role of female leaders and matriarchal institutions."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=NarrativeConnection,
             input_guardrails=[theme_guardrail],
             output_guardrails=[coherence_guardrail],
@@ -393,7 +388,6 @@ class SpecializedAgents:
                 "Suggest fixes that strengthen matriarchal narrative coherence."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=ConsistencyCheckResult,
             input_guardrails=[theme_guardrail]
         )
@@ -406,7 +400,6 @@ class SpecializedAgents:
                 "Show how matriarchal elements persist or transform across cultures."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=MythTransmissionResult,
             input_guardrails=[theme_guardrail]
         )
@@ -420,7 +413,6 @@ class SpecializedAgents:
                 "Maintain some core elements while introducing compelling contradictions."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=List[LegendVariant],
             input_guardrails=[theme_guardrail]
         )
@@ -433,7 +425,6 @@ class SpecializedAgents:
                 "Balance authenticity with visitor appeal and economic viability."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=TouristDevelopment,
             input_guardrails=[theme_guardrail]
         )
@@ -446,7 +437,6 @@ class SpecializedAgents:
                 "Show how matriarchal elements evolve in different mediums."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=TraditionDynamics,
             input_guardrails=[theme_guardrail]
         )
@@ -460,7 +450,6 @@ class SpecializedAgents:
                 "Ensure matriarchal themes are preserved and enhanced."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             handoffs=[
                 handoff(
                     self.folklore_agent,
@@ -1563,7 +1552,6 @@ Be historically plausible and culturally sensitive.
                     "Create realistic consequences that respect existing narratives."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
             
             # Determine what type of lore to create/modify
@@ -2170,7 +2158,6 @@ Show specific differences in language, detail, and emphasis.
             name="LocationMythGenerator",
             instructions="You create authentic urban myths for specific locations.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.85),
             output_type=List[Dict[str, Any]]
         )
         
@@ -2237,7 +2224,6 @@ Show specific differences in language, detail, and emphasis.
             name="LocationHistoryGenerator",
             instructions="You create compelling historical events for locations.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=List[Dict[str, Any]]
         )
         
@@ -2304,7 +2290,6 @@ Show specific differences in language, detail, and emphasis.
             name="LocationLandmarkGenerator",
             instructions="You create memorable landmarks for locations.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8),
             output_type=List[Dict[str, Any]]
         )
         
