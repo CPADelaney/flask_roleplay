@@ -71,7 +71,6 @@ class WorldLoreManager(BaseLoreManager):
             name="InconsistencyResolutionAgent",
             instructions="Analyze and resolve any inconsistencies in world lore elements.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=InconsistencyResolutionAgent
         )
 
@@ -79,7 +78,6 @@ class WorldLoreManager(BaseLoreManager):
             name="WorldDocumentationAgent",
             instructions="Generate readable summaries of world history and current state.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=WorldDocumentationAgent
         )    
 
@@ -87,7 +85,6 @@ class WorldLoreManager(BaseLoreManager):
             name="WorldQueryAgent",
             instructions="Process queries related to the world state and provide relevant information.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7),
             output_type=WorldQueryAgent
         )
 
@@ -1179,7 +1176,6 @@ class MasterCoordinationAgent:
             5. Maintain matriarchal theming throughout
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
         )
         self.trace_id = None
     
@@ -1499,7 +1495,6 @@ class ContentValidationTool:
             and alignment with the matriarchal theme.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
         )
     
     async def validate_content(self, ctx, content: Dict[str, Any], content_type: str) -> Dict[str, Any]:
@@ -1662,7 +1657,6 @@ class LoreRelationshipMapper:
             Create a network of relationships that shows how lore elements interact.
             """,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
         )
     
     async def create_relationship_graph(self, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2461,3 +2455,4 @@ class InconsistencyResolutionAgent(BaseModel):
 
 # Create a singleton instance if desired
 world_lore_manager = WorldLoreManager(user_id=0, conversation_id=0)
+
