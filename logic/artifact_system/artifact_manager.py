@@ -618,118 +618,37 @@ class ArtifactManager:
             logger.error(f"Error analyzing artifact: {e}")
             return {"error": str(e)}
     
-    async def integrate_artifact(
-        self,
-        artifact_id: str,
-        conflict_id: int,
-        integration_type: str = "power"
-    ) -> Dict[str, Any]:
-        """
-        Integrate an artifact with a conflict (now synthesis-aware).
-        WITH GOVERNANCE TRACKING.
-        """
+    async def integrate_artifact(self, artifact_id: str, conflict_id: int, 
+                                integration_type: str = "power") -> Dict[str, Any]:
+        """Integrate artifact with conflict through synthesizer"""
         try:
             from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
-            from agents import Runner, RunContextWrapper
-            from nyx.nyx_governance import AgentType
-            from nyx.governance_helpers import with_governance
             
-            @with_governance(
-                agent_type=AgentType.NARRATIVE_CRAFTER,
-                action_type="integrate_artifact",
-                action_description="Integrating an artifact with a conflict",
-                id_from_context=lambda ctx: "artifact_integration"
-            )
-            async def _integrate_with_governance():
-                artifact = self.active_artifacts.get(artifact_id)
-                if not artifact:
-                    return {"success": False, "error": "Artifact not found"}
-                
-                # Check if this conflict is part of a synthesis
-                synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
-                
-                async with get_db_connection_context() as conn:
-                    # Check for synthesis
-                    synthesis = await conn.fetchrow("""
-                        SELECT synthesis_id, component_conflicts, synthesis_type
-                        FROM conflict_synthesis
-                        WHERE $1 = ANY(component_conflicts::int[])
-                        ORDER BY created_at DESC
-                        LIMIT 1
-                    """, conflict_id)
-                
-                if synthesis:
-                    # This conflict is part of a synthesis - artifact affects the whole
-                    synthesis_event = {
-                        "type": "artifact_integration",
-                        "artifact": artifact,
-                        "target_conflict": conflict_id,
-                        "integration_type": integration_type
-                    }
-                    
-                    result = await synthesizer.manage_synthesis_progression(
-                        synthesis['synthesis_id'],
-                        synthesis_event
-                    )
-                    
-                    return {
-                        "success": True,
-                        "artifact_id": artifact_id,
-                        "synthesis_affected": True,
-                        "synthesis_id": synthesis['synthesis_id'],
-                        "cascade_effects": result.get('cascade_effects', []),
-                        "narrative_impact": result.get('narrative_impact', '')
-                    }
-                else:
-                    # Single conflict integration (old path)
-                    ctx_wrapper = RunContextWrapper(self.user_id, self.conversation_id)
-                    from logic.conflict_system.conflict_tools import get_conflict_details
-                    conflict = await get_conflict_details(ctx_wrapper, conflict_id)
-                    
-                    if not conflict:
-                        return {"success": False, "error": "Conflict not found"}
-                
-                # Build integration prompt
-                integration_prompt = f"""
-                Artifact: {json.dumps(artifact, indent=2)}
-                Conflict: {json.dumps(conflict, indent=2)}
-                Integration Type: {integration_type}
-                
-                Plan how this artifact should integrate with the conflict:
-                1. Determine the type of integration (power shift, revelation, catalyst, resolution)
-                2. Identify which story elements will be affected
-                3. Predict narrative outcomes
-                4. Assess risks
-                5. Rate the expected narrative impact (1-10)
-                """
-                
-                # Get integration plan
-                result = await Runner.run(
-                    self.integration_agent,
-                    integration_prompt,
-                    context=self.agent_context
-                )
-                
-                plan = result.final_output_as(ArtifactIntegrationPlan)
-                
-                # Execute integration
-                integration_result = await self._execute_integration(artifact, conflict, plan.dict())
-                
-                # Update conflict if successful
-                if integration_result.get("success"):
-                    await self._update_conflict_with_artifact(conflict_id, artifact_id, integration_result)
-                
-                # Update agent performance
-                self._update_agent_performance("artifact_integration", integration_result.get("success", False))
-                
-                return integration_result
+            artifact = self.active_artifacts.get(artifact_id)
+            if not artifact:
+                return {"success": False, "error": "Artifact not found"}
             
-            # Execute the governed function
-            return await _integrate_with_governance()
+            # Route through synthesizer
+            synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
+            
+            event = {
+                "type": "artifact_integration",
+                "artifact_id": artifact_id,
+                "artifact": artifact,
+                "integration_type": integration_type
+            }
+            
+            result = await synthesizer.process_conflict_event(conflict_id, event)
+            
+            # Update artifact state based on result
+            if result.get("success"):
+                artifact["integrated_with_conflict"] = conflict_id
+                artifact["integration_effects"] = result.get("effects", [])
+            
+            return result
             
         except Exception as e:
             logger.error(f"Error integrating artifact: {e}")
-            self._update_agent_performance("artifact_integration", False)
             return {"success": False, "error": str(e)}
     
     async def grant_artifact_to_player(
@@ -1044,4 +963,5 @@ async def ensure_artifacts_table(conn):
 # =====================================================
 
 __all__ = ['ArtifactManager', 'ensure_artifacts_table']
+
 
