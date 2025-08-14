@@ -10,8 +10,15 @@ class OrchestratorMixin:
         self,
         event_type: str,
         payload: dict | None = None,
+        user_id: int | None = None,
+        conversation_id: int | None = None,
     ) -> float:
-        return await orchestrator.log_and_score(event_type, payload)
+        return await orchestrator.log_and_score(
+            event_type,
+            payload,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
 
     def start_background(self) -> None:
         orchestrator.start_background()

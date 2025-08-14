@@ -9,6 +9,7 @@ from strategy.manager import StrategyManager
 from nyx.core.logging import event_logger as EventLogger
 from nyx.core.logging.summarizer import nightly_rollup
 from nyx.core.reward import evaluator as RewardEvaluator
+from logic.event_logging import log_event as build_event
 
 async def prepare_context(ctx: str, user_msg: str) -> str:
     """Prepend relevant memories to context.
@@ -49,11 +50,20 @@ async def prepare_context(ctx: str, user_msg: str) -> str:
     return f"{strategy_line}{ctx}"
 
 
-async def log_and_score(event_type: str, payload: dict | None = None) -> float:
+async def log_and_score(
+    event_type: str,
+    payload: dict | None = None,
+    user_id: int | None = None,
+    conversation_id: int | None = None,
+) -> float:
     """Log an event and return its reward score."""
-    event = {"type": event_type}
-    if payload:
-        event["payload"] = payload
+    if user_id is not None and conversation_id is not None:
+        data = {"payload": payload} if payload else {}
+        event = await build_event(user_id, conversation_id, event_type, data)
+    else:
+        event = {"type": event_type}
+        if payload:
+            event["payload"] = payload
     await EventLogger.log_event(event)
     return RewardEvaluator.evaluate(event_type)
 
