@@ -151,7 +151,6 @@ maintenance_agent = Agent(
         "}"
     ),
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.0)
 )
 
 # ------------------------------------------------------------------------
@@ -342,7 +341,6 @@ class BaseLoreManager:
                 name="FoundationAgent",
                 instructions="You are a general-purpose agent for lore management.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.7)
             )
             
             logger.info(f"Agents initialized for {self.__class__.__name__} user {self.user_id}")
@@ -1202,7 +1200,6 @@ class BaseLoreManager:
         prompt: str, 
         agent_name: Optional[str] = None, 
         model: str = "gpt-5-nano",
-        temperature: float = 0.7
     ) -> str:
         """
         Execute a prompt with an LLM agent.
@@ -1234,7 +1231,6 @@ class BaseLoreManager:
                     name=agent_name or f"{self.__class__.__name__}Agent",
                     instructions=f"You help with {self.__class__.__name__} management.",
                     model=model,
-                    model_settings=ModelSettings(temperature=temperature)
                 )
             
             run_config = RunConfig(
@@ -1327,3 +1323,4 @@ class BaseLoreManager:
         """Cleanup on deletion."""
         if hasattr(self, 'maintenance_task') and self.maintenance_task:
             self.maintenance_task.cancel()
+
