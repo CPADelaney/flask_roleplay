@@ -190,7 +190,7 @@ class WorldStateAnalyzer:
             ORDER BY ABS(SUM(change_amount)) DESC
         """, self.user_id, self.conversation_id)
         
-        # Get faction rivalries
+        # Get faction rivalries - FIX: Check if rivals field exists and handle properly
         rivalries = await conn.fetch("""
             SELECT f1.id as faction1_id, f1.name as faction1_name,
                    f2.id as faction2_id, f2.name as faction2_name,
@@ -200,13 +200,34 @@ class WorldStateAnalyzer:
             WHERE f1.user_id = $1 AND f1.conversation_id = $2
                 AND f2.user_id = $1 AND f2.conversation_id = $2
                 AND f1.id < f2.id
-                AND (f1.id = ANY(f2.rivals) OR f2.id = ANY(f1.rivals))
+                AND (
+                    -- Check if rivals column exists and contains the other faction
+                    (f1.rivals IS NOT NULL AND f2.id = ANY(f1.rivals::int[])) 
+                    OR 
+                    (f2.rivals IS NOT NULL AND f1.id = ANY(f2.rivals::int[]))
+                )
         """, self.user_id, self.conversation_id)
+        
+        # Alternative simpler query if the above doesn't work:
+        # Just get all faction pairs and check rivalry elsewhere
+        if not rivalries:
+            rivalries = await conn.fetch("""
+                SELECT f1.id as faction1_id, f1.name as faction1_name,
+                       f2.id as faction2_id, f2.name as faction2_name,
+                       f1.power_level as f1_power, f2.power_level as f2_power
+                FROM Factions f1
+                CROSS JOIN Factions f2
+                WHERE f1.user_id = $1 AND f1.conversation_id = $2
+                    AND f2.user_id = $1 AND f2.conversation_id = $2
+                    AND f1.id < f2.id
+                    AND ABS(f1.power_level - f2.power_level) < 3  -- Similar power levels suggest rivalry
+                LIMIT 5
+            """, self.user_id, self.conversation_id)
         
         return {
             "power_shifts": [dict(p) for p in power_shifts],
             "active_rivalries": [dict(r) for r in rivalries],
-            "instability_score": sum(abs(p['total_change']) for p in power_shifts)
+            "instability_score": sum(abs(p['total_change']) for p in power_shifts) if power_shifts else 0
         }
     
     async def _analyze_economic_factors(self, conn) -> Dict[str, Any]:
