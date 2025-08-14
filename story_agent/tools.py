@@ -53,16 +53,16 @@ from context.memory_manager import get_memory_manager, MemorySearchRequest
 from context.vector_service import get_vector_service
 from context.context_performance import PerformanceMonitor, track_performance
 
-# Time cycle integration
+# Time cycle integration - KEEPING ALL NECESSARY IMPORTS
 from logic.time_cycle import (
     get_current_time_model,
     get_current_vitals,
     VitalsData,
     CurrentTimeData,
-    ActivityType
+    ActivityType,
+    get_current_time,
+    get_game_iso_string
 )
-
-from logic.game_time_helper import get_game_iso_string, get_current_time
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -323,7 +323,6 @@ DailyLifeDirector = Agent(
     
     Remember: This is slice-of-life. Most moments are mundane with subtle dynamics.""",
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.7),
     tools=[generate_daily_scene]
 )
 
@@ -366,7 +365,6 @@ AmbientDialogueWriter = Agent(
     
     Never be heavy-handed. Even dominant NPCs speak naturally.""",
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.8),
     tools=[create_ambient_dialogue]
 )
 
@@ -415,7 +413,6 @@ PowerDynamicsOrchestrator = Agent(
     
     Avoid cartoon villainy. Even controlling NPCs believe they're being helpful/caring.""",
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.6),
     tools=[identify_power_moment]
 )
 
@@ -457,7 +454,6 @@ EmergentNarrativeDetector = Agent(
     
     Remember: Emergent narratives should feel discovered, not authored.""",
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.7),
     tools=[detect_emergent_narrative]
 )
 
@@ -511,7 +507,6 @@ PlayerAgencyManager = Agent(
     - Emotional dependencies
     - Power dynamic escalation/reduction""",
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.7),
     tools=[generate_player_agency]
 )
 
@@ -695,11 +690,13 @@ async def generate_daily_life_scene(
         # Parse agent output
         scene_data = json.loads(result.output) if result.output else {}
         
-        # Create scene ID based on game time
+        # Create scene ID based on game time (sanitized) - FIXED VERSION
         game_time = await get_current_time(context.user_id, context.conversation_id)
-        timestamp = (await get_game_iso_string(context.user_id, context.conversation_id)).replace(":", "-")
-        logger.debug(f"Generating daily life scene at game time: {game_time}")
-        scene_id = f"scene_{timestamp}_{random.randint(1000, 9999)}"
+        raw_ts = await get_game_iso_string(context.user_id, context.conversation_id)
+        logger.debug(f"Generating daily life scene at game time: {game_time} ({raw_ts})")
+        # safe for DB keys / filenames: no colons/hyphens; T -> _
+        sanitized = raw_ts.replace(":", "").replace("-", "").replace("T", "_")
+        scene_id = f"scene_{sanitized}_{random.randint(1000, 9999)}"
         
         # Build the scene
         scene = SliceOfLifeScene(
@@ -740,8 +737,9 @@ async def generate_daily_life_scene(
         
     except Exception as e:
         logger.error(f"Error generating daily life scene: {e}", exc_info=True)
-        # Return a basic scene as fallback using game time
-        fallback_id = (await get_game_iso_string(context.user_id, context.conversation_id)).replace(":", "-")
+        # Return a basic scene as fallback using sanitized game time
+        raw_fallback = await get_game_iso_string(context.user_id, context.conversation_id)
+        fallback_id = raw_fallback.replace(":", "").replace("-", "").replace("T", "_")
         return SliceOfLifeScene(
             scene_id=f"fallback_{fallback_id}",
             title="A Quiet Moment",
