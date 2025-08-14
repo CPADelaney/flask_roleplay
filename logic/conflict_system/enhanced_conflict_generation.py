@@ -690,8 +690,12 @@ async def generate_organic_conflict_impl(
     """
     Implementation: Generate a conflict that feels organic based on world state.
     """
-    context = ctx.context
-    generator = OrganicConflictGenerator(context.user_id, context.conversation_id)
+    # Fix: Access context as a dict
+    context = ctx.context if hasattr(ctx, 'context') else ctx
+    user_id = context.get('user_id') if isinstance(context, dict) else context.user_id
+    conversation_id = context.get('conversation_id') if isinstance(context, dict) else context.conversation_id
+    
+    generator = OrganicConflictGenerator(user_id, conversation_id)
     
     try:
         conflict_data = await generator.generate_contextual_conflict(
@@ -704,7 +708,7 @@ async def generate_organic_conflict_impl(
             current_day = await conn.fetchval("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentDay'
-            """, context.user_id, context.conversation_id)
+            """, user_id, conversation_id)
             current_day = int(current_day) if current_day else 1
             
             # Create conflict record
@@ -716,7 +720,7 @@ async def generate_organic_conflict_impl(
                 ) VALUES ($1, $2, $3, $4, $5, 0, 'brewing', $6, $7, $8, TRUE)
                 RETURNING conflict_id
             """, 
-            context.user_id, context.conversation_id,
+            user_id, conversation_id,
             conflict_data["conflict_name"], conflict_data["archetype"],
             conflict_data["description"], current_day,
             conflict_data["estimated_duration"], 0.5
@@ -726,7 +730,7 @@ async def generate_organic_conflict_impl(
             for stakeholder in conflict_data.get("stakeholders", []):
                 # Ensure NPC exists canonically
                 npc_id = await canon.find_or_create_npc(
-                    context, conn,
+                    ctx, conn,
                     npc_name=stakeholder["npc_name"],
                     role=stakeholder.get("role"),
                     affiliations=stakeholder.get("faction_affiliations", [])
@@ -736,7 +740,7 @@ async def generate_organic_conflict_impl(
                 faction_id = None
                 if stakeholder.get("faction_name"):
                     faction_id = await canon.find_or_create_faction(
-                        context, conn,
+                        ctx, conn,
                         faction_name=stakeholder["faction_name"],
                         type=stakeholder.get("faction_type", "organization")
                     )
@@ -771,7 +775,7 @@ async def generate_organic_conflict_impl(
             
             # Log canonical event
             await canon.log_canonical_event(
-                context, conn,
+                ctx, conn,
                 f"Conflict emerged: {conflict_data['conflict_name']} - {conflict_data['description'][:100]}...",
                 tags=["conflict", conflict_data["archetype"], "emergence"],
                 significance=8
@@ -792,8 +796,12 @@ async def analyze_conflict_pressure_impl(ctx: RunContextWrapper) -> Dict[str, An
     Returns:
         Analysis of conflict potential
     """
-    context = ctx.context
-    analyzer = WorldStateAnalyzer(context.user_id, context.conversation_id)
+    # Fix: Access context as a dict
+    context = ctx.context if hasattr(ctx, 'context') else ctx
+    user_id = context.get('user_id') if isinstance(context, dict) else context.user_id
+    conversation_id = context.get('conversation_id') if isinstance(context, dict) else context.conversation_id
+    
+    analyzer = WorldStateAnalyzer(user_id, conversation_id)
     
     try:
         analysis = await analyzer.analyze_conflict_potential()
