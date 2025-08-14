@@ -1,441 +1,808 @@
-# Meaningful Objects and Social Leverage Systems
+# logic/conflict_system/leverage.py
+"""
+Leverage System with LLM-generated dynamic content.
+Manages leverage discovery, application, and counter-strategies in conflicts.
+"""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
-from datetime import datetime, timedelta
-from enum import Enum
+import logging
 import json
+import random
+from typing import Dict, List, Any, Optional, Tuple
+from enum import Enum
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
-# MEANINGFUL OBJECTS SYSTEM
+from agents import Agent, ModelSettings, function_tool, RunContextWrapper
+from db.connection import get_db_connection_context
 
-class ObjectSignificance(Enum):
-    """Types of significance an object can hold"""
-    POWER_SYMBOL = "power_symbol"           # Represents dominance/submission
-    COMFORT_ITEM = "comfort_item"           # Emotional security
-    BOUNDARY_MARKER = "boundary_marker"     # Territorial claim
-    GIFT_BOND = "gift_bond"                # Relationship token
-    ROUTINE_ANCHOR = "routine_anchor"       # Part of daily ritual
-    STATUS_DISPLAY = "status_display"       # Social hierarchy marker
-    MEMORY_VESSEL = "memory_vessel"         # Holds shared history
-    CONTROL_TOOL = "control_tool"          # Enables control patterns
+logger = logging.getLogger(__name__)
 
-@dataclass
-class MeaningfulObject:
-    """An object with emotional/power significance"""
-    name: str
-    owner: Optional[str]
-    significance_type: ObjectSignificance
-    power_weight: float  # -1 to 1, negative = submission, positive = dominance
-    emotional_charge: float  # 0 to 1, how much it matters
-    associated_characters: Set[str] = field(default_factory=set)
-    precedents: List[Dict] = field(default_factory=list)
-    location: str = "unknown"
-    is_contested: bool = False
-    creation_context: Dict = field(default_factory=dict)
-    
-    def add_precedent(self, event: Dict):
-        """Record a precedent involving this object"""
-        self.precedents.append({
-            'timestamp': datetime.now(),
-            'event': event,
-            'participants': event.get('participants', []),
-            'outcome': event.get('outcome'),
-            'power_shift': event.get('power_shift', 0)
-        })
-        
-        # Adjust power weight based on precedent
-        if event.get('power_shift'):
-            self.power_weight = min(1, max(-1, 
-                self.power_weight + event['power_shift'] * 0.1))
-    
-    def calculate_leverage_value(self, for_character: str, 
-                                 against_character: str) -> float:
-        """Calculate how much leverage this object provides"""
-        leverage = 0.0
-        
-        # Ownership provides base leverage
-        if self.owner == for_character:
-            leverage += 0.3
-            
-        # Emotional charge multiplies leverage
-        leverage *= (1 + self.emotional_charge)
-        
-        # Check precedents for specific character interactions
-        for precedent in self.precedents:
-            if against_character in precedent['participants']:
-                if precedent['outcome'] == 'submission':
-                    leverage += 0.2
-                elif precedent['outcome'] == 'resistance':
-                    leverage -= 0.1
-                    
-        return min(1.0, leverage)
-
-class ObjectGenerator:
-    """Generates meaningful objects from conflicts and events"""
-    
-    def __init__(self):
-        self.object_templates = {
-            'domestic': [
-                {'name': 'favorite mug', 'significance': ObjectSignificance.ROUTINE_ANCHOR},
-                {'name': 'special chair', 'significance': ObjectSignificance.BOUNDARY_MARKER},
-                {'name': 'gifted jewelry', 'significance': ObjectSignificance.GIFT_BOND},
-                {'name': 'household keys', 'significance': ObjectSignificance.CONTROL_TOOL},
-                {'name': 'photo album', 'significance': ObjectSignificance.MEMORY_VESSEL},
-                {'name': 'personal diary', 'significance': ObjectSignificance.BOUNDARY_MARKER},
-            ],
-            'power': [
-                {'name': 'collar', 'significance': ObjectSignificance.POWER_SYMBOL},
-                {'name': 'special privileges card', 'significance': ObjectSignificance.STATUS_DISPLAY},
-                {'name': 'punishment implement', 'significance': ObjectSignificance.CONTROL_TOOL},
-                {'name': 'reward token', 'significance': ObjectSignificance.GIFT_BOND},
-            ]
-        }
-    
-    def generate_from_conflict(self, conflict: Dict) -> Optional[MeaningfulObject]:
-        """Create object that emerges from conflict resolution"""
-        if conflict['resolution_type'] == 'established_pattern':
-            # Pattern-based objects become routine anchors
-            return MeaningfulObject(
-                name=f"{conflict['winner']}'s {self._generate_object_name(conflict)}",
-                owner=conflict['winner'],
-                significance_type=ObjectSignificance.ROUTINE_ANCHOR,
-                power_weight=0.3 if conflict['winner'] else -0.3,
-                emotional_charge=conflict.get('intensity', 0.5),
-                associated_characters=set(conflict['participants']),
-                creation_context=conflict
-            )
-        elif conflict['resolution_type'] == 'gift_reconciliation':
-            # Gifts become relationship tokens
-            return MeaningfulObject(
-                name=self._generate_gift_name(conflict),
-                owner=conflict['recipient'],
-                significance_type=ObjectSignificance.GIFT_BOND,
-                power_weight=0.0,  # Neutral, but can shift
-                emotional_charge=0.7,
-                associated_characters=set(conflict['participants']),
-                creation_context=conflict
-            )
-        return None
-    
-    def _generate_object_name(self, context: Dict) -> str:
-        """Generate contextual object name"""
-        object_types = ['chair', 'mug', 'spot', 'time slot', 'privilege', 'rule']
-        return object_types[hash(str(context)) % len(object_types)]
-    
-    def _generate_gift_name(self, context: Dict) -> str:
-        """Generate appropriate gift name"""
-        gifts = ['bracelet', 'book', 'special meal', 'handwritten note', 
-                 'small trinket', 'flower', 'custom playlist']
-        return gifts[hash(str(context)) % len(gifts)]
-
-# SOCIAL LEVERAGE SYSTEM
+# ===============================================================================
+# LEVERAGE STRUCTURES
+# ===============================================================================
 
 class LeverageType(Enum):
-    """Types of social leverage"""
-    EMOTIONAL_DEBT = "emotional_debt"       # Guilt, obligation
-    PATTERN_PRECEDENT = "pattern_precedent" # "You always..."
-    SECRET_KNOWLEDGE = "secret_knowledge"   # Private information
-    SOCIAL_CAPITAL = "social_capital"       # Reputation, standing
-    RECIPROCITY = "reciprocity"            # Favor economy
-    DEPENDENCY = "dependency"               # Need-based
-    AUTHORITY = "authority"                # Hierarchical power
-    INTIMACY = "intimacy"                  # Emotional closeness
+    """Types of leverage in conflicts"""
+    INFORMATION = "information"  # Secrets, knowledge
+    EMOTIONAL = "emotional"  # Feelings, attachments
+    SOCIAL = "social"  # Reputation, relationships
+    MATERIAL = "material"  # Resources, possessions
+    POSITIONAL = "positional"  # Authority, access
+    BEHAVIORAL = "behavioral"  # Habits, patterns
+    VULNERABILITY = "vulnerability"  # Weaknesses, fears
+    DEPENDENCY = "dependency"  # Needs, addictions
+
+class LeverageStrength(Enum):
+    """Strength levels of leverage"""
+    TRIVIAL = 0.2
+    MINOR = 0.4
+    MODERATE = 0.6
+    MAJOR = 0.8
+    DECISIVE = 1.0
 
 @dataclass
-class SocialLeverage:
-    """Represents leverage one character has over another"""
-    holder: str
-    target: str
+class LeverageItem:
+    """A piece of leverage"""
+    leverage_id: int
     leverage_type: LeverageType
-    strength: float  # 0 to 1
-    context: Dict
-    expiration: Optional[datetime] = None
-    uses_remaining: int = -1  # -1 for unlimited
-    evidence: List[Dict] = field(default_factory=list)
-    
-    def use(self, context: Dict) -> Tuple[bool, float]:
-        """Attempt to use leverage"""
-        if self.expiration and datetime.now() > self.expiration:
-            return False, 0.0
-            
-        if self.uses_remaining == 0:
-            return False, 0.0
-            
-        # Calculate effectiveness based on context
-        effectiveness = self.strength
-        
-        # Reduce effectiveness with repeated use
-        if self.uses_remaining > 0:
-            self.uses_remaining -= 1
-            effectiveness *= (self.uses_remaining / max(1, self.uses_remaining + 1))
-            
-        # Context modifiers
-        if context.get('public_setting') and self.leverage_type == LeverageType.SECRET_KNOWLEDGE:
-            effectiveness *= 1.5  # Secrets more powerful in public
-        elif context.get('private_setting') and self.leverage_type == LeverageType.INTIMACY:
-            effectiveness *= 1.3  # Intimacy more effective in private
-            
-        # Record use
-        self.evidence.append({
-            'timestamp': datetime.now(),
-            'context': context,
-            'effectiveness': effectiveness
-        })
-        
-        return True, effectiveness
-    
-    def decay(self, days_passed: int):
-        """Natural decay of leverage over time"""
-        decay_rates = {
-            LeverageType.EMOTIONAL_DEBT: 0.05,
-            LeverageType.PATTERN_PRECEDENT: 0.02,  # Patterns decay slowly
-            LeverageType.SECRET_KNOWLEDGE: 0.01,   # Secrets keep power
-            LeverageType.SOCIAL_CAPITAL: 0.08,
-            LeverageType.RECIPROCITY: 0.10,        # Favors fade fast
-            LeverageType.DEPENDENCY: 0.03,
-            LeverageType.AUTHORITY: 0.02,
-            LeverageType.INTIMACY: 0.04
-        }
-        
-        decay = decay_rates.get(self.leverage_type, 0.05)
-        self.strength *= (1 - decay * days_passed)
-        self.strength = max(0, self.strength)
+    target_id: int  # Who it's leverage over
+    holder_id: int  # Who holds the leverage
+    description: str
+    strength: float  # 0.0-1.0
+    evidence: List[str]  # Supporting evidence/proof
+    expiration: Optional[datetime]  # When it becomes useless
+    uses_remaining: int  # How many times it can be used
+    counters: List[str]  # Known counter-strategies
+    discovery_context: str  # How it was discovered
 
-class LeverageSystem:
-    """Manages social leverage between characters"""
+@dataclass
+class LeverageApplication:
+    """An instance of using leverage"""
+    application_id: int
+    leverage_id: int
+    context: str  # Why it's being used
+    demand: str  # What's being asked for
+    threat_level: float  # How aggressively it's used
+    target_response: str  # How target responds
+    success_level: float  # How effective it was
+    consequences: Dict[str, Any]  # Results of use
+
+@dataclass
+class CounterStrategy:
+    """A strategy to counter leverage"""
+    strategy_id: int
+    leverage_id: int
+    strategy_type: str  # "deny", "deflect", "destroy", "reverse"
+    description: str
+    requirements: List[str]  # What's needed to execute
+    success_chance: float  # Probability of working
+    risks: List[str]  # What could go wrong
+
+# ===============================================================================
+# LEVERAGE MANAGER WITH LLM
+# ===============================================================================
+
+class LeverageManager:
+    """
+    Manages leverage dynamics using LLM for intelligent generation.
+    Handles discovery, application, and counter-strategies.
+    """
     
-    def __init__(self):
-        self.leverage_map: Dict[Tuple[str, str], List[SocialLeverage]] = {}
-        self.favor_ledger: Dict[Tuple[str, str], float] = {}  # Track favor balance
-        self.patterns_db: Dict[str, List[Dict]] = {}  # Character behavior patterns
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self._discovery_agent = None
+        self._application_strategist = None
+        self._counter_strategist = None
+        self._consequence_narrator = None
+    
+    @property
+    def discovery_agent(self) -> Agent:
+        """Agent for discovering leverage"""
+        if self._discovery_agent is None:
+            self._discovery_agent = Agent(
+                name="Leverage Discovery Agent",
+                instructions="""
+                Discover leverage based on observations and patterns.
+                
+                Look for:
+                - Hidden vulnerabilities and dependencies
+                - Secrets that could be exposed
+                - Behavioral patterns that can be exploited
+                - Emotional attachments that create pressure points
+                - Social connections that matter
+                
+                Generate leverage that feels:
+                - Organic to the relationships
+                - Proportional (not too powerful)
+                - Grounded in established facts
+                - Interesting for gameplay
+                
+                Consider both obvious and subtle forms of leverage.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._discovery_agent
+    
+    @property
+    def application_strategist(self) -> Agent:
+        """Agent for applying leverage strategically"""
+        if self._application_strategist is None:
+            self._application_strategist = Agent(
+                name="Leverage Application Strategist",
+                instructions="""
+                Strategize how to apply leverage effectively.
+                
+                Consider:
+                - The relationship between parties
+                - The severity of the demand
+                - The strength of the leverage
+                - Potential backfire risks
+                - Long-term consequences
+                
+                Generate applications that are:
+                - Psychologically realistic
+                - Proportional to the leverage strength
+                - Contextually appropriate
+                - Interesting narratively
+                
+                Balance effectiveness with relationship preservation.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._application_strategist
+    
+    @property
+    def counter_strategist(self) -> Agent:
+        """Agent for generating counter-strategies"""
+        if self._counter_strategist is None:
+            self._counter_strategist = Agent(
+                name="Counter-Strategy Developer",
+                instructions="""
+                Develop strategies to counter leverage.
+                
+                Consider approaches like:
+                - Denial and discrediting
+                - Deflection and misdirection  
+                - Destroying the evidence
+                - Reversing the leverage
+                - Accepting and minimizing damage
+                - Creating mutual destruction scenarios
+                
+                Generate counters that are:
+                - Clever but realistic
+                - Appropriate to character capabilities
+                - Risk-aware
+                - Dramatically interesting
+                
+                Consider both immediate and long-term strategies.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._counter_strategist
+    
+    @property
+    def consequence_narrator(self) -> Agent:
+        """Agent for narrating leverage consequences"""
+        if self._consequence_narrator is None:
+            self._consequence_narrator = Agent(
+                name="Leverage Consequence Narrator",
+                instructions="""
+                Narrate the consequences of leverage use.
+                
+                Focus on:
+                - Immediate emotional impacts
+                - Relationship shifts
+                - Power dynamic changes
+                - Unintended consequences
+                - Long-term ramifications
+                
+                Create narratives that show:
+                - The cost of using leverage
+                - How it changes relationships
+                - Ripple effects through social circles
+                - Character growth or degradation
+                
+                Keep consequences proportional and realistic.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._consequence_narrator
+    
+    # ========== Leverage Discovery ==========
+    
+    async def discover_leverage(
+        self,
+        observer_id: int,
+        target_id: int,
+        context: Dict[str, Any]
+    ) -> Optional[LeverageItem]:
+        """Discover leverage through observation and analysis"""
         
-    def create_leverage(self, holder: str, target: str, 
-                       leverage_type: LeverageType, context: Dict) -> SocialLeverage:
-        """Create new leverage based on events"""
+        # Gather information about target
+        target_info = await self._gather_target_information(target_id)
         
-        # Calculate initial strength based on type and context
-        base_strength = {
-            LeverageType.EMOTIONAL_DEBT: 0.6,
-            LeverageType.PATTERN_PRECEDENT: 0.4,
-            LeverageType.SECRET_KNOWLEDGE: 0.8,
-            LeverageType.SOCIAL_CAPITAL: 0.5,
-            LeverageType.RECIPROCITY: 0.5,
-            LeverageType.DEPENDENCY: 0.7,
-            LeverageType.AUTHORITY: 0.6,
-            LeverageType.INTIMACY: 0.5
-        }
+        prompt = f"""
+        Analyze for potential leverage:
         
-        leverage = SocialLeverage(
-            holder=holder,
-            target=target,
-            leverage_type=leverage_type,
-            strength=base_strength.get(leverage_type, 0.5),
-            context=context
+        Observer: {"Player" if observer_id == self.user_id else f"NPC {observer_id}"}
+        Target: {"Player" if target_id == self.user_id else f"NPC {target_id}"}
+        
+        Target Information:
+        {json.dumps(target_info, indent=2)}
+        
+        Context:
+        {json.dumps(context, indent=2)}
+        
+        Identify:
+        1. Type of leverage (information/emotional/social/material/etc)
+        2. Specific description (what exactly is the leverage)
+        3. Strength (0.0-1.0, be conservative)
+        4. Evidence/proof available
+        5. How it could be countered
+        6. Expiration conditions (when it becomes useless)
+        
+        Only identify leverage that:
+        - Is supported by the information
+        - Feels realistic and proportional
+        - Would be interesting to use
+        
+        Format as JSON. Return null if no good leverage found.
+        """
+        
+        response = await self.discovery_agent.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            
+            if result and result != 'null':
+                # Store leverage
+                async with get_db_connection_context() as conn:
+                    leverage_id = await conn.fetchval("""
+                        INSERT INTO leverage_items
+                        (user_id, conversation_id, holder_id, target_id,
+                         leverage_type, description, strength, evidence,
+                         discovery_context, uses_remaining)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        RETURNING leverage_id
+                    """, self.user_id, self.conversation_id,
+                    observer_id, target_id,
+                    result['type'], result['description'],
+                    float(result['strength']), json.dumps(result.get('evidence', [])),
+                    json.dumps(context), 3)  # Default 3 uses
+                
+                return LeverageItem(
+                    leverage_id=leverage_id,
+                    leverage_type=LeverageType[result['type'].upper()],
+                    target_id=target_id,
+                    holder_id=observer_id,
+                    description=result['description'],
+                    strength=float(result['strength']),
+                    evidence=result.get('evidence', []),
+                    expiration=self._calculate_expiration(result.get('expiration')),
+                    uses_remaining=3,
+                    counters=result.get('counters', []),
+                    discovery_context=str(context)
+                )
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"Failed to discover leverage: {e}")
+        
+        return None
+    
+    # ========== Leverage Application ==========
+    
+    async def apply_leverage(
+        self,
+        leverage_id: int,
+        demand: str,
+        threat_level: float = 0.5
+    ) -> LeverageApplication:
+        """Apply leverage to achieve a goal"""
+        
+        # Get leverage details
+        leverage = await self._get_leverage_details(leverage_id)
+        if not leverage:
+            raise ValueError(f"Leverage {leverage_id} not found")
+        
+        # Check if leverage is still valid
+        if leverage['uses_remaining'] <= 0:
+            return self._create_failed_application("Leverage exhausted")
+        
+        # Generate application strategy
+        prompt = f"""
+        Strategize leverage application:
+        
+        Leverage: {leverage['description']}
+        Type: {leverage['leverage_type']}
+        Strength: {leverage['strength']}
+        Target: {"Player" if leverage['target_id'] == self.user_id else f"NPC {leverage['target_id']}"}
+        
+        Demand: {demand}
+        Threat Level: {threat_level} (0=subtle, 1=aggressive)
+        
+        Determine:
+        1. How to present the leverage (exact approach)
+        2. Target's likely response
+        3. Success probability (0.0-1.0)
+        4. Immediate consequences
+        5. Relationship impact (-1.0 to 1.0)
+        6. Potential backfire risks
+        
+        Consider personality and relationship dynamics.
+        Format as JSON.
+        """
+        
+        response = await self.application_strategist.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            
+            # Determine success
+            success = random.random() < float(result.get('success_probability', 0.5))
+            
+            # Create application record
+            async with get_db_connection_context() as conn:
+                application_id = await conn.fetchval("""
+                    INSERT INTO leverage_applications
+                    (user_id, conversation_id, leverage_id, demand,
+                     threat_level, success, consequences)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING application_id
+                """, self.user_id, self.conversation_id,
+                leverage_id, demand, threat_level, success,
+                json.dumps(result.get('consequences', {})))
+                
+                # Reduce uses remaining
+                await conn.execute("""
+                    UPDATE leverage_items
+                    SET uses_remaining = uses_remaining - 1
+                    WHERE leverage_id = $1
+                """, leverage_id)
+            
+            return LeverageApplication(
+                application_id=application_id,
+                leverage_id=leverage_id,
+                context=result.get('approach', 'Direct application'),
+                demand=demand,
+                threat_level=threat_level,
+                target_response=result.get('target_response', 'Compliance'),
+                success_level=1.0 if success else 0.3,
+                consequences=result.get('consequences', {})
+            )
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"Failed to apply leverage: {e}")
+            return self._create_failed_application("Application failed")
+    
+    # ========== Counter-Strategies ==========
+    
+    async def generate_counter_strategies(
+        self,
+        leverage_id: int,
+        defender_resources: Dict[str, Any]
+    ) -> List[CounterStrategy]:
+        """Generate strategies to counter leverage"""
+        
+        leverage = await self._get_leverage_details(leverage_id)
+        if not leverage:
+            return []
+        
+        prompt = f"""
+        Generate counter-strategies for this leverage:
+        
+        Leverage: {leverage['description']}
+        Type: {leverage['leverage_type']}
+        Strength: {leverage['strength']}
+        Evidence: {leverage.get('evidence', [])}
+        
+        Defender Resources:
+        {json.dumps(defender_resources, indent=2)}
+        
+        Generate 2-4 counter-strategies:
+        For each strategy provide:
+        1. Type (deny/deflect/destroy/reverse/accept)
+        2. Description (specific approach)
+        3. Requirements (what's needed)
+        4. Success chance (0.0-1.0, be realistic)
+        5. Risks (what could go wrong)
+        
+        Make strategies varied and interesting.
+        Format as JSON array.
+        """
+        
+        response = await self.counter_strategist.run(prompt)
+        
+        try:
+            strategies_data = json.loads(response.content)
+            
+            strategies = []
+            for s_data in strategies_data:
+                # Store strategy
+                async with get_db_connection_context() as conn:
+                    strategy_id = await conn.fetchval("""
+                        INSERT INTO counter_strategies
+                        (user_id, conversation_id, leverage_id,
+                         strategy_type, description, success_chance)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        RETURNING strategy_id
+                    """, self.user_id, self.conversation_id,
+                    leverage_id, s_data['type'], s_data['description'],
+                    float(s_data['success_chance']))
+                
+                strategies.append(CounterStrategy(
+                    strategy_id=strategy_id,
+                    leverage_id=leverage_id,
+                    strategy_type=s_data['type'],
+                    description=s_data['description'],
+                    requirements=s_data.get('requirements', []),
+                    success_chance=float(s_data['success_chance']),
+                    risks=s_data.get('risks', [])
+                ))
+            
+            return strategies
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"Failed to generate counter-strategies: {e}")
+            return []
+    
+    async def execute_counter_strategy(
+        self,
+        strategy_id: int,
+        execution_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute a counter-strategy"""
+        
+        # Get strategy details
+        strategy = await self._get_strategy_details(strategy_id)
+        if not strategy:
+            return {'error': 'Strategy not found'}
+        
+        # Check requirements
+        requirements_met = await self._check_requirements(
+            strategy['requirements'],
+            execution_context
         )
         
-        # Set expiration for temporary leverage
-        if leverage_type == LeverageType.RECIPROCITY:
-            leverage.expiration = datetime.now() + timedelta(days=7)
-            leverage.uses_remaining = 1
-        elif leverage_type == LeverageType.EMOTIONAL_DEBT:
-            leverage.uses_remaining = 3  # Can guilt trip a few times
-            
-        # Store leverage
-        key = (holder, target)
-        if key not in self.leverage_map:
-            self.leverage_map[key] = []
-        self.leverage_map[key].append(leverage)
+        if not requirements_met:
+            return {
+                'success': False,
+                'reason': 'Requirements not met',
+                'missing': strategy['requirements']
+            }
         
-        return leverage
+        # Determine success with randomness
+        base_chance = strategy['success_chance']
+        modified_chance = self._modify_success_chance(base_chance, execution_context)
+        success = random.random() < modified_chance
+        
+        # Generate consequences
+        prompt = f"""
+        Narrate counter-strategy execution:
+        
+        Strategy Type: {strategy['strategy_type']}
+        Description: {strategy['description']}
+        Success: {success}
+        Context: {json.dumps(execution_context, indent=2)}
+        
+        Generate:
+        1. How it plays out (2-3 sentences)
+        2. If successful: How the leverage is neutralized
+        3. If failed: What went wrong and consequences
+        4. Impact on relationships
+        5. Any unexpected outcomes
+        
+        Keep it grounded and realistic.
+        Format as JSON.
+        """
+        
+        response = await self.consequence_narrator.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            
+            # Update leverage status if successful
+            if success:
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        UPDATE leverage_items
+                        SET is_neutralized = true
+                        WHERE leverage_id = $1
+                    """, strategy['leverage_id'])
+            
+            return {
+                'success': success,
+                'narrative': result.get('narrative', 'The counter-strategy is executed'),
+                'leverage_status': 'neutralized' if success else 'active',
+                'relationship_impact': result.get('relationship_impact', {}),
+                'unexpected_outcomes': result.get('unexpected', [])
+            }
+            
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to execute counter-strategy: {e}")
+            return {
+                'success': success,
+                'narrative': 'The counter-strategy plays out',
+                'leverage_status': 'neutralized' if success else 'active'
+            }
     
-    def detect_pattern_leverage(self, character: str, 
-                               behavior_history: List[Dict]) -> List[Dict]:
-        """Detect patterns that could become leverage"""
-        patterns = []
-        
-        # Look for repeated behaviors
-        behavior_counts = {}
-        for behavior in behavior_history[-20:]:  # Last 20 behaviors
-            key = behavior['type']
-            behavior_counts[key] = behavior_counts.get(key, 0) + 1
-            
-        # Patterns that appear 3+ times become leverage
-        for behavior_type, count in behavior_counts.items():
-            if count >= 3:
-                patterns.append({
-                    'character': character,
-                    'pattern': behavior_type,
-                    'frequency': count,
-                    'leverage_potential': min(1.0, count * 0.15),
-                    'example_phrase': f"You always {behavior_type}"
-                })
-                
-        return patterns
+    # ========== Consequence System ==========
     
-    def calculate_total_leverage(self, holder: str, target: str) -> float:
-        """Calculate total leverage one character has over another"""
-        key = (holder, target)
-        if key not in self.leverage_map:
-            return 0.0
-            
-        total = 0.0
-        for leverage in self.leverage_map[key]:
-            if leverage.strength > 0:
-                total += leverage.strength
-                
-        # Check favor balance
-        favor_key = (holder, target)
-        if favor_key in self.favor_ledger:
-            total += self.favor_ledger[favor_key] * 0.1
-            
-        return min(1.0, total)
+    async def narrate_leverage_consequences(
+        self,
+        application: LeverageApplication,
+        long_term: bool = False
+    ) -> str:
+        """Generate narrative for leverage consequences"""
+        
+        prompt = f"""
+        Narrate the {'long-term' if long_term else 'immediate'} consequences of leverage use:
+        
+        Leverage Applied: {application.context}
+        Demand: {application.demand}
+        Threat Level: {application.threat_level}
+        Success: {application.success_level > 0.5}
+        Target Response: {application.target_response}
+        
+        Create a narrative (2-4 sentences) that shows:
+        {'- How relationships have permanently shifted' if long_term else '- The immediate emotional impact'}
+        {'- Trust that may never return' if long_term else '- The power dynamic shift'}
+        {'- Social ripple effects' if long_term else '- How others react'}
+        
+        Focus on the human cost of using leverage.
+        Keep it realistic and emotionally grounded.
+        """
+        
+        response = await self.consequence_narrator.run(prompt)
+        return response.content.strip()
     
-    def record_favor(self, giver: str, receiver: str, value: float):
-        """Record a favor in the ledger"""
-        key = (receiver, giver)  # Receiver owes giver
-        self.favor_ledger[key] = self.favor_ledger.get(key, 0) + value
+    # ========== Helper Methods ==========
+    
+    async def _gather_target_information(self, target_id: int) -> Dict:
+        """Gather information about a target for leverage discovery"""
         
-    def cash_in_favor(self, collector: str, debtor: str) -> Tuple[bool, float]:
-        """Attempt to cash in a favor"""
-        key = (debtor, collector)
+        info = {}
         
-        if key in self.favor_ledger and self.favor_ledger[key] > 0:
-            value = min(1.0, self.favor_ledger[key])
-            self.favor_ledger[key] = max(0, self.favor_ledger[key] - 1.0)
-            return True, value
+        async with get_db_connection_context() as conn:
+            # Get basic info
+            if target_id == self.user_id:
+                info['type'] = 'player'
+            else:
+                npc = await conn.fetchrow("""
+                    SELECT name, personality_traits FROM NPCs
+                    WHERE npc_id = $1
+                """, target_id)
+                info['type'] = 'npc'
+                info['traits'] = npc.get('personality_traits', '') if npc else ''
             
-        return False, 0.0
+            # Get recent memories
+            memories = await conn.fetch("""
+                SELECT memory_text, emotional_valence
+                FROM enhanced_memories
+                WHERE user_id = $1 AND conversation_id = $2
+                AND entity_id = $3
+                ORDER BY created_at DESC LIMIT 10
+            """, self.user_id, self.conversation_id, target_id)
+            
+            info['recent_events'] = [
+                {'text': m['memory_text'], 'emotion': m['emotional_valence']}
+                for m in memories
+            ]
+            
+            # Get relationships
+            relationships = await conn.fetch("""
+                SELECT dimension, current_value
+                FROM relationship_dimensions
+                WHERE user_id = $1 AND conversation_id = $2
+                AND (entity1_id = $3 OR entity2_id = $3)
+            """, self.user_id, self.conversation_id, target_id)
+            
+            info['relationships'] = {
+                r['dimension']: r['current_value']
+                for r in relationships
+            }
+        
+        return info
+    
+    async def _get_leverage_details(self, leverage_id: int) -> Optional[Dict]:
+        """Get details of a leverage item"""
+        
+        async with get_db_connection_context() as conn:
+            leverage = await conn.fetchrow("""
+                SELECT * FROM leverage_items
+                WHERE leverage_id = $1
+            """, leverage_id)
+        
+        return dict(leverage) if leverage else None
+    
+    async def _get_strategy_details(self, strategy_id: int) -> Optional[Dict]:
+        """Get details of a counter-strategy"""
+        
+        async with get_db_connection_context() as conn:
+            strategy = await conn.fetchrow("""
+                SELECT * FROM counter_strategies
+                WHERE strategy_id = $1
+            """, strategy_id)
+        
+        return dict(strategy) if strategy else None
+    
+    def _calculate_expiration(self, expiration_data: Any) -> Optional[datetime]:
+        """Calculate when leverage expires"""
+        
+        if not expiration_data:
+            return None
+        
+        if isinstance(expiration_data, str):
+            if 'days' in expiration_data:
+                days = int(''.join(filter(str.isdigit, expiration_data)) or 7)
+                return datetime.now() + timedelta(days=days)
+        
+        return None
+    
+    def _create_failed_application(self, reason: str) -> LeverageApplication:
+        """Create a failed application result"""
+        
+        return LeverageApplication(
+            application_id=0,
+            leverage_id=0,
+            context=reason,
+            demand="",
+            threat_level=0,
+            target_response="Rejection",
+            success_level=0.0,
+            consequences={'failure_reason': reason}
+        )
+    
+    async def _check_requirements(
+        self,
+        requirements: List[str],
+        context: Dict[str, Any]
+    ) -> bool:
+        """Check if requirements are met"""
+        
+        # Simple check - could be enhanced
+        if not requirements:
+            return True
+        
+        # Check context for requirement keywords
+        context_str = json.dumps(context).lower()
+        for req in requirements:
+            if req.lower() not in context_str:
+                return False
+        
+        return True
+    
+    def _modify_success_chance(
+        self,
+        base_chance: float,
+        context: Dict[str, Any]
+    ) -> float:
+        """Modify success chance based on context"""
+        
+        modified = base_chance
+        
+        # Boost for preparation
+        if context.get('prepared', False):
+            modified += 0.1
+        
+        # Penalty for rushed execution
+        if context.get('rushed', False):
+            modified -= 0.2
+        
+        # Bonus for resources
+        if context.get('resources_available', 0) > 3:
+            modified += 0.15
+        
+        return max(0.0, min(1.0, modified))
 
-# Integration Functions
+# ===============================================================================
+# PUBLIC API FUNCTIONS
+# ===============================================================================
 
-def integrate_objects_with_conflicts(obj: MeaningfulObject, 
-                                    conflict: Dict) -> Dict:
-    """Use objects as stakes or tools in conflicts"""
-    integration = {
-        'object': obj.name,
-        'role': None,
-        'impact': 0.0
+@function_tool
+async def discover_leverage_opportunity(
+    ctx: RunContextWrapper,
+    target_id: int,
+    observation: str
+) -> Dict[str, Any]:
+    """Discover potential leverage through observation"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    manager = LeverageManager(user_id, conversation_id)
+    
+    context = {'observation': observation}
+    leverage = await manager.discover_leverage(user_id, target_id, context)
+    
+    if leverage:
+        return {
+            'discovered': True,
+            'leverage_id': leverage.leverage_id,
+            'type': leverage.leverage_type.value,
+            'description': leverage.description,
+            'strength': leverage.strength,
+            'uses_remaining': leverage.uses_remaining
+        }
+    else:
+        return {
+            'discovered': False,
+            'message': 'No leverage discovered from this observation'
+        }
+
+@function_tool
+async def use_leverage(
+    ctx: RunContextWrapper,
+    leverage_id: int,
+    demand: str,
+    aggressive: bool = False
+) -> Dict[str, Any]:
+    """Apply leverage to make a demand"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    manager = LeverageManager(user_id, conversation_id)
+    
+    threat_level = 0.8 if aggressive else 0.4
+    application = await manager.apply_leverage(leverage_id, demand, threat_level)
+    
+    # Generate narrative
+    narrative = await manager.narrate_leverage_consequences(application, long_term=False)
+    
+    return {
+        'application_id': application.application_id,
+        'success': application.success_level > 0.5,
+        'target_response': application.target_response,
+        'narrative': narrative,
+        'consequences': application.consequences
     }
+
+@function_tool
+async def defend_against_leverage(
+    ctx: RunContextWrapper,
+    leverage_id: int,
+    available_resources: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Generate and optionally execute counter-strategies"""
     
-    if obj.is_contested:
-        integration['role'] = 'stake'
-        integration['impact'] = obj.emotional_charge
-    elif obj.owner in conflict['participants']:
-        integration['role'] = 'leverage_tool'
-        integration['impact'] = obj.power_weight
-    else:
-        integration['role'] = 'catalyst'
-        integration['impact'] = 0.3
-        
-    return integration
-
-def discover_hidden_pattern(character: str, leverage_system: LeverageSystem,
-                          behavior_history: List[Dict]) -> str:
-    """LLM tool to discover manipulation patterns"""
-    patterns = leverage_system.detect_pattern_leverage(character, behavior_history)
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
     
-    if patterns:
-        most_significant = max(patterns, key=lambda p: p['leverage_potential'])
-        return json.dumps({
-            'pattern_found': True,
-            'character': character,
-            'pattern': most_significant['pattern'],
-            'frequency': most_significant['frequency'],
-            'leverage_created': True,
-            'suggested_dialogue': most_significant['example_phrase']
-        })
+    manager = LeverageManager(user_id, conversation_id)
     
-    return json.dumps({
-        'pattern_found': False,
-        'character': character,
-        'message': 'No significant patterns detected yet'
-    })
-
-def calculate_social_leverage(char_a: str, char_b: str, 
-                             leverage_system: LeverageSystem) -> str:
-    """LLM tool to check leverage dynamics"""
-    leverage_a_to_b = leverage_system.calculate_total_leverage(char_a, char_b)
-    leverage_b_to_a = leverage_system.calculate_total_leverage(char_b, char_a)
+    resources = available_resources or {}
+    strategies = await manager.generate_counter_strategies(leverage_id, resources)
     
-    balance = leverage_a_to_b - leverage_b_to_a
+    return {
+        'strategies_available': len(strategies),
+        'options': [
+            {
+                'strategy_id': s.strategy_id,
+                'type': s.strategy_type,
+                'description': s.description,
+                'requirements': s.requirements,
+                'success_chance': s.success_chance,
+                'risks': s.risks
+            }
+            for s in strategies
+        ]
+    }
+
+@function_tool
+async def execute_counter_strategy(
+    ctx: RunContextWrapper,
+    strategy_id: int,
+    additional_context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Execute a specific counter-strategy"""
     
-    return json.dumps({
-        'leverage_a_to_b': leverage_a_to_b,
-        'leverage_b_to_a': leverage_b_to_a,
-        'balance': balance,
-        'dominant': char_a if balance > 0 else char_b if balance < 0 else 'balanced',
-        'recommendation': _suggest_leverage_use(balance)
-    })
-
-def _suggest_leverage_use(balance: float) -> str:
-    """Suggest how to use leverage based on balance"""
-    if abs(balance) < 0.2:
-        return "Relatively balanced - small favors or requests appropriate"
-    elif balance > 0.5:
-        return "Strong leverage position - can make significant requests"
-    elif balance < -0.5:
-        return "Weak position - focus on building leverage or offering favors"
-    else:
-        return "Moderate leverage - standard requests reasonable"
-
-# Database Schema SQL
-SCHEMA_SQL = """
--- Meaningful Objects Table
-CREATE TABLE meaningful_objects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    owner TEXT,
-    significance_type TEXT NOT NULL,
-    power_weight REAL DEFAULT 0.0,
-    emotional_charge REAL DEFAULT 0.5,
-    location TEXT DEFAULT 'unknown',
-    is_contested BOOLEAN DEFAULT FALSE,
-    creation_context JSON,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Object Precedents Table
-CREATE TABLE object_precedents (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    object_id INTEGER REFERENCES meaningful_objects(id),
-    event JSON NOT NULL,
-    participants JSON,
-    outcome TEXT,
-    power_shift REAL DEFAULT 0.0,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Social Leverage Table
-CREATE TABLE social_leverage (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    holder TEXT NOT NULL,
-    target TEXT NOT NULL,
-    leverage_type TEXT NOT NULL,
-    strength REAL DEFAULT 0.5,
-    context JSON,
-    expiration TIMESTAMP,
-    uses_remaining INTEGER DEFAULT -1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Favor Ledger Table
-CREATE TABLE favor_ledger (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    giver TEXT NOT NULL,
-    receiver TEXT NOT NULL,
-    favor_value REAL DEFAULT 1.0,
-    description TEXT,
-    repaid BOOLEAN DEFAULT FALSE,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Pattern Evidence Table
-CREATE TABLE pattern_evidence (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    character TEXT NOT NULL,
-    pattern_type TEXT NOT NULL,
-    evidence JSON,
-    frequency INTEGER DEFAULT 1,
-    last_observed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-"""
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    manager = LeverageManager(user_id, conversation_id)
+    
+    context = additional_context or {}
+    result = await manager.execute_counter_strategy(strategy_id, context)
+    
+    return result
