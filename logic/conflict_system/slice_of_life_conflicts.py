@@ -1,19 +1,24 @@
 # logic/conflict_system/slice_of_life_conflicts.py
 """
 Slice-of-life conflict system with LLM-generated dynamic content.
-Replaces hardcoded patterns with intelligent, contextual generation.
+Refactored to work as a ConflictSubsystem with the synthesizer.
 """
 
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional
+import weakref
+from typing import Dict, List, Any, Optional, Set
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
+from logic.conflict_system.conflict_synthesizer import (
+    ConflictSubsystem, SubsystemType, EventType, 
+    SystemEvent, SubsystemResponse
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +85,259 @@ class DailyConflictEvent:
     npc_reactions: Dict[int, str]
 
 # ===============================================================================
-# EMERGENT CONFLICT DETECTOR WITH LLM
+# SLICE OF LIFE CONFLICT SUBSYSTEM
+# ===============================================================================
+
+class SliceOfLifeConflictSubsystem(ConflictSubsystem):
+    """
+    Slice-of-life conflict subsystem integrated with synthesizer.
+    Combines all slice-of-life components into one subsystem.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.synthesizer = None  # Will be set by synthesizer
+        
+        # Components
+        self.detector = EmergentConflictDetector(user_id, conversation_id)
+        self.manager = SliceOfLifeConflictManager(user_id, conversation_id)
+        self.resolver = PatternBasedResolution(user_id, conversation_id)
+        self.daily_integration = ConflictDailyIntegration(user_id, conversation_id)
+    
+    # ========== ConflictSubsystem Interface Implementation ==========
+    
+    @property
+    def subsystem_type(self) -> SubsystemType:
+        return SubsystemType.SLICE_OF_LIFE
+    
+    @property
+    def capabilities(self) -> Set[str]:
+        return {
+            'detect_emerging_tensions',
+            'embed_in_daily_activities',
+            'pattern_based_resolution',
+            'generate_slice_of_life_conflicts',
+            'subtle_conflict_manifestation'
+        }
+    
+    @property
+    def dependencies(self) -> Set[SubsystemType]:
+        return {SubsystemType.FLOW, SubsystemType.SOCIAL}
+    
+    @property
+    def event_subscriptions(self) -> Set[EventType]:
+        return {
+            EventType.STATE_SYNC,
+            EventType.PLAYER_CHOICE,
+            EventType.PHASE_TRANSITION,
+            EventType.CONFLICT_CREATED
+        }
+    
+    async def initialize(self, synthesizer: 'ConflictSynthesizer') -> bool:
+        """Initialize with synthesizer reference"""
+        self.synthesizer = weakref.ref(synthesizer)
+        return True
+    
+    async def handle_event(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle events from synthesizer"""
+        try:
+            if event.event_type == EventType.STATE_SYNC:
+                return await self._handle_state_sync(event)
+            elif event.event_type == EventType.PLAYER_CHOICE:
+                return await self._handle_player_choice(event)
+            elif event.event_type == EventType.PHASE_TRANSITION:
+                return await self._handle_phase_transition(event)
+            elif event.event_type == EventType.CONFLICT_CREATED:
+                return await self._handle_conflict_creation(event)
+            else:
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'handled': False}
+                )
+        except Exception as e:
+            logger.error(f"SliceOfLife error handling event: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Check health of subsystem"""
+        try:
+            tensions = await self.detector.detect_brewing_tensions()
+            return {
+                'healthy': True,
+                'active_tensions': len(tensions),
+                'components': {
+                    'detector': 'operational',
+                    'manager': 'operational',
+                    'resolver': 'operational',
+                    'daily_integration': 'operational'
+                }
+            }
+        except Exception as e:
+            return {'healthy': False, 'issue': str(e)}
+    
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get slice-of-life specific conflict data"""
+        resolution = await self.resolver.check_resolution_by_pattern(conflict_id)
+        return {
+            'subsystem': 'slice_of_life',
+            'pattern_resolution_available': resolution is not None,
+            'resolution_details': resolution
+        }
+    
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current state"""
+        tensions = await self.detector.detect_brewing_tensions()
+        return {
+            'emerging_tensions': len(tensions),
+            'tension_types': [t.get('type', 'unknown') for t in tensions],
+            'daily_integration_active': True
+        }
+    
+    # ========== Event Handlers ==========
+    
+    async def _handle_state_sync(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle scene state synchronization"""
+        scene_context = event.payload
+        
+        # Detect emerging tensions
+        tensions = await self.detector.detect_brewing_tensions()
+        
+        # Check for conflicts in current activity
+        activity = scene_context.get('activity', 'daily_routine')
+        present_npcs = scene_context.get('present_npcs', [])
+        
+        manifestations = []
+        side_effects = []
+        
+        if tensions:
+            # Create new conflict if tension is high enough
+            for tension in tensions[:1]:  # Limit to one new conflict
+                if tension.get('tension_level', 0) > 0.6:
+                    side_effects.append(SystemEvent(
+                        event_id=f"create_slice_{datetime.now().timestamp()}",
+                        event_type=EventType.CONFLICT_CREATED,
+                        source_subsystem=self.subsystem_type,
+                        payload={
+                            'conflict_type': tension['type'].value,
+                            'context': {
+                                'description': tension['description'],
+                                'intensity': tension['intensity'].value,
+                                'evidence': tension.get('evidence', [])
+                            }
+                        },
+                        priority=5
+                    ))
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'tensions_detected': len(tensions),
+                'manifestations': manifestations,
+                'slice_of_life_active': len(manifestations) > 0
+            },
+            side_effects=side_effects
+        )
+    
+    async def _handle_player_choice(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle player choices"""
+        conflict_id = event.payload.get('conflict_id')
+        
+        if not conflict_id:
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'no_conflict': True}
+            )
+        
+        # Check for pattern-based resolution
+        resolution = await self.resolver.check_resolution_by_pattern(conflict_id)
+        
+        side_effects = []
+        if resolution:
+            side_effects.append(SystemEvent(
+                event_id=f"resolve_{conflict_id}",
+                event_type=EventType.CONFLICT_RESOLVED,
+                source_subsystem=self.subsystem_type,
+                payload={
+                    'conflict_id': conflict_id,
+                    'resolution': resolution,
+                    'type': 'pattern_based'
+                }
+            ))
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'choice_processed': True, 'resolution': resolution},
+            side_effects=side_effects
+        )
+    
+    async def _handle_phase_transition(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle phase transitions"""
+        new_phase = event.payload.get('new_phase')
+        
+        data = {
+            'integration_adjustment': 'reducing' if new_phase in ['resolution', 'aftermath'] else 'maintaining',
+            'phase_acknowledged': new_phase
+        }
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data=data
+        )
+    
+    async def _handle_conflict_creation(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle new conflict creation"""
+        conflict_type = event.payload.get('conflict_type', '')
+        
+        # Check if this is a slice-of-life type
+        is_slice_of_life = conflict_type in [t.value for t in SliceOfLifeConflictType]
+        
+        if is_slice_of_life:
+            context = event.payload.get('context', {})
+            conflict_id = event.payload.get('conflict_id')
+            
+            if conflict_id:
+                event_result = await self.manager.embed_conflict_in_activity(
+                    conflict_id,
+                    context.get('activity', 'conversation'),
+                    context.get('npcs', [])
+                )
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={
+                        'conflict_type': 'slice_of_life',
+                        'initial_manifestation': event_result.conflict_manifestation,
+                        'daily_integration': True
+                    }
+                )
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'not_slice_of_life': True}
+        )
+
+# ===============================================================================
+# ORIGINAL COMPONENTS (Preserved with minor modifications)
 # ===============================================================================
 
 class EmergentConflictDetector:
@@ -227,9 +484,6 @@ class EmergentConflictDetector:
             )
         return "\n".join(summary) if summary else "No significant relationship dynamics"
 
-# ===============================================================================
-# SLICE OF LIFE CONFLICT MANAGER WITH LLM
-# ===============================================================================
 
 class SliceOfLifeConflictManager:
     """Manages conflicts through daily activities with LLM generation"""
@@ -334,9 +588,6 @@ class SliceOfLifeConflictManager:
                 npc_reactions={}
             )
 
-# ===============================================================================
-# PATTERN-BASED RESOLUTION WITH LLM
-# ===============================================================================
 
 class PatternBasedResolution:
     """Resolves conflicts based on accumulated patterns using LLM"""
@@ -434,9 +685,6 @@ class PatternBasedResolution:
             pattern.append(f"- {m['memory_text']}")
         return "\n".join(pattern)
 
-# ===============================================================================
-# CONFLICT DAILY INTEGRATION WITH LLM
-# ===============================================================================
 
 class ConflictDailyIntegration:
     """Integrates conflicts with daily routines using LLM"""
@@ -504,193 +752,3 @@ class ConflictDailyIntegration:
         
         response = await self.integration_agent.run(prompt)
         return 'yes' in response.content.lower()
-    
-    async def weave_conflict_into_routine(
-        self,
-        activity_type: str,
-        conflict_ids: List[int]
-    ) -> Dict[str, Any]:
-        """Weave multiple conflicts into routine activity"""
-        
-        if not conflict_ids:
-            return {'conflicts_woven': False}
-        
-        # Get conflict details
-        async with get_db_connection_context() as conn:
-            conflicts = await conn.fetch("""
-                SELECT * FROM Conflicts 
-                WHERE conflict_id = ANY($1::int[])
-            """, conflict_ids)
-        
-        # Generate integrated narrative
-        prompt = f"""
-        Weave these conflicts into {activity_type}:
-        
-        Active Conflicts:
-        {self._format_conflicts_for_prompt(conflicts)}
-        
-        Create:
-        1. How conflicts subtly affect the activity
-        2. Any micro-aggressions or subtle power plays
-        3. Player agency level (high/medium/low)
-        4. Suggested NPC behaviors
-        
-        Keep everything subtle and slice-of-life.
-        Format as JSON.
-        """
-        
-        response = await self.integration_agent.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            return {
-                'conflicts_woven': True,
-                'activity_modified': result.get('activity_effect', ''),
-                'micro_aggressions': result.get('micro_aggressions', []),
-                'player_agency': result.get('player_agency', 'medium'),
-                'npc_behaviors': result.get('npc_behaviors', {})
-            }
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to weave conflicts: {e}")
-            return {'conflicts_woven': False}
-    
-    def _format_conflicts_for_prompt(self, conflicts: List) -> str:
-        """Format conflicts for LLM prompt"""
-        formatted = []
-        for c in conflicts[:3]:  # Limit to avoid token overflow
-            formatted.append(f"- {c['conflict_type']} ({c.get('intensity', 'tension')})")
-        return "\n".join(formatted)
-
-# ===============================================================================
-# INTEGRATION HOOKS (Preserved with LLM enhancement)
-# ===============================================================================
-
-@function_tool
-async def generate_slice_of_life_conflict(
-    ctx: RunContextWrapper,
-    current_activity: str,
-    present_npcs: List[int],
-    recent_patterns: Optional[List[str]] = None
-) -> Optional[Dict[str, Any]]:
-    """Generate a conflict appropriate for current slice-of-life context"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    detector = EmergentConflictDetector(user_id, conversation_id)
-    tensions = await detector.detect_brewing_tensions()
-    
-    if not tensions:
-        return None
-    
-    selected_tension = tensions[0]
-    
-    async with get_db_connection_context() as conn:
-        conflict_id = await conn.fetchval("""
-            INSERT INTO Conflicts
-            (user_id, conversation_id, conflict_type, conflict_name, 
-             description, intensity, phase, is_active, progress)
-            VALUES ($1, $2, $3, $4, $5, $6, 'emerging', true, 0)
-            RETURNING conflict_id
-        """, user_id, conversation_id, 
-        selected_tension['type'].value,
-        f"{current_activity} tension",
-        selected_tension['description'],
-        selected_tension['intensity'].value)
-        
-        for npc_id in present_npcs:
-            await conn.execute("""
-                INSERT INTO conflict_stakeholders
-                (conflict_id, npc_id, faction, involvement_level)
-                VALUES ($1, $2, 'neutral', 'participant')
-            """, conflict_id, npc_id)
-    
-    return {
-        'conflict_id': conflict_id,
-        'type': selected_tension['type'].value,
-        'intensity': selected_tension['intensity'].value,
-        'embedded_in_activity': current_activity,
-        'participating_npcs': present_npcs
-    }
-
-@function_tool
-async def process_daily_conflict_progression(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    activity_type: str,
-    player_choice: Optional[str] = None
-) -> Dict[str, Any]:
-    """Progress a conflict through daily activity"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = SliceOfLifeConflictManager(user_id, conversation_id)
-    
-    async with get_db_connection_context() as conn:
-        stakeholders = await conn.fetch("""
-            SELECT npc_id FROM conflict_stakeholders
-            WHERE conflict_id = $1
-        """, conflict_id)
-    
-    npc_ids = [s['npc_id'] for s in stakeholders]
-    
-    event = await manager.embed_conflict_in_activity(conflict_id, activity_type, npc_ids)
-    
-    resolver = PatternBasedResolution(user_id, conversation_id)
-    resolution = await resolver.check_resolution_by_pattern(conflict_id)
-    
-    return {
-        'event': {
-            'manifestation': event.conflict_manifestation,
-            'choice_available': event.choice_presented,
-            'npc_reactions': event.npc_reactions
-        },
-        'progress_impact': event.accumulation_impact,
-        'resolution': resolution
-    }
-
-@function_tool  
-async def analyze_conflict_subtext(
-    ctx: RunContextWrapper,
-    scene_description: str,
-    participating_npcs: List[int]
-) -> Dict[str, Any]:
-    """Analyze a scene for hidden conflict dynamics"""
-    
-    agent = Agent(
-        name="Subtext Analyzer",
-        instructions="""
-        Analyze scenes for hidden conflicts and power dynamics.
-        Look for:
-        - Unspoken tensions
-        - Power plays disguised as care
-        - Boundary testing
-        - Submission patterns
-        - Control through routine
-        
-        Return insights about what's really happening beneath the surface.
-        """,
-        model="gpt-5-nano",
-    )
-    
-    prompt = f"""
-    Scene: {scene_description}
-    NPCs present: {participating_npcs}
-    
-    Analyze the subtext and hidden dynamics.
-    Return as JSON with: hidden_tensions, control_mechanisms, 
-    escalation_potential (0-1), and primary_dynamic.
-    """
-    
-    response = await agent.run(prompt)
-    
-    try:
-        return json.loads(response.content)
-    except json.JSONDecodeError:
-        return {
-            'hidden_tensions': [],
-            'control_mechanisms': [],
-            'escalation_potential': 0.5,
-            'primary_dynamic': 'unclear'
-        }
