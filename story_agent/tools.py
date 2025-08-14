@@ -62,6 +62,8 @@ from logic.time_cycle import (
     ActivityType
 )
 
+from logic.game_time_helper import get_game_iso_string, get_current_time
+
 # Initialize logger
 logger = logging.getLogger(__name__)
 
@@ -693,8 +695,11 @@ async def generate_daily_life_scene(
         # Parse agent output
         scene_data = json.loads(result.output) if result.output else {}
         
-        # Create scene ID
-        scene_id = f"scene_{int(datetime.now().timestamp())}_{random.randint(1000, 9999)}"
+        # Create scene ID based on game time
+        game_time = await get_current_time(context.user_id, context.conversation_id)
+        timestamp = (await get_game_iso_string(context.user_id, context.conversation_id)).replace(":", "-")
+        logger.debug(f"Generating daily life scene at game time: {game_time}")
+        scene_id = f"scene_{timestamp}_{random.randint(1000, 9999)}"
         
         # Build the scene
         scene = SliceOfLifeScene(
@@ -735,9 +740,10 @@ async def generate_daily_life_scene(
         
     except Exception as e:
         logger.error(f"Error generating daily life scene: {e}", exc_info=True)
-        # Return a basic scene as fallback
+        # Return a basic scene as fallback using game time
+        fallback_id = (await get_game_iso_string(context.user_id, context.conversation_id)).replace(":", "-")
         return SliceOfLifeScene(
-            scene_id=f"fallback_{int(datetime.now().timestamp())}",
+            scene_id=f"fallback_{fallback_id}",
             title="A Quiet Moment",
             setting=LocationType.HOME,
             time_of_day=DailyRoutinePhase.MORNING_ROUTINE,
