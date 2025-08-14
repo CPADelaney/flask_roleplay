@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from pydantic import BaseModel, Field
 import os
 import asyncpg
-from datetime import datetime
+from logic.game_time_helper import get_game_time_string, GameTimeContext
 from agents.models.openai_responses import OpenAIResponsesModel
 
 from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper, input_guardrail, output_guardrail, ModelSettings
@@ -904,14 +904,19 @@ class NPCCreationHandler:
             
             # Analyze emotional content
             emotion_analysis = await emotional_manager.analyze_emotional_content(traumatic_memory)
-            
+
             # Create trauma event
-            trauma_event = {
-                "memory_text": traumatic_memory,
-                "emotion": emotion_analysis.get("primary_emotion", "fear"),
-                "intensity": emotion_analysis.get("intensity", 0.8),
-                "timestamp": datetime.now().isoformat()
-            }
+            async with GameTimeContext(user_id, conversation_id) as game_time:
+                trauma_event = {
+                    "memory_text": traumatic_memory,
+                    "emotion": emotion_analysis.get("primary_emotion", "fear"),
+                    "intensity": emotion_analysis.get("intensity", 0.8),
+                    "timestamp": await game_time.to_string(),
+                    "year": game_time.year,
+                    "month": game_time.month,
+                    "day": game_time.day,
+                    "time_of_day": game_time.time_of_day,
+                }
             
             # Update emotional state with trauma
             await emotional_manager.update_entity_emotional_state(
@@ -994,38 +999,45 @@ class NPCCreationHandler:
                     # Check if relationship evolution entry exists
                     check_query = """
                         SELECT 1 FROM RelationshipEvolution
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc1_id=$3 
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc1_id=$3
                         AND entity2_type=$4 AND entity2_id=$5
                     """
-                    
+
                     exists = await conn.fetchrow(
                         check_query,
-                        user_id, conversation_id, npc_id, entity_type, entity_id
+                        user_id, conversation_id, npc_id, entity_type, entity_id,
                     )
-                    
+
                     if not exists:
                         # Create new relationship evolution record
                         insert_query = """
                             INSERT INTO RelationshipEvolution (
-                                user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
+                                user_id, conversation_id, npc1_id, entity2_type, entity2_id,
                                 relationship_type, current_stage, progress_to_next, evolution_history
                             )
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                         """
-                        
+
+                        async with GameTimeContext(user_id, conversation_id) as game_time:
+                            history_entry = json.dumps([{
+                                "stage": "dynamic",
+                                "date": await game_time.to_string(),
+                                "note": f"Relationship tracked by dynamic system as {relationship_label}",
+                                "year": game_time.year,
+                                "month": game_time.month,
+                                "day": game_time.day,
+                                "time_of_day": game_time.time_of_day,
+                            }])
+
                         await conn.execute(
                             insert_query,
                             user_id, conversation_id, npc_id, entity_type, entity_id,
                             relationship_label, "dynamic", 0,  # Mark as "dynamic" stage
-                            json.dumps([{
-                                "stage": "dynamic",
-                                "date": datetime.now().isoformat(),
-                                "note": f"Relationship tracked by dynamic system as {relationship_label}"
-                            }])
+                            history_entry,
                         )
-                        
+
                         tracked_count += 1
-                        
+
                         # Log canonical event
                         target_name = "player" if entity_type == "player" else f"entity {entity_id}"
                         await canon.log_canonical_event(
@@ -1115,13 +1127,18 @@ class NPCCreationHandler:
                         SET personality_patterns = personality_patterns || $1::jsonb
                         WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
                     """
-                    
-                    pattern_data = json.dumps([{
-                        "pattern_name": schema_name,
-                        "schema_id": schema_id,
-                        "confidence": result.get("confidence", 0.7),
-                        "detected_at": datetime.now().isoformat()
-                    }])
+
+                    async with GameTimeContext(user_id, conversation_id) as game_time:
+                        pattern_data = json.dumps([{
+                            "pattern_name": schema_name,
+                            "schema_id": schema_id,
+                            "confidence": result.get("confidence", 0.7),
+                            "detected_at": await game_time.to_string(),
+                            "year": game_time.year,
+                            "month": game_time.month,
+                            "day": game_time.day,
+                            "time_of_day": game_time.time_of_day,
+                        }])
                     
                     await conn.execute(query, pattern_data, user_id, conversation_id, npc_id)
                 
@@ -4644,30 +4661,41 @@ class NPCCreationHandler:
     
             history_cues = {h["cue"] for h in history}
             newly_triggered: list[dict] = []
-    
-            # ── evaluate each stat's ladder ─────────────────────────────────────
-            for stat, value in stats_current.items():
-                # Additional safety check (though shouldn't be needed with the fix above)
-                if value is None:
-                    logging.warning(f"Stat {stat} is None for NPC {npc_id}, skipping")
-                    continue
-                    
-                for step in trigger_map[stat]:
-                    cue = step["cue"]
-                    if cue in history_cues:
-                        continue                       # already fired
-    
-                    if value >= step["threshold"]:
-                        newly_triggered.append(
-                            {
-                                "cue": cue,
-                                "stat": stat,
-                                "threshold": step["threshold"],
-                                "description": step["description"],
-                                "timestamp": datetime.utcnow().isoformat(),
-                            }
-                        )
-                        history_cues.add(cue)
+
+            async with GameTimeContext(user_id, conversation_id) as game_time:
+                timestamp = await game_time.to_string()
+                year = game_time.year
+                month = game_time.month
+                day = game_time.day
+                time_of_day = game_time.time_of_day
+
+                # ── evaluate each stat's ladder ─────────────────────────────────────
+                for stat, value in stats_current.items():
+                    # Additional safety check (though shouldn't be needed with the fix above)
+                    if value is None:
+                        logging.warning(f"Stat {stat} is None for NPC {npc_id}, skipping")
+                        continue
+
+                    for step in trigger_map[stat]:
+                        cue = step["cue"]
+                        if cue in history_cues:
+                            continue                       # already fired
+
+                        if value >= step["threshold"]:
+                            newly_triggered.append(
+                                {
+                                    "cue": cue,
+                                    "stat": stat,
+                                    "threshold": step["threshold"],
+                                    "description": step["description"],
+                                    "timestamp": timestamp,
+                                    "year": year,
+                                    "month": month,
+                                    "day": day,
+                                    "time_of_day": time_of_day,
+                                }
+                            )
+                            history_cues.add(cue)
     
             if not newly_triggered:
                 return []                              # nothing new this tick
