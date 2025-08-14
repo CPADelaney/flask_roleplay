@@ -1000,7 +1000,12 @@ async def check_relationship_milestones(user_id: int, conversation_id: int, play
                 """, player_name, "Bond Token")
                 
                 # Log in relationship history
-                state.history.add_interaction("milestone", "high_trust_affection")
+                await state.history.record_interaction(
+                    user_id,
+                    conversation_id,
+                    "milestone",
+                    "high_trust_affection",
+                )
 # ============================
 # HUNGER & VITALS SYSTEM
 # ============================
