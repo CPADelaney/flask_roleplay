@@ -1,324 +1,685 @@
-# Tension Accumulation System
+# logic/conflict_system/tension.py
+"""
+Dynamic Tension System with LLM-generated content.
+Manages the build-up, manifestation, and resolution of tensions in conflicts.
+"""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Set
-from datetime import datetime, timedelta
-from enum import Enum
+import logging
 import json
+import random
+from typing import Dict, List, Any, Optional, Tuple
+from enum import Enum
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
-class TensionSource(Enum):
-    """Types of tension sources in slice-of-life conflicts"""
-    ROUTINE_VIOLATION = "routine_violation"
-    UNMET_EXPECTATION = "unmet_expectation"
-    RESOURCE_COMPETITION = "resource_competition"
-    SOCIAL_SLIGHT = "social_slight"
-    PATTERN_FRICTION = "pattern_friction"
-    ACCUMULATED_IRRITATION = "accumulated_irritation"
-    POWER_CHALLENGE = "power_challenge"
-    ATTENTION_IMBALANCE = "attention_imbalance"
+from agents import Agent, ModelSettings, function_tool, RunContextWrapper
+from db.connection import get_db_connection_context
 
-class FrictionPoint:
-    """Represents a single point of friction between characters"""
-    def __init__(self, source: TensionSource, intensity: float, 
-                 participants: Set[str], context: Dict):
-        self.source = source
-        self.intensity = intensity  # 0.0 to 1.0
-        self.participants = participants
-        self.context = context
-        self.timestamp = datetime.now()
-        self.decay_rate = 0.05  # How quickly it fades if not reinforced
-        
-    def decay(self, hours_passed: float) -> float:
-        """Natural decay of friction over time"""
-        self.intensity *= (1 - self.decay_rate * hours_passed)
-        return self.intensity
+logger = logging.getLogger(__name__)
+
+# ===============================================================================
+# TENSION TYPES AND STRUCTURES
+# ===============================================================================
+
+class TensionType(Enum):
+    """Different types of tension in the game"""
+    POWER = "power"
+    SOCIAL = "social"
+    SEXUAL = "sexual"
+    EMOTIONAL = "emotional"
+    ADDICTION = "addiction"
+    VITAL = "vital"
+    ECONOMIC = "economic"
+    IDEOLOGICAL = "ideological"
+    TERRITORIAL = "territorial"
+
+class TensionLevel(Enum):
+    """Levels of tension intensity"""
+    ABSENT = 0.0
+    SUBTLE = 0.2
+    NOTICEABLE = 0.4
+    PALPABLE = 0.6
+    INTENSE = 0.8
+    BREAKING = 1.0
 
 @dataclass
-class TensionAccumulator:
-    """Tracks building tension between characters"""
-    character_a: str
-    character_b: str
-    current_pressure: float = 0.0
-    friction_points: List[FrictionPoint] = field(default_factory=list)
-    micro_aggressions: List[Dict] = field(default_factory=list)
-    boiling_point: float = 10.0  # Threshold for conflict emergence
-    pressure_relief_rate: float = 0.1  # Natural pressure dissipation
-    
-    def add_friction(self, friction: FrictionPoint):
-        """Add a new friction point and calculate pressure increase"""
-        self.friction_points.append(friction)
-        
-        # Recent frictions have more impact
-        recency_multiplier = 1.0
-        if len(self.friction_points) > 1:
-            time_since_last = (friction.timestamp - 
-                             self.friction_points[-2].timestamp).total_seconds() / 3600
-            if time_since_last < 1:  # Within an hour
-                recency_multiplier = 1.5  # Compounds faster
-                
-        pressure_increase = friction.intensity * recency_multiplier
-        self.current_pressure += pressure_increase
-        
-        # Check for pattern-based amplification
-        if self._detect_pattern_amplification():
-            self.current_pressure *= 1.2
-            
-        return self.current_pressure
-    
-    def add_micro_aggression(self, aggression: Dict):
-        """Track small slights that build up over time"""
-        self.micro_aggressions.append({
-            **aggression,
-            'timestamp': datetime.now(),
-            'weight': aggression.get('weight', 0.1)
-        })
-        
-        # Every 5 micro-aggressions increases pressure
-        if len(self.micro_aggressions) % 5 == 0:
-            self.current_pressure += 0.5
-            
-    def _detect_pattern_amplification(self) -> bool:
-        """Check if similar frictions are repeating (pattern detection)"""
-        if len(self.friction_points) < 3:
-            return False
-            
-        recent = self.friction_points[-3:]
-        sources = [f.source for f in recent]
-        
-        # If same source appears multiple times, it's a pattern
-        return len(sources) != len(set(sources))
-    
-    def check_boiling_point(self) -> Optional[Dict]:
-        """Determine if tension has reached breaking point"""
-        if self.current_pressure >= self.boiling_point:
-            # Analyze what type of conflict should emerge
-            dominant_source = self._get_dominant_tension_source()
-            
-            return {
-                'type': 'boiling_point_reached',
-                'participants': [self.character_a, self.character_b],
-                'pressure': self.current_pressure,
-                'dominant_source': dominant_source,
-                'trigger_suggestion': self._suggest_trigger(dominant_source),
-                'intensity_level': self._calculate_intensity()
-            }
-        return None
-    
-    def _get_dominant_tension_source(self) -> TensionSource:
-        """Identify the primary source of tension"""
-        source_weights = {}
-        for friction in self.friction_points[-10:]:  # Last 10 frictions
-            source = friction.source
-            source_weights[source] = source_weights.get(source, 0) + friction.intensity
-            
-        return max(source_weights, key=source_weights.get)
-    
-    def _suggest_trigger(self, source: TensionSource) -> str:
-        """Suggest a naturalistic trigger for the conflict"""
-        triggers = {
-            TensionSource.ROUTINE_VIOLATION: "deviation from expected routine",
-            TensionSource.UNMET_EXPECTATION: "forgotten promise or expectation",
-            TensionSource.RESOURCE_COMPETITION: "both wanting the same thing",
-            TensionSource.SOCIAL_SLIGHT: "perceived disrespect or dismissal",
-            TensionSource.PATTERN_FRICTION: "the same issue coming up again",
-            TensionSource.ACCUMULATED_IRRITATION: "one too many small annoyances",
-            TensionSource.POWER_CHALLENGE: "subtle challenge to established dynamic",
-            TensionSource.ATTENTION_IMBALANCE: "feeling ignored or overshadowed"
-        }
-        return triggers.get(source, "accumulated tension")
-    
-    def _calculate_intensity(self) -> str:
-        """Determine conflict intensity based on pressure level"""
-        ratio = self.current_pressure / self.boiling_point
-        if ratio < 1.2:
-            return "subtext"
-        elif ratio < 1.5:
-            return "tension"
-        elif ratio < 2.0:
-            return "passive_aggressive"
-        else:
-            return "confrontation"
-    
-    def apply_time_decay(self, hours_passed: float):
-        """Apply natural pressure relief over time"""
-        self.current_pressure *= (1 - self.pressure_relief_rate * hours_passed)
-        self.current_pressure = max(0, self.current_pressure)
-        
-        # Decay individual friction points
-        self.friction_points = [f for f in self.friction_points 
-                               if f.decay(hours_passed) > 0.01]
+class TensionSource:
+    """A source contributing to tension"""
+    source_type: str  # "npc", "conflict", "environment", "activity"
+    source_id: Any
+    contribution: float  # 0.0-1.0
+    description: str
 
-class TensionAnalyzer:
-    """Analyzes game state to detect and generate tension"""
+@dataclass
+class TensionManifestation:
+    """How tension manifests in a scene"""
+    tension_type: TensionType
+    level: float
+    physical_cues: List[str]
+    dialogue_modifications: List[str]
+    environmental_changes: List[str]
+    player_sensations: List[str]
+
+# ===============================================================================
+# TENSION SYSTEM WITH LLM
+# ===============================================================================
+
+class TensionSystem:
+    """
+    Manages tension dynamics using LLM for dynamic content generation.
+    Replaces all hardcoded manifestations with contextual generation.
+    """
     
-    def __init__(self):
-        self.accumulators: Dict[Tuple[str, str], TensionAccumulator] = {}
-        self.global_modifiers = {
-            'morning': 1.2,  # People more irritable in morning
-            'evening': 0.8,   # More relaxed in evening
-            'weekend': 0.7,   # Less pressure on weekends
-            'hungry': 1.3,    # Hunger increases irritability
-            'tired': 1.4,     # Fatigue lowers tolerance
-        }
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self._tension_analyzer = None
+        self._manifestation_generator = None
+        self._escalation_narrator = None
         
-    def detect_friction_opportunity(self, scene_context: Dict) -> List[Dict]:
-        """Analyze scene for potential friction points"""
-        opportunities = []
-        
-        # Check for routine violations
-        if scene_context.get('routine_broken'):
-            opportunities.append({
-                'source': TensionSource.ROUTINE_VIOLATION,
-                'intensity': 0.3,
-                'description': 'Expected routine was disrupted'
-            })
-            
-        # Check for resource competition
-        shared_resources = scene_context.get('shared_resources', [])
-        if len(shared_resources) > 0:
-            for resource in shared_resources:
-                if resource['availability'] < resource['demand']:
-                    opportunities.append({
-                        'source': TensionSource.RESOURCE_COMPETITION,
-                        'intensity': 0.4,
-                        'description': f'Competition for {resource["name"]}'
-                    })
-                    
-        # Check for attention imbalance
-        attention_distribution = scene_context.get('attention_distribution', {})
-        if attention_distribution:
-            avg_attention = sum(attention_distribution.values()) / len(attention_distribution)
-            for character, attention in attention_distribution.items():
-                if attention < avg_attention * 0.5:
-                    opportunities.append({
-                        'source': TensionSource.ATTENTION_IMBALANCE,
-                        'intensity': 0.2,
-                        'affected': character,
-                        'description': f'{character} receiving less attention'
-                    })
-                    
-        return opportunities
+    @property
+    def tension_analyzer(self) -> Agent:
+        """Agent for analyzing tension sources and levels"""
+        if self._tension_analyzer is None:
+            self._tension_analyzer = Agent(
+                name="Tension Analyzer",
+                instructions="""
+                Analyze various sources to determine tension levels and types.
+                
+                Consider:
+                - Relationship dynamics and power imbalances
+                - Recent conflicts and their intensity
+                - Environmental factors and time of day
+                - Player choices and their consequences
+                - NPC emotional states and goals
+                
+                Identify subtle tensions that build gradually.
+                Focus on psychological and emotional undercurrents.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._tension_analyzer
     
-    def calculate_group_tension_dynamics(self, characters: List[str], 
-                                        context: Dict) -> Dict:
-        """Calculate tension dynamics for a group"""
-        tension_web = {}
-        
-        for i, char_a in enumerate(characters):
-            for char_b in characters[i+1:]:
-                key = tuple(sorted([char_a, char_b]))
+    @property
+    def manifestation_generator(self) -> Agent:
+        """Agent for generating tension manifestations"""
+        if self._manifestation_generator is None:
+            self._manifestation_generator = Agent(
+                name="Tension Manifestation Generator",
+                instructions="""
+                Generate specific, sensory manifestations of tension.
                 
-                if key not in self.accumulators:
-                    self.accumulators[key] = TensionAccumulator(
-                        character_a=key[0],
-                        character_b=key[1]
-                    )
-                    
-                accumulator = self.accumulators[key]
+                Create:
+                - Physical cues (body language, facial expressions)
+                - Dialogue modifications (tone, word choice, pauses)
+                - Environmental changes (atmosphere, sounds, lighting)
+                - Player sensations (what they notice/feel)
                 
-                # Apply contextual modifiers
-                modifier = 1.0
-                for condition, mult in self.global_modifiers.items():
-                    if context.get(condition):
-                        modifier *= mult
-                        
-                accumulator.current_pressure *= modifier
-                
-                # Check for emergence
-                emergence = accumulator.check_boiling_point()
-                if emergence:
-                    tension_web[key] = emergence
-                    
-        return tension_web
+                Make manifestations subtle and contextual.
+                Layer multiple small details rather than obvious statements.
+                Focus on show-don't-tell storytelling.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._manifestation_generator
     
-    def generate_micro_aggression(self, perpetrator: str, target: str, 
-                                 context: Dict) -> Dict:
-        """Generate contextual micro-aggression"""
-        templates = [
-            {'text': 'subtle eye roll', 'weight': 0.1},
-            {'text': 'delayed response', 'weight': 0.15},
-            {'text': 'talking over', 'weight': 0.2},
-            {'text': 'dismissive tone', 'weight': 0.15},
-            {'text': 'ignored suggestion', 'weight': 0.25},
-            {'text': 'backhanded compliment', 'weight': 0.3},
-        ]
+    @property
+    def escalation_narrator(self) -> Agent:
+        """Agent for narrating tension escalation"""
+        if self._escalation_narrator is None:
+            self._escalation_narrator = Agent(
+                name="Tension Escalation Narrator",
+                instructions="""
+                Narrate how tensions build, peak, and release.
+                
+                Focus on:
+                - Gradual accumulation of small moments
+                - Tipping points and triggers
+                - The moment before something breaks
+                - Release and aftermath
+                
+                Create atmospheric, evocative descriptions.
+                Use sensory details and emotional weight.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._escalation_narrator
+    
+    # ========== Core Tension Management ==========
+    
+    async def calculate_current_tensions(self) -> Dict[TensionType, float]:
+        """Calculate current tension levels from all sources"""
         
-        # Select based on relationship dynamics
-        aggression = templates[hash((perpetrator, target)) % len(templates)]
+        tensions = {t: 0.0 for t in TensionType}
+        
+        # Get tension sources
+        sources = await self._gather_tension_sources()
+        
+        # Use LLM to analyze and calculate tensions
+        prompt = f"""
+        Analyze these tension sources and calculate overall tension levels:
+        
+        Sources:
+        {json.dumps([self._source_to_dict(s) for s in sources], indent=2)}
+        
+        For each tension type (power, social, sexual, emotional, addiction, vital, economic, ideological, territorial):
+        Calculate a level from 0.0 to 1.0 based on the sources.
+        
+        Consider how sources compound or cancel each other.
+        Format as JSON: {{"power": 0.X, "social": 0.X, ...}}
+        """
+        
+        response = await self.tension_analyzer.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            for tension_type in TensionType:
+                if tension_type.value in result:
+                    tensions[tension_type] = min(1.0, max(0.0, float(result[tension_type.value])))
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"Failed to parse tension levels: {e}")
+            # Fallback calculation
+            for source in sources:
+                tensions[self._map_source_to_tension_type(source)] += source.contribution * 0.2
+        
+        # Store in database
+        await self._store_tension_levels(tensions)
+        
+        return tensions
+    
+    async def build_tension(
+        self,
+        tension_type: TensionType,
+        amount: float,
+        source: str,
+        context: Optional[Dict] = None
+    ) -> Dict[str, Any]:
+        """Build tension with contextual narrative"""
+        
+        current_level = await self._get_tension_level(tension_type)
+        new_level = min(1.0, current_level + amount)
+        
+        # Generate build narrative with LLM
+        prompt = f"""
+        Narrate tension building:
+        
+        Type: {tension_type.value}
+        Current Level: {current_level:.2f} → {new_level:.2f}
+        Source: {source}
+        Context: {json.dumps(context or {}, indent=2)}
+        
+        Create:
+        1. A brief description of how the tension builds (1-2 sentences)
+        2. 2-3 subtle physical/environmental cues
+        3. Any changes in NPC behavior
+        4. What the player might sense
+        
+        Keep it subtle and atmospheric.
+        Format as JSON.
+        """
+        
+        response = await self.escalation_narrator.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            narrative = result
+        except json.JSONDecodeError:
+            narrative = {
+                'description': f"The {tension_type.value} tension grows stronger",
+                'cues': ['A subtle shift in the atmosphere'],
+                'npc_changes': [],
+                'player_sensation': 'You feel something building'
+            }
+        
+        # Update database
+        await self._update_tension_level(tension_type, new_level)
+        
+        # Record event
+        await self._create_tension_memory(
+            tension_type, 
+            f"Tension increased: {narrative['description']}", 
+            new_level
+        )
         
         return {
-            'perpetrator': perpetrator,
-            'target': target,
-            'action': aggression['text'],
-            'weight': aggression['weight'] * context.get('intensity_multiplier', 1.0),
-            'context': context
+            'tension_type': tension_type.value,
+            'old_level': current_level,
+            'new_level': new_level,
+            'narrative': narrative,
+            'threshold_crossed': self._check_threshold_crossed(current_level, new_level)
         }
-
-# Integration Functions
-
-def integrate_with_memory_system(accumulator: TensionAccumulator, 
-                                memory_store: Dict) -> None:
-    """Store tension patterns in memory for future reference"""
-    memory_key = f"tension_{accumulator.character_a}_{accumulator.character_b}"
     
-    memory_store[memory_key] = {
-        'current_pressure': accumulator.current_pressure,
-        'pattern': accumulator._get_dominant_tension_source().value,
-        'friction_count': len(accumulator.friction_points),
-        'last_updated': datetime.now().isoformat(),
-        'historical_peaks': memory_store.get(memory_key, {}).get('historical_peaks', []) + 
-                           [accumulator.current_pressure] if accumulator.current_pressure > 8 else []
+    async def resolve_tension(
+        self,
+        tension_type: TensionType,
+        amount: float,
+        resolution_type: str,
+        context: Optional[Dict] = None
+    ) -> Dict[str, Any]:
+        """Resolve tension with contextual narrative"""
+        
+        current_level = await self._get_tension_level(tension_type)
+        new_level = max(0.0, current_level - amount)
+        
+        # Generate resolution narrative with LLM
+        prompt = f"""
+        Narrate tension resolution:
+        
+        Type: {tension_type.value}
+        Current Level: {current_level:.2f} → {new_level:.2f}
+        Resolution Type: {resolution_type}
+        Context: {json.dumps(context or {}, indent=2)}
+        
+        Create:
+        1. How the tension releases (1-2 sentences)
+        2. Physical/emotional relief descriptions
+        3. Environmental changes
+        4. Aftermath mood
+        
+        Focus on the feeling of release and what changes.
+        Format as JSON.
+        """
+        
+        response = await self.escalation_narrator.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            narrative = result
+        except json.JSONDecodeError:
+            narrative = {
+                'release': f"The {tension_type.value} tension eases",
+                'relief': ['A sense of lightness returns'],
+                'changes': ['The atmosphere softens'],
+                'aftermath': 'calm'
+            }
+        
+        # Update database
+        await self._update_tension_level(tension_type, new_level)
+        
+        return {
+            'tension_type': tension_type.value,
+            'old_level': current_level,
+            'new_level': new_level,
+            'narrative': narrative,
+            'fully_resolved': new_level < 0.1
+        }
+    
+    async def generate_tension_manifestation(
+        self,
+        scene_context: Dict[str, Any]
+    ) -> TensionManifestation:
+        """Generate how current tensions manifest in a scene"""
+        
+        # Get current tensions
+        tensions = await self.calculate_current_tensions()
+        
+        # Find dominant tension
+        dominant_type, dominant_level = max(
+            tensions.items(), 
+            key=lambda x: x[1]
+        )
+        
+        if dominant_level < 0.1:
+            return self._create_no_tension_manifestation()
+        
+        # Generate manifestation with LLM
+        prompt = f"""
+        Generate tension manifestations for this scene:
+        
+        Dominant Tension: {dominant_type.value} ({dominant_level:.2f})
+        Other Tensions: {self._format_tensions_for_prompt(tensions)}
+        Scene: {json.dumps(scene_context, indent=2)}
+        
+        Create specific, sensory details:
+        1. 3-4 physical cues (body language, expressions)
+        2. 2-3 dialogue modifications (how speech changes)
+        3. 2-3 environmental changes (atmosphere, sounds)
+        4. 2-3 player sensations (what they notice/feel)
+        
+        Make it subtle and layered. Show tension through details.
+        Format as JSON with arrays for each category.
+        """
+        
+        response = await self.manifestation_generator.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            return TensionManifestation(
+                tension_type=dominant_type,
+                level=dominant_level,
+                physical_cues=result.get('physical_cues', []),
+                dialogue_modifications=result.get('dialogue_modifications', []),
+                environmental_changes=result.get('environmental_changes', []),
+                player_sensations=result.get('player_sensations', [])
+            )
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse manifestation: {e}")
+            return self._create_fallback_manifestation(dominant_type, dominant_level)
+    
+    async def check_tension_breaking_point(self) -> Optional[Dict[str, Any]]:
+        """Check if any tension has reached breaking point"""
+        
+        tensions = await self.calculate_current_tensions()
+        breaking_tensions = {
+            t: level for t, level in tensions.items() 
+            if level >= TensionLevel.BREAKING.value
+        }
+        
+        if not breaking_tensions:
+            return None
+        
+        # Generate breaking point event with LLM
+        breaking_type = max(breaking_tensions.items(), key=lambda x: x[1])[0]
+        
+        prompt = f"""
+        A tension has reached its breaking point:
+        
+        Breaking Tension: {breaking_type.value}
+        Level: {breaking_tensions[breaking_type]:.2f}
+        All Tensions: {self._format_tensions_for_prompt(tensions)}
+        
+        Generate:
+        1. The triggering moment (what finally breaks)
+        2. Immediate consequences
+        3. How it affects other tensions
+        4. Choices available to player
+        
+        Make it dramatic but believable.
+        Format as JSON.
+        """
+        
+        response = await self.escalation_narrator.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            return {
+                'breaking_tension': breaking_type.value,
+                'trigger': result.get('trigger', 'The tension finally snaps'),
+                'consequences': result.get('consequences', []),
+                'tension_changes': result.get('tension_changes', {}),
+                'player_choices': result.get('choices', [])
+            }
+        except json.JSONDecodeError:
+            return {
+                'breaking_tension': breaking_type.value,
+                'trigger': 'The tension reaches a breaking point',
+                'consequences': ['Things can no longer continue as they were'],
+                'tension_changes': {},
+                'player_choices': []
+            }
+    
+    # ========== Helper Methods ==========
+    
+    async def _gather_tension_sources(self) -> List[TensionSource]:
+        """Gather all current sources of tension"""
+        
+        sources = []
+        
+        async with get_db_connection_context() as conn:
+            # Get conflict tensions
+            conflicts = await conn.fetch("""
+                SELECT conflict_id, conflict_type, intensity, progress
+                FROM Conflicts
+                WHERE user_id = $1 AND conversation_id = $2
+                AND is_active = true
+            """, self.user_id, self.conversation_id)
+            
+            for conflict in conflicts:
+                sources.append(TensionSource(
+                    source_type="conflict",
+                    source_id=conflict['conflict_id'],
+                    contribution=conflict['progress'] / 100 * 0.5,
+                    description=f"{conflict['conflict_type']} conflict"
+                ))
+            
+            # Get NPC tensions
+            npc_tensions = await conn.fetch("""
+                SELECT npc_id, emotional_state, stress_level
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+                AND stress_level > 30
+            """, self.user_id, self.conversation_id)
+            
+            for npc in npc_tensions:
+                sources.append(TensionSource(
+                    source_type="npc",
+                    source_id=npc['npc_id'],
+                    contribution=npc['stress_level'] / 100 * 0.3,
+                    description=f"NPC stress: {npc['emotional_state']}"
+                ))
+        
+        return sources
+    
+    async def _get_tension_level(self, tension_type: TensionType) -> float:
+        """Get current level for a specific tension type"""
+        
+        async with get_db_connection_context() as conn:
+            level = await conn.fetchval("""
+                SELECT level FROM TensionLevels
+                WHERE user_id = $1 AND conversation_id = $2
+                AND tension_type = $3
+            """, self.user_id, self.conversation_id, tension_type.value)
+        
+        return level or 0.0
+    
+    async def _update_tension_level(self, tension_type: TensionType, level: float):
+        """Update tension level in database"""
+        
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO TensionLevels (user_id, conversation_id, tension_type, level)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, conversation_id, tension_type)
+                DO UPDATE SET level = $4, updated_at = NOW()
+            """, self.user_id, self.conversation_id, tension_type.value, level)
+    
+    async def _store_tension_levels(self, tensions: Dict[TensionType, float]):
+        """Store all tension levels"""
+        
+        for tension_type, level in tensions.items():
+            await self._update_tension_level(tension_type, level)
+    
+    async def _create_tension_memory(
+        self,
+        tension_type: TensionType,
+        description: str,
+        level: float
+    ):
+        """Create a memory record of tension change"""
+        
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO enhanced_memories
+                (user_id, conversation_id, entity_type, entity_id, 
+                 memory_text, importance, tags)
+                VALUES ($1, $2, 'tension', $3, $4, $5, $6)
+            """, self.user_id, self.conversation_id,
+            tension_type.value, description,
+            'medium' if level < 0.7 else 'high',
+            ['tension', tension_type.value, f"level_{int(level*10)}"])
+    
+    def _source_to_dict(self, source: TensionSource) -> Dict:
+        """Convert TensionSource to dict for JSON"""
+        return {
+            'type': source.source_type,
+            'id': str(source.source_id),
+            'contribution': source.contribution,
+            'description': source.description
+        }
+    
+    def _map_source_to_tension_type(self, source: TensionSource) -> TensionType:
+        """Map a source to its primary tension type"""
+        
+        # Simple mapping - could be enhanced with LLM
+        mappings = {
+            'conflict': TensionType.POWER,
+            'npc': TensionType.EMOTIONAL,
+            'environment': TensionType.VITAL,
+            'activity': TensionType.SOCIAL
+        }
+        return mappings.get(source.source_type, TensionType.EMOTIONAL)
+    
+    def _format_tensions_for_prompt(self, tensions: Dict[TensionType, float]) -> str:
+        """Format tensions for LLM prompts"""
+        
+        formatted = []
+        for t, level in tensions.items():
+            if level > 0.1:
+                formatted.append(f"{t.value}: {level:.2f}")
+        return ", ".join(formatted) if formatted else "minimal tensions"
+    
+    def _check_threshold_crossed(self, old_level: float, new_level: float) -> Optional[str]:
+        """Check if a significant threshold was crossed"""
+        
+        thresholds = [
+            (0.2, "subtle"),
+            (0.4, "noticeable"),
+            (0.6, "palpable"),
+            (0.8, "intense"),
+            (1.0, "breaking")
+        ]
+        
+        for threshold, name in thresholds:
+            if old_level < threshold <= new_level:
+                return f"entered_{name}"
+            elif new_level < threshold <= old_level:
+                return f"left_{name}"
+        
+        return None
+    
+    def _create_no_tension_manifestation(self) -> TensionManifestation:
+        """Create manifestation for no/minimal tension"""
+        
+        return TensionManifestation(
+            tension_type=TensionType.EMOTIONAL,
+            level=0.0,
+            physical_cues=["Relaxed postures", "Easy movements"],
+            dialogue_modifications=["Natural speech patterns"],
+            environmental_changes=["Comfortable atmosphere"],
+            player_sensations=["A sense of ease"]
+        )
+    
+    def _create_fallback_manifestation(
+        self,
+        tension_type: TensionType,
+        level: float
+    ) -> TensionManifestation:
+        """Create fallback manifestation if LLM fails"""
+        
+        return TensionManifestation(
+            tension_type=tension_type,
+            level=level,
+            physical_cues=[f"Subtle {tension_type.value} tension in body language"],
+            dialogue_modifications=["Careful word choices"],
+            environmental_changes=["The atmosphere feels charged"],
+            player_sensations=["You sense an undercurrent of tension"]
+        )
+
+# ===============================================================================
+# PUBLIC API FUNCTIONS
+# ===============================================================================
+
+@function_tool
+async def analyze_scene_tensions(
+    ctx: RunContextWrapper,
+    scene_description: str,
+    npcs_present: List[int],
+    current_activity: str
+) -> Dict[str, Any]:
+    """Analyze tensions in current scene"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    system = TensionSystem(user_id, conversation_id)
+    
+    # Calculate current tensions
+    tensions = await system.calculate_current_tensions()
+    
+    # Generate manifestation
+    scene_context = {
+        'description': scene_description,
+        'npcs': npcs_present,
+        'activity': current_activity
+    }
+    manifestation = await system.generate_tension_manifestation(scene_context)
+    
+    # Check for breaking points
+    breaking_point = await system.check_tension_breaking_point()
+    
+    return {
+        'tension_levels': {t.value: level for t, level in tensions.items()},
+        'dominant_tension': manifestation.tension_type.value,
+        'manifestation': {
+            'physical_cues': manifestation.physical_cues,
+            'dialogue_mods': manifestation.dialogue_modifications,
+            'environment': manifestation.environmental_changes,
+            'sensations': manifestation.player_sensations
+        },
+        'breaking_point': breaking_point
     }
 
-def integrate_with_relationship_system(tension_web: Dict, 
-                                      relationships: Dict) -> None:
-    """Modify relationship dimensions based on tension"""
-    for (char_a, char_b), tension_data in tension_web.items():
-        rel_key = f"{char_a}_{char_b}"
-        
-        if rel_key in relationships:
-            # High tension affects trust and comfort
-            if tension_data['pressure'] > 8:
-                relationships[rel_key]['trust'] *= 0.95
-                relationships[rel_key]['comfort'] *= 0.9
-                
-            # Resolved tensions can increase intimacy
-            if tension_data.get('resolved'):
-                relationships[rel_key]['intimacy'] *= 1.05
+@function_tool
+async def modify_tension(
+    ctx: RunContextWrapper,
+    tension_type: str,
+    change: float,
+    reason: str
+) -> Dict[str, Any]:
+    """Modify a specific tension level"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    system = TensionSystem(user_id, conversation_id)
+    
+    try:
+        t_type = TensionType(tension_type)
+    except ValueError:
+        return {'error': f'Invalid tension type: {tension_type}'}
+    
+    if change > 0:
+        result = await system.build_tension(t_type, abs(change), reason)
+    else:
+        result = await system.resolve_tension(t_type, abs(change), reason)
+    
+    return result
 
-# Agent Functions for LLM Integration
-
-def detect_brewing_tension(scene: Dict, analyzer: TensionAnalyzer) -> str:
-    """LLM tool function to detect brewing tensions"""
-    opportunities = analyzer.detect_friction_opportunity(scene)
+@function_tool
+async def get_tension_report(
+    ctx: RunContextWrapper
+) -> Dict[str, Any]:
+    """Get comprehensive tension report"""
     
-    if opportunities:
-        return json.dumps({
-            'tension_detected': True,
-            'opportunities': opportunities,
-            'recommended_action': 'Consider introducing subtle friction',
-            'intensity': max(opp['intensity'] for opp in opportunities)
-        })
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
     
-    return json.dumps({
-        'tension_detected': False,
-        'message': 'No significant tension opportunities in current scene'
-    })
-
-def trigger_tension_event(char_a: str, char_b: str, 
-                         analyzer: TensionAnalyzer) -> str:
-    """LLM tool to check if tension should trigger an event"""
-    key = tuple(sorted([char_a, char_b]))
+    system = TensionSystem(user_id, conversation_id)
     
-    if key in analyzer.accumulators:
-        accumulator = analyzer.accumulators[key]
-        emergence = accumulator.check_boiling_point()
-        
-        if emergence:
-            return json.dumps({
-                'should_trigger': True,
-                'event_data': emergence,
-                'suggestion': f"Create {emergence['intensity_level']} level conflict about {emergence['trigger_suggestion']}"
-            })
+    tensions = await system.calculate_current_tensions()
     
-    return json.dumps({'should_trigger': False})
+    # Sort by level
+    sorted_tensions = sorted(
+        tensions.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+    
+    report = {
+        'current_tensions': {t.value: level for t, level in sorted_tensions},
+        'highest': sorted_tensions[0] if sorted_tensions else None,
+        'total_tension': sum(tensions.values()),
+        'critical_tensions': [
+            t.value for t, level in tensions.items() 
+            if level >= 0.8
+        ],
+        'recommendations': []
+    }
+    
+    # Generate recommendations
+    if report['total_tension'] > 3.0:
+        report['recommendations'].append("Multiple high tensions - consider resolution")
+    if report['critical_tensions']:
+        report['recommendations'].append("Critical tensions need immediate attention")
+    
+    return report
