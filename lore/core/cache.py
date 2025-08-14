@@ -89,6 +89,7 @@ class LoreCache:
                 "which items should be pre-warmed."
             ),
             model="gpt-5-nano",
+            model_settings=ModelSettings(temperature=0.0)
         )
     
     async def get(self, namespace, key, user_id=None, conversation_id=None):
@@ -218,11 +219,19 @@ class LoreCache:
         # First, remove any expired items
         current_times: Dict[str, float] = {}
         expired_keys = []
-        for key, item in self.cache.items():
-            current = await get_game_timestamp(item.user_id, item.conversation_id)
-            current_times[key] = current
-            if item.expiry <= current:
-                expired_keys.append(key)
+        
+        # Gather all timestamp fetches in parallel for efficiency
+        items = list(self.cache.items())
+        if items:
+            timestamps = await asyncio.gather(*[
+                get_game_timestamp(item.user_id, item.conversation_id)
+                for _, item in items
+            ])
+            
+            for (key, item), current in zip(items, timestamps):
+                current_times[key] = current
+                if item.expiry <= current:
+                    expired_keys.append(key)
         
         for key in expired_keys:
             self.analytics.size_bytes -= self.cache[key].size_bytes
