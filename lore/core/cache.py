@@ -6,10 +6,11 @@ from typing import Dict, Any, Optional, List, Set, Tuple
 from dataclasses import dataclass
 import json
 import logging
-from logic.game_time_helper import get_game_timestamp
 
 from agents import Agent, function_tool, Runner, trace, ModelSettings
 from agents.run import RunConfig
+
+from logic.game_time_helper import get_game_timestamp, get_game_datetime
 
 @dataclass
 class CacheAnalytics:
@@ -30,20 +31,31 @@ class CacheAnalytics:
 class CacheItem:
     """Enhanced cache item with metadata for optimization."""
 
-    def __init__(self, value: Any, expiry: float, size_bytes: int = 0, priority: int = 0,
-                 creation_time: float = 0.0):
+    def __init__(self, value: Any, expiry: float, size_bytes: int = 0, priority: int = 0, 
+                 user_id: int = 0, conversation_id: int = 0):
         self.value = value
         self.expiry = expiry
         self.size_bytes = size_bytes
         self.access_count = 0
-        self.last_access_time = creation_time
-        self.creation_time = creation_time
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.last_access_time = 0.0
+        self.creation_time = 0.0
+        self.creation_datetime = None
         self.priority = priority  # 0-10, higher means more important
 
-    def access(self, current_time: float):
+    async def initialize_timestamps(self):
+        """Initialize timestamps using game time."""
+        dt = await get_game_datetime(self.user_id, self.conversation_id)
+        ts = dt.timestamp()
+        self.last_access_time = ts
+        self.creation_time = ts
+        self.creation_datetime = dt
+
+    async def access(self):
         """Record an access to this item."""
         self.access_count += 1
-        self.last_access_time = current_time
+        self.last_access_time = await get_game_timestamp(self.user_id, self.conversation_id)
     
     def get_access_frequency(self, current_time: float) -> float:
         """Calculate access frequency (accesses per hour)."""
@@ -82,22 +94,25 @@ class LoreCache:
     
     async def get(self, namespace, key, user_id=None, conversation_id=None):
         """Get an item from the cache with async support and analytics."""
-        start_time = await get_game_timestamp(user_id or 0, conversation_id or 0)
+        uid = user_id or 0
+        cid = conversation_id or 0
+        start_time = await get_game_timestamp(uid, cid)
         full_key = self._create_key(namespace, key, user_id, conversation_id)
 
         async with self._lock:
             if full_key in self.cache:
                 cache_item = self.cache[full_key]
-                current_time = await get_game_timestamp(user_id or 0, conversation_id or 0)
+                current_time = await get_game_timestamp(uid, cid)
                 if cache_item.expiry > current_time:
                     # Update access statistics
-                    cache_item.access(current_time)
+                    await cache_item.access()
 
                     # Record hit in analytics
                     self.analytics.hit_count += 1
 
                     # Calculate access time for analytics
-                    access_time = current_time - start_time
+                    end_time = await get_game_timestamp(uid, cid)
+                    access_time = end_time - start_time
                     self._update_avg_access_time(access_time)
 
                     return cache_item.value
@@ -105,19 +120,21 @@ class LoreCache:
                 # Remove expired item
                 self._remove_key(full_key)
                 self.analytics.eviction_count += 1
-
+        
         # Record miss in analytics
         self.analytics.miss_count += 1
-
+        
         # Add to warm-up candidates
         self._add_warm_up_candidate(namespace, key, user_id, conversation_id)
-
+        
         return None
     
     async def set(self, namespace, key, value, ttl=None, user_id=None, conversation_id=None, priority=0):
         """Set an item in the cache with async support, priority, and size tracking."""
         full_key = self._create_key(namespace, key, user_id, conversation_id)
-        current_time = await get_game_timestamp(user_id or 0, conversation_id or 0)
+        uid = user_id or 0
+        cid = conversation_id or 0
+        current_time = await get_game_timestamp(uid, cid)
         expiry = current_time + (ttl or self.default_ttl)
 
         # Estimate size in bytes (rough approximation)
@@ -126,7 +143,7 @@ class LoreCache:
         async with self._lock:
             # Manage cache size - use priority-aware eviction strategy
             if len(self.cache) >= self.max_size:
-                await self._evict_items(size_bytes, user_id, conversation_id)
+                await self._evict_items(size_bytes)
 
             # Create cache item with metadata
             cache_item = CacheItem(
@@ -134,8 +151,10 @@ class LoreCache:
                 expiry=expiry,
                 size_bytes=size_bytes,
                 priority=priority,
-                creation_time=current_time
+                user_id=uid,
+                conversation_id=cid,
             )
+            await cache_item.initialize_timestamps()
 
             self.cache[full_key] = cache_item
 
@@ -192,41 +211,52 @@ class LoreCache:
             del self.cache[full_key]
             self.analytics.keys_count = len(self.cache)
     
-    async def _evict_items(self, required_space=0, user_id=None, conversation_id=None):
+    async def _evict_items(self, required_space=0):
         """
         Evict items based on priority, expiry, and access patterns.
         This is a more sophisticated eviction strategy than basic LRU.
         """
         # First, remove any expired items
-        current_time = await get_game_timestamp(user_id or 0, conversation_id or 0)
-        expired_keys = [k for k, v in self.cache.items() if v.expiry <= current_time]
+        current_times: Dict[str, float] = {}
+        expired_keys = []
+        for key, item in self.cache.items():
+            current = await get_game_timestamp(item.user_id, item.conversation_id)
+            current_times[key] = current
+            if item.expiry <= current:
+                expired_keys.append(key)
+        
         for key in expired_keys:
             self.analytics.size_bytes -= self.cache[key].size_bytes
             self._remove_key(key)
             self.analytics.eviction_count += 1
-        
+
         # If we still need to evict, use a smart strategy
         if len(self.cache) >= self.max_size or required_space > 0:
             # Calculate scores for each item (lower is more evictable)
             scores = []
             for key, item in self.cache.items():
+                current_time = current_times.get(key)
+                if current_time is None:
+                    current_time = await get_game_timestamp(item.user_id, item.conversation_id)
+                    current_times[key] = current_time
+                
                 # Score formula: priority * frequency * recency
                 frequency = item.get_access_frequency(current_time)
                 recency = (current_time - item.last_access_time) / 3600  # Hours since last access
                 recency_factor = 1 / (1 + recency)  # Higher for more recent access
-                
+
                 score = item.priority * (1 + frequency) * recency_factor
                 scores.append((key, score, item.size_bytes))
-            
+
             # Sort by score (ascending, so we evict lowest scores first)
             scores.sort(key=lambda x: x[1])
-            
+
             # Evict until we have enough space
             space_cleared = 0
             for key, score, size in scores:
                 if len(self.cache) < self.max_size and space_cleared >= required_space:
                     break
-                
+
                 self.analytics.size_bytes -= size
                 self._remove_key(key)
                 self.analytics.eviction_count += 1
@@ -341,15 +371,15 @@ class LoreCache:
                     if re.search(pattern, key_part):
                         item.priority = new_priority
     
-    async def _adjust_item_ttls(self, pattern, namespace, new_ttl, user_id=0, conversation_id=0):
+    async def _adjust_item_ttls(self, pattern, namespace, new_ttl):
         """Adjust TTLs for cache items matching a pattern."""
-        current_time = await get_game_timestamp(user_id, conversation_id)
         async with self._lock:
             namespace_prefix = f"{namespace}:"
             for key, item in self.cache.items():
                 if key.startswith(namespace_prefix):
                     key_part = key[len(namespace_prefix):]
                     if re.search(pattern, key_part):
+                        current_time = await get_game_timestamp(item.user_id, item.conversation_id)
                         item.expiry = current_time + new_ttl
     
     async def _schedule_pre_warm(self, namespace, pattern, factory_func_name):
