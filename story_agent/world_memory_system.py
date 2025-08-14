@@ -9,12 +9,12 @@ import logging
 import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
-from logic.game_time_helper import get_game_iso_string, get_current_time
 from dataclasses import dataclass, field
 from collections import defaultdict
 
 from db.connection import get_db_connection_context
 from context.memory_manager import get_memory_manager
+from logic.time_cycle import get_game_iso_string, get_current_time
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +55,21 @@ class RelationshipMemory:
     typical_dynamics: List[str] = field(default_factory=list)
     evolution_milestones: List[Dict[str, Any]] = field(default_factory=list)
     
-    async def add_milestone(self, user_id: int, conversation_id: int, description: str, significance: float = 0.5):
+    # FIXED: Single async method with proper parameters
+    async def add_milestone(
+        self,
+        user_id: int,
+        conversation_id: int,
+        description: str,
+        significance: float = 0.5
+    ):
+        """Add a milestone to this relationship's evolution"""
         timestamp = await get_game_iso_string(user_id, conversation_id)
         self.evolution_milestones.append({
             "description": description,
-            "timestamp": timestamp,
+            "timestamp": timestamp,  # FIXED: Single timestamp key
             "game_time": await get_current_time(user_id, conversation_id),
-            "significance": significance
+            "significance": significance,
         })
 
 class WorldMemorySystem:
@@ -205,8 +213,11 @@ class WorldMemorySystem:
             if len(relationship.intimate_moments) > 20:
                 relationship.intimate_moments.pop(0)
         
+        # FIXED: Proper await call with all required parameters
         if is_milestone:
-            await relationship.add_milestone(self.user_id, self.conversation_id, description)
+            await relationship.add_milestone(
+                self.user_id, self.conversation_id, description
+            )
     
     async def detect_patterns(self) -> List[str]:
         """Detect patterns in world memories"""
