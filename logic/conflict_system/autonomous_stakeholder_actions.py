@@ -1,24 +1,34 @@
 # logic/conflict_system/autonomous_stakeholder_actions.py
 """
 Autonomous Stakeholder Actions System with LLM-generated decisions.
-Manages NPC decision-making, reactions, and autonomous actions in conflicts.
+Refactored to work as a subsystem under the Conflict Synthesizer orchestrator.
 """
 
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Set
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
+import weakref
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
 
+# Import orchestrator interfaces
+from logic.conflict_system.conflict_synthesizer import (
+    ConflictSubsystem,
+    SubsystemType,
+    EventType,
+    SystemEvent,
+    SubsystemResponse
+)
+
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# STAKEHOLDER STRUCTURES
+# STAKEHOLDER STRUCTURES (Preserved)
 # ===============================================================================
 
 class StakeholderRole(Enum):
@@ -45,12 +55,12 @@ class ActionType(Enum):
 
 class DecisionStyle(Enum):
     """How stakeholders make decisions"""
-    EMOTIONAL = "emotional"  # Driven by feelings
-    RATIONAL = "rational"  # Logic-based
-    INSTINCTIVE = "instinctive"  # Gut reactions
-    CALCULATING = "calculating"  # Long-term planning
-    REACTIVE = "reactive"  # Response to immediate stimuli
-    PRINCIPLED = "principled"  # Based on values
+    EMOTIONAL = "emotional"
+    RATIONAL = "rational"
+    INSTINCTIVE = "instinctive"
+    CALCULATING = "calculating"
+    REACTIVE = "reactive"
+    PRINCIPLED = "principled"
 
 @dataclass
 class Stakeholder:
@@ -63,9 +73,9 @@ class Stakeholder:
     decision_style: DecisionStyle
     goals: List[str]
     resources: Dict[str, float]
-    relationships: Dict[int, float]  # Other stakeholder_id -> relationship value
-    stress_level: float  # 0-1, affects decision quality
-    commitment_level: float  # 0-1, how invested in conflict
+    relationships: Dict[int, float]
+    stress_level: float
+    commitment_level: float
 
 @dataclass
 class StakeholderAction:
@@ -74,7 +84,7 @@ class StakeholderAction:
     stakeholder_id: int
     action_type: ActionType
     description: str
-    target: Optional[int]  # Target stakeholder_id if applicable
+    target: Optional[int]
     resources_used: Dict[str, float]
     success_probability: float
     consequences: Dict[str, Any]
@@ -86,7 +96,7 @@ class StakeholderReaction:
     reaction_id: int
     stakeholder_id: int
     triggering_action_id: int
-    reaction_type: str  # "counter", "support", "ignore", "escalate", "de-escalate"
+    reaction_type: str
     description: str
     emotional_response: str
     relationship_impact: Dict[int, float]
@@ -101,145 +111,434 @@ class StakeholderStrategy:
     tactics: List[str]
     success_conditions: List[str]
     abandon_conditions: List[str]
-    time_horizon: str  # "immediate", "short-term", "long-term"
+    time_horizon: str
 
 # ===============================================================================
-# AUTONOMOUS STAKEHOLDER MANAGER WITH LLM
+# REFACTORED STAKEHOLDER AUTONOMY SYSTEM
 # ===============================================================================
 
-class StakeholderAutonomySystem:
+class StakeholderAutonomySystem(ConflictSubsystem):
     """
-    Manages autonomous NPC actions using LLM for intelligent decision-making.
-    Creates realistic, personality-driven stakeholder behaviors.
+    Manages autonomous NPC actions as a subsystem under the orchestrator.
+    Now implements ConflictSubsystem interface for proper integration.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.manager = AutonomousStakeholderManager(user_id, conversation_id)
+        self._synthesizer = None  # Will be set by orchestrator
+        
+        # Stakeholder state
+        self._active_stakeholders: Dict[int, Stakeholder] = {}
+        self._pending_actions: List[StakeholderAction] = []
+        self._strategy_cache: Dict[int, StakeholderStrategy] = {}
+        
+        # LLM agents (preserved)
         self._decision_maker = None
         self._reaction_generator = None
         self._strategy_planner = None
         self._personality_analyzer = None
     
-    @property
-    def decision_maker(self) -> Agent:
-        """Agent for making stakeholder decisions"""
-        if self._decision_maker is None:
-            self._decision_maker = Agent(
-                name="Stakeholder Decision Maker",
-                instructions="""
-                Make decisions for NPC stakeholders in conflicts.
-                
-                Consider:
-                - Personality traits and values
-                - Current emotional state and stress
-                - Available resources and constraints
-                - Relationships and alliances
-                - Long-term goals vs immediate needs
-                - Risk tolerance and decision style
-                
-                Generate decisions that are:
-                - True to character personality
-                - Contextually appropriate
-                - Strategically reasonable
-                - Dramatically interesting
-                - Varied based on individual traits
-                
-                Think like each unique character would think.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._decision_maker
+    # ========== ConflictSubsystem Interface Implementation ==========
     
     @property
-    def reaction_generator(self) -> Agent:
-        """Agent for generating stakeholder reactions"""
-        if self._reaction_generator is None:
-            self._reaction_generator = Agent(
-                name="Stakeholder Reaction Generator",
-                instructions="""
-                Generate realistic reactions to events and actions.
-                
-                Consider:
-                - Personality and emotional state
-                - Relationship with action initiator
-                - Personal stakes in the conflict
-                - Past experiences and patterns
-                - Cultural and social norms
-                
-                Create reactions that:
-                - Feel authentic to the character
-                - Show emotional depth
-                - Advance the conflict naturally
-                - Vary based on context
-                - Include both immediate and considered responses
-                
-                Balance emotional authenticity with strategic thinking.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._reaction_generator
+    def subsystem_type(self) -> SubsystemType:
+        """Identify as stakeholder subsystem"""
+        return SubsystemType.STAKEHOLDER
     
     @property
-    def strategy_planner(self) -> Agent:
-        """Agent for planning stakeholder strategies"""
-        if self._strategy_planner is None:
-            self._strategy_planner = Agent(
-                name="Stakeholder Strategy Planner",
-                instructions="""
-                Develop long-term strategies for stakeholders.
-                
-                Consider:
-                - Character's intelligence and foresight
-                - Available resources and allies
-                - Conflict dynamics and power balance
-                - Personal values and red lines
-                - Risk vs reward calculations
-                
-                Create strategies that:
-                - Match character capabilities
-                - Have clear objectives
-                - Include contingency plans
-                - Adapt to changing situations
-                - Feel realistic, not omniscient
-                
-                Think like a character planning within their limitations.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._strategy_planner
+    def capabilities(self) -> Set[str]:
+        """Capabilities this subsystem provides"""
+        return {
+            'create_stakeholder',
+            'autonomous_decision',
+            'generate_reaction',
+            'develop_strategy',
+            'update_stress',
+            'adapt_role',
+            'process_breaking_point',
+            'manage_relationships'
+        }
     
     @property
-    def personality_analyzer(self) -> Agent:
-        """Agent for analyzing personality influence on actions"""
-        if self._personality_analyzer is None:
-            self._personality_analyzer = Agent(
-                name="Personality Analyzer",
-                instructions="""
-                Analyze how personality traits affect decisions.
-                
-                Consider:
-                - Core personality traits
-                - Stress responses and coping mechanisms
-                - Decision-making patterns
-                - Emotional regulation abilities
-                - Social tendencies
-                
-                Provide insights on:
-                - Likely behavioral patterns
-                - Stress breaking points
-                - Relationship dynamics
-                - Decision biases
-                - Character growth potential
-                
-                Create psychologically consistent characters.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._personality_analyzer
+    def dependencies(self) -> Set[SubsystemType]:
+        """Other subsystems we depend on"""
+        return {
+            SubsystemType.TENSION,  # Stress affects tension
+            SubsystemType.SOCIAL,  # For relationship dynamics
+            SubsystemType.FLOW,  # For timing decisions
+        }
     
-    # ========== Stakeholder Creation ==========
+    @property
+    def event_subscriptions(self) -> Set[EventType]:
+        """Events we want to receive from orchestrator"""
+        return {
+            EventType.CONFLICT_CREATED,
+            EventType.CONFLICT_UPDATED,
+            EventType.PHASE_TRANSITION,
+            EventType.PLAYER_CHOICE,
+            EventType.TENSION_CHANGED,
+            EventType.STATE_SYNC,
+            EventType.HEALTH_CHECK
+        }
+    
+    async def initialize(self, synthesizer) -> bool:
+        """Initialize with synthesizer reference"""
+        self._synthesizer = weakref.ref(synthesizer)
+        
+        # Load active stakeholders from DB
+        await self._load_active_stakeholders()
+        
+        return True
+    
+    async def handle_event(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle events from the orchestrator"""
+        
+        try:
+            # Route to appropriate handler
+            handlers = {
+                EventType.CONFLICT_CREATED: self._on_conflict_created,
+                EventType.CONFLICT_UPDATED: self._on_conflict_updated,
+                EventType.PHASE_TRANSITION: self._on_phase_transition,
+                EventType.PLAYER_CHOICE: self._on_player_choice,
+                EventType.TENSION_CHANGED: self._on_tension_changed,
+                EventType.STATE_SYNC: self._on_state_sync,
+                EventType.HEALTH_CHECK: self._on_health_check
+            }
+            
+            handler = handlers.get(event.event_type)
+            if handler:
+                return await handler(event)
+            
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'status': 'no_action_taken'}
+            )
+            
+        except Exception as e:
+            logger.error(f"Stakeholder system error: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Return health status"""
+        
+        # Check for stressed stakeholders
+        stressed = [s for s in self._active_stakeholders.values() if s.stress_level > 0.8]
+        
+        return {
+            'healthy': len(stressed) < len(self._active_stakeholders) / 2,
+            'active_stakeholders': len(self._active_stakeholders),
+            'stressed_stakeholders': len(stressed),
+            'pending_actions': len(self._pending_actions),
+            'status': 'operational'
+        }
+    
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get stakeholder data for a specific conflict"""
+        
+        # Get stakeholders for this conflict
+        conflict_stakeholders = []
+        for stakeholder in self._active_stakeholders.values():
+            # Check if stakeholder is in this conflict
+            # (Would check database for conflict association)
+            conflict_stakeholders.append({
+                'id': stakeholder.stakeholder_id,
+                'name': stakeholder.name,
+                'role': stakeholder.current_role.value,
+                'stress': stakeholder.stress_level,
+                'commitment': stakeholder.commitment_level
+            })
+        
+        return {
+            'stakeholders': conflict_stakeholders,
+            'total_stakeholders': len(conflict_stakeholders)
+        }
+    
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current subsystem state"""
+        
+        return {
+            'active_stakeholders': len(self._active_stakeholders),
+            'stressed_count': len([s for s in self._active_stakeholders.values() if s.stress_level > 0.7]),
+            'pending_actions': len(self._pending_actions),
+            'active_strategies': len(self._strategy_cache)
+        }
+    
+    async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
+        """Check if stakeholder system should process this scene"""
+        
+        # Relevant if NPCs are present
+        npcs = scene_context.get('npcs', [])
+        
+        # Check if any NPCs are stakeholders
+        for npc_id in npcs:
+            if any(s.npc_id == npc_id for s in self._active_stakeholders.values()):
+                return True
+        
+        return False
+    
+    # ========== Event Handlers ==========
+    
+    async def _on_conflict_created(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle new conflict creation - create stakeholders"""
+        
+        conflict_id = event.payload.get('conflict_id')
+        conflict_type = event.payload.get('conflict_type')
+        context = event.payload.get('context', {})
+        
+        # Get NPCs involved
+        npcs = context.get('npcs', [])
+        
+        # Create stakeholders for NPCs
+        created_stakeholders = []
+        side_effects = []
+        
+        for npc_id in npcs[:5]:  # Limit stakeholders
+            stakeholder = await self.create_stakeholder(
+                npc_id,
+                conflict_id,
+                self._determine_initial_role(conflict_type)
+            )
+            
+            if stakeholder:
+                self._active_stakeholders[stakeholder.stakeholder_id] = stakeholder
+                created_stakeholders.append(stakeholder)
+                
+                # Notify about stakeholder creation
+                side_effects.append(SystemEvent(
+                    event_id=f"stakeholder_created_{stakeholder.stakeholder_id}",
+                    event_type=EventType.STAKEHOLDER_ACTION,
+                    source_subsystem=self.subsystem_type,
+                    payload={
+                        'stakeholder_id': stakeholder.stakeholder_id,
+                        'action_type': 'joined_conflict',
+                        'role': stakeholder.current_role.value
+                    }
+                ))
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'stakeholders_created': len(created_stakeholders),
+                'stakeholder_ids': [s.stakeholder_id for s in created_stakeholders]
+            },
+            side_effects=side_effects
+        )
+    
+    async def _on_conflict_updated(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle conflict updates - stakeholders may take actions"""
+        
+        conflict_id = event.payload.get('conflict_id')
+        update_type = event.payload.get('update_type')
+        
+        # Determine which stakeholders should act
+        acting_stakeholders = self._select_acting_stakeholders(update_type)
+        
+        # Generate actions
+        actions = []
+        side_effects = []
+        
+        for stakeholder in acting_stakeholders:
+            action = await self.make_autonomous_decision(
+                stakeholder,
+                event.payload
+            )
+            
+            if action:
+                actions.append(action)
+                self._pending_actions.append(action)
+                
+                # Notify about stakeholder action
+                side_effects.append(SystemEvent(
+                    event_id=f"action_{action.action_id}",
+                    event_type=EventType.STAKEHOLDER_ACTION,
+                    source_subsystem=self.subsystem_type,
+                    payload={
+                        'stakeholder_id': stakeholder.stakeholder_id,
+                        'action_type': action.action_type.value,
+                        'target_id': action.target,
+                        'intensity': action.success_probability
+                    }
+                ))
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'actions_taken': len(actions),
+                'action_types': [a.action_type.value for a in actions]
+            },
+            side_effects=side_effects
+        )
+    
+    async def _on_phase_transition(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle phase transitions - stakeholders adapt"""
+        
+        from_phase = event.payload.get('from_phase')
+        to_phase = event.payload.get('to_phase')
+        
+        # Adapt stakeholder roles based on phase
+        adaptations = []
+        
+        for stakeholder in self._active_stakeholders.values():
+            if self._should_adapt_role(stakeholder, to_phase):
+                adaptation = await self.adapt_stakeholder_role(
+                    stakeholder,
+                    {'phase': to_phase}
+                )
+                if adaptation.get('role_changed'):
+                    adaptations.append(adaptation)
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'adaptations': len(adaptations),
+                'phase_response': 'stakeholders_adapted'
+            }
+        )
+    
+    async def _on_player_choice(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle player choices - stakeholders react"""
+        
+        choice_type = event.payload.get('choice_type')
+        target_npc = event.payload.get('target_npc')
+        
+        # Generate reactions from relevant stakeholders
+        reactions = []
+        side_effects = []
+        
+        for stakeholder in self._active_stakeholders.values():
+            if self._should_react_to_choice(stakeholder, choice_type, target_npc):
+                # Create mock action for reaction
+                triggering_action = StakeholderAction(
+                    action_id=0,
+                    stakeholder_id=0,  # Player
+                    action_type=ActionType.STRATEGIC,
+                    description=f"Player choice: {choice_type}",
+                    target=target_npc,
+                    resources_used={},
+                    success_probability=1.0,
+                    consequences={},
+                    timestamp=datetime.now()
+                )
+                
+                reaction = await self.generate_reaction(
+                    stakeholder,
+                    triggering_action,
+                    event.payload
+                )
+                
+                reactions.append(reaction)
+                
+                # Update stress based on reaction
+                if reaction.emotional_response in ['angry', 'fearful', 'frustrated']:
+                    stakeholder.stress_level = min(1.0, stakeholder.stress_level + 0.1)
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'reactions_generated': len(reactions),
+                'emotional_responses': [r.emotional_response for r in reactions]
+            },
+            side_effects=side_effects
+        )
+    
+    async def _on_tension_changed(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle tension changes - affects stakeholder stress"""
+        
+        tension_type = event.payload.get('tension_type')
+        level = event.payload.get('level', 0)
+        
+        # High tension increases stakeholder stress
+        if level > 0.7:
+            for stakeholder in self._active_stakeholders.values():
+                stakeholder.stress_level = min(1.0, stakeholder.stress_level + 0.05)
+                
+                # Check for breaking points
+                if stakeholder.stress_level >= 0.9:
+                    await self._handle_breaking_point(
+                        stakeholder,
+                        "Overwhelmed by tension"
+                    )
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'stress_updated': True}
+        )
+    
+    async def _on_state_sync(self, event: SystemEvent) -> SubsystemResponse:
+        """Sync state with scene processing"""
+        
+        scene_context = event.payload
+        npcs_present = scene_context.get('npcs', [])
+        
+        # Determine NPC behaviors based on stakeholder state
+        npc_behaviors = {}
+        
+        for npc_id in npcs_present:
+            stakeholder = self._find_stakeholder_by_npc(npc_id)
+            if stakeholder:
+                behavior = self._determine_scene_behavior(stakeholder)
+                npc_behaviors[npc_id] = behavior
+        
+        # Check for autonomous actions
+        autonomous_actions = []
+        for stakeholder in self._active_stakeholders.values():
+            if stakeholder.npc_id in npcs_present:
+                if self._should_take_autonomous_action(stakeholder, scene_context):
+                    action = await self.make_autonomous_decision(
+                        stakeholder,
+                        scene_context
+                    )
+                    if action:
+                        autonomous_actions.append(action)
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'npc_behaviors': npc_behaviors,
+                'autonomous_actions': [
+                    {
+                        'stakeholder': a.stakeholder_id,
+                        'action': a.description,
+                        'type': a.action_type.value
+                    }
+                    for a in autonomous_actions
+                ]
+            }
+        )
+    
+    async def _on_health_check(self, event: SystemEvent) -> SubsystemResponse:
+        """Respond to health check"""
+        
+        health = await self.health_check()
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data=health
+        )
+    
+    # ========== Core Stakeholder Management (Modified for Orchestrator) ==========
     
     async def create_stakeholder(
         self,
@@ -261,14 +560,12 @@ class StakeholderAutonomySystem:
         Suggested Role: {initial_role or 'determine based on personality'}
         
         Generate:
-        1. Stakeholder role (instigator/defender/mediator/opportunist/victim/bystander/escalator/peacemaker)
-        2. Decision style (emotional/rational/instinctive/calculating/reactive/principled)
-        3. 3-4 specific goals in this conflict
+        1. Stakeholder role
+        2. Decision style
+        3. 3-4 specific goals
         4. Initial stress level (0-1)
         5. Commitment level (0-1)
-        6. Key resources they bring
         
-        Match everything to personality.
         Format as JSON.
         """
         
@@ -291,7 +588,7 @@ class StakeholderAutonomySystem:
                 result.get('stress_level', 0.3),
                 result.get('commitment_level', 0.5))
             
-            return Stakeholder(
+            stakeholder = Stakeholder(
                 stakeholder_id=stakeholder_id,
                 npc_id=npc_id,
                 name=npc_details.get('name', 'Unknown'),
@@ -305,11 +602,24 @@ class StakeholderAutonomySystem:
                 commitment_level=result.get('commitment_level', 0.5)
             )
             
+            # Notify orchestrator of new stakeholder
+            if self._synthesizer and self._synthesizer():
+                await self._synthesizer().emit_event(SystemEvent(
+                    event_id=f"stakeholder_{stakeholder_id}",
+                    event_type=EventType.STAKEHOLDER_ACTION,
+                    source_subsystem=self.subsystem_type,
+                    payload={
+                        'action_type': 'stakeholder_created',
+                        'stakeholder_id': stakeholder_id,
+                        'role': stakeholder.current_role.value
+                    }
+                ))
+            
+            return stakeholder
+            
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Failed to create stakeholder: {e}")
             return self._create_fallback_stakeholder(npc_id, npc_details)
-    
-    # ========== Decision Making ==========
     
     async def make_autonomous_decision(
         self,
@@ -326,21 +636,16 @@ class StakeholderAutonomySystem:
         Personality: {stakeholder.personality_traits}
         Role: {stakeholder.current_role.value}
         Decision Style: {stakeholder.decision_style.value}
-        Goals: {json.dumps(stakeholder.goals)}
         Stress Level: {stakeholder.stress_level}
         
         Conflict State: {json.dumps(conflict_state, indent=2)}
-        Available Options: {json.dumps(available_options) if available_options else 'Generate appropriate action'}
         
         Decide:
-        1. Action type (aggressive/defensive/diplomatic/manipulative/supportive/evasive/observant/strategic)
+        1. Action type
         2. Specific action description
         3. Target (if applicable)
-        4. Resources to commit
-        5. Success probability (0-1, be realistic)
-        6. Rationale (why this action, in character)
+        4. Success probability (0-1)
         
-        Make decision true to personality and stress level.
         Format as JSON.
         """
         
@@ -379,13 +684,6 @@ class StakeholderAutonomySystem:
             logger.warning(f"Failed to make decision: {e}")
             return self._create_fallback_action(stakeholder)
     
-    # ========== Reaction System ==========
-
-    async def process_event(self, conflict_id: int, event: Dict[str, Any]):
-        """Process events for stakeholder reactions"""
-        # Delegate to existing manager methods
-        return await self.manager.process_stakeholder_event(conflict_id, event)
-    
     async def generate_reaction(
         self,
         stakeholder: Stakeholder,
@@ -400,21 +698,15 @@ class StakeholderAutonomySystem:
         Reacting Character: {stakeholder.name}
         Personality: {stakeholder.personality_traits}
         Current Stress: {stakeholder.stress_level}
-        Relationship with Actor: {stakeholder.relationships.get(triggering_action.stakeholder_id, 0.5)}
         
         Triggering Action: {triggering_action.description}
         Action Type: {triggering_action.action_type.value}
-        Context: {json.dumps(action_context, indent=2)}
         
         Generate:
         1. Reaction type (counter/support/ignore/escalate/de-escalate)
         2. Specific reaction description
-        3. Emotional response (how they feel)
-        4. Relationship impact (-1 to 1)
-        5. Stress impact on self (-1 to 1)
-        6. Follow-up intentions
+        3. Emotional response
         
-        Make reaction authentic to character.
         Format as JSON.
         """
         
@@ -438,7 +730,7 @@ class StakeholderAutonomySystem:
                 result.get('emotional_response', 'neutral'))
             
             # Update stakeholder stress
-            stakeholder.stress_level = max(0, min(1, 
+            stakeholder.stress_level = max(0, min(1,
                 stakeholder.stress_level + result.get('stress_impact', 0)))
             
             return StakeholderReaction(
@@ -457,143 +749,6 @@ class StakeholderAutonomySystem:
             logger.warning(f"Failed to generate reaction: {e}")
             return self._create_fallback_reaction(stakeholder, triggering_action)
     
-    # ========== Strategy Planning ==========
-    
-    async def develop_strategy(
-        self,
-        stakeholder: Stakeholder,
-        conflict_analysis: Dict[str, Any]
-    ) -> StakeholderStrategy:
-        """Develop a long-term strategy for a stakeholder"""
-        
-        prompt = f"""
-        Develop strategy for stakeholder:
-        
-        Character: {stakeholder.name}
-        Personality: {stakeholder.personality_traits}
-        Decision Style: {stakeholder.decision_style.value}
-        Goals: {json.dumps(stakeholder.goals)}
-        Resources: {json.dumps(stakeholder.resources)}
-        
-        Conflict Analysis: {json.dumps(conflict_analysis, indent=2)}
-        
-        Create strategy:
-        1. Strategy name (brief, descriptive)
-        2. 3-4 key objectives
-        3. 4-5 specific tactics
-        4. Success conditions (when to consider it successful)
-        5. Abandon conditions (when to change strategy)
-        6. Time horizon (immediate/short-term/long-term)
-        
-        Match strategy to character's capabilities and style.
-        Format as JSON.
-        """
-        
-        response = await self.strategy_planner.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            # Store strategy
-            async with get_db_connection_context() as conn:
-                strategy_id = await conn.fetchval("""
-                    INSERT INTO stakeholder_strategies
-                    (user_id, conversation_id, stakeholder_id, strategy_name,
-                     objectives, tactics, time_horizon)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    RETURNING strategy_id
-                """, self.user_id, self.conversation_id,
-                stakeholder.stakeholder_id,
-                result.get('name', 'Default Strategy'),
-                json.dumps(result.get('objectives', [])),
-                json.dumps(result.get('tactics', [])),
-                result.get('time_horizon', 'short-term'))
-            
-            return StakeholderStrategy(
-                strategy_id=strategy_id,
-                stakeholder_id=stakeholder.stakeholder_id,
-                strategy_name=result.get('name', 'Default Strategy'),
-                objectives=result.get('objectives', []),
-                tactics=result.get('tactics', []),
-                success_conditions=result.get('success_conditions', []),
-                abandon_conditions=result.get('abandon_conditions', []),
-                time_horizon=result.get('time_horizon', 'short-term')
-            )
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to develop strategy: {e}")
-            return self._create_fallback_strategy(stakeholder)
-
-    async def process_event(self, conflict_id: int, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Process conflict events for this subsystem"""
-        event_type = event.get('type', 'unknown')
-        
-        # Route to appropriate handler
-        if event_type == 'your_specific_type':
-            return await self.handle_specific_event(conflict_id, event)
-        
-        return {'processed': True, 'subsystem': 'module_name'}
-        
-    # ========== Stress and Adaptation ==========
-    
-    async def update_stakeholder_stress(
-        self,
-        stakeholder: Stakeholder,
-        stressor: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Update stakeholder stress and potential breaking point"""
-        
-        prompt = f"""
-        Analyze stress impact:
-        
-        Character: {stakeholder.name}
-        Personality: {stakeholder.personality_traits}
-        Current Stress: {stakeholder.stress_level}
-        
-        Stressor: {json.dumps(stressor, indent=2)}
-        
-        Determine:
-        1. Stress change (-1 to 1)
-        2. Coping mechanism used
-        3. Behavioral changes
-        4. Breaking point reached? (yes/no)
-        5. If breaking: What happens?
-        
-        Consider personality's stress resilience.
-        Format as JSON.
-        """
-        
-        response = await self.personality_analyzer.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            # Update stress
-            old_stress = stakeholder.stress_level
-            stakeholder.stress_level = max(0, min(1, 
-                stakeholder.stress_level + result.get('stress_change', 0)))
-            
-            # Handle breaking point
-            breaking_point_action = None
-            if result.get('breaking_point'):
-                breaking_point_action = await self._handle_breaking_point(
-                    stakeholder,
-                    result.get('breaking_action', 'withdraws from conflict')
-                )
-            
-            return {
-                'old_stress': old_stress,
-                'new_stress': stakeholder.stress_level,
-                'coping_mechanism': result.get('coping', 'endures'),
-                'behavioral_changes': result.get('changes', []),
-                'breaking_point': result.get('breaking_point', False),
-                'breaking_action': breaking_point_action
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to update stress: {e}")
-            return {'new_stress': stakeholder.stress_level}
-    
     async def adapt_stakeholder_role(
         self,
         stakeholder: Stakeholder,
@@ -606,7 +761,6 @@ class StakeholderAutonomySystem:
         
         Character: {stakeholder.name}
         Current Role: {stakeholder.current_role.value}
-        Personality: {stakeholder.personality_traits}
         Stress: {stakeholder.stress_level}
         
         Changing Conditions: {json.dumps(changing_conditions, indent=2)}
@@ -615,10 +769,7 @@ class StakeholderAutonomySystem:
         1. Should change role? (yes/no)
         2. If yes, new role
         3. Reason for change
-        4. How the change manifests
-        5. Impact on behavior
         
-        Make changes feel organic to character development.
         Format as JSON.
         """
         
@@ -645,9 +796,7 @@ class StakeholderAutonomySystem:
                     'role_changed': True,
                     'old_role': old_role.value,
                     'new_role': stakeholder.current_role.value,
-                    'reason': result.get('reason', 'Circumstances changed'),
-                    'manifestation': result.get('manifestation', 'Behavior shifts'),
-                    'behavioral_impact': result.get('impact', [])
+                    'reason': result.get('reason', 'Circumstances changed')
                 }
             
             return {'role_changed': False}
@@ -658,6 +807,177 @@ class StakeholderAutonomySystem:
     
     # ========== Helper Methods ==========
     
+    async def _load_active_stakeholders(self):
+        """Load active stakeholders from database"""
+        
+        async with get_db_connection_context() as conn:
+            stakeholders = await conn.fetch("""
+                SELECT s.*, n.name, n.personality_traits
+                FROM stakeholders s
+                JOIN NPCs n ON s.npc_id = n.npc_id
+                WHERE s.user_id = $1 AND s.conversation_id = $2
+                AND EXISTS (
+                    SELECT 1 FROM Conflicts c
+                    WHERE c.conflict_id = s.conflict_id
+                    AND c.is_active = true
+                )
+            """, self.user_id, self.conversation_id)
+        
+        for s in stakeholders:
+            stakeholder = Stakeholder(
+                stakeholder_id=s['stakeholder_id'],
+                npc_id=s['npc_id'],
+                name=s['name'],
+                personality_traits=json.loads(s.get('personality_traits', '[]')),
+                current_role=StakeholderRole[s['role'].upper()],
+                decision_style=DecisionStyle[s['decision_style'].upper()],
+                goals=[],
+                resources={},
+                relationships={},
+                stress_level=s['stress_level'],
+                commitment_level=s['commitment_level']
+            )
+            self._active_stakeholders[stakeholder.stakeholder_id] = stakeholder
+    
+    def _determine_initial_role(self, conflict_type: str) -> str:
+        """Determine initial role based on conflict type"""
+        
+        if 'power' in conflict_type.lower():
+            return random.choice(['instigator', 'defender', 'opportunist'])
+        elif 'social' in conflict_type.lower():
+            return random.choice(['mediator', 'bystander', 'escalator'])
+        else:
+            return 'bystander'
+    
+    def _select_acting_stakeholders(self, update_type: str) -> List[Stakeholder]:
+        """Select which stakeholders should act"""
+        
+        acting = []
+        
+        for stakeholder in self._active_stakeholders.values():
+            # Active roles always act
+            if stakeholder.current_role in [
+                StakeholderRole.INSTIGATOR,
+                StakeholderRole.ESCALATOR,
+                StakeholderRole.MEDIATOR
+            ]:
+                acting.append(stakeholder)
+            # Others act probabilistically
+            elif random.random() < stakeholder.commitment_level:
+                acting.append(stakeholder)
+        
+        return acting[:3]  # Limit to prevent overwhelming
+    
+    def _should_adapt_role(self, stakeholder: Stakeholder, phase: str) -> bool:
+        """Check if stakeholder should adapt role"""
+        
+        # Adapt if stressed
+        if stakeholder.stress_level > 0.8:
+            return True
+        
+        # Adapt based on phase
+        if phase == 'climax' and stakeholder.current_role == StakeholderRole.BYSTANDER:
+            return True
+        
+        if phase == 'resolution' and stakeholder.current_role == StakeholderRole.ESCALATOR:
+            return True
+        
+        return False
+    
+    def _should_react_to_choice(
+        self,
+        stakeholder: Stakeholder,
+        choice_type: str,
+        target_npc: Optional[int]
+    ) -> bool:
+        """Check if stakeholder should react to player choice"""
+        
+        # Always react if targeted
+        if target_npc == stakeholder.npc_id:
+            return True
+        
+        # React based on role and commitment
+        if stakeholder.current_role in [
+            StakeholderRole.MEDIATOR,
+            StakeholderRole.INSTIGATOR
+        ]:
+            return True
+        
+        return random.random() < stakeholder.commitment_level
+    
+    def _find_stakeholder_by_npc(self, npc_id: int) -> Optional[Stakeholder]:
+        """Find stakeholder by NPC ID"""
+        
+        for stakeholder in self._active_stakeholders.values():
+            if stakeholder.npc_id == npc_id:
+                return stakeholder
+        return None
+    
+    def _determine_scene_behavior(self, stakeholder: Stakeholder) -> str:
+        """Determine NPC behavior in scene based on stakeholder state"""
+        
+        if stakeholder.stress_level > 0.8:
+            return "agitated"
+        elif stakeholder.current_role == StakeholderRole.MEDIATOR:
+            return "conciliatory"
+        elif stakeholder.current_role == StakeholderRole.INSTIGATOR:
+            return "provocative"
+        elif stakeholder.current_role == StakeholderRole.BYSTANDER:
+            return "observant"
+        else:
+            return "engaged"
+    
+    def _should_take_autonomous_action(
+        self,
+        stakeholder: Stakeholder,
+        scene_context: Dict[str, Any]
+    ) -> bool:
+        """Check if stakeholder should take autonomous action"""
+        
+        # High stress increases action likelihood
+        if stakeholder.stress_level > 0.7:
+            return random.random() < 0.5
+        
+        # Active roles more likely to act
+        if stakeholder.current_role in [
+            StakeholderRole.INSTIGATOR,
+            StakeholderRole.ESCALATOR
+        ]:
+            return random.random() < 0.4
+        
+        return random.random() < 0.2
+    
+    async def _handle_breaking_point(
+        self,
+        stakeholder: Stakeholder,
+        breaking_action: str
+    ) -> Dict[str, Any]:
+        """Handle a stakeholder reaching their breaking point"""
+        
+        # Update stakeholder state
+        stakeholder.commitment_level = 0.0
+        stakeholder.current_role = StakeholderRole.BYSTANDER
+        
+        # Notify orchestrator
+        if self._synthesizer and self._synthesizer():
+            await self._synthesizer().emit_event(SystemEvent(
+                event_id=f"breaking_{stakeholder.stakeholder_id}",
+                event_type=EventType.EDGE_CASE_DETECTED,
+                source_subsystem=self.subsystem_type,
+                payload={
+                    'edge_case': 'stakeholder_breaking_point',
+                    'stakeholder_id': stakeholder.stakeholder_id,
+                    'action': breaking_action
+                },
+                priority=2
+            ))
+        
+        return {
+            'action': breaking_action,
+            'stakeholder_withdraws': True,
+            'stress_relief': 0.5
+        }
+    
     async def _get_npc_details(self, npc_id: int) -> Dict:
         """Get NPC details from database"""
         
@@ -667,36 +987,6 @@ class StakeholderAutonomySystem:
             """, npc_id)
         
         return dict(npc) if npc else {}
-    
-    async def _handle_breaking_point(
-        self,
-        stakeholder: Stakeholder,
-        breaking_action: str
-    ) -> Dict[str, Any]:
-        """Handle a stakeholder reaching their breaking point"""
-        
-        # Create dramatic action
-        action = StakeholderAction(
-            action_id=0,
-            stakeholder_id=stakeholder.stakeholder_id,
-            action_type=ActionType.EMOTIONAL,
-            description=breaking_action,
-            target=None,
-            resources_used={},
-            success_probability=1.0,
-            consequences={'type': 'breaking_point'},
-            timestamp=datetime.now()
-        )
-        
-        # Update stakeholder state
-        stakeholder.commitment_level = 0.0
-        stakeholder.current_role = StakeholderRole.BYSTANDER
-        
-        return {
-            'action': breaking_action,
-            'stakeholder_withdraws': True,
-            'stress_relief': 0.5
-        }
     
     def _create_fallback_stakeholder(
         self,
@@ -751,22 +1041,83 @@ class StakeholderAutonomySystem:
             relationship_impact={}
         )
     
-    def _create_fallback_strategy(self, stakeholder: Stakeholder) -> StakeholderStrategy:
-        """Create fallback strategy if LLM fails"""
+    # ========== Process Event (Required by parent class) ==========
+    
+    async def process_event(self, conflict_id: int, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Legacy method - now routes through handle_event"""
         
-        return StakeholderStrategy(
-            strategy_id=0,
-            stakeholder_id=stakeholder.stakeholder_id,
-            strategy_name="Wait and See",
-            objectives=["Survive", "Minimize losses"],
-            tactics=["Observe", "React carefully"],
-            success_conditions=["Conflict ends"],
-            abandon_conditions=["Direct threat"],
-            time_horizon="short-term"
+        # Convert to SystemEvent
+        system_event = SystemEvent(
+            event_id=f"legacy_{conflict_id}",
+            event_type=EventType.CONFLICT_UPDATED,
+            source_subsystem=SubsystemType.STAKEHOLDER,
+            payload={
+                'conflict_id': conflict_id,
+                **event
+            }
         )
+        
+        response = await self.handle_event(system_event)
+        return response.data
+    
+    # ========== LLM Agent Properties (Preserved) ==========
+    
+    @property
+    def decision_maker(self) -> Agent:
+        if self._decision_maker is None:
+            self._decision_maker = Agent(
+                name="Stakeholder Decision Maker",
+                instructions="""
+                Make decisions for NPC stakeholders in conflicts.
+                Consider personality, stress, resources, and goals.
+                Generate decisions that are true to character.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._decision_maker
+    
+    @property
+    def reaction_generator(self) -> Agent:
+        if self._reaction_generator is None:
+            self._reaction_generator = Agent(
+                name="Stakeholder Reaction Generator",
+                instructions="""
+                Generate realistic reactions to events and actions.
+                Consider personality, relationships, and emotional state.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._reaction_generator
+    
+    @property
+    def strategy_planner(self) -> Agent:
+        if self._strategy_planner is None:
+            self._strategy_planner = Agent(
+                name="Stakeholder Strategy Planner",
+                instructions="""
+                Develop long-term strategies for stakeholders.
+                Match strategies to character capabilities and style.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._strategy_planner
+    
+    @property
+    def personality_analyzer(self) -> Agent:
+        if self._personality_analyzer is None:
+            self._personality_analyzer = Agent(
+                name="Personality Analyzer",
+                instructions="""
+                Analyze how personality traits affect decisions.
+                Create psychologically consistent characters.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._personality_analyzer
+
 
 # ===============================================================================
-# PUBLIC API FUNCTIONS
+# PUBLIC API - Now Routes Through Orchestrator
 # ===============================================================================
 
 @function_tool
@@ -776,25 +1127,34 @@ async def create_conflict_stakeholder(
     conflict_id: int,
     suggested_role: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Create a stakeholder for a conflict"""
+    """Create a stakeholder for a conflict - routes through orchestrator"""
+    
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer
     
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = AutonomousStakeholderManager(user_id, conversation_id)
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    stakeholder = await manager.create_stakeholder(npc_id, conflict_id, suggested_role)
+    # Emit stakeholder creation event
+    event = SystemEvent(
+        event_id=f"create_stakeholder_{npc_id}",
+        event_type=EventType.STAKEHOLDER_ACTION,
+        source_subsystem=SubsystemType.STAKEHOLDER,
+        payload={
+            'action_type': 'create_stakeholder',
+            'npc_id': npc_id,
+            'conflict_id': conflict_id,
+            'suggested_role': suggested_role
+        },
+        requires_response=True
+    )
     
-    return {
-        'stakeholder_id': stakeholder.stakeholder_id,
-        'npc_id': stakeholder.npc_id,
-        'name': stakeholder.name,
-        'role': stakeholder.current_role.value,
-        'decision_style': stakeholder.decision_style.value,
-        'goals': stakeholder.goals,
-        'stress_level': stakeholder.stress_level,
-        'commitment_level': stakeholder.commitment_level
-    }
+    responses = await synthesizer.emit_event(event)
+    
+    if responses:
+        return responses[0].data
+    return {'error': 'Failed to create stakeholder'}
 
 @function_tool
 async def stakeholder_take_action(
@@ -803,217 +1163,30 @@ async def stakeholder_take_action(
     conflict_state: Dict[str, Any],
     options: Optional[List[str]] = None
 ) -> Dict[str, Any]:
-    """Have a stakeholder take an autonomous action"""
+    """Have a stakeholder take an autonomous action - routes through orchestrator"""
+    
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer
     
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = AutonomousStakeholderManager(user_id, conversation_id)
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Get stakeholder details
-    async with get_db_connection_context() as conn:
-        stakeholder_data = await conn.fetchrow("""
-            SELECT s.*, n.name, n.personality_traits
-            FROM stakeholders s
-            JOIN NPCs n ON s.npc_id = n.npc_id
-            WHERE s.stakeholder_id = $1
-        """, stakeholder_id)
-    
-    if not stakeholder_data:
-        return {'error': 'Stakeholder not found'}
-    
-    # Create stakeholder object
-    stakeholder = Stakeholder(
-        stakeholder_id=stakeholder_id,
-        npc_id=stakeholder_data['npc_id'],
-        name=stakeholder_data['name'],
-        personality_traits=json.loads(stakeholder_data.get('personality_traits', '[]')),
-        current_role=StakeholderRole[stakeholder_data['role'].upper()],
-        decision_style=DecisionStyle[stakeholder_data['decision_style'].upper()],
-        goals=[],
-        resources={},
-        relationships={},
-        stress_level=stakeholder_data['stress_level'],
-        commitment_level=stakeholder_data['commitment_level']
+    # Emit action event
+    event = SystemEvent(
+        event_id=f"stakeholder_action_{stakeholder_id}",
+        event_type=EventType.STAKEHOLDER_ACTION,
+        source_subsystem=SubsystemType.STAKEHOLDER,
+        payload={
+            'stakeholder_id': stakeholder_id,
+            'conflict_state': conflict_state,
+            'options': options
+        },
+        requires_response=True
     )
     
-    action = await manager.make_autonomous_decision(stakeholder, conflict_state, options)
+    responses = await synthesizer.emit_event(event)
     
-    return {
-        'action_id': action.action_id,
-        'action_type': action.action_type.value,
-        'description': action.description,
-        'target': action.target,
-        'success_probability': action.success_probability,
-        'resources_used': action.resources_used
-    }
-
-@function_tool
-async def generate_stakeholder_reaction(
-    ctx: RunContextWrapper,
-    stakeholder_id: int,
-    triggering_action_id: int,
-    action_context: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """Generate a stakeholder's reaction to an action"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = AutonomousStakeholderManager(user_id, conversation_id)
-    
-    # Get stakeholder and action details
-    async with get_db_connection_context() as conn:
-        stakeholder_data = await conn.fetchrow("""
-            SELECT s.*, n.name, n.personality_traits
-            FROM stakeholders s
-            JOIN NPCs n ON s.npc_id = n.npc_id
-            WHERE s.stakeholder_id = $1
-        """, stakeholder_id)
-        
-        action_data = await conn.fetchrow("""
-            SELECT * FROM stakeholder_actions
-            WHERE action_id = $1
-        """, triggering_action_id)
-    
-    if not stakeholder_data or not action_data:
-        return {'error': 'Data not found'}
-    
-    # Create objects
-    stakeholder = Stakeholder(
-        stakeholder_id=stakeholder_id,
-        npc_id=stakeholder_data['npc_id'],
-        name=stakeholder_data['name'],
-        personality_traits=json.loads(stakeholder_data.get('personality_traits', '[]')),
-        current_role=StakeholderRole[stakeholder_data['role'].upper()],
-        decision_style=DecisionStyle[stakeholder_data['decision_style'].upper()],
-        goals=[],
-        resources={},
-        relationships={},
-        stress_level=stakeholder_data['stress_level'],
-        commitment_level=stakeholder_data['commitment_level']
-    )
-    
-    action = StakeholderAction(
-        action_id=triggering_action_id,
-        stakeholder_id=action_data['stakeholder_id'],
-        action_type=ActionType[action_data['action_type'].upper()],
-        description=action_data['description'],
-        target=action_data.get('target'),
-        resources_used={},
-        success_probability=action_data['success_probability'],
-        consequences={},
-        timestamp=action_data['created_at']
-    )
-    
-    reaction = await manager.generate_reaction(stakeholder, action, action_context or {})
-    
-    return {
-        'reaction_id': reaction.reaction_id,
-        'reaction_type': reaction.reaction_type,
-        'description': reaction.description,
-        'emotional_response': reaction.emotional_response,
-        'relationship_impact': reaction.relationship_impact
-    }
-
-@function_tool
-async def develop_stakeholder_strategy(
-    ctx: RunContextWrapper,
-    stakeholder_id: int,
-    conflict_analysis: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Develop a strategy for a stakeholder"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = AutonomousStakeholderManager(user_id, conversation_id)
-    
-    # Get stakeholder details
-    async with get_db_connection_context() as conn:
-        stakeholder_data = await conn.fetchrow("""
-            SELECT s.*, n.name, n.personality_traits
-            FROM stakeholders s
-            JOIN NPCs n ON s.npc_id = n.npc_id
-            WHERE s.stakeholder_id = $1
-        """, stakeholder_id)
-    
-    if not stakeholder_data:
-        return {'error': 'Stakeholder not found'}
-    
-    stakeholder = Stakeholder(
-        stakeholder_id=stakeholder_id,
-        npc_id=stakeholder_data['npc_id'],
-        name=stakeholder_data['name'],
-        personality_traits=json.loads(stakeholder_data.get('personality_traits', '[]')),
-        current_role=StakeholderRole[stakeholder_data['role'].upper()],
-        decision_style=DecisionStyle[stakeholder_data['decision_style'].upper()],
-        goals=[],
-        resources={},
-        relationships={},
-        stress_level=stakeholder_data['stress_level'],
-        commitment_level=stakeholder_data['commitment_level']
-    )
-    
-    strategy = await manager.develop_strategy(stakeholder, conflict_analysis)
-    
-    return {
-        'strategy_id': strategy.strategy_id,
-        'strategy_name': strategy.strategy_name,
-        'objectives': strategy.objectives,
-        'tactics': strategy.tactics,
-        'success_conditions': strategy.success_conditions,
-        'abandon_conditions': strategy.abandon_conditions,
-        'time_horizon': strategy.time_horizon
-    }
-
-@function_tool
-async def update_stakeholder_stress(
-    ctx: RunContextWrapper,
-    stakeholder_id: int,
-    stressor: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Update a stakeholder's stress level"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = AutonomousStakeholderManager(user_id, conversation_id)
-    
-    # Get stakeholder
-    async with get_db_connection_context() as conn:
-        stakeholder_data = await conn.fetchrow("""
-            SELECT s.*, n.name, n.personality_traits
-            FROM stakeholders s
-            JOIN NPCs n ON s.npc_id = n.npc_id
-            WHERE s.stakeholder_id = $1
-        """, stakeholder_id)
-    
-    if not stakeholder_data:
-        return {'error': 'Stakeholder not found'}
-    
-    stakeholder = Stakeholder(
-        stakeholder_id=stakeholder_id,
-        npc_id=stakeholder_data['npc_id'],
-        name=stakeholder_data['name'],
-        personality_traits=json.loads(stakeholder_data.get('personality_traits', '[]')),
-        current_role=StakeholderRole[stakeholder_data['role'].upper()],
-        decision_style=DecisionStyle[stakeholder_data['decision_style'].upper()],
-        goals=[],
-        resources={},
-        relationships={},
-        stress_level=stakeholder_data['stress_level'],
-        commitment_level=stakeholder_data['commitment_level']
-    )
-    
-    result = await manager.update_stakeholder_stress(stakeholder, stressor)
-    
-    # Update database
-    async with get_db_connection_context() as conn:
-        await conn.execute("""
-            UPDATE stakeholders
-            SET stress_level = $1
-            WHERE stakeholder_id = $2
-        """, stakeholder.stress_level, stakeholder_id)
-    
-    return result
+    if responses:
+        return responses[0].data
+    return {'error': 'Failed to execute action'}
