@@ -227,7 +227,6 @@ class EducationalSystemManager(BaseLoreManager):
                 "}"
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.8)
         )
         
         # Formal education specialist
@@ -239,7 +238,6 @@ class EducationalSystemManager(BaseLoreManager):
                 "Emphasize matriarchal authority in educational leadership and teaching methods."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
         )
         
         # Apprenticeship specialist
@@ -251,7 +249,6 @@ class EducationalSystemManager(BaseLoreManager):
                 "Emphasize matriarchal authority with female masters and gender-based access."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
         )
         
         # Religious education specialist
@@ -263,7 +260,6 @@ class EducationalSystemManager(BaseLoreManager):
                 "Emphasize female religious authority and gendered access to sacred knowledge."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
         )
         
         # Main education agent with handoffs
@@ -271,7 +267,6 @@ class EducationalSystemManager(BaseLoreManager):
             name="EducationalSystemAgent",
             instructions="You create educational systems for fictional matriarchal societies.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             handoffs=[
                 handoff(
                     self.formal_education_agent,
@@ -300,7 +295,6 @@ class EducationalSystemManager(BaseLoreManager):
                 "Consider power dynamics, accessibility, and cultural context."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7)
         )
         
         logger.info(f"Educational agents initialized for user {self.user_id}")
@@ -1430,7 +1424,6 @@ async def generate_knowledge_traditions(
             name="KnowledgeTraditionAgent",
             instructions="You create knowledge transmission traditions for matriarchal societies.",
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9),
             output_type=List[KnowledgeTradition]
         )
         
@@ -1567,7 +1560,6 @@ def create_education_orchestrator() -> Agent[EducationContext]:
             get_teaching_contents
         ],
         model="gpt-5-nano",
-        model_settings=ModelSettings(temperature=0.7)
     )
 
 # ---------------------------------------------------------------------
