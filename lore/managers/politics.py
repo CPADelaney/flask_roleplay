@@ -57,7 +57,6 @@ distribution_agent = Agent(
         "Return JSON, e.g. {\"count\": 3}, or additional instructions.\n"
     ),
     model="gpt-5-nano",
-    model_settings=ModelSettings(temperature=0.0)
 )
 
 # -------------------------------------------------------------------------
@@ -249,7 +248,6 @@ class FactionAgentProxy:
             name=f"{faction_data['name']}Agent",
             instructions=self._build_instructions(),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.9)
         )
         self.actions_history = []
         self.goals = self._determine_faction_goals()
@@ -808,7 +806,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="NationalConflictAgent",
                 instructions="You create realistic international conflicts for a fantasy world with matriarchal structures.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9)
             )
             
             async with await self.get_connection_pool() as pool:
@@ -947,7 +944,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="ConflictNewsAgent",
                 instructions="You create realistic news articles about new conflicts in a matriarchal fantasy world.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
     
             # We'll produce a single news article from each nation's perspective
@@ -1056,7 +1052,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="CrisisStreamingAgent",
                 instructions="Generate a stream of real-time developments in an ongoing crisis.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9)
             )
     
             prompt = f"""
@@ -1137,7 +1132,6 @@ class WorldPoliticsManager(BaseLoreManager):
                     f"{nations['nation1'].get('cultural_traits', [])}"
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9)
             )
             
             nation2_agent = Agent(
@@ -1148,7 +1142,6 @@ class WorldPoliticsManager(BaseLoreManager):
                     f"{nations['nation2'].get('cultural_traits', [])}"
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9)
             )
     
             # Create a mediator agent
@@ -1159,7 +1152,6 @@ class WorldPoliticsManager(BaseLoreManager):
                     "negotiations and help reach a resolution that both parties can accept."
                 ),
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.7)
             )
     
             # Set up the negotiation simulation
@@ -1227,7 +1219,6 @@ class WorldPoliticsManager(BaseLoreManager):
                         f"Cover political events with your unique perspective. Maintain matriarchal themes."
                     ),
                     model="gpt-5-nano",
-                    model_settings=ModelSettings(temperature=0.8)
                 )
                 
                 prompt = f"""
@@ -1312,7 +1303,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="DomesticIssueAgent",
                 instructions="You create realistic domestic political and social issues in a matriarchal society.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9)
             )
     
             issues = []
@@ -1417,7 +1407,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="DomesticNewsAgent",
                 instructions="You create realistic news articles about domestic issues in a matriarchal society.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
     
             biases = ["supporting", "opposing", "neutral"]
@@ -1654,7 +1643,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 instructions="""You evolve international conflicts over time in a matriarchal fantasy world.
                 Consider realistic progression, diplomatic efforts, and power dynamics.""",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
             
             evolution_results = {
@@ -1882,7 +1870,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="ConflictNewsUpdateAgent",
                 instructions="You create news updates about evolving international conflicts in a matriarchal world.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
     
             devs = "\n".join([f"- {d}" for d in evo_data.get("new_developments",[])])
@@ -1973,7 +1960,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="PoliticalReformAgent",
                 instructions="Consider internal and external pressures to propose feasible political reforms.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
     
             prompt = f"""
@@ -2067,7 +2053,6 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="DynastyAgent",
                 instructions="You simulate how a dynasty evolves over multiple generations in a matriarchal fantasy world.",
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.7)
             )
     
             prompt = f"""
