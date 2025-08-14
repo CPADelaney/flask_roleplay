@@ -38,6 +38,8 @@ from db.connection import get_db_connection_context
 from logic.dynamic_relationships import OptimizedRelationshipManager
 from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
 from logic.artifact_system.artifact_manager import ArtifactManager
+from logic.event_logging import log_event
+from logic.game_time_helper import GameTimeContext
 from npcs.npc_learning_adaptation import NPCLearningManager
 from npcs.belief_system_integration import NPCBeliefSystemIntegration
 
@@ -250,16 +252,22 @@ class EventSystem:
         try:
             event_id = f"{event_type}-{uuid4().hex[:10]}"
 
-            event: Dict[str, Any] = {
+            base_event = {
                 "id": event_id,
-                "type": event_type,
                 "data": event_data,
                 "priority": int(priority),
                 "status": "queued",
-                "created_at": datetime.utcnow().isoformat(),
                 "processed_at": None,
                 "results": {},
             }
+            event = await log_event(
+                self.user_id,
+                self.conversation_id,
+                event_type,
+                base_event,
+            )
+            event["type"] = event.pop("event_type")
+            event["created_at"] = event["timestamp"].isoformat()
 
             if self.analysis_agent:
                 analysis_result = await self._analyze_event(event)
@@ -324,11 +332,11 @@ class EventSystem:
                     continue
 
                 # Process + propagate
-                await self._process_event(event)
                 await self._propagate_event(event)
 
                 # Mark processed
-                event["processed_at"] = datetime.utcnow().isoformat()
+                async with GameTimeContext(self.user_id, self.conversation_id) as game_time:
+                    event["processed_at"] = (await game_time.to_datetime()).isoformat()
                 event["status"] = "processed"
 
                 # History trim
@@ -665,3 +673,4 @@ class EventSystem:
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
             return {"error": str(e)}
+
