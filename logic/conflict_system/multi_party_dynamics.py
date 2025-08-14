@@ -1,7 +1,7 @@
 # logic/conflict_system/multi_party_dynamics.py
 """
-Multi-Party Dynamics System with LLM-generated content.
-Manages complex conflicts involving multiple factions, alliances, and betrayals.
+Multi-Party Dynamics System with LLM-generated content
+Integrated with ConflictSynthesizer as the central orchestrator
 """
 
 import logging
@@ -94,24 +94,296 @@ class Negotiation:
     deadline: Optional[datetime]
     mediator: Optional[int]  # faction_id of mediator
 
+
 # ===============================================================================
-# MULTI-PARTY MANAGER WITH LLM
+# MULTI-PARTY SUBSYSTEM (Integrated with Synthesizer)
 # ===============================================================================
 
-class MultiPartyDynamicsManager:
+class MultiPartyConflictSubsystem:
     """
-    Manages complex multi-party conflicts using LLM for dynamic generation.
-    Handles faction interactions, alliances, betrayals, and negotiations.
+    Multi-party subsystem that integrates with ConflictSynthesizer.
+    Manages complex multi-faction conflicts, alliances, and betrayals.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        
+        # Lazy-loaded agents
         self._faction_strategist = None
         self._alliance_broker = None
         self._betrayal_orchestrator = None
         self._negotiation_mediator = None
         self._outcome_predictor = None
+        
+        # Reference to synthesizer
+        self.synthesizer = None
+    
+    @property
+    def subsystem_type(self):
+        """Return the subsystem type"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return SubsystemType.MULTIPARTY
+    
+    @property
+    def capabilities(self) -> Set[str]:
+        """Return capabilities this subsystem provides"""
+        return {
+            'faction_management',
+            'alliance_formation',
+            'betrayal_orchestration',
+            'negotiation_mediation',
+            'outcome_prediction',
+            'power_balance_tracking'
+        }
+    
+    @property
+    def dependencies(self) -> Set:
+        """Return other subsystems this depends on"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return {
+            SubsystemType.STAKEHOLDER,  # Need stakeholder system
+            SubsystemType.LEVERAGE,  # Use leverage in negotiations
+            SubsystemType.SOCIAL  # Social dynamics affect alliances
+        }
+    
+    @property
+    def event_subscriptions(self) -> Set:
+        """Return events this subsystem wants to receive"""
+        from logic.conflict_system.conflict_synthesizer import EventType
+        return {
+            EventType.CONFLICT_CREATED,
+            EventType.STAKEHOLDER_ACTION,
+            EventType.PHASE_TRANSITION,
+            EventType.HEALTH_CHECK
+        }
+    
+    async def initialize(self, synthesizer) -> bool:
+        """Initialize the subsystem with synthesizer reference"""
+        import weakref
+        self.synthesizer = weakref.ref(synthesizer)
+        return True
+    
+    async def handle_event(self, event) -> Any:
+        """Handle an event from the synthesizer"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemResponse, SystemEvent, EventType
+        
+        try:
+            if event.event_type == EventType.CONFLICT_CREATED:
+                # Check if this should be a multi-party conflict
+                conflict_type = event.payload.get('conflict_type')
+                if 'faction' in conflict_type or 'multi' in conflict_type:
+                    # Initialize as multi-party
+                    conflict_id = event.payload.get('conflict_id')
+                    factions = await self._initialize_factions(conflict_id)
+                    
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={
+                            'multi_party_initialized': True,
+                            'faction_count': len(factions)
+                        }
+                    )
+                    
+            elif event.event_type == EventType.STAKEHOLDER_ACTION:
+                # Process faction actions
+                stakeholder_id = event.payload.get('stakeholder_id')
+                action_type = event.payload.get('action_type')
+                
+                # Check if stakeholder is part of a faction
+                faction = await self._get_stakeholder_faction(stakeholder_id)
+                
+                if faction:
+                    # Process as faction action
+                    result = await self._process_faction_action(
+                        faction, action_type, event.payload
+                    )
+                    
+                    side_effects = []
+                    
+                    # Check for alliance or betrayal triggers
+                    if result.get('triggers_alliance'):
+                        side_effects.append(SystemEvent(
+                            event_id=f"alliance_{event.event_id}",
+                            event_type=EventType.STATE_SYNC,
+                            source_subsystem=self.subsystem_type,
+                            payload={'alliance_formed': result['alliance']},
+                            priority=5
+                        ))
+                    
+                    if result.get('triggers_betrayal'):
+                        side_effects.append(SystemEvent(
+                            event_id=f"betrayal_{event.event_id}",
+                            event_type=EventType.STATE_SYNC,
+                            source_subsystem=self.subsystem_type,
+                            payload={'betrayal_executed': result['betrayal']},
+                            priority=3
+                        ))
+                    
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data=result,
+                        side_effects=side_effects
+                    )
+                    
+            elif event.event_type == EventType.PHASE_TRANSITION:
+                # Update faction dynamics based on phase
+                conflict_id = event.payload.get('conflict_id')
+                new_phase = event.payload.get('phase')
+                
+                if new_phase == 'climax':
+                    # Time for betrayals and power plays
+                    betrayals = await self._check_for_betrayals(conflict_id)
+                    
+                    side_effects = []
+                    for betrayal in betrayals:
+                        side_effects.append(SystemEvent(
+                            event_id=f"betrayal_{event.event_id}_{betrayal['betrayer_id']}",
+                            event_type=EventType.STATE_SYNC,
+                            source_subsystem=self.subsystem_type,
+                            payload=betrayal,
+                            priority=2
+                        ))
+                    
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={'betrayals_triggered': len(betrayals)},
+                        side_effects=side_effects
+                    )
+                    
+            elif event.event_type == EventType.HEALTH_CHECK:
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data=await self.health_check()
+                )
+            
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={}
+            )
+            
+        except Exception as e:
+            logger.error(f"Multi-party subsystem error: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Return health status of the subsystem"""
+        async with get_db_connection_context() as conn:
+            faction_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM factions
+                WHERE user_id = $1 AND conversation_id = $2
+            """, self.user_id, self.conversation_id)
+            
+            alliance_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM alliances
+                WHERE user_id = $1 AND conversation_id = $2
+                AND is_active = true
+            """, self.user_id, self.conversation_id)
+            
+            negotiation_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM negotiations
+                WHERE user_id = $1 AND conversation_id = $2
+                AND status = 'active'
+            """, self.user_id, self.conversation_id)
+        
+        is_healthy = faction_count < 20 and negotiation_count < 10
+        
+        return {
+            'healthy': is_healthy,
+            'active_factions': faction_count,
+            'active_alliances': alliance_count,
+            'active_negotiations': negotiation_count,
+            'issue': 'Too many factions' if faction_count >= 20 else None
+        }
+    
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get multi-party data for a specific conflict"""
+        async with get_db_connection_context() as conn:
+            # Get factions involved in this conflict
+            factions = await conn.fetch("""
+                SELECT f.* FROM factions f
+                JOIN faction_conflicts fc ON f.faction_id = fc.faction_id
+                WHERE fc.conflict_id = $1
+            """, conflict_id)
+            
+            # Get alliances
+            alliances = await conn.fetch("""
+                SELECT * FROM alliances
+                WHERE faction_id_1 IN (
+                    SELECT faction_id FROM faction_conflicts WHERE conflict_id = $1
+                )
+                AND is_active = true
+            """, conflict_id)
+        
+        return {
+            'faction_count': len(factions),
+            'factions': [
+                {
+                    'id': f['faction_id'],
+                    'name': f['name'],
+                    'stance': f['stance'],
+                    'reputation': f['reputation']
+                }
+                for f in factions
+            ],
+            'alliance_count': len(alliances)
+        }
+    
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current state of multi-party system"""
+        async with get_db_connection_context() as conn:
+            # Get power balance
+            top_factions = await conn.fetch("""
+                SELECT faction_id, name, reputation
+                FROM factions
+                WHERE user_id = $1 AND conversation_id = $2
+                ORDER BY reputation DESC
+                LIMIT 3
+            """, self.user_id, self.conversation_id)
+        
+        return {
+            'dominant_factions': [
+                {'name': f['name'], 'reputation': f['reputation']}
+                for f in top_factions
+            ],
+            'power_balance': await self._calculate_power_balance()
+        }
+    
+    async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
+        """Check if multi-party system is relevant to scene"""
+        # Relevant when multiple NPCs from different factions are present
+        present_npcs = scene_context.get('present_npcs', [])
+        
+        if len(present_npcs) < 2:
+            return False
+        
+        # Check if NPCs belong to different factions
+        async with get_db_connection_context() as conn:
+            faction_diversity = await conn.fetchval("""
+                SELECT COUNT(DISTINCT f.faction_id)
+                FROM factions f
+                JOIN faction_members fm ON f.faction_id = fm.faction_id
+                WHERE fm.member_id = ANY($1)
+            """, present_npcs)
+        
+        return faction_diversity > 1
+    
+    # ========== Agent Properties ==========
     
     @property
     def faction_strategist(self) -> Agent:
@@ -253,7 +525,35 @@ class MultiPartyDynamicsManager:
             )
         return self._outcome_predictor
     
-    # ========== Faction Management ==========
+    # ========== Multi-Party Management Methods ==========
+    
+    async def _initialize_factions(self, conflict_id: int) -> List[Faction]:
+        """Initialize factions for a multi-party conflict"""
+        
+        # Get stakeholders
+        async with get_db_connection_context() as conn:
+            stakeholders = await conn.fetch("""
+                SELECT * FROM conflict_stakeholders WHERE conflict_id = $1
+            """, conflict_id)
+        
+        # Group into factions or create individual factions
+        factions = []
+        for stakeholder in stakeholders[:3]:  # Limit to 3 initial factions
+            faction = await self.create_faction(
+                f"Faction_{stakeholder['stakeholder_id']}",
+                [stakeholder['stakeholder_id']],
+                ["Achieve dominance", "Protect interests"]
+            )
+            factions.append(faction)
+            
+            # Link faction to conflict
+            await conn.execute("""
+                INSERT INTO faction_conflicts (faction_id, conflict_id)
+                VALUES ($1, $2)
+                ON CONFLICT DO NOTHING
+            """, faction.faction_id, conflict_id)
+        
+        return factions
     
     async def create_faction(
         self,
@@ -299,6 +599,14 @@ class MultiPartyDynamicsManager:
                 json.dumps(result.get('resources', {})),
                 result.get('stance', 'neutral'),
                 result.get('reputation', 0.5))
+                
+                # Store faction members
+                for member_id in initial_members:
+                    await conn.execute("""
+                        INSERT INTO faction_members (faction_id, member_id)
+                        VALUES ($1, $2)
+                        ON CONFLICT DO NOTHING
+                    """, faction_id, member_id)
             
             return Faction(
                 faction_id=faction_id,
@@ -316,489 +624,150 @@ class MultiPartyDynamicsManager:
             logger.warning(f"Failed to create faction: {e}")
             return self._create_fallback_faction(name, initial_members, goals)
     
-    async def determine_faction_action(
+    async def _get_stakeholder_faction(self, stakeholder_id: int) -> Optional[Faction]:
+        """Get the faction a stakeholder belongs to"""
+        async with get_db_connection_context() as conn:
+            faction_data = await conn.fetchrow("""
+                SELECT f.* FROM factions f
+                JOIN faction_members fm ON f.faction_id = fm.faction_id
+                WHERE fm.member_id = $1
+            """, stakeholder_id)
+        
+        if faction_data:
+            return Faction(
+                faction_id=faction_data['faction_id'],
+                name=faction_data['name'],
+                members=json.loads(faction_data['members']),
+                resources=json.loads(faction_data['resources']),
+                goals=json.loads(faction_data['goals']),
+                strengths=[],
+                weaknesses=[],
+                current_stance=FactionRole[faction_data['stance'].upper()],
+                reputation=faction_data['reputation']
+            )
+        return None
+    
+    async def _process_faction_action(
         self,
         faction: Faction,
-        conflict_state: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Determine what action a faction should take"""
-        
-        prompt = f"""
-        Determine faction action:
-        
-        Faction: {faction.name}
-        Current Stance: {faction.current_stance.value}
-        Resources: {json.dumps(faction.resources)}
-        Goals: {json.dumps(faction.goals)}
-        
-        Conflict State:
-        {json.dumps(conflict_state, indent=2)}
-        
-        Determine:
-        1. Primary action (attack/defend/negotiate/ally/betray/wait)
-        2. Target (if applicable)
-        3. Resources to commit (0-1 for each type)
-        4. Rationale
-        5. Success probability (0-1)
-        6. Risks
-        
-        Make the decision strategically sound.
-        Format as JSON.
-        """
-        
-        response = await self.faction_strategist.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            return {
-                'faction_id': faction.faction_id,
-                'action': result.get('action', 'wait'),
-                'target': result.get('target'),
-                'resources_committed': result.get('resources', {}),
-                'rationale': result.get('rationale', 'Strategic decision'),
-                'success_probability': result.get('success_probability', 0.5),
-                'risks': result.get('risks', [])
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to determine faction action: {e}")
-            return {'faction_id': faction.faction_id, 'action': 'wait'}
-    
-    # ========== Alliance System ==========
-    
-    async def propose_alliance(
-        self,
-        proposer_id: int,
-        target_id: int,
+        action_type: str,
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Generate an alliance proposal"""
+        """Process a faction's action"""
         
-        # Get faction details
-        proposer = await self._get_faction_details(proposer_id)
-        target = await self._get_faction_details(target_id)
-        
-        prompt = f"""
-        Generate alliance proposal:
-        
-        Proposer: {proposer.get('name', 'Unknown')}
-        Target: {target.get('name', 'Unknown')}
-        Context: {json.dumps(context, indent=2)}
-        
-        Create:
-        1. Alliance type (formal/secret/temporary/defensive/opportunistic)
-        2. Specific terms (what each party provides/gains)
-        3. Duration/expiration condition
-        4. Enforcement mechanisms
-        5. Exit clauses
-        6. Why target should accept
-        
-        Make it mutually beneficial but realistic.
-        Format as JSON.
-        """
-        
-        response = await self.alliance_broker.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            # Store proposal
-            async with get_db_connection_context() as conn:
-                proposal_id = await conn.fetchval("""
-                    INSERT INTO alliance_proposals
-                    (user_id, conversation_id, proposer_id, target_id, 
-                     alliance_type, terms, status)
-                    VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-                    RETURNING proposal_id
-                """, self.user_id, self.conversation_id,
-                proposer_id, target_id,
-                result.get('type', 'temporary'),
-                json.dumps(result.get('terms', {})))
-            
-            return {
-                'proposal_id': proposal_id,
-                'type': result.get('type'),
-                'terms': result.get('terms'),
-                'expiration': result.get('expiration'),
-                'enforcement': result.get('enforcement'),
-                'exit_clauses': result.get('exit_clauses', []),
-                'pitch': result.get('pitch', 'Mutual benefit')
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to propose alliance: {e}")
-            return {'error': 'Failed to generate proposal'}
-    
-    async def evaluate_alliance_proposal(
-        self,
-        faction_id: int,
-        proposal: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Evaluate whether to accept an alliance proposal"""
-        
-        faction = await self._get_faction_details(faction_id)
-        
-        prompt = f"""
-        Evaluate alliance proposal:
-        
-        Evaluating Faction: {faction.get('name')}
-        Goals: {faction.get('goals')}
-        Current Alliances: {faction.get('alliances', [])}
-        
-        Proposal:
-        {json.dumps(proposal, indent=2)}
-        
-        Determine:
-        1. Should accept? (yes/no/counter)
-        2. Benefits vs costs analysis
-        3. Trust level in proposer (0-1)
-        4. Conditions or modifications needed
-        5. Long-term implications
-        
-        Be strategically minded.
-        Format as JSON.
-        """
-        
-        response = await self.alliance_broker.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            return {
-                'decision': result.get('accept', 'no'),
-                'analysis': result.get('analysis'),
-                'trust_level': result.get('trust', 0.5),
-                'conditions': result.get('conditions', []),
-                'implications': result.get('implications', [])
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to evaluate proposal: {e}")
-            return {'decision': 'no', 'reason': 'Evaluation failed'}
-    
-    # ========== Betrayal System ==========
-    
-    async def plan_betrayal(
-        self,
-        betrayer_id: int,
-        target_alliance_id: int,
-        motivation: str
-    ) -> Dict[str, Any]:
-        """Plan a betrayal with timing and method"""
-        
-        betrayer = await self._get_faction_details(betrayer_id)
-        alliance = await self._get_alliance_details(target_alliance_id)
-        
-        prompt = f"""
-        Plan a betrayal:
-        
-        Betrayer: {betrayer.get('name')}
-        Current Alliance: {json.dumps(alliance, indent=2)}
-        Motivation: {motivation}
-        
-        Generate:
-        1. Betrayal type (defection/sabotage/leak/abandonment/double-cross)
-        2. Optimal timing (immediate/specific trigger/gradual)
-        3. Method of execution
-        4. Cover story/justification
-        5. Expected gains
-        6. Risk of discovery (0-1)
-        7. Potential backlash
-        
-        Make it cunning but not cartoonishly evil.
-        Format as JSON.
-        """
-        
-        response = await self.betrayal_orchestrator.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            return {
-                'betrayal_type': result.get('type'),
-                'timing': result.get('timing'),
-                'method': result.get('method'),
-                'cover_story': result.get('cover_story'),
-                'expected_gains': result.get('gains'),
-                'discovery_risk': result.get('discovery_risk', 0.5),
-                'potential_backlash': result.get('backlash', [])
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to plan betrayal: {e}")
-            return {'error': 'Failed to plan betrayal'}
-    
-    async def execute_betrayal(
-        self,
-        betrayal_plan: Dict[str, Any],
-        execution_context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute a betrayal and generate consequences"""
-        
-        prompt = f"""
-        Execute betrayal:
-        
-        Plan: {json.dumps(betrayal_plan, indent=2)}
-        Context: {json.dumps(execution_context, indent=2)}
-        
-        Determine:
-        1. Success level (0-1)
-        2. Immediate consequences
-        3. Who discovers the betrayal
-        4. Faction reactions
-        5. Power balance shift
-        6. Narrative description (2-3 sentences)
-        
-        Make consequences proportional and realistic.
-        Format as JSON.
-        """
-        
-        response = await self.betrayal_orchestrator.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            # Store betrayal
-            async with get_db_connection_context() as conn:
-                await conn.execute("""
-                    INSERT INTO betrayals
-                    (user_id, conversation_id, betrayer_id, betrayal_type, 
-                     success_level, consequences)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                """, self.user_id, self.conversation_id,
-                execution_context.get('betrayer_id'),
-                betrayal_plan.get('betrayal_type'),
-                result.get('success', 0.5),
-                json.dumps(result.get('consequences', {})))
-            
-            return {
-                'success': result.get('success', 0.5),
-                'immediate_consequences': result.get('consequences'),
-                'discovered_by': result.get('discovered_by', []),
-                'faction_reactions': result.get('reactions', {}),
-                'power_shift': result.get('power_shift', {}),
-                'narrative': result.get('narrative', 'The betrayal unfolds')
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to execute betrayal: {e}")
-            return {'success': 0.0, 'narrative': 'The betrayal fails'}
-    
-    # ========== Negotiation System ==========
-    
-    async def initiate_negotiation(
-        self,
-        initiator_id: int,
-        participants: List[int],
-        topic: str,
-        initial_position: str
-    ) -> Negotiation:
-        """Start a multi-party negotiation"""
-        
-        # Get participant details
-        participant_details = await self._get_multiple_faction_details(participants)
-        
-        prompt = f"""
-        Set up negotiation:
-        
-        Initiator: Faction {initiator_id}
-        Participants: {json.dumps(participant_details, indent=2)}
-        Topic: {topic}
-        Initial Position: {initial_position}
-        
-        Generate:
-        1. Each party's opening position
-        2. Their hidden bottom lines
-        3. Leverage they might use
-        4. Potential compromise points
-        5. Deal breakers for each party
-        
-        Make positions realistic and negotiable.
-        Format as JSON.
-        """
-        
-        response = await self.negotiation_mediator.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            # Store negotiation
-            async with get_db_connection_context() as conn:
-                negotiation_id = await conn.fetchval("""
-                    INSERT INTO negotiations
-                    (user_id, conversation_id, topic, participants, status)
-                    VALUES ($1, $2, $3, $4, 'active')
-                    RETURNING negotiation_id
-                """, self.user_id, self.conversation_id,
-                topic, json.dumps(participants))
-            
-            return Negotiation(
-                negotiation_id=negotiation_id,
-                participants=participants,
-                topic=topic,
-                offers={p: result.get('positions', {}).get(str(p), '') for p in participants},
-                leverage_in_play=result.get('leverage', {}),
-                deadline=None,
-                mediator=None
-            )
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to initiate negotiation: {e}")
-            return self._create_fallback_negotiation(participants, topic)
-    
-    async def advance_negotiation(
-        self,
-        negotiation: Negotiation,
-        new_offer: Dict[int, str]
-    ) -> Dict[str, Any]:
-        """Advance negotiation with new offers and counter-offers"""
-        
-        prompt = f"""
-        Advance negotiation:
-        
-        Topic: {negotiation.topic}
-        Current Offers: {json.dumps(negotiation.offers, indent=2)}
-        New Offer: {json.dumps(new_offer, indent=2)}
-        
-        Generate:
-        1. Reactions from each party
-        2. Counter-offers
-        3. Movement toward agreement (0-1)
-        4. Sticking points remaining
-        5. Breakthrough potential
-        
-        Show realistic give-and-take.
-        Format as JSON.
-        """
-        
-        response = await self.negotiation_mediator.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            # Update negotiation
-            negotiation.offers.update(new_offer)
-            for party_id, counter in result.get('counter_offers', {}).items():
-                negotiation.offers[int(party_id)] = counter
-            
-            return {
-                'reactions': result.get('reactions', {}),
-                'counter_offers': result.get('counter_offers', {}),
-                'progress': result.get('progress', 0.5),
-                'sticking_points': result.get('sticking_points', []),
-                'breakthrough_possible': result.get('breakthrough', False)
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to advance negotiation: {e}")
-            return {'progress': 0.0}
-    
-    # ========== Outcome Prediction ==========
-    
-    async def predict_conflict_outcomes(
-        self,
-        conflict: MultiPartyConflict
-    ) -> List[Dict[str, Any]]:
-        """Predict possible outcomes of the conflict"""
-        
-        # Prepare conflict summary
-        conflict_summary = {
-            'factions': {f_id: self._faction_to_dict(f) for f_id, f in conflict.factions.items()},
-            'alliances': [self._alliance_to_dict(a) for a in conflict.alliances],
-            'power_balance': conflict.power_balance,
-            'escalation': conflict.escalation_level
+        result = {
+            'faction_id': faction.faction_id,
+            'action_processed': True
         }
         
-        prompt = f"""
-        Predict conflict outcomes:
+        # Check for alliance opportunities
+        if action_type in ['negotiate', 'ally']:
+            alliance_opportunity = await self._check_alliance_opportunity(faction)
+            if alliance_opportunity:
+                result['triggers_alliance'] = True
+                result['alliance'] = alliance_opportunity
         
-        Conflict State:
-        {json.dumps(conflict_summary, indent=2)}
+        # Check for betrayal opportunities
+        if action_type in ['attack', 'betray'] and faction.current_stance == FactionRole.OPPORTUNIST:
+            betrayal_opportunity = await self._check_betrayal_opportunity(faction)
+            if betrayal_opportunity:
+                result['triggers_betrayal'] = True
+                result['betrayal'] = betrayal_opportunity
         
-        Generate 3-4 possible outcomes:
-        For each outcome provide:
-        1. Description (what happens)
-        2. Probability (0-1)
-        3. Winners and losers
-        4. Long-term consequences
-        5. Trigger conditions
-        
-        Include both expected and surprising possibilities.
-        Format as JSON array.
-        """
-        
-        response = await self.outcome_predictor.run(prompt)
-        
-        try:
-            outcomes = json.loads(response.content)
+        return result
+    
+    async def _check_alliance_opportunity(self, faction: Faction) -> Optional[Dict[str, Any]]:
+        """Check if faction should form an alliance"""
+        if random.random() < 0.3:  # 30% chance
+            # Find potential ally
+            async with get_db_connection_context() as conn:
+                potential_ally = await conn.fetchrow("""
+                    SELECT * FROM factions
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND faction_id != $3
+                    AND ABS(reputation - $4) < 0.3
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                """, self.user_id, self.conversation_id, faction.faction_id, faction.reputation)
             
-            return [
-                {
-                    'description': o.get('description'),
-                    'probability': o.get('probability', 0.25),
-                    'winners': o.get('winners', []),
-                    'losers': o.get('losers', []),
-                    'consequences': o.get('consequences', []),
-                    'triggers': o.get('triggers', [])
+            if potential_ally:
+                return {
+                    'proposer': faction.faction_id,
+                    'target': potential_ally['faction_id'],
+                    'type': 'temporary'
                 }
-                for o in outcomes
-            ]
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to predict outcomes: {e}")
-            return []
+        return None
     
-    # ========== Helper Methods ==========
-    
-    async def _get_faction_details(self, faction_id: int) -> Dict:
-        """Get faction details"""
-        
-        async with get_db_connection_context() as conn:
-            faction = await conn.fetchrow("""
-                SELECT * FROM factions WHERE faction_id = $1
-            """, faction_id)
-        
-        return dict(faction) if faction else {}
-    
-    async def _get_multiple_faction_details(self, faction_ids: List[int]) -> List[Dict]:
-        """Get details for multiple factions"""
-        
-        details = []
-        for f_id in faction_ids:
-            details.append(await self._get_faction_details(f_id))
-        return details
-    
-    async def _get_alliance_details(self, alliance_id: int) -> Dict:
-        """Get alliance details"""
-        
+    async def _check_betrayal_opportunity(self, faction: Faction) -> Optional[Dict[str, Any]]:
+        """Check if faction should betray an ally"""
+        # Check if faction has alliances
         async with get_db_connection_context() as conn:
             alliance = await conn.fetchrow("""
-                SELECT * FROM alliances WHERE alliance_id = $1
-            """, alliance_id)
+                SELECT * FROM alliances
+                WHERE (faction_id_1 = $1 OR faction_id_2 = $1)
+                AND is_active = true
+                ORDER BY created_at ASC
+                LIMIT 1
+            """, faction.faction_id)
         
-        return dict(alliance) if alliance else {}
+        if alliance and random.random() < 0.2:  # 20% chance if has alliance
+            return {
+                'betrayer_id': faction.faction_id,
+                'alliance_id': alliance['alliance_id'],
+                'type': 'defection'
+            }
+        return None
     
-    def _faction_to_dict(self, faction: Faction) -> Dict:
-        """Convert faction to dict"""
+    async def _check_for_betrayals(self, conflict_id: int) -> List[Dict[str, Any]]:
+        """Check for potential betrayals during climax"""
+        betrayals = []
         
-        return {
-            'name': faction.name,
-            'members': faction.members,
-            'resources': faction.resources,
-            'stance': faction.current_stance.value,
-            'reputation': faction.reputation
-        }
+        # Get factions in conflict
+        async with get_db_connection_context() as conn:
+            factions = await conn.fetch("""
+                SELECT f.* FROM factions f
+                JOIN faction_conflicts fc ON f.faction_id = fc.faction_id
+                WHERE fc.conflict_id = $1
+                AND f.stance = 'opportunist'
+            """, conflict_id)
+        
+        for faction_data in factions:
+            if random.random() < 0.4:  # 40% chance for opportunists
+                faction = Faction(
+                    faction_id=faction_data['faction_id'],
+                    name=faction_data['name'],
+                    members=json.loads(faction_data['members']),
+                    resources=json.loads(faction_data['resources']),
+                    goals=json.loads(faction_data['goals']),
+                    strengths=[],
+                    weaknesses=[],
+                    current_stance=FactionRole.OPPORTUNIST,
+                    reputation=faction_data['reputation']
+                )
+                
+                betrayal = await self._check_betrayal_opportunity(faction)
+                if betrayal:
+                    betrayals.append(betrayal)
+        
+        return betrayals
     
-    def _alliance_to_dict(self, alliance: Alliance) -> Dict:
-        """Convert alliance to dict"""
+    async def _calculate_power_balance(self) -> Dict[str, float]:
+        """Calculate current power balance"""
+        async with get_db_connection_context() as conn:
+            factions = await conn.fetch("""
+                SELECT faction_id, name, reputation, resources
+                FROM factions
+                WHERE user_id = $1 AND conversation_id = $2
+            """, self.user_id, self.conversation_id)
         
-        return {
-            'type': alliance.alliance_type.value,
-            'members': list(alliance.members),
-            'strength': alliance.strength,
-            'secret': alliance.secret
-        }
+        power_balance = {}
+        for faction in factions:
+            resources = json.loads(faction['resources'])
+            # Calculate power as combination of reputation and resources
+            power = faction['reputation'] * 0.5 + sum(resources.values()) / len(resources) * 0.5
+            power_balance[faction['name']] = power
+        
+        return power_balance
     
     def _create_fallback_faction(
         self,
@@ -819,23 +788,7 @@ class MultiPartyDynamicsManager:
             current_stance=FactionRole.NEUTRAL,
             reputation=0.5
         )
-    
-    def _create_fallback_negotiation(
-        self,
-        participants: List[int],
-        topic: str
-    ) -> Negotiation:
-        """Create fallback negotiation if LLM fails"""
-        
-        return Negotiation(
-            negotiation_id=0,
-            participants=participants,
-            topic=topic,
-            offers={},
-            leverage_in_play={},
-            deadline=None,
-            mediator=None
-        )
+
 
 # ===============================================================================
 # PUBLIC API FUNCTIONS
@@ -847,45 +800,26 @@ async def create_multi_party_conflict(
     conflict_name: str,
     initial_factions: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
-    """Create a new multi-party conflict"""
+    """Create a new multi-party conflict through synthesizer"""
     
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = MultiPartyDynamicsManager(user_id, conversation_id)
+    # Use synthesizer to create conflict
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Create factions
-    factions = {}
-    for f_data in initial_factions:
-        faction = await manager.create_faction(
-            f_data['name'],
-            f_data.get('members', []),
-            f_data.get('goals', [])
-        )
-        factions[faction.faction_id] = faction
-    
-    # Store conflict
-    async with get_db_connection_context() as conn:
-        conflict_id = await conn.fetchval("""
-            INSERT INTO multi_party_conflicts
-            (user_id, conversation_id, name, faction_ids, escalation_level)
-            VALUES ($1, $2, $3, $4, 0.3)
-            RETURNING conflict_id
-        """, user_id, conversation_id,
-        conflict_name, json.dumps(list(factions.keys())))
-    
-    return {
-        'conflict_id': conflict_id,
-        'name': conflict_name,
-        'factions': {
-            f_id: {
-                'name': f.name,
-                'stance': f.current_stance.value,
-                'reputation': f.reputation
-            }
-            for f_id, f in factions.items()
+    # Create conflict with multi-party type
+    conflict_result = await synthesizer.create_conflict(
+        'multi_faction_war',
+        {
+            'name': conflict_name,
+            'factions': initial_factions
         }
-    }
+    )
+    
+    return conflict_result
+
 
 @function_tool
 async def faction_take_action(
@@ -893,85 +827,35 @@ async def faction_take_action(
     faction_id: int,
     conflict_id: int
 ) -> Dict[str, Any]:
-    """Have a faction take its turn"""
+    """Have a faction take its turn through synthesizer"""
     
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = MultiPartyDynamicsManager(user_id, conversation_id)
+    # Use synthesizer to emit stakeholder action
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Get faction and conflict state
-    faction_data = await manager._get_faction_details(faction_id)
-    
-    # Create faction object
-    faction = Faction(
-        faction_id=faction_id,
-        name=faction_data['name'],
-        members=json.loads(faction_data.get('members', '[]')),
-        resources=json.loads(faction_data.get('resources', '{}')),
-        goals=json.loads(faction_data.get('goals', '[]')),
-        strengths=[],
-        weaknesses=[],
-        current_stance=FactionRole[faction_data.get('stance', 'NEUTRAL').upper()],
-        reputation=faction_data.get('reputation', 0.5)
+    event = SystemEvent(
+        event_id=f"faction_action_{faction_id}",
+        event_type=EventType.STAKEHOLDER_ACTION,
+        source_subsystem=SubsystemType.MULTIPARTY,
+        payload={
+            'stakeholder_id': faction_id,
+            'conflict_id': conflict_id,
+            'action_type': 'faction_turn'
+        },
+        requires_response=True
     )
     
-    # Get conflict state
-    conflict_state = {'conflict_id': conflict_id}  # Would be more detailed
+    responses = await synthesizer.emit_event(event)
     
-    action = await manager.determine_faction_action(faction, conflict_state)
-    return action
+    for response in responses:
+        if response.subsystem == SubsystemType.MULTIPARTY:
+            return response.data
+    
+    return {'error': 'No response from multi-party system'}
 
-@function_tool
-async def propose_faction_alliance(
-    ctx: RunContextWrapper,
-    proposer_faction: int,
-    target_faction: int,
-    reason: str
-) -> Dict[str, Any]:
-    """Propose an alliance between factions"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = MultiPartyDynamicsManager(user_id, conversation_id)
-    
-    context = {'reason': reason}
-    proposal = await manager.propose_alliance(proposer_faction, target_faction, context)
-    
-    # Auto-evaluate for NPC factions
-    if target_faction != user_id:  # If target is NPC faction
-        evaluation = await manager.evaluate_alliance_proposal(target_faction, proposal)
-        proposal['target_response'] = evaluation
-    
-    return proposal
-
-@function_tool
-async def betray_alliance(
-    ctx: RunContextWrapper,
-    betrayer_faction: int,
-    alliance_id: int,
-    motivation: str
-) -> Dict[str, Any]:
-    """Plan and potentially execute a betrayal"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = MultiPartyDynamicsManager(user_id, conversation_id)
-    
-    # Plan betrayal
-    plan = await manager.plan_betrayal(betrayer_faction, alliance_id, motivation)
-    
-    # Optionally auto-execute based on timing
-    if plan.get('timing') == 'immediate':
-        execution = await manager.execute_betrayal(
-            plan,
-            {'betrayer_id': betrayer_faction}
-        )
-        plan['execution'] = execution
-    
-    return plan
 
 @function_tool
 async def negotiate_between_factions(
@@ -985,21 +869,39 @@ async def negotiate_between_factions(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = MultiPartyDynamicsManager(user_id, conversation_id)
+    # Get synthesizer and multi-party subsystem
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Determine initiator (first in list)
-    initiator = participating_factions[0] if participating_factions else user_id
+    multiparty_subsystem = synthesizer._subsystems.get(SubsystemType.MULTIPARTY)
+    if not multiparty_subsystem:
+        return {'error': 'Multi-party subsystem not available'}
     
-    negotiation = await manager.initiate_negotiation(
-        initiator,
-        participating_factions,
-        topic,
-        initial_position
+    # Create negotiation through subsystem
+    from logic.conflict_system.multi_party_dynamics import Negotiation
+    
+    # Store negotiation
+    async with get_db_connection_context() as conn:
+        negotiation_id = await conn.fetchval("""
+            INSERT INTO negotiations
+            (user_id, conversation_id, topic, participants, status)
+            VALUES ($1, $2, $3, $4, 'active')
+            RETURNING negotiation_id
+        """, user_id, conversation_id, topic, json.dumps(participating_factions))
+    
+    negotiation = Negotiation(
+        negotiation_id=negotiation_id,
+        participants=participating_factions,
+        topic=topic,
+        offers={p: initial_position for p in participating_factions},
+        leverage_in_play={},
+        deadline=None,
+        mediator=None
     )
     
     return {
         'negotiation_id': negotiation.negotiation_id,
         'topic': negotiation.topic,
         'participants': negotiation.participants,
-        'opening_positions': negotiation.offers
+        'status': 'initiated'
     }
