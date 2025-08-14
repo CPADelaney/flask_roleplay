@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # MASTER INTEGRATION CLASS WITH LLM ENHANCEMENT
 # ===============================================================================
 
-class EnhancedConflictSystemIntegration:
+class ConflictSystemIntegration:
     """
     Master integration class with LLM-powered dynamic content generation.
     Preserves all original functionality while replacing hardcoded analysis.
