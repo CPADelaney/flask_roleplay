@@ -144,55 +144,171 @@ class ConflictOutputSynthesizer:
         """Gather inputs from all conflict subsystems"""
         inputs = {}
         
-        # Get slice-of-life conflicts
+        # 1. SLICE-OF-LIFE CONFLICTS
         from logic.conflict_system.slice_of_life_conflicts import (
-            SliceOfLifeConflictManager, EmergentConflictDetector
+            SliceOfLifeConflictManager, EmergentConflictDetector, PatternBasedResolution
         )
         
         slice_manager = SliceOfLifeConflictManager(self.user_id, self.conversation_id)
         detector = EmergentConflictDetector(self.user_id, self.conversation_id)
+        pattern_resolver = PatternBasedResolution(self.user_id, self.conversation_id)
         
         inputs['slice_of_life'] = {
             'active': await slice_manager.get_active_conflicts(),
-            'tensions': await detector.detect_brewing_tensions()
+            'tensions': await detector.detect_brewing_tensions(),
+            'pending_resolutions': []  # Check for pattern-based resolutions
         }
         
-        # Get power dynamics from enhanced integration
+        # Check each slice conflict for pattern resolution
+        for conflict in inputs['slice_of_life']['active']:
+            resolution = await pattern_resolver.check_resolution_by_pattern(conflict.get('conflict_id'))
+            if resolution:
+                inputs['slice_of_life']['pending_resolutions'].append(resolution)
+        
+        # 2. ENHANCED CONFLICT INTEGRATION
         from logic.conflict_system.enhanced_conflict_integration import (
             EnhancedConflictSystemIntegration
         )
         
         integration = EnhancedConflictSystemIntegration(self.user_id, self.conversation_id)
-        inputs['power_dynamics'] = await integration.daily_integration.get_current_dynamics()
+        inputs['enhanced_integration'] = {
+            'daily_dynamics': await integration.daily_integration.get_current_dynamics(),
+            'pattern_resolutions': await integration.check_for_pattern_resolutions()
+        }
         
-        # Get major conflicts from main integration
+        # 3. MAIN CONFLICT SYSTEM INTEGRATION  
         from logic.conflict_system.conflict_integration import ConflictSystemIntegration
         
         main_system = ConflictSystemIntegration(self.user_id, self.conversation_id)
-        inputs['major_conflicts'] = await main_system.get_active_conflicts()
+        inputs['main_conflicts'] = {
+            'active': await main_system.get_active_conflicts(),
+            'vitals': await main_system.update_player_vitals(context.get('activity_type', 'idle')),
+            'daily_update': await main_system.run_daily_update() if context.get('is_new_day') else None
+        }
         
-        # Get time-based conflict progressions
-        from logic.time_cycle import get_current_time_model
+        # Get detailed conflict info for each active conflict
+        inputs['main_conflicts']['details'] = {}
+        for conflict in inputs['main_conflicts']['active']:
+            conflict_id = conflict.get('conflict_id')
+            if conflict_id:
+                inputs['main_conflicts']['details'][conflict_id] = await main_system.get_conflict_details(conflict_id)
+        
+        # 4. CONFLICT RESOLUTION SYSTEM
+        try:
+            from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
+            resolution_system = ConflictResolutionSystem(self.user_id, self.conversation_id)
+            inputs['resolution_system'] = {
+                'pending_resolutions': await resolution_system.get_pending_resolutions(),
+                'resolution_history': await resolution_system.get_recent_resolutions()
+            }
+        except ImportError:
+            inputs['resolution_system'] = {'available': False}
+        
+        # 5. POWER DYNAMICS FROM AGENT INTERACTION
+        from story_agent.agent_interaction import (
+            check_for_power_exchange, update_relationship_from_exchange
+        )
+        
+        # Check for active power exchanges with present NPCs
+        inputs['power_exchanges'] = []
+        for npc_id in context.get('npcs_present', []):
+            exchange = await check_for_power_exchange(
+                self.user_id, 
+                self.conversation_id,
+                context.get('scene_focus', 'routine'),
+                npc_id
+            )
+            if exchange:
+                inputs['power_exchanges'].append(exchange)
+        
+        # 6. GOVERNANCE-LEVEL CONFLICTS
+        try:
+            from nyx.governance.conflict import ConflictAnalyzer
+            governance = ConflictAnalyzer()
+            inputs['governance_conflicts'] = await governance.analyze_conflicts({
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            })
+        except ImportError:
+            inputs['governance_conflicts'] = {'available': False}
+        
+        # 7. POLITICAL/GEOPOLITICAL CONFLICTS
+        try:
+            from lore.managers.politics import PoliticalManager
+            from lore.managers.geopolitical import GeopoliticalManager
+            
+            political_mgr = PoliticalManager()
+            geo_mgr = GeopoliticalManager()
+            
+            inputs['political_conflicts'] = {
+                'active_political': await political_mgr.get_active_conflicts(),
+                'geopolitical': await geo_mgr.get_regional_conflicts()
+            }
+        except ImportError:
+            inputs['political_conflicts'] = {'available': False}
+        
+        # 8. TIME-BASED CONTEXT
+        from logic.time_cycle import (
+            get_current_time_model, 
+            check_for_conflict_events,
+            process_conflict_time_advancement
+        )
         
         time_model = await get_current_time_model(self.user_id, self.conversation_id)
         inputs['temporal_context'] = {
             'time_of_day': time_model.time_of_day,
-            'activity': time_model.current_activity
+            'activity': time_model.current_activity,
+            'conflict_events': await check_for_conflict_events(self.user_id, self.conversation_id),
+            'time_advancement': await process_conflict_time_advancement(
+                self.user_id, 
+                self.conversation_id,
+                context.get('activity_type', 'idle')
+            )
         }
         
-        # Get NPC-specific conflict states
+        # 9. NPC-SPECIFIC CONFLICT STATES
         npcs_present = context.get('npcs_present', [])
         inputs['npc_conflicts'] = {}
         
         for npc_id in npcs_present:
             inputs['npc_conflicts'][npc_id] = await self._get_npc_conflict_state(npc_id)
         
-        # Get world state impacts
+        # 10. WORLD STATE IMPACTS
         from story_agent.world_director_agent import WorldDirector
         
         world_director = WorldDirector(self.user_id, self.conversation_id)
         world_state = await world_director.get_world_state()
-        inputs['world_tensions'] = world_state.tension_factors if hasattr(world_state, 'tension_factors') else {}
+        
+        inputs['world_state'] = {
+            'tensions': world_state.tension_factors if hasattr(world_state, 'tension_factors') else {},
+            'mood': world_state.world_mood if hasattr(world_state, 'world_mood') else 'neutral',
+            'power_dynamics': world_state.recent_power_exchanges if hasattr(world_state, 'recent_power_exchanges') else []
+        }
+        
+        # 11. MEMORY-BASED CONFLICT TRACKING
+        from context.memory_manager import get_memory_manager
+        
+        memory_mgr = get_memory_manager(self.user_id, self.conversation_id)
+        inputs['conflict_memories'] = {
+            'recent_resolutions': await memory_mgr.get_memories_by_type('conflict_resolution', limit=5),
+            'conflict_patterns': await memory_mgr.get_memories_by_type('conflict_pattern', limit=10)
+        }
+        
+        # 12. EVENT SYSTEM CONFLICTS
+        from logic.event_system import EventSystem
+        
+        event_system = EventSystem()
+        await event_system.initialize(self.user_id, self.conversation_id)
+        inputs['event_conflicts'] = await event_system.get_conflict_events()
+        
+        # 13. NARRATIVE EVENT CONFLICTS
+        from logic.narrative_events import check_for_narrative_moments
+        
+        inputs['narrative_conflicts'] = await check_for_narrative_moments(
+            self.user_id, 
+            self.conversation_id,
+            context
+        )
         
         return inputs
     
@@ -207,25 +323,89 @@ class ConflictOutputSynthesizer:
             'conflicts': [],
             'tensions': defaultdict(float),
             'active_dynamics': [],
-            'contradictions_resolved': []
+            'power_exchanges': [],
+            'resolutions_pending': [],
+            'contradictions_resolved': [],
+            'vitals_impact': {},
+            'governance_directives': []
         }
         
-        # Merge slice-of-life and major conflicts
         all_conflicts = []
         
-        # Add slice-of-life conflicts with proper typing
+        # 1. Process slice-of-life conflicts
         for conflict in inputs.get('slice_of_life', {}).get('active', []):
             conflict['source_system'] = 'slice_of_life'
             conflict['weight'] = 0.7  # Subtle conflicts have lower weight
+            conflict['category'] = 'interpersonal'
             all_conflicts.append(conflict)
         
-        # Add major conflicts with higher weight
-        for conflict in inputs.get('major_conflicts', []):
-            conflict['source_system'] = 'major'
+        # Add pending slice-of-life resolutions
+        harmonized['resolutions_pending'].extend(
+            inputs.get('slice_of_life', {}).get('pending_resolutions', [])
+        )
+        
+        # 2. Process main system conflicts
+        for conflict in inputs.get('main_conflicts', {}).get('active', []):
+            conflict['source_system'] = 'main'
             conflict['weight'] = 1.0
+            conflict['category'] = 'major'
+            # Add detailed info if available
+            conflict_id = conflict.get('conflict_id')
+            if conflict_id and conflict_id in inputs.get('main_conflicts', {}).get('details', {}):
+                conflict['details'] = inputs['main_conflicts']['details'][conflict_id]
             all_conflicts.append(conflict)
         
-        # Check for contradictions
+        # 3. Process enhanced integration conflicts
+        if 'enhanced_integration' in inputs:
+            # Add pattern resolutions
+            harmonized['resolutions_pending'].extend(
+                inputs['enhanced_integration'].get('pattern_resolutions', [])
+            )
+            # Add daily dynamics as active dynamics
+            harmonized['active_dynamics'].extend(
+                inputs['enhanced_integration'].get('daily_dynamics', [])
+            )
+        
+        # 4. Process power exchanges
+        harmonized['power_exchanges'] = inputs.get('power_exchanges', [])
+        
+        # 5. Process political/geopolitical conflicts
+        if inputs.get('political_conflicts', {}).get('available', True):
+            for conflict in inputs.get('political_conflicts', {}).get('active_political', []):
+                conflict['source_system'] = 'political'
+                conflict['weight'] = 0.5  # Background political tensions
+                conflict['category'] = 'political'
+                all_conflicts.append(conflict)
+        
+        # 6. Process governance conflicts
+        if inputs.get('governance_conflicts', {}).get('available', True):
+            governance_data = inputs.get('governance_conflicts', {})
+            if governance_data:
+                harmonized['governance_directives'] = governance_data.get('directives', [])
+                # Add high-priority governance conflicts
+                for conflict in governance_data.get('conflicts', []):
+                    conflict['source_system'] = 'governance'
+                    conflict['weight'] = 1.5  # Governance has high priority
+                    conflict['category'] = 'systemic'
+                    all_conflicts.append(conflict)
+        
+        # 7. Process temporal conflict events
+        for event in inputs.get('temporal_context', {}).get('conflict_events', []):
+            # Convert events to temporary conflicts
+            temp_conflict = {
+                'conflict_id': f"event_{event.get('conflict_id')}",
+                'source_system': 'event',
+                'weight': 0.8,
+                'category': 'event',
+                'description': event.get('description'),
+                'temporary': True
+            }
+            all_conflicts.append(temp_conflict)
+        
+        # 8. Process vitals impact
+        harmonized['vitals_impact'] = inputs.get('main_conflicts', {}).get('vitals', {})
+        
+        # 9. Check for contradictions between ALL conflicts
         for i, c1 in enumerate(all_conflicts):
             for c2 in all_conflicts[i+1:]:
                 contradiction = await self._detect_contradiction(c1, c2)
@@ -233,21 +413,40 @@ class ConflictOutputSynthesizer:
                     resolved = await self._resolve_contradiction(c1, c2, contradiction)
                     harmonized['contradictions_resolved'].append(resolved)
         
-        # Aggregate tension levels
-        for source, data in inputs.items():
-            if isinstance(data, dict) and 'tensions' in data:
-                for tension_type, level in data['tensions'].items():
-                    harmonized['tensions'][tension_type] += level
+        # 10. Aggregate tension levels from all sources
+        tension_sources = [
+            ('slice_of_life', 1.0),
+            ('world_state', 1.2),
+            ('temporal_context', 0.8),
+            ('narrative_conflicts', 0.9)
+        ]
+        
+        for source_key, weight in tension_sources:
+            if source_key in inputs and isinstance(inputs[source_key], dict):
+                tensions = inputs[source_key].get('tensions', {})
+                for tension_type, level in tensions.items():
+                    harmonized['tensions'][tension_type] += level * weight
+        
+        # Add power exchange tensions
+        for exchange in harmonized['power_exchanges']:
+            intensity = exchange.get('intensity', 0.5)
+            harmonized['tensions']['power'] += intensity * 0.3
+            harmonized['tensions']['sexual'] += intensity * 0.1
         
         # Normalize tension levels
         max_tension = max(harmonized['tensions'].values()) if harmonized['tensions'] else 1.0
         if max_tension > 0:
             for key in harmonized['tensions']:
-                harmonized['tensions'][key] /= max_tension
+                harmonized['tensions'][key] = min(1.0, harmonized['tensions'][key] / max_tension)
         
-        # Extract active dynamics
-        if 'power_dynamics' in inputs:
-            harmonized['active_dynamics'] = inputs['power_dynamics']
+        # 11. Extract memory patterns
+        if 'conflict_memories' in inputs:
+            for memory in inputs['conflict_memories'].get('conflict_patterns', []):
+                # Use memory patterns to adjust conflict weights
+                pattern_type = memory.get('pattern_type')
+                for conflict in all_conflicts:
+                    if pattern_type in str(conflict.get('conflict_type', '')).lower():
+                        conflict['weight'] *= 1.2  # Boost conflicts matching memory patterns
         
         harmonized['conflicts'] = all_conflicts
         
