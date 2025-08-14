@@ -3,7 +3,8 @@
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional, Union
-from datetime import datetime
+
+from logic.game_time_helper import get_game_datetime, get_game_iso_string
 
 from .integrated import IntegratedMemorySystem, init_memory_system
 from .core import Memory, MemoryType, MemorySignificance

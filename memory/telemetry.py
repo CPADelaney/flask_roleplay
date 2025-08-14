@@ -5,7 +5,9 @@ import logging
 import asyncio
 from typing import Dict, Any, Optional, List
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from logic.game_time_helper import get_game_datetime, get_game_iso_string
 
 from .connection import DBConnectionManager
 
@@ -34,9 +36,11 @@ class MemoryTelemetry:
     }
     
     @classmethod
-    async def record(cls, 
-                    operation: str, 
-                    success: bool = True, 
+    async def record(cls,
+                    user_id: int,
+                    conversation_id: int,
+                    operation: str,
+                    success: bool = True,
                     duration: float = 0.0,
                     data_size: Optional[int] = None,
                     error: Optional[str] = None,
@@ -45,9 +49,10 @@ class MemoryTelemetry:
         Record a telemetry event for a memory operation.
         Queues the event for background processing.
         """
-        # Create telemetry record
+        # Create telemetry record using game time
+        timestamp_str = await get_game_iso_string(user_id, conversation_id)
         record = {
-            "timestamp": datetime.now(),
+            "timestamp": timestamp_str,
             "operation": operation,
             "success": success,
             "duration": duration,
@@ -180,14 +185,14 @@ class MemoryTelemetry:
             logger.error(f"Error flushing telemetry batch: {e}")
     
     @classmethod
-    async def get_recent_metrics(cls, time_window_minutes: int = 15) -> Dict[str, Any]:
+    async def get_recent_metrics(cls, user_id: int, conversation_id: int, time_window_minutes: int = 15) -> Dict[str, Any]:
         """
         Get metrics for recent operations.
         """
         try:
             # Get database connection using the proper context manager
             async with await get_connection_context() as conn:
-                cutoff = datetime.now() - timedelta(minutes=time_window_minutes)
+                cutoff = await get_game_datetime(user_id, conversation_id) - timedelta(minutes=time_window_minutes)
                 
                 # Get operation counts
                 operation_rows = await conn.fetch("""
@@ -309,13 +314,13 @@ class MemoryTelemetry:
 
     
     @classmethod
-    async def cleanup_old_telemetry(cls, days_to_keep: int = 30) -> int:
+    async def cleanup_old_telemetry(cls, user_id: int, conversation_id: int, days_to_keep: int = 30) -> int:
         """
         Clean up old telemetry data.
         """
         try:
             async with await get_connection_context() as conn:
-                cutoff = datetime.now() - timedelta(days=days_to_keep)
+                cutoff = await get_game_datetime(user_id, conversation_id) - timedelta(days=days_to_keep)
                 result = await conn.execute(
                     """
                     DELETE FROM memory_telemetry
