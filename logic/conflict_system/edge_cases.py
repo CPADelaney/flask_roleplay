@@ -1,601 +1,897 @@
-# Testing Framework & Edge Case Handling for Conflict System
+# logic/conflict_system/edge_cases.py
+"""
+Edge Case Handler with LLM-powered recovery and adaptation
+Handles unusual, broken, or unexpected conflict situations gracefully
+"""
 
-import unittest
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+import logging
 import json
 import random
+from typing import Dict, List, Any, Optional
+from enum import Enum
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
-class EdgeCaseHandler:
-    """Handles edge cases in the conflict system"""
+from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
+from db.connection import get_db_connection_context
+
+logger = logging.getLogger(__name__)
+
+# ===============================================================================
+# EDGE CASE TYPES
+# ===============================================================================
+
+class EdgeCaseType(Enum):
+    """Types of edge cases in conflict system"""
+    ORPHANED_CONFLICT = "orphaned_conflict"  # Conflict with no stakeholders
+    INFINITE_LOOP = "infinite_loop"  # Conflicts triggering each other
+    CONTRADICTION = "contradiction"  # Mutually exclusive states
+    STALE_CONFLICT = "stale_conflict"  # Conflict stuck too long
+    COMPLEXITY_OVERLOAD = "complexity_overload"  # Too many simultaneous conflicts
+    MISSING_CONTEXT = "missing_context"  # Required data missing
+    PLAYER_DISCONNECT = "player_disconnect"  # Player not engaging
+    NPC_UNAVAILABLE = "npc_unavailable"  # Key NPC removed/busy
+    NARRATIVE_BREAK = "narrative_break"  # Story continuity broken
+    SYSTEM_CONFLICT = "system_conflict"  # Different systems disagree
+
+
+@dataclass
+class EdgeCase:
+    """Represents a detected edge case"""
+    case_id: int
+    case_type: EdgeCaseType
+    affected_conflicts: List[int]
+    severity: float  # 0-1
+    description: str
+    detection_context: Dict[str, Any]
+    recovery_options: List[Dict[str, Any]]
+
+
+# ===============================================================================
+# EDGE CASE DETECTOR AND HANDLER
+# ===============================================================================
+
+class ConflictEdgeCaseHandler:
+    """Detects and handles edge cases in conflict system"""
     
-    def __init__(self, conflict_system, db_connection):
-        self.conflicts = conflict_system
-        self.db = db_connection
-    
-    def handle_all_npcs_allied(self, player_id: str) -> Dict:
-        """Handle case where all NPCs are in same alliance"""
-        # Detect if all NPCs are allied
-        all_npcs = self._get_all_npcs()
-        alliances = self._get_npc_alliances(all_npcs)
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
         
-        if len(set(alliances.values())) == 1:
-            # All in same alliance - create internal friction
-            return self._create_alliance_internal_conflict(list(alliances.keys()))
-        return None
+        # Lazy-loaded agents
+        self._anomaly_detector = None
+        self._recovery_strategist = None
+        self._narrative_healer = None
+        self._graceful_degrader = None
+        self._continuity_keeper = None
     
-    def _create_alliance_internal_conflict(self, allied_npcs: List[str]) -> Dict:
-        """Create conflict within an alliance"""
-        # Pick two NPCs with highest tension
-        tension_pairs = []
-        for i, npc1 in enumerate(allied_npcs):
-            for npc2 in allied_npcs[i+1:]:
-                tension = self._calculate_tension(npc1, npc2)
-                tension_pairs.append((tension, npc1, npc2))
-        
-        tension_pairs.sort(reverse=True)
-        if tension_pairs and tension_pairs[0][0] > 0.3:
-            _, npc1, npc2 = tension_pairs[0]
-            return {
-                'type': 'alliance_friction',
-                'description': f"Tension within the alliance between {npc1} and {npc2}",
-                'stakes': {
-                    'alliance_stability': 'May split the alliance',
-                    'hierarchy': 'Determine pecking order within alliance'
-                }
-            }
-        return None
+    # ========== Agent Properties ==========
     
-    def handle_player_disengagement(self, player_id: str) -> Dict:
-        """Handle when player completely disengages from conflicts"""
-        recent_responses = self._get_recent_conflict_responses(player_id, days=7)
-        
-        if len(recent_responses) == 0 or all(r['type'] == 'ignore' for r in recent_responses):
-            # Player is disengaged - NPCs act autonomously
-            return self._trigger_autonomous_resolution(player_id)
-    
-    def _trigger_autonomous_resolution(self, player_id: str) -> Dict:
-        """NPCs resolve conflicts without player input"""
-        active_conflicts = self.conflicts.get_active_conflicts()
-        
-        resolutions = []
-        for conflict in active_conflicts:
-            if self._should_auto_resolve(conflict):
-                resolution = self._generate_autonomous_resolution(conflict)
-                resolutions.append(resolution)
+    @property
+    def anomaly_detector(self) -> Agent:
+        if self._anomaly_detector is None:
+            self._anomaly_detector = Agent(
+                name="Anomaly Detector",
+                instructions="""
+                Detect unusual or problematic patterns in conflict systems.
                 
-                # Apply resolution
-                self.conflicts.resolve_conflict(conflict['id'], resolution)
-        
-        return {
-            'auto_resolved': len(resolutions),
-            'message': "NPCs resolved conflicts without your input",
-            'consequences': self._summarize_consequences(resolutions)
-        }
+                Identify:
+                - Logical contradictions
+                - Infinite loops
+                - Orphaned elements
+                - Stale progressions
+                - Missing dependencies
+                - Narrative breaks
+                
+                Focus on catching problems before they break the experience.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._anomaly_detector
     
-    def handle_conflicting_background_events(self, events: List[Dict]) -> List[Dict]:
-        """Resolve conflicting background events"""
-        # Group events by type and location
-        event_groups = {}
+    @property
+    def recovery_strategist(self) -> Agent:
+        if self._recovery_strategist is None:
+            self._recovery_strategist = Agent(
+                name="Recovery Strategist",
+                instructions="""
+                Design recovery strategies for conflict system problems.
+                
+                Create strategies that:
+                - Preserve narrative continuity
+                - Minimize player disruption
+                - Maintain conflict integrity
+                - Enable graceful recovery
+                - Prevent recurrence
+                
+                Turn problems into opportunities when possible.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._recovery_strategist
+    
+    @property
+    def narrative_healer(self) -> Agent:
+        if self._narrative_healer is None:
+            self._narrative_healer = Agent(
+                name="Narrative Healer",
+                instructions="""
+                Heal narrative breaks and continuity issues.
+                
+                Create fixes that:
+                - Explain inconsistencies
+                - Bridge narrative gaps
+                - Justify sudden changes
+                - Maintain immersion
+                - Feel intentional
+                
+                Make broken stories whole again.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._narrative_healer
+    
+    @property
+    def graceful_degrader(self) -> Agent:
+        if self._graceful_degrader is None:
+            self._graceful_degrader = Agent(
+                name="Graceful Degradation Manager",
+                instructions="""
+                Manage graceful degradation when systems fail.
+                
+                Ensure:
+                - Core experience preserved
+                - Fallbacks feel natural
+                - Complexity reduced smoothly
+                - Player experience maintained
+                - Recovery paths clear
+                
+                When things break, break beautifully.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._graceful_degrader
+    
+    @property
+    def continuity_keeper(self) -> Agent:
+        if self._continuity_keeper is None:
+            self._continuity_keeper = Agent(
+                name="Continuity Keeper",
+                instructions="""
+                Maintain story continuity despite system issues.
+                
+                Preserve:
+                - Character consistency
+                - Timeline coherence
+                - Relationship dynamics
+                - World state logic
+                - Player agency
+                
+                Keep the story making sense no matter what.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._continuity_keeper
+    
+    # ========== Detection Methods ==========
+    
+    async def scan_for_edge_cases(self) -> List[EdgeCase]:
+        """Scan system for edge cases"""
+        
+        edge_cases = []
+        
+        # Check for orphaned conflicts
+        orphaned = await self._detect_orphaned_conflicts()
+        edge_cases.extend(orphaned)
+        
+        # Check for infinite loops
+        loops = await self._detect_infinite_loops()
+        edge_cases.extend(loops)
+        
+        # Check for stale conflicts
+        stale = await self._detect_stale_conflicts()
+        edge_cases.extend(stale)
+        
+        # Check for complexity overload
+        overload = await self._detect_complexity_overload()
+        if overload:
+            edge_cases.append(overload)
+        
+        # Check for narrative breaks
+        breaks = await self._detect_narrative_breaks()
+        edge_cases.extend(breaks)
+        
+        return edge_cases
+    
+    async def _detect_orphaned_conflicts(self) -> List[EdgeCase]:
+        """Detect conflicts with no active stakeholders"""
+        
+        edge_cases = []
+        
+        async with get_db_connection_context() as conn:
+            orphaned = await conn.fetch("""
+                SELECT c.conflict_id, c.conflict_name, c.description
+                FROM Conflicts c
+                LEFT JOIN conflict_stakeholders cs ON c.conflict_id = cs.conflict_id
+                WHERE c.user_id = $1 AND c.conversation_id = $2
+                AND c.is_active = true
+                GROUP BY c.conflict_id
+                HAVING COUNT(cs.stakeholder_id) = 0
+            """, self.user_id, self.conversation_id)
+        
+        for conflict in orphaned:
+            recovery = await self._generate_orphan_recovery(conflict)
+            
+            edge_case = EdgeCase(
+                case_id=await self._store_edge_case(
+                    EdgeCaseType.ORPHANED_CONFLICT,
+                    [conflict['conflict_id']],
+                    0.7,
+                    f"Conflict '{conflict['conflict_name']}' has no stakeholders"
+                ),
+                case_type=EdgeCaseType.ORPHANED_CONFLICT,
+                affected_conflicts=[conflict['conflict_id']],
+                severity=0.7,
+                description=f"Orphaned conflict: {conflict['conflict_name']}",
+                detection_context={'conflict': dict(conflict)},
+                recovery_options=recovery
+            )
+            edge_cases.append(edge_case)
+        
+        return edge_cases
+    
+    async def _detect_infinite_loops(self) -> List[EdgeCase]:
+        """Detect conflicts triggering each other infinitely"""
+        
+        edge_cases = []
+        
+        async with get_db_connection_context() as conn:
+            # Get recent conflict events
+            events = await conn.fetch("""
+                SELECT conflict_id, triggered_by, event_type, created_at
+                FROM conflict_events
+                WHERE user_id = $1 AND conversation_id = $2
+                AND created_at > NOW() - INTERVAL '1 hour'
+                ORDER BY created_at DESC
+                LIMIT 100
+            """, self.user_id, self.conversation_id)
+        
+        # Analyze for circular triggers
+        trigger_chains = {}
         for event in events:
-            key = (event['type'], event.get('location', 'global'))
-            if key not in event_groups:
-                event_groups[key] = []
-            event_groups[key].append(event)
+            if event['triggered_by']:
+                chain_key = f"{event['conflict_id']}-{event['triggered_by']}"
+                if chain_key not in trigger_chains:
+                    trigger_chains[chain_key] = 0
+                trigger_chains[chain_key] += 1
         
-        # Resolve conflicts within groups
-        resolved_events = []
-        for group_key, group_events in event_groups.items():
-            if len(group_events) > 1:
-                # Events conflict - merge or prioritize
-                resolved = self._merge_conflicting_events(group_events)
-                resolved_events.append(resolved)
-            else:
-                resolved_events.extend(group_events)
+        # Detect loops
+        for chain, count in trigger_chains.items():
+            if count > 5:  # More than 5 mutual triggers
+                conflicts = [int(c) for c in chain.split('-')]
+                
+                recovery = await self._generate_loop_recovery(conflicts)
+                
+                edge_case = EdgeCase(
+                    case_id=await self._store_edge_case(
+                        EdgeCaseType.INFINITE_LOOP,
+                        conflicts,
+                        0.9,
+                        f"Infinite loop detected between conflicts"
+                    ),
+                    case_type=EdgeCaseType.INFINITE_LOOP,
+                    affected_conflicts=conflicts,
+                    severity=0.9,
+                    description="Conflicts triggering each other infinitely",
+                    detection_context={'trigger_count': count},
+                    recovery_options=recovery
+                )
+                edge_cases.append(edge_case)
         
-        return resolved_events
+        return edge_cases
     
-    def handle_memory_overload(self, npc_id: str) -> Dict:
-        """Handle when memory system has too many conflict memories"""
-        memory_count = self._count_conflict_memories(npc_id)
+    async def _detect_stale_conflicts(self) -> List[EdgeCase]:
+        """Detect conflicts that haven't progressed"""
         
-        if memory_count > 100:  # Threshold for overload
-            # Consolidate memories into patterns
-            patterns = self._consolidate_memories_to_patterns(npc_id)
+        edge_cases = []
+        
+        async with get_db_connection_context() as conn:
+            stale = await conn.fetch("""
+                SELECT conflict_id, conflict_name, phase, progress,
+                       last_updated, CURRENT_TIMESTAMP - last_updated as stale_duration
+                FROM Conflicts
+                WHERE user_id = $1 AND conversation_id = $2
+                AND is_active = true
+                AND last_updated < CURRENT_TIMESTAMP - INTERVAL '7 days'
+                AND progress < 100
+            """, self.user_id, self.conversation_id)
+        
+        for conflict in stale:
+            recovery = await self._generate_stale_recovery(conflict)
             
-            # Archive old detailed memories
-            self._archive_old_memories(npc_id, days=30)
+            edge_case = EdgeCase(
+                case_id=await self._store_edge_case(
+                    EdgeCaseType.STALE_CONFLICT,
+                    [conflict['conflict_id']],
+                    0.5,
+                    f"Conflict stale for {conflict['stale_duration'].days} days"
+                ),
+                case_type=EdgeCaseType.STALE_CONFLICT,
+                affected_conflicts=[conflict['conflict_id']],
+                severity=min(0.9, conflict['stale_duration'].days / 14),
+                description=f"Stale conflict: {conflict['conflict_name']}",
+                detection_context={'stale_days': conflict['stale_duration'].days},
+                recovery_options=recovery
+            )
+            edge_cases.append(edge_case)
+        
+        return edge_cases
+    
+    async def _detect_complexity_overload(self) -> Optional[EdgeCase]:
+        """Detect if too many conflicts are active"""
+        
+        async with get_db_connection_context() as conn:
+            count = await conn.fetchval("""
+                SELECT COUNT(*) FROM Conflicts
+                WHERE user_id = $1 AND conversation_id = $2
+                AND is_active = true
+            """, self.user_id, self.conversation_id)
+        
+        if count > 10:  # More than 10 active conflicts
+            conflicts = await conn.fetch("""
+                SELECT conflict_id FROM Conflicts
+                WHERE user_id = $1 AND conversation_id = $2
+                AND is_active = true
+            """, self.user_id, self.conversation_id)
             
-            return {
-                'action': 'memory_consolidation',
-                'patterns_extracted': len(patterns),
-                'memories_archived': memory_count - 20,
-                'message': f"Consolidated {npc_id}'s conflict memories into behavioral patterns"
-            }
+            recovery = await self._generate_overload_recovery(count)
+            
+            return EdgeCase(
+                case_id=await self._store_edge_case(
+                    EdgeCaseType.COMPLEXITY_OVERLOAD,
+                    [c['conflict_id'] for c in conflicts],
+                    0.8,
+                    f"{count} active conflicts causing overload"
+                ),
+                case_type=EdgeCaseType.COMPLEXITY_OVERLOAD,
+                affected_conflicts=[c['conflict_id'] for c in conflicts],
+                severity=min(1.0, count / 15),
+                description=f"System overloaded with {count} active conflicts",
+                detection_context={'active_count': count},
+                recovery_options=recovery
+            )
+        
         return None
     
-    def handle_circular_alliance_dependencies(self) -> Dict:
-        """Detect and resolve circular alliance dependencies"""
-        alliances = self._get_all_alliances()
-        cycles = self._detect_cycles(alliances)
+    async def _detect_narrative_breaks(self) -> List[EdgeCase]:
+        """Detect narrative continuity breaks"""
         
-        if cycles:
-            # Break cycles by weakening weakest links
-            for cycle in cycles:
-                weakest_link = self._find_weakest_alliance_link(cycle)
-                self._weaken_alliance(weakest_link['from'], weakest_link['to'])
+        edge_cases = []
+        
+        # Detect conflicts with contradictory states
+        async with get_db_connection_context() as conn:
+            contradictions = await conn.fetch("""
+                SELECT c1.conflict_id as conflict1, c2.conflict_id as conflict2,
+                       c1.conflict_name as name1, c2.conflict_name as name2
+                FROM Conflicts c1
+                JOIN Conflicts c2 ON c1.user_id = c2.user_id
+                WHERE c1.user_id = $1 AND c1.conversation_id = $2
+                AND c1.is_active = true AND c2.is_active = true
+                AND c1.conflict_id < c2.conflict_id
+                AND EXISTS (
+                    SELECT 1 FROM conflict_stakeholders cs1
+                    JOIN conflict_stakeholders cs2 ON cs1.npc_id = cs2.npc_id
+                    WHERE cs1.conflict_id = c1.conflict_id
+                    AND cs2.conflict_id = c2.conflict_id
+                    AND cs1.faction != cs2.faction
+                )
+            """, self.user_id, self.conversation_id)
+        
+        for contradiction in contradictions:
+            recovery = await self._generate_contradiction_recovery(contradiction)
             
-            return {
-                'cycles_detected': len(cycles),
-                'cycles_broken': len(cycles),
-                'method': 'Weakened unstable alliance links'
-            }
-        return None
-    
-    def handle_resource_deadlock(self) -> Dict:
-        """Handle when resources are completely locked/unavailable"""
-        resources = self._get_all_resources()
-        deadlocked = []
+            edge_case = EdgeCase(
+                case_id=await self._store_edge_case(
+                    EdgeCaseType.CONTRADICTION,
+                    [contradiction['conflict1'], contradiction['conflict2']],
+                    0.6,
+                    "Contradictory NPC positions in conflicts"
+                ),
+                case_type=EdgeCaseType.CONTRADICTION,
+                affected_conflicts=[contradiction['conflict1'], contradiction['conflict2']],
+                severity=0.6,
+                description="NPC has contradictory roles in conflicts",
+                detection_context={'conflicts': dict(contradiction)},
+                recovery_options=recovery
+            )
+            edge_cases.append(edge_case)
         
-        for resource in resources:
-            if self._is_deadlocked(resource):
-                deadlocked.append(resource)
-        
-        if deadlocked:
-            # Force redistribution
-            for resource in deadlocked:
-                self._force_redistribute(resource)
-            
-            return {
-                'deadlocked_resources': len(deadlocked),
-                'action': 'forced_redistribution',
-                'message': 'Resources redistributed to break deadlock'
-            }
-        return None
+        return edge_cases
     
-    def handle_investigation_dead_end(self, investigation_id: str) -> Dict:
-        """Handle when investigation reaches dead end"""
-        investigation = self._get_investigation(investigation_id)
-        
-        if investigation['progress'] < 0.3 and investigation['days_active'] > 7:
-            # Investigation stalled - provide hint or alternate path
-            hint = self._generate_investigation_hint(investigation)
-            alternate_path = self._create_alternate_investigation_path(investigation)
-            
-            return {
-                'action': 'investigation_assistance',
-                'hint': hint,
-                'alternate_path': alternate_path,
-                'message': 'New lead discovered in investigation'
-            }
-        return None
+    # ========== Recovery Generation ==========
     
-    def handle_canon_contradiction(self, fact1: Dict, fact2: Dict) -> Dict:
-        """Resolve contradicting canonical facts"""
-        # Determine which fact takes precedence
-        if fact1['establishment_date'] < fact2['establishment_date']:
-            # Earlier fact has precedence
-            primary_fact = fact1
-            contradicting_fact = fact2
+    async def _generate_orphan_recovery(
+        self,
+        conflict: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Generate recovery options for orphaned conflict"""
+        
+        prompt = f"""
+        Generate recovery options for orphaned conflict:
+        
+        Conflict: {conflict['conflict_name']}
+        Description: {conflict['description']}
+        
+        Create 3 recovery options:
+        1. Graceful closure
+        2. NPC assignment
+        3. Player-centric pivot
+        
+        Return JSON:
+        {{
+            "options": [
+                {{
+                    "strategy": "close/assign/pivot",
+                    "description": "How to recover",
+                    "narrative": "Story explanation",
+                    "implementation": ["steps to take"],
+                    "risk": "low/medium/high"
+                }}
+            ]
+        }}
+        """
+        
+        response = await Runner.run(self.recovery_strategist, prompt)
+        data = json.loads(response.output)
+        return data['options']
+    
+    async def _generate_loop_recovery(
+        self,
+        conflicts: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Generate recovery for infinite loop"""
+        
+        prompt = f"""
+        Generate recovery for infinite conflict loop:
+        
+        Conflicts involved: {conflicts}
+        
+        Create solutions that:
+        - Break the cycle
+        - Preserve both conflicts if possible
+        - Maintain narrative sense
+        
+        Return JSON:
+        {{
+            "options": [
+                {{
+                    "strategy": "break/merge/prioritize",
+                    "description": "How to break loop",
+                    "preserved_conflicts": [conflict_ids],
+                    "narrative_bridge": "Story explanation",
+                    "prevention": "How to prevent recurrence"
+                }}
+            ]
+        }}
+        """
+        
+        response = await Runner.run(self.recovery_strategist, prompt)
+        data = json.loads(response.output)
+        return data['options']
+    
+    async def _generate_stale_recovery(
+        self,
+        conflict: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Generate recovery for stale conflict"""
+        
+        prompt = f"""
+        Generate recovery for stale conflict:
+        
+        Conflict: {conflict['conflict_name']}
+        Phase: {conflict['phase']}
+        Progress: {conflict['progress']}%
+        Stale for: {conflict['stale_duration'].days} days
+        
+        Create options to:
+        - Revitalize with new development
+        - Gracefully conclude
+        - Transform into something new
+        
+        Return JSON:
+        {{
+            "options": [
+                {{
+                    "strategy": "revitalize/conclude/transform",
+                    "description": "Recovery approach",
+                    "narrative_event": "What happens in story",
+                    "player_hook": "How to re-engage player",
+                    "expected_outcome": "What this achieves"
+                }}
+            ]
+        }}
+        """
+        
+        response = await Runner.run(self.recovery_strategist, prompt)
+        data = json.loads(response.output)
+        return data['options']
+    
+    async def _generate_overload_recovery(
+        self,
+        count: int
+    ) -> List[Dict[str, Any]]:
+        """Generate recovery for complexity overload"""
+        
+        prompt = f"""
+        Generate recovery for conflict overload:
+        
+        Active conflicts: {count}
+        
+        Create strategies to:
+        - Reduce complexity gracefully
+        - Merge related conflicts
+        - Prioritize important conflicts
+        - Create breathing room
+        
+        Return JSON:
+        {{
+            "options": [
+                {{
+                    "strategy": "consolidate/prioritize/pause/resolve",
+                    "target_count": ideal number of conflicts,
+                    "selection_criteria": "How to choose which conflicts",
+                    "narrative_framing": "Story explanation",
+                    "player_communication": "How to explain to player"
+                }}
+            ]
+        }}
+        """
+        
+        response = await Runner.run(self.graceful_degrader, prompt)
+        data = json.loads(response.output)
+        return data['options']
+    
+    async def _generate_contradiction_recovery(
+        self,
+        contradiction: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Generate recovery for contradictory states"""
+        
+        prompt = f"""
+        Generate recovery for contradictory NPC positions:
+        
+        Conflict 1: {contradiction['name1']}
+        Conflict 2: {contradiction['name2']}
+        
+        NPC has contradictory roles in these conflicts.
+        
+        Create solutions that:
+        - Explain the contradiction
+        - Resolve the inconsistency
+        - Maintain character integrity
+        
+        Return JSON:
+        {{
+            "options": [
+                {{
+                    "strategy": "explain/choose/split",
+                    "narrative_explanation": "How to explain in story",
+                    "character_development": "How this develops NPC",
+                    "conflict_impact": {{
+                        "conflict1": "impact on first conflict",
+                        "conflict2": "impact on second conflict"
+                    }}
+                }}
+            ]
+        }}
+        """
+        
+        response = await Runner.run(self.narrative_healer, prompt)
+        data = json.loads(response.output)
+        return data['options']
+    
+    # ========== Recovery Execution ==========
+    
+    async def execute_recovery(
+        self,
+        edge_case: EdgeCase,
+        option_index: int = 0
+    ) -> Dict[str, Any]:
+        """Execute recovery strategy for edge case"""
+        
+        if option_index >= len(edge_case.recovery_options):
+            return {'success': False, 'reason': 'Invalid recovery option'}
+        
+        recovery = edge_case.recovery_options[option_index]
+        
+        # Execute based on edge case type
+        if edge_case.case_type == EdgeCaseType.ORPHANED_CONFLICT:
+            result = await self._execute_orphan_recovery(
+                edge_case.affected_conflicts[0],
+                recovery
+            )
+        elif edge_case.case_type == EdgeCaseType.INFINITE_LOOP:
+            result = await self._execute_loop_recovery(
+                edge_case.affected_conflicts,
+                recovery
+            )
+        elif edge_case.case_type == EdgeCaseType.STALE_CONFLICT:
+            result = await self._execute_stale_recovery(
+                edge_case.affected_conflicts[0],
+                recovery
+            )
+        elif edge_case.case_type == EdgeCaseType.COMPLEXITY_OVERLOAD:
+            result = await self._execute_overload_recovery(recovery)
+        elif edge_case.case_type == EdgeCaseType.CONTRADICTION:
+            result = await self._execute_contradiction_recovery(
+                edge_case.affected_conflicts,
+                recovery
+            )
         else:
-            primary_fact = fact2
-            contradicting_fact = fact1
+            result = {'success': False, 'reason': 'Unknown edge case type'}
         
-        # Check if facts can coexist with modification
-        if self._can_reconcile_facts(primary_fact, contradicting_fact):
-            # Modify newer fact to be compatible
-            modified_fact = self._reconcile_facts(primary_fact, contradicting_fact)
-            return {
-                'resolution': 'reconciled',
-                'primary_fact': primary_fact,
-                'modified_fact': modified_fact
-            }
-        else:
-            # Newer fact is rejected
-            self._reject_canonical_fact(contradicting_fact['id'])
-            return {
-                'resolution': 'rejected',
-                'kept_fact': primary_fact,
-                'rejected_fact': contradicting_fact,
-                'reason': 'Contradicts established canon'
-            }
-
-class ConflictSystemTester:
-    """Comprehensive testing for conflict system"""
+        # Record recovery attempt
+        await self._record_recovery(edge_case.case_id, recovery, result)
+        
+        return result
     
-    def __init__(self, conflict_system):
-        self.conflicts = conflict_system
-        self.test_results = []
+    async def _execute_orphan_recovery(
+        self,
+        conflict_id: int,
+        recovery: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute recovery for orphaned conflict"""
+        
+        strategy = recovery['strategy']
+        
+        async with get_db_connection_context() as conn:
+            if strategy == 'close':
+                # Gracefully close the conflict
+                await conn.execute("""
+                    UPDATE Conflicts
+                    SET is_active = false,
+                        resolution_description = $1,
+                        resolved_at = CURRENT_TIMESTAMP
+                    WHERE conflict_id = $2
+                """, recovery['narrative'], conflict_id)
+                
+                return {'success': True, 'action': 'closed_conflict'}
+                
+            elif strategy == 'assign':
+                # Assign NPCs to the conflict
+                # This would need actual NPC selection logic
+                return {'success': True, 'action': 'assigned_npcs'}
+                
+            elif strategy == 'pivot':
+                # Transform to player-centric conflict
+                await conn.execute("""
+                    UPDATE Conflicts
+                    SET conflict_type = 'personal',
+                        description = $1
+                    WHERE conflict_id = $2
+                """, recovery['narrative'], conflict_id)
+                
+                return {'success': True, 'action': 'pivoted_to_player'}
+        
+        return {'success': False}
     
-    def run_all_tests(self) -> Dict:
-        """Run comprehensive test suite"""
-        tests = [
-            self.test_conflict_frequency,
-            self.test_resolution_timing,
-            self.test_player_agency,
-            self.test_multi_day_progression,
-            self.test_alliance_stability,
-            self.test_background_pacing,
-            self.test_pattern_detection,
-            self.test_resource_scarcity,
-            self.test_social_reputation
-        ]
+    async def _execute_loop_recovery(
+        self,
+        conflicts: List[int],
+        recovery: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute recovery for infinite loop"""
         
-        for test in tests:
-            result = test()
-            self.test_results.append(result)
+        strategy = recovery['strategy']
         
-        return self._summarize_test_results()
+        async with get_db_connection_context() as conn:
+            if strategy == 'break':
+                # Break the trigger chain
+                await conn.execute("""
+                    DELETE FROM conflict_triggers
+                    WHERE conflict_id = ANY($1)
+                    AND triggered_conflict_id = ANY($1)
+                """, conflicts)
+                
+                return {'success': True, 'action': 'broke_trigger_chain'}
+                
+            elif strategy == 'merge':
+                # Merge conflicts into one
+                # Keep first, deactivate others
+                await conn.execute("""
+                    UPDATE Conflicts
+                    SET is_active = false
+                    WHERE conflict_id = ANY($1[2:])
+                """, conflicts)
+                
+                return {'success': True, 'action': 'merged_conflicts'}
+        
+        return {'success': False}
     
-    def test_conflict_frequency(self) -> Dict:
-        """Test that 3-5 conflicts generate naturally per week"""
-        # Simulate a week
-        conflicts_generated = []
-        for day in range(7):
-            daily_conflicts = self._simulate_day_conflicts()
-            conflicts_generated.extend(daily_conflicts)
+    async def _execute_stale_recovery(
+        self,
+        conflict_id: int,
+        recovery: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute recovery for stale conflict"""
         
-        count = len(conflicts_generated)
-        passed = 3 <= count <= 5
+        # Generate narrative event
+        narrative = recovery.get('narrative_event', 'The situation evolves unexpectedly')
         
-        return {
-            'test': 'conflict_frequency',
-            'passed': passed,
-            'expected': '3-5 per week',
-            'actual': count,
-            'conflicts': conflicts_generated
-        }
-    
-    def test_resolution_timing(self) -> Dict:
-        """Test that conflicts resolve in 5-20 days through patterns"""
-        test_conflicts = self._create_test_conflicts(5)
-        resolution_times = []
-        
-        for conflict in test_conflicts:
-            days_to_resolve = self._simulate_resolution(conflict)
-            resolution_times.append(days_to_resolve)
-        
-        avg_time = sum(resolution_times) / len(resolution_times)
-        passed = 5 <= avg_time <= 20
-        
-        return {
-            'test': 'resolution_timing',
-            'passed': passed,
-            'expected': '5-20 days average',
-            'actual': f'{avg_time:.1f} days average',
-            'times': resolution_times
-        }
-    
-    def test_player_agency(self) -> Dict:
-        """Test that player can ignore 90% of conflicts without breaking game"""
-        conflicts = self._create_test_conflicts(20)
-        ignored = random.sample(conflicts, 18)  # Ignore 90%
-        engaged = [c for c in conflicts if c not in ignored]
-        
-        # Simulate ignoring conflicts
-        game_state_before = self._capture_game_state()
-        for conflict in ignored:
-            self._simulate_ignore_conflict(conflict)
-        game_state_after = self._capture_game_state()
-        
-        # Check game still functions
-        game_functional = self._check_game_functionality(game_state_after)
-        meaningful_progress = self._check_meaningful_progress(engaged)
-        
-        return {
-            'test': 'player_agency',
-            'passed': game_functional and meaningful_progress,
-            'ignored_percentage': 90,
-            'game_functional': game_functional,
-            'meaningful_progress': meaningful_progress
-        }
-    
-    def test_multi_day_progression(self) -> Dict:
-        """Test conflict progression over multiple days"""
-        conflict = self._create_test_conflict()
-        progression_log = []
-        
-        for day in range(10):
-            daily_progress = self._simulate_daily_progression(conflict, day)
-            progression_log.append(daily_progress)
-        
-        # Check for natural progression
-        has_escalation = any(p['intensity_change'] > 0 for p in progression_log)
-        has_deescalation = any(p['intensity_change'] < 0 for p in progression_log)
-        has_stasis = any(p['intensity_change'] == 0 for p in progression_log)
-        
-        natural_progression = has_escalation and has_deescalation and has_stasis
-        
-        return {
-            'test': 'multi_day_progression',
-            'passed': natural_progression,
-            'progression': progression_log,
-            'has_variety': natural_progression
-        }
-    
-    def test_alliance_stability(self) -> Dict:
-        """Test alliance stability over time"""
-        alliances = self._create_test_alliances(3)
-        stability_log = []
-        
-        for day in range(14):
-            daily_stability = self._measure_alliance_stability(alliances)
-            stability_log.append(daily_stability)
+        async with get_db_connection_context() as conn:
+            # Progress the conflict
+            await conn.execute("""
+                UPDATE Conflicts
+                SET progress = progress + 20,
+                    phase = CASE 
+                        WHEN progress + 20 >= 80 THEN 'resolution'
+                        WHEN progress + 20 >= 60 THEN 'climax'
+                        ELSE phase
+                    END,
+                    last_updated = CURRENT_TIMESTAMP
+                WHERE conflict_id = $1
+            """, conflict_id)
             
-            # Apply daily pressures
-            self._apply_alliance_pressures(alliances)
+            # Add narrative event
+            await conn.execute("""
+                INSERT INTO conflict_events
+                (conflict_id, event_type, description, created_at)
+                VALUES ($1, 'recovery', $2, CURRENT_TIMESTAMP)
+            """, conflict_id, narrative)
         
-        # Check stability patterns
-        avg_stability = sum(s['overall'] for s in stability_log) / len(stability_log)
-        has_changes = len(set(s['overall'] for s in stability_log)) > 1
-        
-        return {
-            'test': 'alliance_stability',
-            'passed': 0.3 <= avg_stability <= 0.8 and has_changes,
-            'average_stability': avg_stability,
-            'dynamic': has_changes
-        }
+        return {'success': True, 'action': 'revitalized_conflict'}
     
-    def test_background_pacing(self) -> Dict:
-        """Test pacing of background conflicts"""
-        background_events = []
+    async def _execute_overload_recovery(
+        self,
+        recovery: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute recovery for complexity overload"""
         
-        for hour in range(168):  # One week in hours
-            events = self._generate_background_events(hour)
-            background_events.extend(events)
+        strategy = recovery['strategy']
+        target_count = recovery.get('target_count', 5)
         
-        # Analyze pacing
-        events_per_day = [0] * 7
-        for event in background_events:
-            day = event['hour'] // 24
-            events_per_day[day] += 1
+        async with get_db_connection_context() as conn:
+            if strategy == 'prioritize':
+                # Keep only highest intensity conflicts
+                await conn.execute("""
+                    UPDATE Conflicts
+                    SET is_active = false
+                    WHERE conflict_id IN (
+                        SELECT conflict_id FROM Conflicts
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND is_active = true
+                        ORDER BY 
+                            CASE intensity
+                                WHEN 'confrontation' THEN 5
+                                WHEN 'opposition' THEN 4
+                                WHEN 'friction' THEN 3
+                                WHEN 'tension' THEN 2
+                                ELSE 1
+                            END ASC
+                        OFFSET $3
+                    )
+                """, self.user_id, self.conversation_id, target_count)
+                
+                return {'success': True, 'action': 'prioritized_conflicts'}
         
-        avg_per_day = sum(events_per_day) / 7
-        variation = max(events_per_day) - min(events_per_day)
-        
-        good_pacing = 2 <= avg_per_day <= 5 and variation <= 3
-        
-        return {
-            'test': 'background_pacing',
-            'passed': good_pacing,
-            'events_per_day': events_per_day,
-            'average': avg_per_day,
-            'variation': variation
-        }
+        return {'success': False}
     
-    def test_pattern_detection(self) -> Dict:
-        """Test pattern detection thresholds"""
-        patterns = [
-            {'type': 'morning_control', 'instances': 3, 'detected': False},
-            {'type': 'attention_seeking', 'instances': 5, 'detected': True},
-            {'type': 'resource_hoarding', 'instances': 2, 'detected': False}
-        ]
+    async def _execute_contradiction_recovery(
+        self,
+        conflicts: List[int],
+        recovery: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute recovery for contradictions"""
         
-        correct_detections = 0
-        for pattern in patterns:
-            detected = self._test_pattern_detection(pattern)
-            if detected == pattern['detected']:
-                correct_detections += 1
+        # Create narrative explanation
+        explanation = recovery.get('narrative_explanation', 'The situation clarifies')
         
-        accuracy = correct_detections / len(patterns)
+        async with get_db_connection_context() as conn:
+            # Add explanation event to both conflicts
+            for conflict_id in conflicts:
+                await conn.execute("""
+                    INSERT INTO conflict_events
+                    (conflict_id, event_type, description, created_at)
+                    VALUES ($1, 'clarification', $2, CURRENT_TIMESTAMP)
+                """, conflict_id, explanation)
         
-        return {
-            'test': 'pattern_detection',
-            'passed': accuracy >= 0.8,
-            'accuracy': accuracy,
-            'patterns_tested': len(patterns)
-        }
+        return {'success': True, 'action': 'explained_contradiction'}
     
-    def test_resource_scarcity(self) -> Dict:
-        """Test resource scarcity balance"""
-        resources = self._create_test_resources(5)
-        scarcity_events = []
-        
-        for day in range(7):
-            daily_scarcity = self._simulate_resource_scarcity(resources)
-            scarcity_events.append(daily_scarcity)
-        
-        # Check balance
-        total_scarcity = sum(e['scarcity_level'] for e in scarcity_events)
-        avg_scarcity = total_scarcity / len(scarcity_events)
-        
-        # Should create tension but not constant crisis
-        balanced = 0.2 <= avg_scarcity <= 0.5
-        
-        return {
-            'test': 'resource_scarcity',
-            'passed': balanced,
-            'average_scarcity': avg_scarcity,
-            'target_range': '0.2-0.5'
-        }
+    # ========== Storage Methods ==========
     
-    def test_social_reputation(self) -> Dict:
-        """Test social reputation impact rates"""
-        test_npc = self._create_test_npc()
-        reputation_changes = []
+    async def _store_edge_case(
+        self,
+        case_type: EdgeCaseType,
+        conflicts: List[int],
+        severity: float,
+        description: str
+    ) -> int:
+        """Store detected edge case"""
         
-        # Simulate various actions
-        actions = [
-            {'type': 'conflict_win', 'impact': 0.1},
-            {'type': 'conflict_loss', 'impact': -0.1},
-            {'type': 'compromise', 'impact': 0.05},
-            {'type': 'betrayal', 'impact': -0.3}
-        ]
+        async with get_db_connection_context() as conn:
+            case_id = await conn.fetchval("""
+                INSERT INTO conflict_edge_cases
+                (case_type, affected_conflicts, severity, description, detected_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                RETURNING case_id
+            """, case_type.value, json.dumps(conflicts), severity, description)
         
-        for action in actions:
-            impact = self._apply_reputation_change(test_npc, action)
-            reputation_changes.append(impact)
-        
-        # Check if impacts are proportional and reasonable
-        reasonable_impacts = all(-0.5 <= i <= 0.5 for i in reputation_changes)
-        
-        return {
-            'test': 'social_reputation',
-            'passed': reasonable_impacts,
-            'reputation_changes': reputation_changes,
-            'reasonable': reasonable_impacts
-        }
+        return case_id
     
-    def _summarize_test_results(self) -> Dict:
-        """Summarize all test results"""
-        passed = sum(1 for r in self.test_results if r['passed'])
-        total = len(self.test_results)
+    async def _record_recovery(
+        self,
+        case_id: int,
+        recovery: Dict[str, Any],
+        result: Dict[str, Any]
+    ):
+        """Record recovery attempt"""
         
-        return {
-            'total_tests': total,
-            'passed': passed,
-            'failed': total - passed,
-            'success_rate': passed / total,
-            'details': self.test_results,
-            'ready_for_production': passed / total >= 0.8
-        }
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO edge_case_recoveries
+                (case_id, recovery_strategy, recovery_data, result, executed_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            """, case_id, recovery.get('strategy'), 
+            json.dumps(recovery), json.dumps(result))
 
-class BalanceAdjuster:
-    """Adjusts system balance based on testing"""
-    
-    def __init__(self, conflict_system):
-        self.conflicts = conflict_system
-        self.balance_params = self._load_balance_params()
-    
-    def _load_balance_params(self) -> Dict:
-        """Load current balance parameters"""
-        return {
-            'conflict_frequency': 0.3,
-            'intensity_escalation': 0.1,
-            'resolution_difficulty': 0.5,
-            'stakeholder_action_rate': 0.4,
-            'leverage_decay': 0.05,
-            'canon_strength': 0.7,
-            'discovery_chance': 0.2
-        }
-    
-    def auto_balance(self, test_results: Dict):
-        """Automatically adjust balance based on test results"""
-        adjustments = []
-        
-        # Adjust conflict frequency
-        if test_results['conflict_frequency']['actual'] < 3:
-            self.balance_params['conflict_frequency'] *= 1.2
-            adjustments.append('Increased conflict frequency')
-        elif test_results['conflict_frequency']['actual'] > 5:
-            self.balance_params['conflict_frequency'] *= 0.8
-            adjustments.append('Decreased conflict frequency')
-        
-        # Adjust resolution difficulty
-        if test_results['resolution_timing']['actual'] < 5:
-            self.balance_params['resolution_difficulty'] *= 1.3
-            adjustments.append('Increased resolution difficulty')
-        elif test_results['resolution_timing']['actual'] > 20:
-            self.balance_params['resolution_difficulty'] *= 0.7
-            adjustments.append('Decreased resolution difficulty')
-        
-        self._save_balance_params()
-        
-        return {
-            'adjustments_made': len(adjustments),
-            'adjustments': adjustments,
-            'new_params': self.balance_params
-        }
-    
-    def tune_parameter(self, param_name: str, new_value: float) -> Dict:
-        """Manually tune a specific parameter"""
-        if param_name not in self.balance_params:
-            return {'error': f'Unknown parameter: {param_name}'}
-        
-        old_value = self.balance_params[param_name]
-        self.balance_params[param_name] = new_value
-        self._save_balance_params()
-        
-        return {
-            'parameter': param_name,
-            'old_value': old_value,
-            'new_value': new_value,
-            'change_percentage': ((new_value - old_value) / old_value) * 100
-        }
-    
-    def _save_balance_params(self):
-        """Save balance parameters to database"""
-        # Implementation would save to database
-        pass
 
-# Performance Optimizer
-class ConflictPerformanceOptimizer:
-    """Optimizes conflict system performance"""
-    
-    def __init__(self, conflict_system, db_connection):
-        self.conflicts = conflict_system
-        self.db = db_connection
-    
-    def optimize_queries(self):
-        """Optimize database queries"""
-        # Create indexes for frequently accessed data
-        indexes = [
-            "CREATE INDEX IF NOT EXISTS idx_conflicts_active ON conflicts(active)",
-            "CREATE INDEX IF NOT EXISTS idx_tensions_player ON tension_accumulation(player_id)",
-            "CREATE INDEX IF NOT EXISTS idx_precedents_date ON precedents(established_date)",
-            "CREATE INDEX IF NOT EXISTS idx_leverage_expiry ON social_leverage(expires_at)"
-        ]
-        
-        for index in indexes:
-            self.db.execute(index)
-        
-        return {'indexes_created': len(indexes)}
-    
-    def cache_frequent_calculations(self):
-        """Cache frequently calculated values"""
-        cache_config = {
-            'tension_levels': {'ttl': 300},  # 5 minutes
-            'alliance_status': {'ttl': 600},  # 10 minutes
-            'dominance_scores': {'ttl': 900},  # 15 minutes
-            'pattern_detections': {'ttl': 1800}  # 30 minutes
-        }
-        
-        # Implementation would set up caching
-        return {'caches_configured': len(cache_config)}
-    
-    def batch_operations(self):
-        """Batch database operations for efficiency"""
-        # Implementation would batch inserts/updates
-        return {'batching': 'enabled'}
+# ===============================================================================
+# INTEGRATION FUNCTIONS
+# ===============================================================================
 
-# Main test runner
-def run_complete_system_test():
-    """Run complete system test and optimization"""
-    # Initialize systems
-    conflict_system = None  # Would be actual system instance
-    db_connection = None  # Would be actual database connection
+@function_tool
+async def scan_for_conflict_issues(
+    ctx: RunContextWrapper
+) -> Dict[str, Any]:
+    """Scan for edge cases in conflict system"""
     
-    # Run tests
-    tester = ConflictSystemTester(conflict_system)
-    test_results = tester.run_all_tests()
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
     
-    # Handle edge cases
-    edge_handler = EdgeCaseHandler(conflict_system, db_connection)
-    edge_cases_handled = {
-        'all_npcs_allied': edge_handler.handle_all_npcs_allied('player_1'),
-        'player_disengaged': edge_handler.handle_player_disengagement('player_1'),
-        'memory_overload': edge_handler.handle_memory_overload('npc_1'),
-        'circular_alliances': edge_handler.handle_circular_alliance_dependencies(),
-        'resource_deadlock': edge_handler.handle_resource_deadlock()
-    }
+    handler = ConflictEdgeCaseHandler(user_id, conversation_id)
     
-    # Auto-balance
-    adjuster = BalanceAdjuster(conflict_system)
-    balance_adjustments = adjuster.auto_balance(test_results)
-    
-    # Optimize performance
-    optimizer = ConflictPerformanceOptimizer(conflict_system, db_connection)
-    optimizations = {
-        'queries': optimizer.optimize_queries(),
-        'caching': optimizer.cache_frequent_calculations(),
-        'batching': optimizer.batch_operations()
-    }
+    edge_cases = await handler.scan_for_edge_cases()
     
     return {
-        'test_results': test_results,
-        'edge_cases': edge_cases_handled,
-        'balance': balance_adjustments,
-        'optimizations': optimizations,
-        'system_ready': test_results['ready_for_production']
+        'issues_found': len(edge_cases),
+        'edge_cases': [
+            {
+                'type': case.case_type.value,
+                'severity': case.severity,
+                'description': case.description,
+                'recovery_available': len(case.recovery_options) > 0
+            }
+            for case in edge_cases
+        ]
     }
-"""
+
+
+@function_tool
+async def auto_recover_conflicts(
+    ctx: RunContextWrapper
+) -> Dict[str, Any]:
+    """Automatically recover from detected edge cases"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    handler = ConflictEdgeCaseHandler(user_id, conversation_id)
+    
+    edge_cases = await handler.scan_for_edge_cases()
+    
+    recoveries = []
+    for case in edge_cases:
+        if case.recovery_options:
+            # Execute first recovery option
+            result = await handler.execute_recovery(case, 0)
+            recoveries.append({
+                'case_type': case.case_type.value,
+                'success': result.get('success', False),
+                'action': result.get('action', 'unknown')
+            })
+    
+    return {
+        'issues_found': len(edge_cases),
+        'recoveries_attempted': len(recoveries),
+        'recovery_results': recoveries
+    }
