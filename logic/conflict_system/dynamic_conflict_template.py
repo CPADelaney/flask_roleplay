@@ -1,309 +1,694 @@
-# Dynamic Conflict Template System
-# Generates context-aware conflicts based on personality, mood, and time
+# logic/conflict_system/dynamic_conflict_template.py
+"""
+Dynamic Conflict Template System with LLM-generated variations
+Creates infinite conflict variations from base templates
+"""
 
-from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
-from enum import Enum
+import logging
+import json
 import random
-from datetime import datetime
+from typing import Dict, List, Any, Optional, Tuple
+from enum import Enum
+from dataclasses import dataclass
 
-class ConflictCategory(Enum):
-    DOMESTIC_CONTROL = "domestic_control"
-    ATTENTION_SEEKING = "attention_seeking"
-    BOUNDARY_TESTING = "boundary_testing"
-    RESOURCE_CLAIM = "resource_claim"
-    PRECEDENT_SETTING = "precedent_setting"
-    SOCIAL_POSITIONING = "social_positioning"
+from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
+from db.connection import get_db_connection_context
+
+logger = logging.getLogger(__name__)
+
+# ===============================================================================
+# TEMPLATE TYPES
+# ===============================================================================
+
+class TemplateCategory(Enum):
+    """Categories of conflict templates"""
+    POWER_DYNAMICS = "power_dynamics"
+    SOCIAL_HIERARCHY = "social_hierarchy"
+    RESOURCE_COMPETITION = "resource_competition"
+    IDEOLOGICAL_CLASH = "ideological_clash"
+    PERSONAL_BOUNDARIES = "personal_boundaries"
+    LOYALTY_TESTS = "loyalty_tests"
+    HIDDEN_AGENDAS = "hidden_agendas"
+    TRANSFORMATION_RESISTANCE = "transformation_resistance"
+
 
 @dataclass
 class ConflictTemplate:
-    """Template for generating dynamic conflicts"""
-    template_id: str
-    category: ConflictCategory
-    personality_triggers: Dict[str, float]  # personality_trait: likelihood_modifier
-    mood_modifiers: Dict[str, float]  # mood: intensity_modifier
-    time_windows: List[Tuple[int, int]]  # [(start_hour, end_hour), ...]
-    base_intensity: float
-    escalation_pattern: str  # "gradual", "sudden", "cyclic"
-    required_context: List[str]  # ["alone_together", "others_present", etc]
+    """Base template for generating conflicts"""
+    template_id: int
+    category: TemplateCategory
+    name: str
+    base_structure: Dict[str, Any]
+    variable_elements: List[str]
+    contextual_modifiers: Dict[str, Any]
+    complexity_range: Tuple[float, float]
+
+
+@dataclass
+class GeneratedConflict:
+    """A conflict generated from a template"""
+    conflict_id: int
+    template_id: int
+    variation_seed: str
+    customization: Dict[str, Any]
+    narrative_hooks: List[str]
+    unique_elements: List[str]
+
+
+# ===============================================================================
+# DYNAMIC TEMPLATE GENERATOR
+# ===============================================================================
+
+class DynamicConflictTemplateSystem:
+    """Generates infinite conflict variations from templates"""
     
-class DynamicTemplateSystem:
-    def __init__(self, db_connection):
-        self.db = db_connection
-        self.templates = self._load_templates()
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
         
-    def _load_templates(self) -> List[ConflictTemplate]:
-        """Load conflict templates from database or define them"""
-        templates = [
-            ConflictTemplate(
-                template_id="morning_routine_dominance",
-                category=ConflictCategory.DOMESTIC_CONTROL,
-                personality_triggers={
-                    "controlling": 1.5,
-                    "passive_aggressive": 1.3,
-                    "competitive": 1.2
-                },
-                mood_modifiers={
-                    "irritated": 1.4,
-                    "tired": 1.2,
-                    "energetic": 0.8
-                },
-                time_windows=[(6, 10)],  # Morning hours
-                base_intensity=0.3,
-                escalation_pattern="gradual",
-                required_context=["morning_routine", "shared_space"]
-            ),
-            ConflictTemplate(
-                template_id="evening_attention_competition",
-                category=ConflictCategory.ATTENTION_SEEKING,
-                personality_triggers={
-                    "needy": 1.6,
-                    "jealous": 1.4,
-                    "insecure": 1.3
-                },
-                mood_modifiers={
-                    "lonely": 1.5,
-                    "bored": 1.3,
-                    "content": 0.6
-                },
-                time_windows=[(18, 22)],  # Evening hours
-                base_intensity=0.4,
-                escalation_pattern="cyclic",
-                required_context=["multiple_npcs_present"]
-            ),
-            ConflictTemplate(
-                template_id="weekend_territory_claim",
-                category=ConflictCategory.RESOURCE_CLAIM,
-                personality_triggers={
-                    "territorial": 1.7,
-                    "possessive": 1.5,
-                    "dominant": 1.3
-                },
-                mood_modifiers={
-                    "relaxed": 0.7,
-                    "stressed": 1.4
-                },
-                time_windows=[(9, 18)],  # Daytime weekend
-                base_intensity=0.5,
-                escalation_pattern="sudden",
-                required_context=["weekend", "shared_activity"]
-            )
-        ]
-        return templates
+        # Lazy-loaded agents
+        self._template_creator = None
+        self._variation_generator = None
+        self._context_adapter = None
+        self._uniqueness_engine = None
+        self._hook_generator = None
     
-    def generate_conflict(self, context: Dict) -> Optional[Dict]:
-        """Generate a conflict based on current context"""
-        current_hour = context.get('hour', 12)
-        day_type = context.get('day_type', 'weekday')
-        npcs_present = context.get('npcs_present', [])
-        location = context.get('location', 'home')
-        
-        # Filter templates by time and context
-        valid_templates = []
-        for template in self.templates:
-            if self._is_template_valid(template, current_hour, context):
-                score = self._calculate_template_score(template, npcs_present, context)
-                if score > 0.5:  # Threshold for conflict generation
-                    valid_templates.append((template, score))
-        
-        if not valid_templates:
-            return None
-            
-        # Select template weighted by score
-        template, score = self._weighted_selection(valid_templates)
-        
-        # Generate specific conflict from template
-        return self._instantiate_conflict(template, context, score)
+    # ========== Agent Properties ==========
     
-    def _is_template_valid(self, template: ConflictTemplate, hour: int, context: Dict) -> bool:
-        """Check if template is valid for current context"""
-        # Check time window
-        time_valid = any(start <= hour < end for start, end in template.time_windows)
-        if not time_valid:
-            return False
-            
-        # Check required context
-        for req in template.required_context:
-            if req == "weekend" and context.get('day_type') != 'weekend':
-                return False
-            elif req == "multiple_npcs_present" and len(context.get('npcs_present', [])) < 2:
-                return False
-            elif req == "alone_together" and len(context.get('npcs_present', [])) != 1:
-                return False
+    @property
+    def template_creator(self) -> Agent:
+        if self._template_creator is None:
+            self._template_creator = Agent(
+                name="Template Creator",
+                instructions="""
+                Create flexible conflict templates that can generate countless variations.
                 
-        return True
+                Design templates that:
+                - Have clear core structures
+                - Include variable elements
+                - Allow contextual adaptation
+                - Support complexity scaling
+                - Enable emergent storytelling
+                
+                Templates should be seeds for infinite stories, not rigid patterns.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._template_creator
     
-    def _calculate_template_score(self, template: ConflictTemplate, npcs: List, context: Dict) -> float:
-        """Calculate likelihood score for this template"""
-        score = template.base_intensity
-        
-        # Apply personality modifiers
-        for npc in npcs:
-            personality = self._get_npc_personality(npc['id'])
-            for trait, modifier in template.personality_triggers.items():
-                if trait in personality:
-                    score *= modifier * personality[trait]
-        
-        # Apply mood modifiers
-        for npc in npcs:
-            mood = self._get_npc_mood(npc['id'])
-            if mood in template.mood_modifiers:
-                score *= template.mood_modifiers[mood]
-        
-        # Apply tension accumulation
-        tension_level = self._get_current_tension(context.get('player_id'))
-        score *= (1 + tension_level * 0.5)
-        
-        # Apply recent conflict cooldown
-        last_conflict_hours = self._hours_since_last_conflict(context.get('player_id'))
-        if last_conflict_hours < 4:
-            score *= 0.3  # Reduce likelihood if recent conflict
-        elif last_conflict_hours > 24:
-            score *= 1.3  # Increase if no recent conflicts
-            
-        return min(score, 1.0)  # Cap at 1.0
+    @property
+    def variation_generator(self) -> Agent:
+        if self._variation_generator is None:
+            self._variation_generator = Agent(
+                name="Variation Generator",
+                instructions="""
+                Generate unique variations from conflict templates.
+                
+                Create variations that:
+                - Feel fresh and original
+                - Respect template structure
+                - Add surprising elements
+                - Fit the context perfectly
+                - Create memorable experiences
+                
+                Each variation should feel like a unique story, not a copy.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._variation_generator
     
-    def _instantiate_conflict(self, template: ConflictTemplate, context: Dict, score: float) -> Dict:
-        """Create specific conflict instance from template"""
-        npcs = context.get('npcs_present', [])
-        primary_npc = self._select_primary_stakeholder(npcs, template)
-        
-        # Generate conflict details based on template category
-        if template.category == ConflictCategory.DOMESTIC_CONTROL:
-            conflict = self._generate_domestic_control_conflict(primary_npc, template, context)
-        elif template.category == ConflictCategory.ATTENTION_SEEKING:
-            conflict = self._generate_attention_conflict(primary_npc, template, context)
-        elif template.category == ConflictCategory.RESOURCE_CLAIM:
-            conflict = self._generate_resource_conflict(primary_npc, template, context)
-        else:
-            conflict = self._generate_generic_conflict(primary_npc, template, context)
-        
-        # Set intensity based on score and escalation pattern
-        conflict['intensity'] = self._calculate_intensity(score, template.escalation_pattern)
-        conflict['template_id'] = template.template_id
-        conflict['auto_generated'] = True
-        
-        return conflict
+    @property
+    def context_adapter(self) -> Agent:
+        if self._context_adapter is None:
+            self._context_adapter = Agent(
+                name="Context Adapter",
+                instructions="""
+                Adapt conflict templates to specific contexts.
+                
+                Ensure adaptations:
+                - Fit the current situation
+                - Respect character personalities
+                - Match location atmosphere
+                - Align with ongoing narratives
+                - Feel organic to the world
+                
+                Make templated conflicts feel bespoke to the moment.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._context_adapter
     
-    def _generate_domestic_control_conflict(self, npc: Dict, template: ConflictTemplate, context: Dict) -> Dict:
-        """Generate a domestic control conflict"""
-        control_aspects = [
-            {"issue": "morning_schedule", "stake": "who decides when breakfast happens"},
-            {"issue": "space_usage", "stake": "who gets to use the bathroom first"},
-            {"issue": "noise_levels", "stake": "who determines acceptable volume"},
-            {"issue": "temperature", "stake": "who controls the thermostat"},
-            {"issue": "cleanliness", "stake": "whose standards are followed"}
-        ]
+    @property
+    def uniqueness_engine(self) -> Agent:
+        if self._uniqueness_engine is None:
+            self._uniqueness_engine = Agent(
+                name="Uniqueness Engine",
+                instructions="""
+                Ensure each generated conflict feels unique and memorable.
+                
+                Add elements that:
+                - Create distinctive moments
+                - Generate quotable lines
+                - Produce unexpected twists
+                - Build character-specific drama
+                - Leave lasting impressions
+                
+                Every conflict should have something players remember.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._uniqueness_engine
+    
+    @property
+    def hook_generator(self) -> Agent:
+        if self._hook_generator is None:
+            self._hook_generator = Agent(
+                name="Narrative Hook Generator",
+                instructions="""
+                Generate compelling hooks that draw players into conflicts.
+                
+                Create hooks that:
+                - Grab immediate attention
+                - Create emotional investment
+                - Promise interesting outcomes
+                - Connect to player history
+                - Build anticipation
+                
+                Make players WANT to engage with the conflict.
+                """,
+                model="gpt-5-nano",
+            )
+        return self._hook_generator
+    
+    # ========== Template Creation ==========
+    
+    async def create_conflict_template(
+        self,
+        category: TemplateCategory,
+        base_concept: str
+    ) -> ConflictTemplate:
+        """Create a new reusable conflict template"""
         
-        aspect = random.choice(control_aspects)
+        prompt = f"""
+        Create a flexible conflict template:
         
-        return {
-            "type": "domestic_dominance",
-            "primary_stakeholder_id": npc['id'],
-            "issue": aspect['issue'],
-            "description": f"{npc['name']} is asserting control over {aspect['stake']}",
-            "stakes": {
-                "immediate": f"Control over {aspect['issue']}",
-                "precedent": f"Establishing who decides {aspect['stake']}",
-                "relationship": f"Power balance in domestic decisions"
-            },
-            "available_responses": self._generate_response_options(template.category)
+        Category: {category.value}
+        Base Concept: {base_concept}
+        
+        Design a template that can generate hundreds of unique conflicts.
+        
+        Return JSON:
+        {{
+            "name": "Template name",
+            "base_structure": {{
+                "core_tension": "Fundamental conflict",
+                "stakeholder_roles": ["role types needed"],
+                "progression_phases": ["typical phases"],
+                "resolution_conditions": ["ways it can end"]
+            }},
+            "variable_elements": [
+                "List of 10+ elements that can change between instances"
+            ],
+            "contextual_modifiers": {{
+                "personality_axes": ["relevant personality traits"],
+                "environmental_factors": ["location/setting influences"],
+                "cultural_variables": ["social/cultural elements"],
+                "power_modifiers": ["hierarchy/authority factors"]
+            }},
+            "generation_rules": {{
+                "required_elements": ["must-have components"],
+                "optional_elements": ["can-have components"],
+                "exclusions": ["incompatible elements"]
+            }},
+            "complexity_range": {{
+                "minimum": 0.2,
+                "maximum": 0.9
+            }}
+        }}
+        """
+        
+        response = await Runner.run(self.template_creator, prompt)
+        data = json.loads(response.output)
+        
+        # Store template
+        async with get_db_connection_context() as conn:
+            template_id = await conn.fetchval("""
+                INSERT INTO conflict_templates
+                (category, name, base_structure, variable_elements,
+                 contextual_modifiers, complexity_min, complexity_max)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING template_id
+            """, category.value, data['name'],
+            json.dumps(data['base_structure']),
+            json.dumps(data['variable_elements']),
+            json.dumps(data['contextual_modifiers']),
+            data['complexity_range']['minimum'],
+            data['complexity_range']['maximum'])
+        
+        return ConflictTemplate(
+            template_id=template_id,
+            category=category,
+            name=data['name'],
+            base_structure=data['base_structure'],
+            variable_elements=data['variable_elements'],
+            contextual_modifiers=data['contextual_modifiers'],
+            complexity_range=(
+                data['complexity_range']['minimum'],
+                data['complexity_range']['maximum']
+            )
+        )
+    
+    # ========== Conflict Generation ==========
+    
+    async def generate_conflict_from_template(
+        self,
+        template_id: int,
+        context: Dict[str, Any]
+    ) -> GeneratedConflict:
+        """Generate a unique conflict from a template"""
+        
+        # Get template
+        async with get_db_connection_context() as conn:
+            template_data = await conn.fetchrow("""
+                SELECT * FROM conflict_templates WHERE template_id = $1
+            """, template_id)
+        
+        template = ConflictTemplate(
+            template_id=template_id,
+            category=TemplateCategory(template_data['category']),
+            name=template_data['name'],
+            base_structure=json.loads(template_data['base_structure']),
+            variable_elements=json.loads(template_data['variable_elements']),
+            contextual_modifiers=json.loads(template_data['contextual_modifiers']),
+            complexity_range=(
+                template_data['complexity_min'],
+                template_data['complexity_max']
+            )
+        )
+        
+        # Generate variation
+        variation = await self._generate_variation(template, context)
+        
+        # Adapt to context
+        adapted = await self._adapt_to_context(variation, context)
+        
+        # Add unique elements
+        unique = await self._add_unique_elements(adapted, context)
+        
+        # Generate hooks
+        hooks = await self._generate_narrative_hooks(unique, context)
+        
+        # Create the conflict
+        conflict_id = await self._create_conflict_from_generation(
+            template,
+            unique,
+            hooks
+        )
+        
+        return GeneratedConflict(
+            conflict_id=conflict_id,
+            template_id=template_id,
+            variation_seed=unique['seed'],
+            customization=unique['customization'],
+            narrative_hooks=hooks,
+            unique_elements=unique['unique_elements']
+        )
+    
+    async def _generate_variation(
+        self,
+        template: ConflictTemplate,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate a variation from template"""
+        
+        prompt = f"""
+        Generate a unique variation from this template:
+        
+        Template: {template.name}
+        Base Structure: {json.dumps(template.base_structure)}
+        Variable Elements: {json.dumps(template.variable_elements)}
+        Context: {json.dumps(context)}
+        
+        Create a variation that:
+        - Uses the base structure
+        - Varies 3-5 variable elements
+        - Feels fresh and original
+        - Fits the context
+        
+        Return JSON:
+        {{
+            "seed": "Unique identifier for this variation",
+            "core_tension": "Specific tension for this instance",
+            "stakeholder_configuration": {{
+                "roles": ["specific roles"],
+                "relationships": ["specific relationships"]
+            }},
+            "chosen_variables": {{
+                "variable_name": "specific value"
+            }},
+            "progression_path": ["specific phases"],
+            "resolution_options": ["specific endings"],
+            "twist_potential": "Unexpected element"
+        }}
+        """
+        
+        response = await Runner.run(self.variation_generator, prompt)
+        return json.loads(response.output)
+    
+    async def _adapt_to_context(
+        self,
+        variation: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Adapt variation to specific context"""
+        
+        prompt = f"""
+        Adapt this conflict variation to the specific context:
+        
+        Variation: {json.dumps(variation)}
+        Current Location: {context.get('location', 'unknown')}
+        Present NPCs: {json.dumps(context.get('npcs', []))}
+        Time of Day: {context.get('time', 'unknown')}
+        Recent Events: {json.dumps(context.get('recent_events', []))}
+        
+        Adapt by:
+        - Fitting the location perfectly
+        - Using NPC personalities
+        - Matching the time/mood
+        - Building on recent events
+        
+        Return JSON:
+        {{
+            "location_integration": "How location shapes conflict",
+            "npc_motivations": {{
+                "npc_id": "specific motivation"
+            }},
+            "temporal_factors": "How timing affects it",
+            "continuity_connections": ["links to recent events"],
+            "environmental_obstacles": ["location-specific challenges"],
+            "atmospheric_elements": ["mood and tone elements"]
+        }}
+        """
+        
+        response = await Runner.run(self.context_adapter, prompt)
+        adapted = variation.copy()
+        adapted['context_adaptation'] = json.loads(response.output)
+        return adapted
+    
+    async def _add_unique_elements(
+        self,
+        adapted: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Add unique memorable elements"""
+        
+        prompt = f"""
+        Add unique elements to make this conflict memorable:
+        
+        Conflict: {json.dumps(adapted)}
+        Player History: {json.dumps(context.get('player_history', []))}
+        
+        Add:
+        - A memorable quirk or detail
+        - An unexpected element
+        - A quotable moment
+        - A visual or sensory detail
+        - Something players will talk about
+        
+        Return JSON:
+        {{
+            "unique_elements": [
+                "List of 3-5 unique elements"
+            ],
+            "memorable_quote": "Something an NPC might say",
+            "signature_moment": "A scene players will remember",
+            "sensory_detail": "Something visceral",
+            "conversation_piece": "What players will discuss later"
+        }}
+        """
+        
+        response = await Runner.run(self.uniqueness_engine, prompt)
+        unique_data = json.loads(response.output)
+        
+        adapted['unique_elements'] = unique_data['unique_elements']
+        adapted['signature_content'] = unique_data
+        adapted['customization'] = {
+            'base_variation': adapted.get('seed', 'unknown'),
+            'context_layer': adapted.get('context_adaptation', {}),
+            'unique_layer': unique_data
         }
+        
+        return adapted
     
-    def _generate_response_options(self, category: ConflictCategory) -> List[Dict]:
-        """Generate appropriate response options based on conflict category"""
-        if category == ConflictCategory.DOMESTIC_CONTROL:
-            return [
-                {"action": "comply", "description": "Accept their control", "outcome": "reinforces_hierarchy"},
-                {"action": "negotiate", "description": "Propose a compromise", "outcome": "shared_control"},
-                {"action": "resist", "description": "Assert your preference", "outcome": "power_struggle"},
-                {"action": "deflect", "description": "Make it seem unimportant", "outcome": "tension_remains"},
-                {"action": "subvert", "description": "Agree but do it your way later", "outcome": "hidden_rebellion"}
+    async def _generate_narrative_hooks(
+        self,
+        conflict_data: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> List[str]:
+        """Generate compelling narrative hooks"""
+        
+        prompt = f"""
+        Generate narrative hooks for this conflict:
+        
+        Core Tension: {conflict_data.get('core_tension', '')}
+        Unique Elements: {json.dumps(conflict_data.get('unique_elements', []))}
+        Signature Moment: {conflict_data.get('signature_content', {}).get('signature_moment', '')}
+        
+        Create 3-5 hooks that:
+        - Grab immediate attention
+        - Promise interesting outcomes
+        - Create emotional investment
+        - Feel urgent or important
+        - Connect to player experience
+        
+        Return JSON:
+        {{
+            "hooks": [
+                "List of compelling one-sentence hooks"
             ]
-        # Add more categories as needed
-        return []
-    
-    def adapt_difficulty(self, player_id: str, conflict_id: str, player_response: str):
-        """Adapt future conflict difficulty based on player engagement"""
-        # Track player response patterns
-        self.db.execute("""
-            INSERT INTO conflict_responses 
-            (player_id, conflict_id, response_type, timestamp)
-            VALUES (?, ?, ?, ?)
-        """, (player_id, conflict_id, player_response, datetime.now()))
+        }}
+        """
         
-        # Analyze response patterns
-        recent_responses = self._get_recent_responses(player_id, days=7)
+        response = await Runner.run(self.hook_generator, prompt)
+        data = json.loads(response.output)
+        return data['hooks']
+    
+    async def _create_conflict_from_generation(
+        self,
+        template: ConflictTemplate,
+        generation_data: Dict[str, Any],
+        hooks: List[str]
+    ) -> int:
+        """Create actual conflict from generated data"""
         
-        # Adjust future conflict generation
-        if self._player_avoiding_conflicts(recent_responses):
-            self._reduce_conflict_frequency(player_id)
-        elif self._player_always_escalating(recent_responses):
-            self._increase_conflict_complexity(player_id)
-        elif self._player_seeking_variety(recent_responses):
-            self._diversify_conflict_types(player_id)
-    
-    def _get_npc_personality(self, npc_id: str) -> Dict[str, float]:
-        """Get NPC personality traits"""
-        # Query from database or personality system
-        return {}
-    
-    def _get_npc_mood(self, npc_id: str) -> str:
-        """Get current NPC mood"""
-        # Query from mood system
-        return "neutral"
-    
-    def _get_current_tension(self, player_id: str) -> float:
-        """Get accumulated tension level"""
-        # Query from tension system
-        return 0.5
-    
-    def _hours_since_last_conflict(self, player_id: str) -> int:
-        """Calculate hours since last conflict"""
-        # Query from conflict history
-        return 12
-    
-    def _weighted_selection(self, templates: List[Tuple[ConflictTemplate, float]]) -> Tuple[ConflictTemplate, float]:
-        """Select template weighted by scores"""
-        if not templates:
-            return None, 0
+        # Calculate complexity
+        complexity = random.uniform(
+            template.complexity_range[0],
+            template.complexity_range[1]
+        )
         
-        weights = [score for _, score in templates]
-        selected = random.choices(templates, weights=weights, k=1)[0]
-        return selected
+        # Create conflict
+        async with get_db_connection_context() as conn:
+            conflict_id = await conn.fetchval("""
+                INSERT INTO Conflicts
+                (user_id, conversation_id, conflict_type, conflict_name,
+                 description, intensity, phase, is_active, progress,
+                 template_id, generation_data)
+                VALUES ($1, $2, $3, $4, $5, $6, 'emerging', true, 0, $7, $8)
+                RETURNING conflict_id
+            """, self.user_id, self.conversation_id,
+            template.category.value,
+            generation_data.get('seed', 'Generated Conflict'),
+            hooks[0] if hooks else 'A new tension emerges',
+            self._calculate_intensity(complexity),
+            template.template_id,
+            json.dumps(generation_data))
+        
+        return conflict_id
+    
+    def _calculate_intensity(self, complexity: float) -> str:
+        """Calculate intensity from complexity"""
+        if complexity < 0.3:
+            return "subtle"
+        elif complexity < 0.5:
+            return "tension"
+        elif complexity < 0.7:
+            return "friction"
+        elif complexity < 0.9:
+            return "opposition"
+        else:
+            return "confrontation"
+    
+    # ========== Template Evolution ==========
+    
+    async def evolve_template(
+        self,
+        template_id: int,
+        feedback: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Evolve template based on usage feedback"""
+        
+        # Get template and generation history
+        async with get_db_connection_context() as conn:
+            template = await conn.fetchrow("""
+                SELECT * FROM conflict_templates WHERE template_id = $1
+            """, template_id)
+            
+            generations = await conn.fetch("""
+                SELECT generation_data, player_feedback
+                FROM Conflicts
+                WHERE template_id = $1
+                LIMIT 20
+            """, template_id)
+        
+        prompt = f"""
+        Evolve this template based on feedback:
+        
+        Template: {template['name']}
+        Current Structure: {template['base_structure']}
+        Variable Elements: {template['variable_elements']}
+        Feedback: {json.dumps(feedback)}
+        Generation History: {json.dumps([dict(g) for g in generations[:5]])}
+        
+        Suggest improvements:
+        
+        Return JSON:
+        {{
+            "new_variables": ["suggested new variable elements"],
+            "deprecated_variables": ["elements to remove"],
+            "structure_adjustments": {{
+                "add": {{}},
+                "modify": {{}},
+                "remove": []
+            }},
+            "complexity_adjustment": {{
+                "new_min": 0.0 to 1.0,
+                "new_max": 0.0 to 1.0
+            }},
+            "evolution_reason": "Why these changes improve the template"
+        }}
+        """
+        
+        response = await Runner.run(self.template_creator, prompt)
+        evolution = json.loads(response.output)
+        
+        # Apply evolution
+        await self._apply_template_evolution(template_id, evolution)
+        
+        return evolution
+    
+    async def _apply_template_evolution(
+        self,
+        template_id: int,
+        evolution: Dict[str, Any]
+    ):
+        """Apply evolution to template"""
+        
+        async with get_db_connection_context() as conn:
+            # Get current template
+            template = await conn.fetchrow("""
+                SELECT * FROM conflict_templates WHERE template_id = $1
+            """, template_id)
+            
+            # Update structures
+            base_structure = json.loads(template['base_structure'])
+            variable_elements = json.loads(template['variable_elements'])
+            
+            # Apply changes
+            if 'new_variables' in evolution:
+                variable_elements.extend(evolution['new_variables'])
+            if 'deprecated_variables' in evolution:
+                variable_elements = [
+                    v for v in variable_elements
+                    if v not in evolution['deprecated_variables']
+                ]
+            
+            # Update database
+            await conn.execute("""
+                UPDATE conflict_templates
+                SET variable_elements = $1,
+                    complexity_min = $2,
+                    complexity_max = $3,
+                    last_evolved = CURRENT_TIMESTAMP
+                WHERE template_id = $4
+            """, json.dumps(variable_elements),
+            evolution['complexity_adjustment']['new_min'],
+            evolution['complexity_adjustment']['new_max'],
+            template_id)
 
-# Database schema additions
-CONFLICT_TEMPLATE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS conflict_templates (
-    template_id TEXT PRIMARY KEY,
-    category TEXT NOT NULL,
-    personality_triggers JSON,
-    mood_modifiers JSON,
-    time_windows JSON,
-    base_intensity REAL,
-    escalation_pattern TEXT,
-    required_context JSON,
-    usage_count INTEGER DEFAULT 0,
-    success_rate REAL DEFAULT 0.5,
-    last_used TIMESTAMP
-);
 
-CREATE TABLE IF NOT EXISTS conflict_responses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    player_id TEXT NOT NULL,
-    conflict_id TEXT NOT NULL,
-    response_type TEXT,
-    timestamp TIMESTAMP,
-    outcome_satisfaction REAL,
-    FOREIGN KEY (conflict_id) REFERENCES conflicts(id)
-);
+# ===============================================================================
+# INTEGRATION FUNCTIONS
+# ===============================================================================
 
-CREATE TABLE IF NOT EXISTS conflict_adaptation (
-    player_id TEXT PRIMARY KEY,
-    frequency_modifier REAL DEFAULT 1.0,
-    complexity_preference TEXT DEFAULT 'medium',
-    preferred_categories JSON,
-    avoided_categories JSON,
-    last_updated TIMESTAMP
-);
-"""
+@function_tool
+async def generate_templated_conflict(
+    ctx: RunContextWrapper,
+    category: str,
+    context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Generate a conflict from a template category"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    system = DynamicConflictTemplateSystem(user_id, conversation_id)
+    
+    # Get or create template for category
+    async with get_db_connection_context() as conn:
+        template = await conn.fetchrow("""
+            SELECT template_id FROM conflict_templates
+            WHERE category = $1
+            ORDER BY RANDOM()
+            LIMIT 1
+        """, category)
+    
+    if not template:
+        # Create new template
+        template_obj = await system.create_conflict_template(
+            TemplateCategory(category),
+            f"Dynamic {category} conflict"
+        )
+        template_id = template_obj.template_id
+    else:
+        template_id = template['template_id']
+    
+    # Generate conflict
+    generated = await system.generate_conflict_from_template(
+        template_id,
+        context
+    )
+    
+    return {
+        'conflict_id': generated.conflict_id,
+        'template_used': template_id,
+        'hooks': generated.narrative_hooks,
+        'unique_elements': generated.unique_elements
+    }
+
+
+@function_tool
+async def create_custom_template(
+    ctx: RunContextWrapper,
+    category: str,
+    concept: str
+) -> Dict[str, Any]:
+    """Create a custom conflict template"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    system = DynamicConflictTemplateSystem(user_id, conversation_id)
+    
+    template = await system.create_conflict_template(
+        TemplateCategory(category),
+        concept
+    )
+    
+    return {
+        'template_id': template.template_id,
+        'name': template.name,
+        'category': template.category.value,
+        'variable_count': len(template.variable_elements),
+        'complexity_range': template.complexity_range
+    }
