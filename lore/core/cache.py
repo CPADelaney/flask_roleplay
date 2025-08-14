@@ -89,7 +89,6 @@ class LoreCache:
                 "which items should be pre-warmed."
             ),
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.0)
         )
     
     async def get(self, namespace, key, user_id=None, conversation_id=None):
@@ -110,7 +109,7 @@ class LoreCache:
                     # Record hit in analytics
                     self.analytics.hit_count += 1
 
-                    # Calculate access time for analytics
+                    # Calculate access time for analytics (game time)
                     end_time = await get_game_timestamp(uid, cid)
                     access_time = end_time - start_time
                     self._update_avg_access_time(access_time)
