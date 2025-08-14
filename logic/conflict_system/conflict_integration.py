@@ -15,7 +15,9 @@ from db.connection import get_db_connection_context
 from lore.core import canon
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 from logic.conflict_system.enhanced_conflict_generation import (
-    OrganicConflictGenerator, generate_organic_conflict, analyze_conflict_pressure
+    OrganicConflictGenerator, 
+    generate_organic_conflict_impl,  # Import implementation function
+    analyze_conflict_pressure_impl   # Import implementation function
 )
 from logic.conflict_system.conflict_agents import (
     ConflictContext, 
@@ -701,7 +703,8 @@ class ConflictSystemIntegration:
             # Step 3: Replace extraction code
             user_id, conversation_id, ctx = self._normalize_ctx(ctx)
             
-            pressure_analysis = await analyze_conflict_pressure(ctx)
+            # Use the implementation function directly
+            pressure_analysis = await analyze_conflict_pressure_impl(ctx)
             
             active_conflicts = await get_active_conflicts(ctx)
             
@@ -717,6 +720,7 @@ class ConflictSystemIntegration:
             }
             
             if should_generate:
+                # Use the generator directly since we're already in Python code
                 conflict_data = await self.conflict_generator.generate_contextual_conflict(
                     preferred_scale=should_generate.get("preferred_scale")
                 )
