@@ -16,6 +16,7 @@ from agents import function_tool, trace
 from agents.tracing import custom_span, function_span
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
+from logic.game_time_helper import get_game_time_string, GameTimeContext
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,10 @@ class EnvironmentData(BaseModel):
     """Data about the environment an NPC is in."""
     location: str = "Unknown"
     time_of_day: str = "Unknown"
-    day: str = "Unknown"
+    year: Optional[int] = None
+    month: Optional[int] = None
+    day: Optional[int] = None
+    timestamp: Optional[str] = None
     entities_present: List[Dict[str, Any]] = Field(default_factory=list)
     description: Optional[str] = None
     
@@ -403,12 +407,17 @@ class EnvironmentPerception:
         """
         with function_span("fetch_environment_data"):
             try:
-                environment_data = {
-                    "location": "Unknown",
-                    "time_of_day": "Unknown",
-                    "entities_present": []
-                }
-                
+                async with GameTimeContext(self.user_id, self.conversation_id) as game_time:
+                    environment_data = {
+                        "location": "Unknown",
+                        "time_of_day": game_time.time_of_day,
+                        "timestamp": await game_time.to_string(),
+                        "year": game_time.year,
+                        "month": game_time.month,
+                        "day": game_time.day,
+                        "entities_present": []
+                    }
+
                 # Extract location from context if available
                 if context.location:
                     environment_data["location"] = context.location
@@ -435,14 +444,14 @@ class EnvironmentPerception:
                     async with get_db_connection_context() as conn:
                         row = await conn.fetchrow(
                             """
-                            SELECT value FROM CurrentRoleplay 
+                            SELECT value FROM CurrentRoleplay
                             WHERE key = 'TimeOfDay' AND user_id = $1 AND conversation_id = $2
                             """,
                             self.user_id, self.conversation_id
                         )
                         if row:
                             environment_data["time_of_day"] = row[0]
-                
+
                 # Use entities from context if available
                 if context.entities_present:
                     environment_data["entities_present"] = context.entities_present
