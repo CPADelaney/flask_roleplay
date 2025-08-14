@@ -9,6 +9,7 @@ import logging
 import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
+from logic.game_time_helper import get_game_iso_string, get_current_time
 from dataclasses import dataclass, field
 from collections import defaultdict
 
@@ -54,10 +55,12 @@ class RelationshipMemory:
     typical_dynamics: List[str] = field(default_factory=list)
     evolution_milestones: List[Dict[str, Any]] = field(default_factory=list)
     
-    def add_milestone(self, description: str, significance: float = 0.5):
+    async def add_milestone(self, user_id: int, conversation_id: int, description: str, significance: float = 0.5):
+        timestamp = await get_game_iso_string(user_id, conversation_id)
         self.evolution_milestones.append({
             "description": description,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": timestamp,
+            "game_time": await get_current_time(user_id, conversation_id),
             "significance": significance
         })
 
@@ -203,7 +206,7 @@ class WorldMemorySystem:
                 relationship.intimate_moments.pop(0)
         
         if is_milestone:
-            relationship.add_milestone(description)
+            await relationship.add_milestone(self.user_id, self.conversation_id, description)
     
     async def detect_patterns(self) -> List[str]:
         """Detect patterns in world memories"""
