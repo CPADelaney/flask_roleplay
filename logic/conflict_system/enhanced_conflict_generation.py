@@ -680,14 +680,16 @@ class OrganicConflictGenerator:
         return max(drivers.items(), key=lambda x: x[1])[0]
 
 
-# Tool functions for conflict generation
-@function_tool
-async def generate_organic_conflict(
+# ========== IMPLEMENTATION FUNCTIONS (for direct Python calls) ==========
+
+async def generate_organic_conflict_impl(
     ctx: RunContextWrapper,
     preferred_scale: Optional[str] = None,
     force_archetype: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Generate a conflict that feels organic based on world state."""
+    """
+    Implementation: Generate a conflict that feels organic based on world state.
+    """
     context = ctx.context
     generator = OrganicConflictGenerator(context.user_id, context.conversation_id)
     
@@ -783,10 +785,9 @@ async def generate_organic_conflict(
         logger.error(f"Error generating organic conflict: {e}", exc_info=True)
         return {"error": str(e)}
 
-@function_tool
-async def analyze_conflict_pressure(ctx: RunContextWrapper) -> Dict[str, Any]:
+async def analyze_conflict_pressure_impl(ctx: RunContextWrapper) -> Dict[str, Any]:
     """
-    Analyze current world state for conflict pressure.
+    Implementation: Analyze current world state for conflict pressure.
     
     Returns:
         Analysis of conflict potential
@@ -814,6 +815,31 @@ async def analyze_conflict_pressure(ctx: RunContextWrapper) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error analyzing conflict pressure: {e}", exc_info=True)
         return {"error": str(e)}
+
+
+# ========== TOOL FUNCTIONS (for agent tool system) ==========
+
+@function_tool
+async def generate_organic_conflict(
+    ctx: RunContextWrapper,
+    preferred_scale: Optional[str] = None,
+    force_archetype: Optional[str] = None
+) -> Dict[str, Any]:
+    """Generate a conflict that feels organic based on world state."""
+    return await generate_organic_conflict_impl(ctx, preferred_scale, force_archetype)
+
+@function_tool
+async def analyze_conflict_pressure(ctx: RunContextWrapper) -> Dict[str, Any]:
+    """
+    Analyze current world state for conflict pressure.
+    
+    Returns:
+        Analysis of conflict potential
+    """
+    return await analyze_conflict_pressure_impl(ctx)
+
+
+# ========== HELPER FUNCTIONS ==========
 
 def _get_pressure_recommendation(pressure: float) -> str:
     """Get recommendation based on pressure level"""
