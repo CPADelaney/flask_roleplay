@@ -577,6 +577,16 @@ class BackgroundConflictRipples:
                 model="gpt-5-nano",
             )
         return self._opportunity_creator
+
+    async def process_event(self, conflict_id: int, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Process conflict events for this subsystem"""
+        event_type = event.get('type', 'unknown')
+        
+        # Route to appropriate handler
+        if event_type == 'your_specific_type':
+            return await self.handle_specific_event(conflict_id, event)
+        
+        return {'processed': True, 'subsystem': 'module_name'}
     
     async def generate_daily_ripples(
         self,
