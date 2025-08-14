@@ -1,14 +1,14 @@
 # logic/conflict_system/background_grand_conflicts.py
 """
 Background Grand Conflicts System with LLM-generated content
-Maintains large-scale conflicts as ambient worldbuilding elements
+Integrated with ConflictSynthesizer as the central orchestrator
 """
 
 import logging
 import json
 import random
 import asyncio
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Set
 from datetime import datetime, timedelta
 from enum import Enum
 from dataclasses import dataclass, field
@@ -72,6 +72,332 @@ class WorldEvent:
 
 
 # ===============================================================================
+# BACKGROUND CONFLICT SUBSYSTEM (Integrated with Synthesizer)
+# ===============================================================================
+
+class BackgroundConflictSubsystem:
+    """
+    Background conflict subsystem that integrates with ConflictSynthesizer.
+    Implements the ConflictSubsystem interface.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        
+        # Components
+        self.orchestrator = BackgroundConflictOrchestrator(user_id, conversation_id)
+        self.news_generator = BackgroundNewsGenerator(user_id, conversation_id)
+        self.ripple_manager = BackgroundConflictRipples(user_id, conversation_id)
+        
+        # Reference to synthesizer (set during initialization)
+        self.synthesizer = None
+    
+    @property
+    def subsystem_type(self):
+        """Return the subsystem type"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return SubsystemType.BACKGROUND
+    
+    @property
+    def capabilities(self) -> Set[str]:
+        """Return capabilities this subsystem provides"""
+        return {
+            'world_events',
+            'grand_conflicts',
+            'news_generation',
+            'ripple_effects',
+            'conversation_topics',
+            'ambient_atmosphere'
+        }
+    
+    @property
+    def dependencies(self) -> Set:
+        """Return other subsystems this depends on"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return {SubsystemType.CANON}  # Background events can become canonical
+    
+    @property
+    def event_subscriptions(self) -> Set:
+        """Return events this subsystem wants to receive"""
+        from logic.conflict_system.conflict_synthesizer import EventType
+        return {
+            EventType.HEALTH_CHECK,
+            EventType.STATE_SYNC,
+            EventType.CONFLICT_CREATED,
+            EventType.PHASE_TRANSITION
+        }
+    
+    async def initialize(self, synthesizer) -> bool:
+        """Initialize the subsystem with synthesizer reference"""
+        import weakref
+        self.synthesizer = weakref.ref(synthesizer)
+        
+        # Initialize background world if needed
+        active_conflicts = await self._get_active_background_conflicts()
+        if len(active_conflicts) < 2:
+            # Generate initial background conflicts
+            await self.orchestrator.generate_background_conflict()
+        
+        return True
+    
+    async def handle_event(self, event) -> Any:
+        """Handle an event from the synthesizer"""
+        from logic.conflict_system.conflict_synthesizer import EventType, SubsystemResponse, SystemEvent
+        
+        try:
+            if event.event_type == EventType.HEALTH_CHECK:
+                health = await self.health_check()
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data=health
+                )
+                
+            elif event.event_type == EventType.STATE_SYNC:
+                # Generate daily background update
+                daily_update = await self.daily_background_update()
+                
+                # Generate side effects (news items as events)
+                side_effects = []
+                for news in daily_update.get('news', [])[:1]:
+                    side_effects.append(SystemEvent(
+                        event_id=f"news_{event.event_id}",
+                        event_type=EventType.STATE_SYNC,
+                        source_subsystem=self.subsystem_type,
+                        payload={'news': news},
+                        priority=8  # Low priority
+                    ))
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={
+                        'background_update': daily_update,
+                        'world_tension': daily_update.get('world_tension', 0),
+                        'manifestation': daily_update.get('ripple_effects', {})
+                    },
+                    side_effects=side_effects
+                )
+                
+            elif event.event_type == EventType.CONFLICT_CREATED:
+                # Check if main conflict should affect background
+                if event.payload.get('intensity') == 'confrontation':
+                    # High intensity conflicts might affect background
+                    await self._adjust_background_tensions(0.1)
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'background_adjusted': True}
+                )
+                
+            elif event.event_type == EventType.PHASE_TRANSITION:
+                # Background conflicts might advance when main conflicts transition
+                if random.random() < 0.3:  # 30% chance
+                    conflict = await self._get_random_background_conflict()
+                    if conflict:
+                        event = await self.orchestrator.advance_background_conflict(conflict)
+                        return SubsystemResponse(
+                            subsystem=self.subsystem_type,
+                            event_id=event.event_id,
+                            success=True,
+                            data={'background_advanced': True, 'event': event.description}
+                        )
+            
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={}
+            )
+            
+        except Exception as e:
+            logger.error(f"Background subsystem error: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Return health status of the subsystem"""
+        active_conflicts = await self._get_active_background_conflicts()
+        
+        health_status = {
+            'healthy': len(active_conflicts) < 10,
+            'active_background_conflicts': len(active_conflicts),
+            'issue': None
+        }
+        
+        if len(active_conflicts) >= 10:
+            health_status['issue'] = 'Too many background conflicts'
+        elif len(active_conflicts) == 0:
+            health_status['issue'] = 'No background conflicts active'
+        
+        return health_status
+    
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get background-related data for a specific conflict"""
+        # Get conversation topics related to this conflict
+        topics = await self.get_conversation_topics()
+        
+        # Get any ripple effects
+        active_conflicts = await self._get_active_background_conflicts()
+        ripples = await self.ripple_manager.generate_daily_ripples(
+            [self._db_to_background_conflict(c) for c in active_conflicts]
+        )
+        
+        return {
+            'conversation_topics': topics[:3],
+            'ripple_effects': ripples.get('ripples', {})
+        }
+    
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current state of background system"""
+        update = await self.daily_background_update()
+        return {
+            'world_tension': update.get('world_tension', 0),
+            'active_background_conflicts': update.get('active_conflicts', 0),
+            'recent_events': update.get('events_today', []),
+            'optional_opportunities': update.get('optional_opportunities', [])
+        }
+    
+    async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
+        """Check if background system is relevant to scene"""
+        # Background is always somewhat relevant for atmosphere
+        # But more relevant in certain contexts
+        location = scene_context.get('location', '')
+        
+        # More relevant in public spaces where news spreads
+        public_locations = ['market', 'tavern', 'plaza', 'court']
+        if any(loc in location.lower() for loc in public_locations):
+            return True
+        
+        # Always at least minimally relevant
+        return random.random() < 0.3
+    
+    # ========== Daily Update System ==========
+    
+    async def daily_background_update(self) -> Dict[str, Any]:
+        """Daily update of all background conflicts"""
+        
+        # Get active background conflicts
+        conflicts_data = await self._get_active_background_conflicts()
+        
+        active_conflicts = []
+        for conflict_data in conflicts_data:
+            active_conflicts.append(self._db_to_background_conflict(conflict_data))
+        
+        # Generate new conflicts if needed
+        if len(active_conflicts) < 3:
+            new_conflict = await self.orchestrator.generate_background_conflict()
+            active_conflicts.append(new_conflict)
+        
+        # Advance conflicts probabilistically
+        events = []
+        for conflict in active_conflicts:
+            if random.random() < 0.3:  # 30% chance each day
+                event = await self.orchestrator.advance_background_conflict(conflict)
+                events.append({
+                    'conflict': conflict.name,
+                    'event': event.description
+                })
+        
+        # Generate news items
+        news_items = []
+        for conflict in active_conflicts:
+            if random.random() < 0.5:  # 50% chance of news
+                news = await self.news_generator.generate_news_item(conflict)
+                news_items.append(news)
+        
+        # Generate ripple effects
+        ripples = await self.ripple_manager.generate_daily_ripples(active_conflicts)
+        
+        # Check for opportunities
+        opportunities = await self.ripple_manager.check_for_opportunities(
+            active_conflicts, {}  # Would pass actual player skills
+        )
+        
+        return {
+            'active_conflicts': len(active_conflicts),
+            'events_today': events,
+            'news': news_items[:3],  # Limit to 3 news items
+            'ripple_effects': ripples,
+            'optional_opportunities': opportunities,
+            'world_tension': sum(c.progress for c in active_conflicts) / (len(active_conflicts) * 100) if active_conflicts else 0
+        }
+    
+    async def get_conversation_topics(self) -> List[str]:
+        """Get background conflict topics for NPC conversations"""
+        
+        async with get_db_connection_context() as conn:
+            # Get recent news
+            recent_news = await conn.fetch("""
+                SELECT headline, content FROM BackgroundNews
+                WHERE user_id = $1 AND conversation_id = $2
+                AND game_day > (SELECT current_day FROM game_calendar 
+                               WHERE user_id = $3 AND conversation_id = $4) - 7
+                ORDER BY game_day DESC
+                LIMIT 10
+            """, self.user_id, self.conversation_id, self.user_id, self.conversation_id)
+        
+        topics = []
+        for news in recent_news:
+            topics.append(f"Did you hear about {news['headline']}?")
+            topics.append(news['content'][:100] + "...")
+        
+        return topics
+    
+    # ========== Helper Methods ==========
+    
+    async def _get_active_background_conflicts(self):
+        """Get active background conflicts from database"""
+        async with get_db_connection_context() as conn:
+            return await conn.fetch("""
+                SELECT * FROM BackgroundConflicts
+                WHERE user_id = $1 AND conversation_id = $2 AND is_active = true
+            """, self.user_id, self.conversation_id)
+    
+    async def _get_random_background_conflict(self) -> Optional[BackgroundConflict]:
+        """Get a random active background conflict"""
+        conflicts = await self._get_active_background_conflicts()
+        if conflicts:
+            conflict_data = random.choice(conflicts)
+            return self._db_to_background_conflict(conflict_data)
+        return None
+    
+    def _db_to_background_conflict(self, db_row) -> BackgroundConflict:
+        """Convert database row to BackgroundConflict object"""
+        return BackgroundConflict(
+            conflict_id=db_row['conflict_id'],
+            conflict_type=GrandConflictType(db_row['conflict_type']),
+            name=db_row['name'],
+            description=db_row['description'],
+            intensity=BackgroundIntensity(db_row['intensity']),
+            progress=db_row['progress'],
+            factions=json.loads(db_row.get('factions', '[]')),
+            current_state=db_row['current_state'],
+            recent_developments=[],
+            impact_on_daily_life=[],
+            player_awareness_level=db_row.get('player_awareness', 0.1)
+        )
+    
+    async def _adjust_background_tensions(self, amount: float):
+        """Adjust all background conflict tensions"""
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                UPDATE BackgroundConflicts
+                SET progress = LEAST(100, progress + $1)
+                WHERE user_id = $2 AND conversation_id = $3 AND is_active = true
+            """, amount * 100, self.user_id, self.conversation_id)
+
+
+# ===============================================================================
 # ENHANCED BACKGROUND CONFLICT ORCHESTRATOR
 # ===============================================================================
 
@@ -115,50 +441,6 @@ class BackgroundConflictOrchestrator:
         return self._world_event_agent
     
     @property
-    def news_agent(self) -> Agent:
-        """Agent for generating news and rumors"""
-        if self._news_agent is None:
-            self._news_agent = Agent(
-                name="News and Rumor Generator",
-                instructions="""
-                Generate news snippets, rumors, and gossip about background conflicts.
-                
-                Create varied content:
-                - Official news (mostly accurate)
-                - Rumors (partially true)
-                - Gossip (embellished)
-                - Propaganda (biased)
-                - Conspiracy theories (mostly false)
-                
-                Vary tone and reliability. Keep atmospheric, not actionable.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._news_agent
-    
-    @property
-    def faction_agent(self) -> Agent:
-        """Agent for generating faction dynamics"""
-        if self._faction_agent is None:
-            self._faction_agent = Agent(
-                name="Faction Dynamics Generator",
-                instructions="""
-                Generate complex faction behaviors and interactions.
-                
-                Create:
-                - Faction motivations and goals
-                - Alliance formations and betrayals
-                - Strategic moves and counter-moves
-                - Internal faction politics
-                - Public versus private agendas
-                
-                Make factions feel like real political entities with depth.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._faction_agent
-    
-    @property
     def development_agent(self) -> Agent:
         """Agent for progressing conflicts"""
         if self._development_agent is None:
@@ -181,26 +463,26 @@ class BackgroundConflictOrchestrator:
         return self._development_agent
     
     @property
-    def ripple_agent(self) -> Agent:
-        """Agent for generating ripple effects"""
-        if self._ripple_agent is None:
-            self._ripple_agent = Agent(
-                name="Ripple Effect Generator",
+    def faction_agent(self) -> Agent:
+        """Agent for generating faction dynamics"""
+        if self._faction_agent is None:
+            self._faction_agent = Agent(
+                name="Faction Dynamics Generator",
                 instructions="""
-                Generate subtle ripple effects from grand conflicts.
+                Generate complex faction behaviors and interactions.
                 
-                Create effects that:
-                - Subtly affect daily life
-                - Change ambient atmosphere
-                - Influence NPC behaviors
-                - Create conversation topics
-                - Suggest larger forces at work
+                Create:
+                - Faction motivations and goals
+                - Alliance formations and betrayals
+                - Strategic moves and counter-moves
+                - Internal faction politics
+                - Public versus private agendas
                 
-                Keep effects indirect but noticeable.
+                Make factions feel like real political entities with depth.
                 """,
                 model="gpt-5-nano",
             )
-        return self._ripple_agent
+        return self._faction_agent
     
     # ========== Dynamic Generation Methods ==========
     
@@ -345,42 +627,6 @@ class BackgroundConflictOrchestrator:
         elif change == "decrease" and current_idx > 0:
             return intensities[current_idx - 1].value
         return current.value
-    
-    async def generate_faction_move(
-        self,
-        conflict: BackgroundConflict,
-        faction_name: str
-    ) -> Dict[str, Any]:
-        """Generate a strategic move by a faction"""
-        
-        prompt = f"""
-        Generate a strategic move for this faction:
-        
-        Faction: {faction_name}
-        Conflict: {conflict.name}
-        Current State: {conflict.current_state}
-        Other Factions: {json.dumps([f for f in conflict.factions if f != faction_name])}
-        
-        Create a move that:
-        - Advances faction interests
-        - Creates new dynamics
-        - Could backfire
-        - Has hidden motives
-        
-        Return JSON:
-        {{
-            "move_type": "alliance/betrayal/maneuver/revelation/gambit",
-            "public_action": "What everyone sees",
-            "hidden_motive": "Real intention",
-            "targets": ["affected factions"],
-            "success_probability": 0.0 to 1.0,
-            "potential_backfire": "How this could go wrong",
-            "rumors_generated": ["3 rumors this creates"]
-        }}
-        """
-        
-        response = await Runner.run(self.faction_agent, prompt)
-        return json.loads(response.output)
 
 
 # ===============================================================================
@@ -394,8 +640,6 @@ class BackgroundNewsGenerator:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self._news_generator = None
-        self._rumor_mill = None
-        self._propaganda_writer = None
     
     @property
     def news_generator(self) -> Agent:
@@ -416,48 +660,6 @@ class BackgroundNewsGenerator:
             )
         return self._news_generator
     
-    @property
-    def rumor_mill(self) -> Agent:
-        if self._rumor_mill is None:
-            self._rumor_mill = Agent(
-                name="Rumor Mill",
-                instructions="""
-                Generate rumors and gossip about world events.
-                
-                Create rumors that are:
-                - Based on partial truths
-                - Embellished or distorted
-                - Revealing hidden dynamics
-                - Creating social tension
-                - Sometimes completely false
-                
-                Make them feel like organic gossip.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._rumor_mill
-    
-    @property
-    def propaganda_writer(self) -> Agent:
-        if self._propaganda_writer is None:
-            self._propaganda_writer = Agent(
-                name="Propaganda Writer",
-                instructions="""
-                Generate propaganda and biased messaging.
-                
-                Create content that:
-                - Serves faction interests
-                - Distorts truth cleverly
-                - Appeals to emotions
-                - Creates division
-                - Seems reasonable on surface
-                
-                Make propaganda feel authentic to its source.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._propaganda_writer
-    
     async def generate_news_item(
         self,
         conflict: BackgroundConflict,
@@ -466,15 +668,7 @@ class BackgroundNewsGenerator:
         """Generate dynamic news about a conflict"""
         
         if news_type == "random":
-            news_type = random.choice(["official", "independent", "tabloid", "rumor", "propaganda"])
-        
-        # Select appropriate agent
-        if news_type == "rumor":
-            agent = self.rumor_mill
-        elif news_type == "propaganda":
-            agent = self.propaganda_writer
-        else:
-            agent = self.news_generator
+            news_type = random.choice(["official", "independent", "tabloid", "rumor"])
         
         prompt = f"""
         Generate {news_type} news about this conflict:
@@ -505,7 +699,7 @@ class BackgroundNewsGenerator:
         }}
         """
         
-        response = await Runner.run(agent, prompt)
+        response = await Runner.run(self.news_generator, prompt)
         news_data = json.loads(response.output)
         
         # Store in database
@@ -577,16 +771,6 @@ class BackgroundConflictRipples:
                 model="gpt-5-nano",
             )
         return self._opportunity_creator
-
-    async def process_event(self, conflict_id: int, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Process conflict events for this subsystem"""
-        event_type = event.get('type', 'unknown')
-        
-        # Route to appropriate handler
-        if event_type == 'your_specific_type':
-            return await self.handle_specific_event(conflict_id, event)
-        
-        return {'processed': True, 'subsystem': 'module_name'}
     
     async def generate_daily_ripples(
         self,
@@ -697,109 +881,7 @@ class BackgroundConflictRipples:
 
 
 # ===============================================================================
-# BACKGROUND CONFLICT MANAGER
-# ===============================================================================
-
-class BackgroundConflictManager:
-    """Main manager for all background conflict systems"""
-    
-    def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.orchestrator = BackgroundConflictOrchestrator(user_id, conversation_id)
-        self.news_generator = BackgroundNewsGenerator(user_id, conversation_id)
-        self.ripple_manager = BackgroundConflictRipples(user_id, conversation_id)
-    
-    async def daily_background_update(self) -> Dict[str, Any]:
-        """Daily update of all background conflicts"""
-        
-        # Get active background conflicts
-        async with get_db_connection_context() as conn:
-            conflicts_data = await conn.fetch("""
-                SELECT * FROM BackgroundConflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND is_active = true
-            """, self.user_id, self.conversation_id)
-        
-        active_conflicts = []
-        for conflict_data in conflicts_data:
-            active_conflicts.append(BackgroundConflict(
-                conflict_id=conflict_data['conflict_id'],
-                conflict_type=GrandConflictType(conflict_data['conflict_type']),
-                name=conflict_data['name'],
-                description=conflict_data['description'],
-                intensity=BackgroundIntensity(conflict_data['intensity']),
-                progress=conflict_data['progress'],
-                factions=json.loads(conflict_data.get('factions', '[]')),
-                current_state=conflict_data['current_state'],
-                recent_developments=[],
-                impact_on_daily_life=[],
-                player_awareness_level=conflict_data.get('player_awareness', 0.1)
-            ))
-        
-        # Generate new conflicts if needed
-        if len(active_conflicts) < 3:
-            new_conflict = await self.orchestrator.generate_background_conflict()
-            active_conflicts.append(new_conflict)
-        
-        # Advance conflicts probabilistically
-        events = []
-        for conflict in active_conflicts:
-            if random.random() < 0.3:  # 30% chance each day
-                event = await self.orchestrator.advance_background_conflict(conflict)
-                events.append({
-                    'conflict': conflict.name,
-                    'event': event.description
-                })
-        
-        # Generate news items
-        news_items = []
-        for conflict in active_conflicts:
-            if random.random() < 0.5:  # 50% chance of news
-                news = await self.news_generator.generate_news_item(conflict)
-                news_items.append(news)
-        
-        # Generate ripple effects
-        ripples = await self.ripple_manager.generate_daily_ripples(active_conflicts)
-        
-        # Check for opportunities
-        opportunities = await self.ripple_manager.check_for_opportunities(
-            active_conflicts, {}  # Would pass actual player skills
-        )
-        
-        return {
-            'active_conflicts': len(active_conflicts),
-            'events_today': events,
-            'news': news_items[:3],  # Limit to 3 news items
-            'ripple_effects': ripples,
-            'optional_opportunities': opportunities,
-            'world_tension': sum(c.progress for c in active_conflicts) / (len(active_conflicts) * 100) if active_conflicts else 0
-        }
-    
-    async def get_conversation_topics(self) -> List[str]:
-        """Get background conflict topics for NPC conversations"""
-        
-        async with get_db_connection_context() as conn:
-            # Get recent news
-            recent_news = await conn.fetch("""
-                SELECT headline, content FROM BackgroundNews
-                WHERE user_id = $1 AND conversation_id = $2
-                AND game_day > (SELECT current_day FROM game_calendar 
-                               WHERE user_id = $3 AND conversation_id = $4) - 7
-                ORDER BY game_day DESC
-                LIMIT 10
-            """, self.user_id, self.conversation_id, self.user_id, self.conversation_id)
-        
-        topics = []
-        for news in recent_news:
-            topics.append(f"Did you hear about {news['headline']}?")
-            topics.append(news['content'][:100] + "...")
-        
-        return topics
-
-
-# ===============================================================================
-# INTEGRATION FUNCTIONS
+# PUBLIC API FUNCTIONS
 # ===============================================================================
 
 @function_tool
@@ -811,28 +893,14 @@ async def initialize_background_world(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = BackgroundConflictManager(user_id, conversation_id)
+    # Get synthesizer
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Generate initial set of background conflicts
-    conflict_types = [
-        GrandConflictType.POLITICAL_SUCCESSION,
-        GrandConflictType.ECONOMIC_CRISIS,
-        GrandConflictType.FACTION_WAR
-    ]
-    
-    conflicts = []
-    for conflict_type in conflict_types:
-        conflict = await manager.orchestrator.generate_background_conflict(conflict_type)
-        conflicts.append({
-            'name': conflict.name,
-            'type': conflict.conflict_type.value,
-            'description': conflict.description
-        })
-    
+    # The background subsystem will initialize through synthesizer
     return {
         'world_initialized': True,
-        'background_conflicts': conflicts,
-        'message': 'The world beyond your daily life is full of distant dramas'
+        'message': 'Background world initialized through synthesizer'
     }
 
 
@@ -845,20 +913,38 @@ async def get_daily_background_flavor(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = BackgroundConflictManager(user_id, conversation_id)
+    # Get synthesizer
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Get daily update
-    daily_update = await manager.daily_background_update()
+    # Request background update through synthesizer
+    event = SystemEvent(
+        event_id=f"flavor_{datetime.now().timestamp()}",
+        event_type=EventType.STATE_SYNC,
+        source_subsystem=SubsystemType.SLICE_OF_LIFE,
+        payload={'request': 'daily_flavor'},
+        target_subsystems={SubsystemType.BACKGROUND},
+        requires_response=True
+    )
     
-    # Format for use in scenes
-    flavor = {
-        'world_tension': daily_update['world_tension'],
-        'background_news': daily_update['news'][:1] if daily_update['news'] else None,
-        'ambient_effects': daily_update['ripple_effects'].get('ripples', {}).get('ambient_changes', []),
-        'overheard': random.choice(
-            daily_update['ripple_effects'].get('ripples', {}).get('overheard_snippets', [''])
-        ) if daily_update['ripple_effects'].get('ripples', {}).get('overheard_snippets') else None,
-        'optional_hook': daily_update['optional_opportunities'][0] if daily_update['optional_opportunities'] else None
+    responses = await synthesizer.emit_event(event)
+    
+    if responses:
+        for response in responses:
+            if response.subsystem == SubsystemType.BACKGROUND:
+                update = response.data.get('background_update', {})
+                return {
+                    'world_tension': update.get('world_tension', 0),
+                    'background_news': update.get('news', [])[:1],
+                    'ambient_effects': update.get('ripple_effects', {}).get('ripples', {}).get('ambient_mood'),
+                    'overheard': update.get('ripple_effects', {}).get('ripples', {}).get('overheard_snippets', [''])[0],
+                    'optional_hook': update.get('optional_opportunities', [None])[0]
+                }
+    
+    return {
+        'world_tension': 0,
+        'background_news': None,
+        'ambient_effects': [],
+        'overheard': None,
+        'optional_hook': None
     }
-    
-    return flavor
