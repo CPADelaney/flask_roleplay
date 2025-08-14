@@ -86,7 +86,6 @@ def create_daily_life_coordinator():
         instructions=instructions,
         tools=tools,
         model=DEFAULT_MODEL,
-        model_settings=ModelSettings(temperature=0.6, max_tokens=1536)
     )
     
     return agent
@@ -134,7 +133,6 @@ def create_relationship_dynamics_agent():
         instructions=instructions,
         tools=tools,
         model=DEFAULT_MODEL,
-        model_settings=ModelSettings(temperature=0.5, max_tokens=1536)
     )
     
     return agent
@@ -169,7 +167,6 @@ def create_ambient_world_agent():
         instructions=instructions,
         tools=[],  # Uses narrative generation tools
         model=FAST_MODEL,
-        model_settings=ModelSettings(temperature=0.7, max_tokens=1024)
     )
     
     return agent
@@ -209,7 +206,6 @@ def create_pattern_recognition_agent():
         instructions=instructions,
         tools=[],
         model=DEFAULT_MODEL,
-        model_settings=ModelSettings(temperature=0.3, max_tokens=1536)
     )
     
     return agent
@@ -253,7 +249,6 @@ def create_dialogue_specialist():
             instructions=instructions,
             tools=[],
             model=DEFAULT_MODEL,
-            model_settings=ModelSettings(temperature=0.6, max_tokens=1024)
         )
 
 # ----- Activity Generator Agent -----
@@ -289,7 +284,6 @@ def create_activity_generator():
         instructions=instructions,
         tools=[],
         model=FAST_MODEL,
-        model_settings=ModelSettings(temperature=0.6, max_tokens=1024)
     )
     
     return agent
