@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from agents import RunContextWrapper, Agent, Runner
     from nyx.integrate import CentralGovernance
-    from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
+    from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
     from lore.lore_generator import DynamicLoreGenerator
     from lore.core.context import CanonicalContext
 
@@ -625,25 +625,15 @@ class ArtifactManager:
         integration_type: str = "power"
     ) -> Dict[str, Any]:
         """
-        Integrate an artifact with a conflict.
+        Integrate an artifact with a conflict (now synthesis-aware).
         WITH GOVERNANCE TRACKING.
-        
-        Args:
-            artifact_id: ID of the artifact to integrate
-            conflict_id: ID of the conflict to integrate with
-            integration_type: Type of integration to perform
-            
-        Returns:
-            Integration result with impact details
         """
         try:
-            # Lazy imports
+            from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
             from agents import Runner, RunContextWrapper
-            from logic.conflict_system.conflict_tools import get_conflict_details
             from nyx.nyx_governance import AgentType
             from nyx.governance_helpers import with_governance
             
-            # Apply governance decorator to inner function
             @with_governance(
                 agent_type=AgentType.NARRATIVE_CRAFTER,
                 action_type="integrate_artifact",
@@ -651,16 +641,53 @@ class ArtifactManager:
                 id_from_context=lambda ctx: "artifact_integration"
             )
             async def _integrate_with_governance():
-                # Get artifact details
                 artifact = self.active_artifacts.get(artifact_id)
                 if not artifact:
                     return {"success": False, "error": "Artifact not found"}
+                
+                # Check if this conflict is part of a synthesis
+                synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
+                
+                async with get_db_connection_context() as conn:
+                    # Check for synthesis
+                    synthesis = await conn.fetchrow("""
+                        SELECT synthesis_id, component_conflicts, synthesis_type
+                        FROM conflict_synthesis
+                        WHERE $1 = ANY(component_conflicts::int[])
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """, conflict_id)
+                
+                if synthesis:
+                    # This conflict is part of a synthesis - artifact affects the whole
+                    synthesis_event = {
+                        "type": "artifact_integration",
+                        "artifact": artifact,
+                        "target_conflict": conflict_id,
+                        "integration_type": integration_type
+                    }
                     
-                # Get conflict details
-                ctx_wrapper = RunContextWrapper(self.user_id, self.conversation_id)
-                conflict = await get_conflict_details(ctx_wrapper, conflict_id)
-                if not conflict:
-                    return {"success": False, "error": "Conflict not found"}
+                    result = await synthesizer.manage_synthesis_progression(
+                        synthesis['synthesis_id'],
+                        synthesis_event
+                    )
+                    
+                    return {
+                        "success": True,
+                        "artifact_id": artifact_id,
+                        "synthesis_affected": True,
+                        "synthesis_id": synthesis['synthesis_id'],
+                        "cascade_effects": result.get('cascade_effects', []),
+                        "narrative_impact": result.get('narrative_impact', '')
+                    }
+                else:
+                    # Single conflict integration (old path)
+                    ctx_wrapper = RunContextWrapper(self.user_id, self.conversation_id)
+                    from logic.conflict_system.conflict_tools import get_conflict_details
+                    conflict = await get_conflict_details(ctx_wrapper, conflict_id)
+                    
+                    if not conflict:
+                        return {"success": False, "error": "Conflict not found"}
                 
                 # Build integration prompt
                 integration_prompt = f"""
@@ -1017,3 +1044,4 @@ async def ensure_artifacts_table(conn):
 # =====================================================
 
 __all__ = ['ArtifactManager', 'ensure_artifacts_table']
+
