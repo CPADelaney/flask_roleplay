@@ -1,52 +1,57 @@
 # logic/conflict_system/conflict_flow.py
 """
 Conflict Flow System with LLM-generated pacing and transitions.
-Manages the rhythm, pacing, and dramatic flow of conflicts.
+Refactored to work as a ConflictSubsystem with the synthesizer.
 """
 
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple
+import weakref
+from typing import Dict, List, Any, Optional, Tuple, Set
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
+from logic.conflict_system.conflict_synthesizer import (
+    ConflictSubsystem, SubsystemType, EventType,
+    SystemEvent, SubsystemResponse
+)
 
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# FLOW STRUCTURES
+# FLOW STRUCTURES (Preserved from original)
 # ===============================================================================
 
 class ConflictPhase(Enum):
     """Phases of conflict progression"""
-    SEEDS = "seeds"  # Conflict seeds being planted
-    EMERGING = "emerging"  # Starting to surface
-    RISING = "rising"  # Building tension
-    CONFRONTATION = "confrontation"  # Direct conflict
-    CLIMAX = "climax"  # Peak intensity
-    FALLING = "falling"  # De-escalation
-    RESOLUTION = "resolution"  # Settling
-    AFTERMATH = "aftermath"  # Long-term effects
+    SEEDS = "seeds"
+    EMERGING = "emerging"
+    RISING = "rising"
+    CONFRONTATION = "confrontation"
+    CLIMAX = "climax"
+    FALLING = "falling"
+    RESOLUTION = "resolution"
+    AFTERMATH = "aftermath"
 
 class PacingStyle(Enum):
     """Different pacing styles for conflicts"""
-    SLOW_BURN = "slow_burn"  # Gradual build over time
-    RAPID_ESCALATION = "rapid_escalation"  # Quick to conflict
-    WAVES = "waves"  # Cycles of tension and release
-    STEADY = "steady"  # Consistent pressure
-    ERRATIC = "erratic"  # Unpredictable changes
+    SLOW_BURN = "slow_burn"
+    RAPID_ESCALATION = "rapid_escalation"
+    WAVES = "waves"
+    STEADY = "steady"
+    ERRATIC = "erratic"
 
 class TransitionType(Enum):
     """Types of phase transitions"""
-    NATURAL = "natural"  # Organic progression
-    TRIGGERED = "triggered"  # Event-based
-    FORCED = "forced"  # External intervention
-    STALLED = "stalled"  # Progress blocked
-    REVERSED = "reversed"  # Moving backward
+    NATURAL = "natural"
+    TRIGGERED = "triggered"
+    FORCED = "forced"
+    STALLED = "stalled"
+    REVERSED = "reversed"
 
 @dataclass
 class ConflictFlow:
@@ -54,9 +59,9 @@ class ConflictFlow:
     conflict_id: int
     current_phase: ConflictPhase
     pacing_style: PacingStyle
-    intensity: float  # 0-1, current intensity
-    momentum: float  # -1 to 1, direction of change
-    phase_progress: float  # 0-1, progress in current phase
+    intensity: float
+    momentum: float
+    phase_progress: float
     transitions_history: List['PhaseTransition']
     dramatic_beats: List['DramaticBeat']
     next_transition_conditions: List[str]
@@ -74,9 +79,9 @@ class PhaseTransition:
 @dataclass
 class DramaticBeat:
     """A significant moment in conflict flow"""
-    beat_type: str  # "revelation", "betrayal", "reconciliation", etc.
+    beat_type: str
     description: str
-    impact_on_flow: float  # How much it affects momentum
+    impact_on_flow: float
     characters_involved: List[int]
     timestamp: datetime
 
@@ -90,22 +95,326 @@ class FlowModifier:
     duration: Optional[timedelta]
 
 # ===============================================================================
-# CONFLICT FLOW MANAGER WITH LLM
+# CONFLICT FLOW SUBSYSTEM
 # ===============================================================================
 
-class ConflictFlowManager:
+class ConflictFlowSubsystem(ConflictSubsystem):
     """
-    Manages conflict pacing and flow using LLM for dynamic generation.
+    Manages conflict pacing and flow as a subsystem of the synthesizer.
     Controls dramatic rhythm and ensures engaging progression.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self.synthesizer = None  # Will be set by synthesizer
+        
+        # Flow states cache
+        self._flow_states: Dict[int, ConflictFlow] = {}
+        
+        # Lazy-loaded LLM agents
         self._pacing_director = None
         self._transition_narrator = None
         self._beat_generator = None
         self._flow_analyzer = None
+    
+    # ========== ConflictSubsystem Interface Implementation ==========
+    
+    @property
+    def subsystem_type(self) -> SubsystemType:
+        return SubsystemType.FLOW
+    
+    @property
+    def capabilities(self) -> Set[str]:
+        return {
+            'pacing_control',
+            'phase_management',
+            'dramatic_beats',
+            'flow_analysis',
+            'transition_narration',
+            'momentum_tracking'
+        }
+    
+    @property
+    def dependencies(self) -> Set[SubsystemType]:
+        return set()  # Flow is foundational, no dependencies
+    
+    @property
+    def event_subscriptions(self) -> Set[EventType]:
+        return {
+            EventType.CONFLICT_CREATED,
+            EventType.CONFLICT_UPDATED,
+            EventType.TENSION_CHANGED,
+            EventType.PLAYER_CHOICE,
+            EventType.STAKEHOLDER_ACTION
+        }
+    
+    async def initialize(self, synthesizer: 'ConflictSynthesizer') -> bool:
+        """Initialize with synthesizer reference"""
+        self.synthesizer = weakref.ref(synthesizer)
+        return True
+    
+    async def handle_event(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle events from synthesizer"""
+        try:
+            if event.event_type == EventType.CONFLICT_CREATED:
+                return await self._handle_conflict_created(event)
+            elif event.event_type == EventType.CONFLICT_UPDATED:
+                return await self._handle_conflict_updated(event)
+            elif event.event_type == EventType.TENSION_CHANGED:
+                return await self._handle_tension_changed(event)
+            elif event.event_type == EventType.PLAYER_CHOICE:
+                return await self._handle_player_choice(event)
+            elif event.event_type == EventType.STAKEHOLDER_ACTION:
+                return await self._handle_stakeholder_action(event)
+            else:
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'handled': False}
+                )
+        except Exception as e:
+            logger.error(f"FlowSubsystem error: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Check health of flow subsystem"""
+        try:
+            active_flows = len(self._flow_states)
+            stalled_flows = sum(1 for f in self._flow_states.values() 
+                              if f.phase_progress > 0.9 and f.momentum < 0.1)
+            
+            return {
+                'healthy': stalled_flows < active_flows / 2,
+                'active_flows': active_flows,
+                'stalled_flows': stalled_flows,
+                'average_momentum': sum(f.momentum for f in self._flow_states.values()) / max(1, active_flows)
+            }
+        except Exception as e:
+            return {'healthy': False, 'issue': str(e)}
+    
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get flow-specific conflict data"""
+        flow = self._flow_states.get(conflict_id)
+        if not flow:
+            flow = await self._load_flow_state(conflict_id)
+        
+        if flow:
+            return {
+                'subsystem': 'flow',
+                'current_phase': flow.current_phase.value,
+                'pacing_style': flow.pacing_style.value,
+                'intensity': flow.intensity,
+                'momentum': flow.momentum,
+                'phase_progress': flow.phase_progress,
+                'beat_count': len(flow.dramatic_beats)
+            }
+        return {'subsystem': 'flow', 'no_flow_data': True}
+    
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current state of flow subsystem"""
+        return {
+            'active_flows': len(self._flow_states),
+            'phase_distribution': self._get_phase_distribution(),
+            'average_intensity': self._get_average_intensity()
+        }
+    
+    # ========== Event Handlers ==========
+    
+    async def _handle_conflict_created(self, event: SystemEvent) -> SubsystemResponse:
+        """Initialize flow for new conflict"""
+        conflict_id = event.payload.get('conflict_id')
+        conflict_type = event.payload.get('conflict_type')
+        context = event.payload.get('context', {})
+        
+        if not conflict_id:
+            # If no ID yet, request one
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': 'No conflict_id provided'}
+            )
+        
+        # Initialize flow
+        flow = await self.initialize_conflict_flow(conflict_id, conflict_type, context)
+        self._flow_states[conflict_id] = flow
+        
+        # Check for initial dramatic beat
+        side_effects = []
+        if flow.pacing_style == PacingStyle.RAPID_ESCALATION:
+            beat = await self.generate_dramatic_beat(flow, context)
+            if beat:
+                side_effects.append(SystemEvent(
+                    event_id=f"beat_{conflict_id}_{datetime.now().timestamp()}",
+                    event_type=EventType.INTENSITY_CHANGED,
+                    source_subsystem=self.subsystem_type,
+                    payload={
+                        'conflict_id': conflict_id,
+                        'beat': beat.description,
+                        'new_intensity': flow.intensity
+                    },
+                    priority=6
+                ))
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={
+                'flow_initialized': True,
+                'initial_phase': flow.current_phase.value,
+                'pacing_style': flow.pacing_style.value
+            },
+            side_effects=side_effects
+        )
+    
+    async def _handle_conflict_updated(self, event: SystemEvent) -> SubsystemResponse:
+        """Update flow based on conflict changes"""
+        conflict_id = event.payload.get('conflict_id')
+        
+        flow = self._flow_states.get(conflict_id)
+        if not flow:
+            flow = await self._load_flow_state(conflict_id)
+            if not flow:
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=False,
+                    data={'error': 'Flow not found'}
+                )
+            self._flow_states[conflict_id] = flow
+        
+        # Update flow
+        result = await self.update_conflict_flow(flow, event.payload)
+        
+        side_effects = []
+        
+        # Check for phase transition
+        if result.get('transition'):
+            transition = result['transition']
+            side_effects.append(SystemEvent(
+                event_id=f"transition_{conflict_id}",
+                event_type=EventType.PHASE_TRANSITION,
+                source_subsystem=self.subsystem_type,
+                payload={
+                    'conflict_id': conflict_id,
+                    'from_phase': transition.from_phase.value,
+                    'to_phase': transition.to_phase.value,
+                    'narrative': transition.narrative
+                },
+                priority=4
+            ))
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data=result,
+            side_effects=side_effects
+        )
+    
+    async def _handle_tension_changed(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle tension changes affecting flow"""
+        conflict_id = event.payload.get('conflict_id')
+        new_tension = event.payload.get('new_tension', 0.5)
+        
+        flow = self._flow_states.get(conflict_id)
+        if flow:
+            # Adjust momentum based on tension change
+            old_momentum = flow.momentum
+            flow.momentum = max(-1, min(1, flow.momentum + (new_tension - 0.5) * 0.3))
+            
+            # Check if this triggers a beat
+            if abs(flow.momentum - old_momentum) > 0.3:
+                beat = await self.generate_dramatic_beat(flow, event.payload)
+                if beat:
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={'momentum_shift': flow.momentum - old_momentum},
+                        side_effects=[SystemEvent(
+                            event_id=f"tension_beat_{conflict_id}",
+                            event_type=EventType.INTENSITY_CHANGED,
+                            source_subsystem=self.subsystem_type,
+                            payload={'conflict_id': conflict_id, 'beat': beat.description}
+                        )]
+                    )
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'tension_acknowledged': True}
+        )
+    
+    async def _handle_player_choice(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle player choices affecting flow"""
+        conflict_id = event.payload.get('conflict_id')
+        choice_impact = event.payload.get('impact', {})
+        
+        flow = self._flow_states.get(conflict_id)
+        if flow:
+            # Player choices can accelerate or decelerate flow
+            if choice_impact.get('escalate'):
+                flow.momentum = min(1, flow.momentum + 0.2)
+                flow.phase_progress += 0.15
+            elif choice_impact.get('de_escalate'):
+                flow.momentum = max(-0.5, flow.momentum - 0.2)
+            
+            # Check for phase transition
+            if flow.phase_progress >= 1.0:
+                transition = await self._handle_phase_transition(flow, event.payload)
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'phase_transition': transition.to_phase.value}
+                )
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'choice_processed': True}
+        )
+    
+    async def _handle_stakeholder_action(self, event: SystemEvent) -> SubsystemResponse:
+        """Handle stakeholder actions affecting flow"""
+        conflict_id = event.payload.get('conflict_id')
+        action_type = event.payload.get('action_type')
+        
+        flow = self._flow_states.get(conflict_id)
+        if flow:
+            # Different actions have different flow impacts
+            if action_type == 'escalate':
+                flow.intensity = min(1, flow.intensity + 0.1)
+                flow.momentum = min(1, flow.momentum + 0.15)
+            elif action_type == 'withdraw':
+                flow.momentum = max(-1, flow.momentum - 0.3)
+            
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={'flow_adjusted': True, 'new_momentum': flow.momentum}
+            )
+        
+        return SubsystemResponse(
+            subsystem=self.subsystem_type,
+            event_id=event.event_id,
+            success=True,
+            data={'no_flow': True}
+        )
+    
+    # ========== Agent Properties (Preserved from original) ==========
     
     @property
     def pacing_director(self) -> Agent:
@@ -222,7 +531,7 @@ class ConflictFlowManager:
             )
         return self._flow_analyzer
     
-    # ========== Flow State Management ==========
+    # ========== Core Flow Methods (Modified from original) ==========
     
     async def initialize_conflict_flow(
         self,
@@ -262,6 +571,9 @@ class ConflictFlowManager:
                     (user_id, conversation_id, conflict_id, current_phase, 
                      pacing_style, intensity, momentum)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (conflict_id) DO UPDATE
+                    SET current_phase = $4, pacing_style = $5, 
+                        intensity = $6, momentum = $7
                 """, self.user_id, self.conversation_id, conflict_id,
                 result.get('phase', 'emerging'),
                 result.get('pacing', 'steady'),
@@ -330,6 +642,9 @@ class ConflictFlowManager:
             if result.get('should_transition') or flow.phase_progress >= 1.0:
                 transition = await self._handle_phase_transition(flow, event)
             
+            # Update database
+            await self._save_flow_state(flow)
+            
             return {
                 'intensity_change': flow.intensity - old_intensity,
                 'new_momentum': flow.momentum,
@@ -341,98 +656,6 @@ class ConflictFlowManager:
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Failed to update flow: {e}")
             return {'intensity_change': 0, 'new_momentum': flow.momentum}
-    
-    # ========== Phase Transitions ==========
-    
-    async def _handle_phase_transition(
-        self,
-        flow: ConflictFlow,
-        trigger_event: Dict[str, Any]
-    ) -> PhaseTransition:
-        """Handle transition between phases"""
-        
-        # Determine next phase
-        next_phase = await self._determine_next_phase(flow, trigger_event)
-        
-        # Generate transition narrative
-        prompt = f"""
-        Narrate phase transition:
-        
-        From: {flow.current_phase.value}
-        To: {next_phase.value}
-        Trigger: {json.dumps(trigger_event, indent=2)}
-        Current Intensity: {flow.intensity}
-        
-        Create:
-        1. Transition type (natural/triggered/forced/stalled/reversed)
-        2. Narrative description (2-3 sentences)
-        3. Immediate effects
-        4. What changes for characters
-        5. Environmental/mood shifts
-        
-        Make the transition feel significant but smooth.
-        Format as JSON.
-        """
-        
-        response = await self.transition_narrator.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            transition = PhaseTransition(
-                from_phase=flow.current_phase,
-                to_phase=next_phase,
-                transition_type=TransitionType[result.get('type', 'NATURAL').upper()],
-                trigger=str(trigger_event),
-                narrative=result.get('narrative', 'The conflict shifts'),
-                timestamp=datetime.now()
-            )
-            
-            # Update flow
-            flow.current_phase = next_phase
-            flow.phase_progress = 0.0
-            flow.transitions_history.append(transition)
-            
-            # Store transition
-            await self._store_transition(flow.conflict_id, transition)
-            
-            return transition
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to handle transition: {e}")
-            return self._create_fallback_transition(flow.current_phase, next_phase)
-    
-    async def _determine_next_phase(
-        self,
-        flow: ConflictFlow,
-        trigger: Dict[str, Any]
-    ) -> ConflictPhase:
-        """Determine the next phase in progression"""
-        
-        # Natural progression
-        natural_progression = {
-            ConflictPhase.SEEDS: ConflictPhase.EMERGING,
-            ConflictPhase.EMERGING: ConflictPhase.RISING,
-            ConflictPhase.RISING: ConflictPhase.CONFRONTATION,
-            ConflictPhase.CONFRONTATION: ConflictPhase.CLIMAX,
-            ConflictPhase.CLIMAX: ConflictPhase.FALLING,
-            ConflictPhase.FALLING: ConflictPhase.RESOLUTION,
-            ConflictPhase.RESOLUTION: ConflictPhase.AFTERMATH,
-            ConflictPhase.AFTERMATH: ConflictPhase.AFTERMATH
-        }
-        
-        # Check for special conditions
-        if flow.momentum < -0.5:  # Reversing
-            reverse_progression = {
-                ConflictPhase.RISING: ConflictPhase.EMERGING,
-                ConflictPhase.CONFRONTATION: ConflictPhase.RISING,
-                ConflictPhase.CLIMAX: ConflictPhase.CONFRONTATION
-            }
-            return reverse_progression.get(flow.current_phase, natural_progression[flow.current_phase])
-        
-        return natural_progression[flow.current_phase]
-    
-    # ========== Dramatic Beats ==========
     
     async def generate_dramatic_beat(
         self,
@@ -487,138 +710,127 @@ class ConflictFlowManager:
             logger.warning(f"Failed to generate beat: {e}")
             return self._create_fallback_beat()
     
-    async def check_for_beat_opportunity(
-        self,
-        flow: ConflictFlow,
-        recent_events: List[Dict[str, Any]]
-    ) -> bool:
-        """Check if it's time for a dramatic beat"""
-        
-        prompt = f"""
-        Analyze beat opportunity:
-        
-        Current Phase: {flow.current_phase.value}
-        Intensity: {flow.intensity}
-        Last Beat: {len(flow.dramatic_beats)} beats ago
-        Recent Events: {json.dumps(recent_events[-3:] if recent_events else [], indent=2)}
-        
-        Should we generate a dramatic beat now?
-        Consider:
-        - Pacing (not too many beats)
-        - Build-up (has tension accumulated?)
-        - Timing (is it dramatically appropriate?)
-        
-        Answer: yes/no with reasoning
-        Format as JSON: {{"generate_beat": true/false, "reason": "..."}}
-        """
-        
-        response = await self.flow_analyzer.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            return result.get('generate_beat', False)
-        except json.JSONDecodeError:
-            # Default: check simple conditions
-            return len(flow.dramatic_beats) < 3 and flow.intensity > 0.6
-    
-    # ========== Pacing Control ==========
-    
-    async def adjust_pacing(
-        self,
-        flow: ConflictFlow,
-        target_feel: str  # "accelerate", "maintain", "decelerate"
-    ) -> Dict[str, Any]:
-        """Adjust conflict pacing"""
-        
-        prompt = f"""
-        Adjust conflict pacing:
-        
-        Current Pacing: {flow.pacing_style.value}
-        Current Phase: {flow.current_phase.value}
-        Target Feel: {target_feel}
-        
-        Generate:
-        1. Pacing adjustments to make
-        2. Events to introduce
-        3. Narrative techniques to use
-        4. Expected player experience
-        
-        Keep adjustments subtle and natural.
-        Format as JSON.
-        """
-        
-        response = await self.pacing_director.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            # Apply adjustments
-            if target_feel == "accelerate":
-                flow.momentum = min(1.0, flow.momentum + 0.3)
-                flow.phase_progress += 0.2
-            elif target_feel == "decelerate":
-                flow.momentum = max(-0.5, flow.momentum - 0.3)
-                flow.phase_progress *= 0.8
-            
-            return {
-                'adjustments': result.get('adjustments', []),
-                'suggested_events': result.get('events', []),
-                'techniques': result.get('techniques', []),
-                'expected_experience': result.get('experience', 'Pacing adjusted')
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to adjust pacing: {e}")
-            return {'adjustments': [], 'suggested_events': []}
-    
-    async def analyze_flow_health(
-        self,
-        flow: ConflictFlow,
-        player_actions: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Analyze if conflict flow is healthy"""
-        
-        prompt = f"""
-        Analyze conflict flow health:
-        
-        Current State:
-        - Phase: {flow.current_phase.value}
-        - Intensity: {flow.intensity}
-        - Momentum: {flow.momentum}
-        - Phase Progress: {flow.phase_progress}
-        - Beats Generated: {len(flow.dramatic_beats)}
-        
-        Recent Player Actions: {json.dumps(player_actions[-5:] if player_actions else [], indent=2)}
-        
-        Assess:
-        1. Is pacing appropriate? (rating 0-1)
-        2. Player engagement level (0-1)
-        3. Risk of stagnation (0-1)
-        4. Need for intervention (yes/no)
-        5. Recommendations
-        
-        Be analytical and constructive.
-        Format as JSON.
-        """
-        
-        response = await self.flow_analyzer.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            
-            return {
-                'health_score': result.get('pacing_rating', 0.7),
-                'engagement': result.get('engagement', 0.5),
-                'stagnation_risk': result.get('stagnation_risk', 0.2),
-                'needs_intervention': result.get('intervention', False),
-                'recommendations': result.get('recommendations', [])
-            }
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to analyze flow health: {e}")
-            return {'health_score': 0.5, 'recommendations': []}
-    
     # ========== Helper Methods ==========
+    
+    async def _handle_phase_transition(
+        self,
+        flow: ConflictFlow,
+        trigger_event: Dict[str, Any]
+    ) -> PhaseTransition:
+        """Handle transition between phases"""
+        
+        next_phase = await self._determine_next_phase(flow, trigger_event)
+        
+        prompt = f"""
+        Narrate phase transition:
+        
+        From: {flow.current_phase.value}
+        To: {next_phase.value}
+        Trigger: {json.dumps(trigger_event, indent=2)}
+        Current Intensity: {flow.intensity}
+        
+        Create:
+        1. Transition type (natural/triggered/forced/stalled/reversed)
+        2. Narrative description (2-3 sentences)
+        3. Immediate effects
+        4. What changes for characters
+        5. Environmental/mood shifts
+        
+        Make the transition feel significant but smooth.
+        Format as JSON.
+        """
+        
+        response = await self.transition_narrator.run(prompt)
+        
+        try:
+            result = json.loads(response.content)
+            
+            transition = PhaseTransition(
+                from_phase=flow.current_phase,
+                to_phase=next_phase,
+                transition_type=TransitionType[result.get('type', 'NATURAL').upper()],
+                trigger=str(trigger_event),
+                narrative=result.get('narrative', 'The conflict shifts'),
+                timestamp=datetime.now()
+            )
+            
+            # Update flow
+            flow.current_phase = next_phase
+            flow.phase_progress = 0.0
+            flow.transitions_history.append(transition)
+            
+            # Store transition
+            await self._store_transition(flow.conflict_id, transition)
+            
+            return transition
+            
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to handle transition: {e}")
+            return self._create_fallback_transition(flow.current_phase, next_phase)
+    
+    async def _determine_next_phase(
+        self,
+        flow: ConflictFlow,
+        trigger: Dict[str, Any]
+    ) -> ConflictPhase:
+        """Determine the next phase in progression"""
+        
+        natural_progression = {
+            ConflictPhase.SEEDS: ConflictPhase.EMERGING,
+            ConflictPhase.EMERGING: ConflictPhase.RISING,
+            ConflictPhase.RISING: ConflictPhase.CONFRONTATION,
+            ConflictPhase.CONFRONTATION: ConflictPhase.CLIMAX,
+            ConflictPhase.CLIMAX: ConflictPhase.FALLING,
+            ConflictPhase.FALLING: ConflictPhase.RESOLUTION,
+            ConflictPhase.RESOLUTION: ConflictPhase.AFTERMATH,
+            ConflictPhase.AFTERMATH: ConflictPhase.AFTERMATH
+        }
+        
+        # Check for special conditions
+        if flow.momentum < -0.5:  # Reversing
+            reverse_progression = {
+                ConflictPhase.RISING: ConflictPhase.EMERGING,
+                ConflictPhase.CONFRONTATION: ConflictPhase.RISING,
+                ConflictPhase.CLIMAX: ConflictPhase.CONFRONTATION
+            }
+            return reverse_progression.get(flow.current_phase, natural_progression[flow.current_phase])
+        
+        return natural_progression[flow.current_phase]
+    
+    async def _load_flow_state(self, conflict_id: int) -> Optional[ConflictFlow]:
+        """Load flow state from database"""
+        
+        async with get_db_connection_context() as conn:
+            flow_data = await conn.fetchrow("""
+                SELECT * FROM conflict_flows
+                WHERE conflict_id = $1
+            """, conflict_id)
+        
+        if flow_data:
+            return ConflictFlow(
+                conflict_id=conflict_id,
+                current_phase=ConflictPhase[flow_data['current_phase'].upper()],
+                pacing_style=PacingStyle[flow_data['pacing_style'].upper()],
+                intensity=flow_data['intensity'],
+                momentum=flow_data['momentum'],
+                phase_progress=flow_data.get('phase_progress', 0.5),
+                transitions_history=[],
+                dramatic_beats=[],
+                next_transition_conditions=[]
+            )
+        return None
+    
+    async def _save_flow_state(self, flow: ConflictFlow):
+        """Save flow state to database"""
+        
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                UPDATE conflict_flows
+                SET current_phase = $1, intensity = $2, 
+                    momentum = $3, phase_progress = $4
+                WHERE conflict_id = $5
+            """, flow.current_phase.value, flow.intensity,
+            flow.momentum, flow.phase_progress, flow.conflict_id)
     
     async def _store_transition(self, conflict_id: int, transition: PhaseTransition):
         """Store phase transition in database"""
@@ -646,9 +858,22 @@ class ConflictFlowManager:
             """, self.user_id, self.conversation_id, conflict_id,
             beat.beat_type, beat.description, beat.impact_on_flow)
     
+    def _get_phase_distribution(self) -> Dict[str, int]:
+        """Get distribution of conflicts across phases"""
+        distribution = {}
+        for flow in self._flow_states.values():
+            phase = flow.current_phase.value
+            distribution[phase] = distribution.get(phase, 0) + 1
+        return distribution
+    
+    def _get_average_intensity(self) -> float:
+        """Get average intensity across all flows"""
+        if not self._flow_states:
+            return 0.0
+        return sum(f.intensity for f in self._flow_states.values()) / len(self._flow_states)
+    
     def _create_default_flow(self, conflict_id: int) -> ConflictFlow:
         """Create default flow if LLM fails"""
-        
         return ConflictFlow(
             conflict_id=conflict_id,
             current_phase=ConflictPhase.EMERGING,
@@ -667,7 +892,6 @@ class ConflictFlowManager:
         to_phase: ConflictPhase
     ) -> PhaseTransition:
         """Create fallback transition if LLM fails"""
-        
         return PhaseTransition(
             from_phase=from_phase,
             to_phase=to_phase,
@@ -679,7 +903,6 @@ class ConflictFlowManager:
     
     def _create_fallback_beat(self) -> DramaticBeat:
         """Create fallback beat if LLM fails"""
-        
         return DramaticBeat(
             beat_type="moment",
             description="A significant moment in the conflict",
@@ -687,222 +910,3 @@ class ConflictFlowManager:
             characters_involved=[],
             timestamp=datetime.now()
         )
-
-# ===============================================================================
-# PUBLIC API FUNCTIONS
-# ===============================================================================
-
-@function_tool
-async def initialize_conflict_flow(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    conflict_type: str,
-    context: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """Initialize flow for a new conflict"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = ConflictFlowManager(user_id, conversation_id)
-    
-    flow = await manager.initialize_conflict_flow(
-        conflict_id,
-        conflict_type,
-        context or {}
-    )
-    
-    return {
-        'conflict_id': conflict_id,
-        'initial_phase': flow.current_phase.value,
-        'pacing_style': flow.pacing_style.value,
-        'intensity': flow.intensity,
-        'momentum': flow.momentum,
-        'next_conditions': flow.next_transition_conditions
-    }
-
-@function_tool
-async def progress_conflict_flow(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    event: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Progress conflict flow based on an event"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = ConflictFlowManager(user_id, conversation_id)
-    
-    # Get current flow
-    async with get_db_connection_context() as conn:
-        flow_data = await conn.fetchrow("""
-            SELECT * FROM conflict_flows
-            WHERE conflict_id = $1
-        """, conflict_id)
-    
-    if not flow_data:
-        return {'error': 'Flow not found'}
-    
-    # Create flow object
-    flow = ConflictFlow(
-        conflict_id=conflict_id,
-        current_phase=ConflictPhase[flow_data['current_phase'].upper()],
-        pacing_style=PacingStyle[flow_data['pacing_style'].upper()],
-        intensity=flow_data['intensity'],
-        momentum=flow_data['momentum'],
-        phase_progress=flow_data.get('phase_progress', 0.5),
-        transitions_history=[],
-        dramatic_beats=[],
-        next_transition_conditions=[]
-    )
-    
-    # Update flow
-    result = await manager.update_conflict_flow(flow, event)
-    
-    # Check for beat opportunity
-    if await manager.check_for_beat_opportunity(flow, [event]):
-        beat = await manager.generate_dramatic_beat(flow, event)
-        result['dramatic_beat'] = {
-            'type': beat.beat_type,
-            'description': beat.description,
-            'impact': beat.impact_on_flow
-        }
-    
-    # Update database
-    async with get_db_connection_context() as conn:
-        await conn.execute("""
-            UPDATE conflict_flows
-            SET current_phase = $1, intensity = $2, momentum = $3,
-                phase_progress = $4
-            WHERE conflict_id = $5
-        """, flow.current_phase.value, flow.intensity, flow.momentum,
-        flow.phase_progress, conflict_id)
-    
-    return result
-
-@function_tool
-async def generate_conflict_beat(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    context: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """Generate a dramatic beat for a conflict"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = ConflictFlowManager(user_id, conversation_id)
-    
-    # Get flow
-    async with get_db_connection_context() as conn:
-        flow_data = await conn.fetchrow("""
-            SELECT * FROM conflict_flows WHERE conflict_id = $1
-        """, conflict_id)
-    
-    if not flow_data:
-        return {'error': 'Flow not found'}
-    
-    flow = ConflictFlow(
-        conflict_id=conflict_id,
-        current_phase=ConflictPhase[flow_data['current_phase'].upper()],
-        pacing_style=PacingStyle[flow_data['pacing_style'].upper()],
-        intensity=flow_data['intensity'],
-        momentum=flow_data['momentum'],
-        phase_progress=flow_data.get('phase_progress', 0.5),
-        transitions_history=[],
-        dramatic_beats=[],
-        next_transition_conditions=[]
-    )
-    
-    beat = await manager.generate_dramatic_beat(flow, context or {})
-    
-    return {
-        'beat_type': beat.beat_type,
-        'description': beat.description,
-        'impact': beat.impact_on_flow,
-        'new_intensity': flow.intensity,
-        'new_momentum': flow.momentum
-    }
-
-@function_tool
-async def adjust_conflict_pacing(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    target_feel: str  # "accelerate", "maintain", "decelerate"
-) -> Dict[str, Any]:
-    """Adjust the pacing of a conflict"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = ConflictFlowManager(user_id, conversation_id)
-    
-    # Get flow
-    async with get_db_connection_context() as conn:
-        flow_data = await conn.fetchrow("""
-            SELECT * FROM conflict_flows WHERE conflict_id = $1
-        """, conflict_id)
-    
-    if not flow_data:
-        return {'error': 'Flow not found'}
-    
-    flow = ConflictFlow(
-        conflict_id=conflict_id,
-        current_phase=ConflictPhase[flow_data['current_phase'].upper()],
-        pacing_style=PacingStyle[flow_data['pacing_style'].upper()],
-        intensity=flow_data['intensity'],
-        momentum=flow_data['momentum'],
-        phase_progress=flow_data.get('phase_progress', 0.5),
-        transitions_history=[],
-        dramatic_beats=[],
-        next_transition_conditions=[]
-    )
-    
-    result = await manager.adjust_pacing(flow, target_feel)
-    
-    # Update database
-    async with get_db_connection_context() as conn:
-        await conn.execute("""
-            UPDATE conflict_flows
-            SET momentum = $1, phase_progress = $2
-            WHERE conflict_id = $3
-        """, flow.momentum, flow.phase_progress, conflict_id)
-    
-    return result
-
-@function_tool
-async def analyze_conflict_flow_health(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    recent_player_actions: Optional[List[Dict[str, Any]]] = None
-) -> Dict[str, Any]:
-    """Analyze the health of conflict flow"""
-    
-    user_id = ctx.data.get('user_id')
-    conversation_id = ctx.data.get('conversation_id')
-    
-    manager = ConflictFlowManager(user_id, conversation_id)
-    
-    # Get flow
-    async with get_db_connection_context() as conn:
-        flow_data = await conn.fetchrow("""
-            SELECT * FROM conflict_flows WHERE conflict_id = $1
-        """, conflict_id)
-    
-    if not flow_data:
-        return {'error': 'Flow not found'}
-    
-    flow = ConflictFlow(
-        conflict_id=conflict_id,
-        current_phase=ConflictPhase[flow_data['current_phase'].upper()],
-        pacing_style=PacingStyle[flow_data['pacing_style'].upper()],
-        intensity=flow_data['intensity'],
-        momentum=flow_data['momentum'],
-        phase_progress=flow_data.get('phase_progress', 0.5),
-        transitions_history=[],
-        dramatic_beats=[],
-        next_transition_conditions=[]
-    )
-    
-    return await manager.analyze_flow_health(flow, recent_player_actions or [])
