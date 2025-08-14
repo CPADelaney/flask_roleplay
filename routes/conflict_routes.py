@@ -110,10 +110,9 @@ async def register_conflict_system(user_id):
 @conflict_bp.route("/api/conflict/generate", methods=["POST"])
 @require_login
 async def generate_conflict(user_id):
-    """Generate a new conflict."""
+    """Generate conflict through synthesizer"""
     data = await request.get_json() or {}
     
-    # Validate request
     validation_error = await validate_request_data(data, ["conversation_id"])
     if validation_error:
         return jsonify(validation_error), validation_error["status"]
@@ -121,19 +120,12 @@ async def generate_conflict(user_id):
     conversation_id = data["conversation_id"]
     
     try:
-        # Get conflict system
-        conflict_system = await get_conflict_system(user_id, conversation_id)
-        if not conflict_system:
-            return jsonify({"error": "Failed to initialize conflict system"}), 500
+        from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
         
-        # Create context
-        ctx = create_context(user_id, conversation_id)
+        synthesizer = ConflictSynthesizer(user_id, conversation_id)
         
-        # Get conflict data
         conflict_data = data.get("conflict_data", {})
-        
-        # Generate the conflict - UPDATED PARAMETER ORDER
-        result = await conflict_system.generate_conflict(ctx, conflict_data)
+        result = await synthesizer.create_conflict(conflict_data)
         
         return jsonify(result)
     except Exception as e:
@@ -143,10 +135,9 @@ async def generate_conflict(user_id):
 @conflict_bp.route("/api/conflict/resolve", methods=["POST"])
 @require_login
 async def resolve_conflict(user_id):
-    """Resolve an existing conflict."""
+    """Resolve conflict through synthesizer"""
     data = await request.get_json() or {}
     
-    # Validate request
     validation_error = await validate_request_data(data, ["conversation_id", "conflict_id"])
     if validation_error:
         return jsonify(validation_error), validation_error["status"]
@@ -155,20 +146,12 @@ async def resolve_conflict(user_id):
     conflict_id = data["conflict_id"]
     
     try:
-        # Get conflict system
-        conflict_system = await get_conflict_system(user_id, conversation_id)
-        if not conflict_system:
-            return jsonify({"error": "Failed to initialize conflict system"}), 500
+        from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
         
-        # Create context
-        ctx = create_context(user_id, conversation_id)
+        synthesizer = ConflictSynthesizer(user_id, conversation_id)
         
-        # Prepare resolution data
         resolution_data = data.get("resolution_data", {})
-        resolution_data["conflict_id"] = conflict_id
-        
-        # Resolve the conflict - UPDATED PARAMETER ORDER
-        result = await conflict_system.resolve_conflict(ctx, resolution_data)
+        result = await synthesizer.resolve_conflict(conflict_id, resolution_data)
         
         return jsonify(result)
     except Exception as e:
@@ -576,3 +559,4 @@ async def use_special_reward(user_id):
     except Exception as e:
         logger.error(f"Error using special reward: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
