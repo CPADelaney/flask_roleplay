@@ -1,15 +1,16 @@
 # logic/conflict_system/conflict_victory.py
 """
 Victory Conditions System with LLM-generated dynamic content
-Manages victory conditions, achievements, and resolution narratives
+Integrated with ConflictSynthesizer as the central orchestrator
 """
 
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Set
 from enum import Enum
 from dataclasses import dataclass
+from datetime import datetime
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
@@ -49,11 +50,14 @@ class VictoryCondition:
 
 
 # ===============================================================================
-# VICTORY MANAGER
+# VICTORY SUBSYSTEM (Integrated with Synthesizer)
 # ===============================================================================
 
-class ConflictVictoryManager:
-    """Manages victory conditions and resolutions with LLM generation"""
+class ConflictVictorySubsystem:
+    """
+    Victory subsystem that integrates with ConflictSynthesizer.
+    Manages victory conditions and resolutions.
+    """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
@@ -64,6 +68,261 @@ class ConflictVictoryManager:
         self._achievement_narrator = None
         self._consequence_calculator = None
         self._epilogue_writer = None
+        
+        # Reference to synthesizer
+        self.synthesizer = None
+    
+    @property
+    def subsystem_type(self):
+        """Return the subsystem type"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return SubsystemType.VICTORY
+    
+    @property
+    def capabilities(self) -> Set[str]:
+        """Return capabilities this subsystem provides"""
+        return {
+            'victory_conditions',
+            'achievement_tracking',
+            'consequence_calculation',
+            'epilogue_generation',
+            'partial_victories',
+            'narrative_closure'
+        }
+    
+    @property
+    def dependencies(self) -> Set:
+        """Return other subsystems this depends on"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return {
+            SubsystemType.STAKEHOLDER,  # Need stakeholder info
+            SubsystemType.FLOW,  # Need conflict flow state
+            SubsystemType.CANON  # Victories can become canonical
+        }
+    
+    @property
+    def event_subscriptions(self) -> Set:
+        """Return events this subsystem wants to receive"""
+        from logic.conflict_system.conflict_synthesizer import EventType
+        return {
+            EventType.CONFLICT_CREATED,
+            EventType.CONFLICT_UPDATED,
+            EventType.PHASE_TRANSITION,
+            EventType.STAKEHOLDER_ACTION,
+            EventType.HEALTH_CHECK
+        }
+    
+    async def initialize(self, synthesizer) -> bool:
+        """Initialize the subsystem with synthesizer reference"""
+        import weakref
+        self.synthesizer = weakref.ref(synthesizer)
+        return True
+    
+    async def handle_event(self, event) -> Any:
+        """Handle an event from the synthesizer"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemResponse, SystemEvent, EventType
+        
+        try:
+            if event.event_type == EventType.CONFLICT_CREATED:
+                # Generate initial victory conditions
+                conflict_id = event.payload.get('conflict_id')
+                if conflict_id:
+                    conditions = await self._generate_initial_conditions(conflict_id)
+                    
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={
+                            'victory_conditions_created': len(conditions),
+                            'conditions': [c.victory_type.value for c in conditions]
+                        }
+                    )
+                    
+            elif event.event_type == EventType.CONFLICT_UPDATED:
+                # Check victory conditions
+                conflict_id = event.payload.get('conflict_id')
+                current_state = event.payload.get('state', {})
+                
+                achievements = await self.check_victory_conditions(conflict_id, current_state)
+                
+                side_effects = []
+                if achievements:
+                    # Notify synthesizer of victory
+                    for achievement in achievements:
+                        side_effects.append(SystemEvent(
+                            event_id=f"victory_{event.event_id}_{achievement['condition_id']}",
+                            event_type=EventType.CONFLICT_RESOLVED,
+                            source_subsystem=self.subsystem_type,
+                            payload={
+                                'conflict_id': conflict_id,
+                                'victory_type': achievement['victory_type'],
+                                'stakeholder_id': achievement['stakeholder_id'],
+                                'resolution_type': 'victory',
+                                'context': achievement
+                            },
+                            priority=2
+                        ))
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={
+                        'victories_achieved': len(achievements),
+                        'achievements': achievements
+                    },
+                    side_effects=side_effects
+                )
+                
+            elif event.event_type == EventType.PHASE_TRANSITION:
+                # Update victory condition progress based on phase
+                conflict_id = event.payload.get('conflict_id')
+                new_phase = event.payload.get('phase')
+                
+                if new_phase == 'climax':
+                    # Accelerate victory condition checking
+                    await self._accelerate_victory_progress(conflict_id)
+                elif new_phase == 'resolution':
+                    # Check for partial victories
+                    partial = await self.evaluate_partial_victories(conflict_id)
+                    
+                    return SubsystemResponse(
+                        subsystem=self.subsystem_type,
+                        event_id=event.event_id,
+                        success=True,
+                        data={
+                            'partial_victories': partial
+                        }
+                    )
+                    
+            elif event.event_type == EventType.STAKEHOLDER_ACTION:
+                # Update relevant victory conditions
+                stakeholder_id = event.payload.get('stakeholder_id')
+                action_type = event.payload.get('action_type')
+                
+                await self._update_stakeholder_progress(stakeholder_id, action_type)
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={'progress_updated': True}
+                )
+                
+            elif event.event_type == EventType.HEALTH_CHECK:
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data=await self.health_check()
+                )
+            
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={}
+            )
+            
+        except Exception as e:
+            logger.error(f"Victory subsystem error: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Return health status of the subsystem"""
+        async with get_db_connection_context() as conn:
+            # Check for stuck victory conditions
+            stuck = await conn.fetchval("""
+                SELECT COUNT(*) FROM victory_conditions
+                WHERE user_id = $1 AND conversation_id = $2
+                AND progress > 0.5 AND progress < 1.0
+                AND updated_at < CURRENT_TIMESTAMP - INTERVAL '3 days'
+            """, self.user_id, self.conversation_id)
+            
+            total = await conn.fetchval("""
+                SELECT COUNT(*) FROM victory_conditions
+                WHERE user_id = $1 AND conversation_id = $2
+            """, self.user_id, self.conversation_id)
+        
+        return {
+            'healthy': stuck < 5,
+            'total_conditions': total,
+            'stuck_conditions': stuck,
+            'issue': 'Too many stuck victory conditions' if stuck >= 5 else None
+        }
+    
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get victory-related data for a specific conflict"""
+        async with get_db_connection_context() as conn:
+            conditions = await conn.fetch("""
+                SELECT * FROM victory_conditions
+                WHERE conflict_id = $1
+                ORDER BY progress DESC
+            """, conflict_id)
+            
+            achieved = await conn.fetch("""
+                SELECT * FROM victory_conditions
+                WHERE conflict_id = $1 AND is_achieved = true
+            """, conflict_id)
+        
+        return {
+            'total_conditions': len(conditions),
+            'achieved_conditions': len(achieved),
+            'leading_condition': dict(conditions[0]) if conditions else None,
+            'victory_paths': [
+                {
+                    'stakeholder_id': c['stakeholder_id'],
+                    'victory_type': c['victory_type'],
+                    'progress': c['progress']
+                }
+                for c in conditions[:3]
+            ]
+        }
+    
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current state of victory system"""
+        async with get_db_connection_context() as conn:
+            active = await conn.fetchval("""
+                SELECT COUNT(DISTINCT conflict_id) FROM victory_conditions
+                WHERE user_id = $1 AND conversation_id = $2
+                AND conflict_id IN (
+                    SELECT conflict_id FROM Conflicts
+                    WHERE is_active = true
+                )
+            """, self.user_id, self.conversation_id)
+            
+            near_victory = await conn.fetchval("""
+                SELECT COUNT(*) FROM victory_conditions
+                WHERE user_id = $1 AND conversation_id = $2
+                AND progress > 0.8 AND is_achieved = false
+            """, self.user_id, self.conversation_id)
+        
+        return {
+            'conflicts_with_conditions': active,
+            'conditions_near_victory': near_victory
+        }
+    
+    async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
+        """Check if victory system is relevant to scene"""
+        # Victory is relevant when conflicts are active and progressing
+        if scene_context.get('conflict_active'):
+            return True
+            
+        # Check if any victories are close
+        async with get_db_connection_context() as conn:
+            near = await conn.fetchval("""
+                SELECT COUNT(*) FROM victory_conditions
+                WHERE user_id = $1 AND conversation_id = $2
+                AND progress > 0.7 AND is_achieved = false
+            """, self.user_id, self.conversation_id)
+        
+        return near > 0
     
     # ========== Agent Properties ==========
     
@@ -153,7 +412,39 @@ class ConflictVictoryManager:
             )
         return self._epilogue_writer
     
-    # ========== Dynamic Victory Generation ==========
+    # ========== Victory Management Methods ==========
+    
+    async def _generate_initial_conditions(self, conflict_id: int) -> List[VictoryCondition]:
+        """Generate initial victory conditions when conflict is created"""
+        
+        # Get conflict and stakeholder info
+        async with get_db_connection_context() as conn:
+            conflict = await conn.fetchrow("""
+                SELECT * FROM Conflicts WHERE conflict_id = $1
+            """, conflict_id)
+            
+            stakeholders = await conn.fetch("""
+                SELECT * FROM conflict_stakeholders WHERE conflict_id = $1
+            """, conflict_id)
+        
+        if not conflict or not stakeholders:
+            return []
+        
+        # Format stakeholder data
+        stakeholder_data = [
+            {
+                'id': s['stakeholder_id'],
+                'role': s.get('faction', 'participant'),
+                'involvement': s.get('involvement_level', 'primary')
+            }
+            for s in stakeholders
+        ]
+        
+        return await self.generate_victory_conditions(
+            conflict_id,
+            conflict['conflict_type'],
+            stakeholder_data
+        )
     
     async def generate_victory_conditions(
         self,
@@ -170,10 +461,9 @@ class ConflictVictoryManager:
             Generate victory conditions for this stakeholder:
             
             Conflict Type: {conflict_type}
-            Stakeholder: {stakeholder.get('name', 'Unknown')}
+            Stakeholder ID: {stakeholder.get('id')}
             Role: {stakeholder.get('role', 'participant')}
-            Personality: {json.dumps(stakeholder.get('personality', {}))}
-            Goals: {json.dumps(stakeholder.get('goals', []))}
+            Involvement: {stakeholder.get('involvement', 'primary')}
             
             Create 2-3 different victory conditions that reflect different
             ways they could "win" - not just defeating others, but achieving
@@ -208,11 +498,12 @@ class ConflictVictoryManager:
                 for cond in data['conditions']:
                     condition_id = await conn.fetchval("""
                         INSERT INTO victory_conditions
-                        (conflict_id, stakeholder_id, victory_type, description,
-                         requirements, progress, is_achieved)
-                        VALUES ($1, $2, $3, $4, $5, 0.0, false)
+                        (user_id, conversation_id, conflict_id, stakeholder_id, 
+                         victory_type, description, requirements, progress, is_achieved)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, 0.0, false)
                         RETURNING condition_id
-                    """, conflict_id, stakeholder['id'], cond['victory_type'],
+                    """, self.user_id, self.conversation_id, conflict_id,
+                    stakeholder['id'], cond['victory_type'],
                     cond['description'], json.dumps(cond['requirements']))
                     
                     conditions.append(VictoryCondition(
@@ -252,7 +543,7 @@ class ConflictVictoryManager:
             # Update progress
             await conn.execute("""
                 UPDATE victory_conditions
-                SET progress = $1
+                SET progress = $1, updated_at = CURRENT_TIMESTAMP
                 WHERE condition_id = $2
             """, progress, condition['condition_id'])
             
@@ -330,7 +621,7 @@ class ConflictVictoryManager:
             'victory_type': condition['victory_type'],
             'narration': narration,
             'consequences': consequences,
-            'timestamp': datetime.now()
+            'timestamp': datetime.now().isoformat()
         }
     
     async def generate_victory_narration(
@@ -414,6 +705,9 @@ class ConflictVictoryManager:
                 WHERE conflict_id = $1 AND is_achieved = true
             """, conflict_id)
         
+        if not conflict:
+            return "The conflict fades into memory."
+        
         prompt = f"""
         Write an epilogue for this resolved conflict:
         
@@ -487,10 +781,42 @@ class ConflictVictoryManager:
         
         response = await Runner.run(self.achievement_narrator, prompt)
         return response.output
+    
+    # ========== Helper Methods ==========
+    
+    async def _accelerate_victory_progress(self, conflict_id: int):
+        """Accelerate victory condition progress during climax"""
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                UPDATE victory_conditions
+                SET progress = LEAST(1.0, progress * 1.2)
+                WHERE conflict_id = $1 AND is_achieved = false
+            """, conflict_id)
+    
+    async def _update_stakeholder_progress(self, stakeholder_id: int, action_type: str):
+        """Update victory progress based on stakeholder action"""
+        # Different actions contribute differently to victory
+        progress_modifiers = {
+            'attack': 0.1,
+            'defend': 0.05,
+            'negotiate': 0.15,
+            'ally': 0.1,
+            'betray': 0.2,
+            'retreat': -0.1
+        }
+        
+        modifier = progress_modifiers.get(action_type, 0.05)
+        
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                UPDATE victory_conditions
+                SET progress = LEAST(1.0, GREATEST(0.0, progress + $1))
+                WHERE stakeholder_id = $2 AND is_achieved = false
+            """, modifier, stakeholder_id)
 
 
 # ===============================================================================
-# INTEGRATION FUNCTIONS
+# PUBLIC API FUNCTIONS
 # ===============================================================================
 
 @function_tool
@@ -503,45 +829,61 @@ async def check_for_victory(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = ConflictVictoryManager(user_id, conversation_id)
+    # Use synthesizer to coordinate check
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Get current conflict state
-    async with get_db_connection_context() as conn:
-        conflict = await conn.fetchrow("""
-            SELECT * FROM Conflicts WHERE conflict_id = $1
-        """, conflict_id)
+    # Get current conflict state from synthesizer
+    conflict_state = await synthesizer.get_conflict_state(conflict_id)
     
-    current_state = {
-        'progress': conflict['progress'],
-        'phase': conflict['phase'],
-        'intensity': conflict['intensity']
-        # Add more state data as needed
-    }
+    # Send update event
+    event = SystemEvent(
+        event_id=f"check_victory_{conflict_id}",
+        event_type=EventType.CONFLICT_UPDATED,
+        source_subsystem=SubsystemType.FLOW,
+        payload={
+            'conflict_id': conflict_id,
+            'state': conflict_state
+        },
+        target_subsystems={SubsystemType.VICTORY},
+        requires_response=True
+    )
     
-    # Check victory conditions
-    achievements = await manager.check_victory_conditions(conflict_id, current_state)
+    responses = await synthesizer.emit_event(event)
     
-    if achievements:
-        # Generate epilogue if conflict is resolved
-        epilogue = await manager.generate_conflict_epilogue(
-            conflict_id,
-            {'achievements': achievements}
-        )
-        
-        return {
-            'victory_achieved': True,
-            'achievements': achievements,
-            'epilogue': epilogue
-        }
-    else:
-        # Check for partial victories
-        partial = await manager.evaluate_partial_victories(conflict_id)
+    for response in responses:
+        if response.subsystem == SubsystemType.VICTORY:
+            achievements = response.data.get('achievements', [])
+            
+            if achievements:
+                # Get epilogue
+                victory_subsystem = synthesizer._subsystems.get(SubsystemType.VICTORY)
+                epilogue = await victory_subsystem.generate_conflict_epilogue(
+                    conflict_id,
+                    {'achievements': achievements}
+                )
+                
+                return {
+                    'victory_achieved': True,
+                    'achievements': achievements,
+                    'epilogue': epilogue
+                }
+    
+    # Check for partial victories
+    victory_subsystem = synthesizer._subsystems.get(SubsystemType.VICTORY)
+    if victory_subsystem:
+        partial = await victory_subsystem.evaluate_partial_victories(conflict_id)
         
         return {
             'victory_achieved': False,
             'partial_victories': partial,
             'conflict_continues': True
         }
+    
+    return {
+        'victory_achieved': False,
+        'conflict_continues': True
+    }
 
 
 @function_tool
@@ -554,7 +896,13 @@ async def generate_victory_paths(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    manager = ConflictVictoryManager(user_id, conversation_id)
+    # Get synthesizer
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
+    
+    victory_subsystem = synthesizer._subsystems.get(SubsystemType.VICTORY)
+    if not victory_subsystem:
+        return {'error': 'Victory subsystem not available'}
     
     # Get conflict and stakeholders
     async with get_db_connection_context() as conn:
@@ -563,17 +911,25 @@ async def generate_victory_paths(
         """, conflict_id)
         
         stakeholders = await conn.fetch("""
-            SELECT cs.*, n.npc_name as name
-            FROM conflict_stakeholders cs
-            JOIN NPCStats n ON cs.npc_id = n.npc_id
-            WHERE cs.conflict_id = $1
+            SELECT * FROM conflict_stakeholders WHERE conflict_id = $1
         """, conflict_id)
     
+    if not conflict:
+        return {'error': 'Conflict not found'}
+    
     # Generate victory conditions
-    conditions = await manager.generate_victory_conditions(
+    stakeholder_data = [
+        {
+            'id': s['stakeholder_id'],
+            'role': s.get('faction', 'participant')
+        }
+        for s in stakeholders
+    ]
+    
+    conditions = await victory_subsystem.generate_victory_conditions(
         conflict_id,
         conflict['conflict_type'],
-        [dict(s) for s in stakeholders]
+        stakeholder_data
     )
     
     return {
