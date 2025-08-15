@@ -468,32 +468,36 @@ class ConflictSynthesizer:
             return False
     
     async def initialize_all_subsystems(self):
-        """Initialize all standard subsystems"""
-        from logic.conflict_system.tension import TensionSystemAdapter
-        from logic.conflict_system.stakeholder_adapter import StakeholderSystemAdapter
-        from logic.conflict_system.flow_adapter import FlowSystemAdapter
-        from logic.conflict_system.social_adapter import SocialSystemAdapter
-        from logic.conflict_system.leverage_adapter import LeverageSystemAdapter
-        from logic.conflict_system.background_adapter import BackgroundSystemAdapter
-        from logic.conflict_system.victory_adapter import VictorySystemAdapter
-        from logic.conflict_system.canon_adapter import CanonSystemAdapter
-        from logic.conflict_system.template_adapter import TemplateSystemAdapter
-        from logic.conflict_system.edge_adapter import EdgeHandlerAdapter
-        from logic.conflict_system.slice_adapter import SliceOfLifeAdapter
+        """Initialize all standard subsystems with CORRECT imports"""
+        
+        # Import the ACTUAL subsystem classes
+        from logic.conflict_system.tension import TensionSystem
+        from logic.conflict_system.autonomous_stakeholder_actions import StakeholderAutonomySystem
+        from logic.conflict_system.conflict_flow import ConflictFlowSubsystem
+        from logic.conflict_system.social_circle import SocialCircleConflictSubsystem
+        from logic.conflict_system.leverage import LeverageSubsystem
+        from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
+        from logic.conflict_system.conflict_victory import VictoryConditionSubsystem
+        from logic.conflict_system.conflict_canon import ConflictCanonSubsystem
+        from logic.conflict_system.dynamic_conflict_template import DynamicConflictTemplateSubsystem
+        from logic.conflict_system.edge_cases import EdgeCaseDetectionSubsystem
+        from logic.conflict_system.slice_of_life_conflicts import SliceOfLifeConflictSubsystem
+        from logic.conflict_system.enhanced_conflict_integration import EnhancedIntegrationSubsystem
         
         # Create and register all subsystems
         subsystems = [
-            TensionSystemAdapter(self.user_id, self.conversation_id),
-            StakeholderSystemAdapter(self.user_id, self.conversation_id),
-            FlowSystemAdapter(self.user_id, self.conversation_id),
-            SocialSystemAdapter(self.user_id, self.conversation_id),
-            LeverageSystemAdapter(self.user_id, self.conversation_id),
-            BackgroundSystemAdapter(self.user_id, self.conversation_id),
-            VictorySystemAdapter(self.user_id, self.conversation_id),
-            CanonSystemAdapter(self.user_id, self.conversation_id),
-            TemplateSystemAdapter(self.user_id, self.conversation_id),
-            EdgeHandlerAdapter(self.user_id, self.conversation_id),
-            SliceOfLifeAdapter(self.user_id, self.conversation_id),
+            TensionSystem(self.user_id, self.conversation_id),
+            StakeholderAutonomySystem(self.user_id, self.conversation_id),
+            ConflictFlowSubsystem(self.user_id, self.conversation_id),
+            SocialCircleConflictSubsystem(self.user_id, self.conversation_id),
+            LeverageSubsystem(self.user_id, self.conversation_id),
+            BackgroundConflictSubsystem(self.user_id, self.conversation_id),
+            VictoryConditionSubsystem(self.user_id, self.conversation_id),
+            ConflictCanonSubsystem(self.user_id, self.conversation_id),
+            DynamicConflictTemplateSubsystem(self.user_id, self.conversation_id),
+            EdgeCaseDetectionSubsystem(self.user_id, self.conversation_id),
+            SliceOfLifeConflictSubsystem(self.user_id, self.conversation_id),
+            EnhancedIntegrationSubsystem(self.user_id, self.conversation_id),
         ]
         
         for subsystem in subsystems:
@@ -520,63 +524,58 @@ class ConflictSynthesizer:
         return None
     
     async def _process_events(self):
-        """Main event processing loop"""
+        """Background event processing loop"""
         self._processing = True
         
         while not self._shutdown:
             try:
-                # Get next event with timeout
+                # Get event from queue
                 event = await asyncio.wait_for(
                     self._event_queue.get(),
                     timeout=1.0
                 )
                 
-                # Process the event
-                await self._route_event(event)
+                # Route to handlers
+                responses = await self._route_event(event)
+                
+                # Process side effects
+                for response in responses:
+                    for side_effect in response.side_effects:
+                        await self._event_queue.put(side_effect)
                 
             except asyncio.TimeoutError:
-                # Periodic health check
-                await self._perform_health_check()
+                continue
             except Exception as e:
                 logger.error(f"Error processing event: {e}")
         
         self._processing = False
     
-    async def _route_event(self, event: SystemEvent):
-        """Route an event to appropriate subsystems"""
-        # Determine target subsystems
-        if event.target_subsystems:
-            targets = event.target_subsystems
-        else:
-            targets = set(self._event_handlers.get(event.event_type, []))
-        
-        # Send to each target
+    async def _route_event(self, event: SystemEvent) -> List[SubsystemResponse]:
+        """Route event to appropriate subsystems"""
         responses = []
-        for subsystem_type in targets:
+        
+        # Get handlers for this event type
+        handler_subsystems = self._event_handlers.get(event.event_type, [])
+        
+        # Add targeted subsystems if specified
+        if event.target_subsystems:
+            handler_subsystems.extend(event.target_subsystems)
+        
+        # Send to each handler
+        for subsystem_type in set(handler_subsystems):
             if subsystem_type in self._subsystems:
+                subsystem = self._subsystems[subsystem_type]
                 try:
-                    response = await self._subsystems[subsystem_type].handle_event(event)
+                    response = await subsystem.handle_event(event)
                     responses.append(response)
-                    
-                    # Process any side effects
-                    for side_effect in response.side_effects:
-                        await self.emit_event(side_effect)
-                        
                 except Exception as e:
                     logger.error(f"Error in {subsystem_type} handling event: {e}")
         
-        # Store responses if needed
-        if event.requires_response:
-            self._pending_responses[event.event_id] = responses
+        return responses
     
     async def _process_event_sync(self, event: SystemEvent) -> List[SubsystemResponse]:
-        """Process an event synchronously and return responses"""
-        await self._route_event(event)
-        
-        # Wait for responses (with timeout)
-        await asyncio.sleep(0.1)  # Allow processing
-        
-        return self._pending_responses.get(event.event_id, [])
+        """Process event synchronously and return responses"""
+        return await self._route_event(event)
     
     # ========== Conflict Operations ==========
     
@@ -585,212 +584,89 @@ class ConflictSynthesizer:
         conflict_type: str,
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create a new conflict through the appropriate subsystems"""
+        """Create a new conflict with all subsystems participating"""
         
-        # Validate conflict type - no more 'multiparty' as a type
-        valid_types = ['social', 'slice', 'background', 'political', 
-                      'economic', 'ideological', 'resource', 'personal']
+        # Determine which subsystems should be active
+        active_subsystems = self._determine_required_subsystems(conflict_type, context)
         
-        if conflict_type not in valid_types:
-            logger.warning(f"Unknown conflict type: {conflict_type}, defaulting to 'slice'")
-            conflict_type = 'slice'
-        
-        # Detect if this should be multiparty based on participants
-        participants = context.get('participants', [])
-        if len(participants) > 2 and not context.get('is_multiparty'):
-            context['is_multiparty'] = True
-            context['party_count'] = len(participants)
-            logger.info(f"Auto-detected multiparty conflict with {len(participants)} parties")
-        
-        # Generate unique ID
-        import uuid
-        operation_id = str(uuid.uuid4())
-        
-        # Create canonical context for lore system
-        from lore.core.context import CanonicalContext
-        from lore.core.canon import log_canonical_event
-        ctx = CanonicalContext(self.user_id, self.conversation_id)
-        
-        # Determine which subsystems to involve
-        involved_subsystems = await self._determine_subsystems_for_operation(
-            'create_conflict', conflict_type, context
-        )
-        
-        # Create the conflict event
+        # Create conflict event
         event = SystemEvent(
-            event_id=operation_id,
+            event_id=f"create_{conflict_type}_{datetime.now().timestamp()}",
             event_type=EventType.CONFLICT_CREATED,
-            source_subsystem=SubsystemType.SLICE_OF_LIFE,  # Default
+            source_subsystem=SubsystemType.DETECTION,
             payload={
                 'conflict_type': conflict_type,
                 'context': context
             },
-            target_subsystems=involved_subsystems,
+            target_subsystems=active_subsystems,
             requires_response=True,
             priority=1
         )
         
-        # Emit and wait for responses
+        # Get responses from all subsystems
+        responses = await self.emit_event(event)
+        
+        # Aggregate responses into conflict creation result
+        result = self._aggregate_conflict_creation(responses)
+        
+        # Update metrics
+        self._global_metrics['total_conflicts'] += 1
+        self._global_metrics['active_conflicts'] += 1
+        
+        return result
+    
+    async def update_conflict(
+        self,
+        conflict_id: int,
+        update_type: str,
+        update_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update a conflict with coordinated subsystem responses"""
+        
+        # Create update event
+        event = SystemEvent(
+            event_id=f"update_{conflict_id}_{datetime.now().timestamp()}",
+            event_type=EventType.CONFLICT_UPDATED,
+            source_subsystem=SubsystemType.FLOW,
+            payload={
+                'conflict_id': conflict_id,
+                'update_type': update_type,
+                'data': update_data
+            },
+            requires_response=True,
+            priority=3
+        )
+        
+        # Process update
         responses = await self.emit_event(event)
         
         # Aggregate responses
-        conflict_data = self._aggregate_conflict_creation(responses)
+        result = self._aggregate_update_responses(responses)
         
         # Update state
-        if conflict_data.get('conflict_id'):
-            self._conflict_states[conflict_data['conflict_id']] = conflict_data
-            self._global_metrics['total_conflicts'] += 1
-            self._global_metrics['active_conflicts'] += 1
-            
-            # Log the conflict creation canonically using the core canon system
-            async with get_db_connection_context() as conn:
-                # Extract meaningful details from context
-                participants = context.get('participants', [])
-                location = context.get('location', 'Unknown location')
-                description = context.get('description', f'A {conflict_type} conflict')
-                intensity = context.get('intensity', 'moderate')
-                
-                # Build a descriptive event text
-                event_text = f"New {conflict_type} conflict initiated"
-                if participants:
-                    if len(participants) == 1:
-                        event_text += f" involving {participants[0]}"
-                    elif len(participants) == 2:
-                        event_text += f" between {participants[0]} and {participants[1]}"
-                    else:
-                        event_text += f" involving {len(participants)} parties"
-                
-                if location != 'Unknown location':
-                    event_text += f" at {location}"
-                
-                event_text += f": {description}"
-                
-                # Determine significance based on conflict type and intensity
-                significance_map = {
-                    'political': 7,
-                    'social': 5,
-                    'personal': 4,
-                    'faction': 8,
-                    'power': 8,
-                    'slice': 3,
-                    'background': 3,
-                    'multiparty': 7
-                }
-                base_significance = significance_map.get(conflict_type.lower(), 5)
-                
-                # Adjust for intensity
-                intensity_modifiers = {
-                    'subtle': -1,
-                    'moderate': 0,
-                    'high': 1,
-                    'extreme': 2
-                }
-                significance = min(10, max(1, base_significance + intensity_modifiers.get(intensity, 0)))
-                
-                # Log the canonical event
-                await log_canonical_event(
-                    ctx, conn,
-                    event_text,
-                    tags=[
-                        'conflict',
-                        'creation',
-                        conflict_type,
-                        intensity,
-                        f"conflict_id_{conflict_data['conflict_id']}"
-                    ],
-                    significance=significance
-                )
-                
-                # If this conflict involves NPCs, log their involvement
-                if 'npc_ids' in context:
-                    for npc_id in context['npc_ids']:
-                        # Get NPC name if possible
-                        npc = await conn.fetchrow(
-                            "SELECT npc_name FROM NPCStats WHERE npc_id = $1",
-                            npc_id
-                        )
-                        npc_name = npc['npc_name'] if npc else f"NPC {npc_id}"
-                        
-                        await log_canonical_event(
-                            ctx, conn,
-                            f"{npc_name} became involved in {conflict_type} conflict",
-                            tags=[
-                                'npc_involvement',
-                                'conflict',
-                                f"npc_{npc_id}",
-                                f"conflict_id_{conflict_data['conflict_id']}"
-                            ],
-                            significance=3
-                        )
-                
-                # Check if this conflict should reference historical precedents
-                if conflict_type in ['political', 'faction', 'power']:
-                    # Look for similar past conflicts
-                    similar_conflicts = await conn.fetch("""
-                        SELECT event_text, tags, significance
-                        FROM CanonicalEvents
-                        WHERE user_id = $1 AND conversation_id = $2
-                        AND 'conflict' = ANY(tags)
-                        AND $3 = ANY(tags)
-                        AND significance >= 7
-                        ORDER BY timestamp DESC
-                        LIMIT 3
-                    """, self.user_id, self.conversation_id, conflict_type)
-                    
-                    if similar_conflicts:
-                        # Store references to precedents
-                        conflict_data['historical_precedents'] = [
-                            dict(p) for p in similar_conflicts
-                        ]
-                        
-                        # Update the conflict with precedent awareness
-                        precedent_event = SystemEvent(
-                            event_id=f"precedent_{operation_id}",
-                            event_type=EventType.STATE_SYNC,
-                            source_subsystem=SubsystemType.CANON,
-                            payload={
-                                'conflict_id': conflict_data['conflict_id'],
-                                'precedents': conflict_data['historical_precedents'],
-                                'message': 'Historical precedents identified for this conflict'
-                            },
-                            target_subsystems={SubsystemType.CANON},
-                            requires_response=False,
-                            priority=5
-                        )
-                        await self.emit_event(precedent_event)
-            
-            # Update complexity score based on conflict creation
-            self._global_metrics['complexity_score'] = min(
-                1.0,
-                self._global_metrics['complexity_score'] + 0.1
-            )
+        if conflict_id not in self._conflict_states:
+            self._conflict_states[conflict_id] = {}
+        self._conflict_states[conflict_id].update(result)
         
-        return conflict_data
+        return result
     
     async def resolve_conflict(
         self,
         conflict_id: int,
         resolution_type: str,
-        context: Dict[str, Any]
+        resolution_context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Resolve a conflict through appropriate subsystems"""
-        
-        # Get conflict state
-        conflict_state = self._conflict_states.get(conflict_id, {})
-        
-        # Create canonical context
-        ctx = CanonicalContext(self.user_id, self.conversation_id)
+        """Resolve a conflict with all subsystems participating"""
         
         # Create resolution event
         event = SystemEvent(
-            event_id=f"resolve_{conflict_id}",
+            event_id=f"resolve_{conflict_id}_{datetime.now().timestamp()}",
             event_type=EventType.CONFLICT_RESOLVED,
             source_subsystem=SubsystemType.RESOLUTION,
             payload={
                 'conflict_id': conflict_id,
                 'resolution_type': resolution_type,
-                'context': context,
-                'conflict_state': conflict_state
+                'context': resolution_context
             },
             requires_response=True,
             priority=2
@@ -798,28 +674,9 @@ class ConflictSynthesizer:
         
         # Process resolution
         responses = await self.emit_event(event)
-        result = self._aggregate_resolution_result(responses)
         
-        # Log the resolution canonically
-        if result['resolved']:
-            async with get_db_connection_context() as conn:
-                conflict_name = conflict_state.get('conflict_name', f'Conflict {conflict_id}')
-                await log_canonical_event(
-                    ctx, conn,
-                    f"Conflict resolved: {conflict_name} through {resolution_type}",
-                    tags=['conflict', 'resolution', resolution_type],
-                    significance=7
-                )
-                
-                # Log consequences as canonical events if significant
-                for consequence in result.get('consequences', []):
-                    if consequence.get('significance', 0) >= 5:
-                        await log_canonical_event(
-                            ctx, conn,
-                            f"Consequence of {conflict_name}: {consequence.get('description', '')}",
-                            tags=['conflict_consequence', 'ripple_effect'],
-                            significance=consequence.get('significance', 5)
-                        )
+        # Aggregate responses
+        result = self._aggregate_resolution_responses(responses)
         
         # Update metrics
         self._global_metrics['active_conflicts'] -= 1
@@ -828,6 +685,101 @@ class ConflictSynthesizer:
         # Clean up state
         if conflict_id in self._conflict_states:
             del self._conflict_states[conflict_id]
+        
+        return result
+    
+    # The rest of the methods remain the same...
+    
+    def _determine_required_subsystems(
+        self,
+        conflict_type: str,
+        context: Dict[str, Any]
+    ) -> Set[SubsystemType]:
+        """Determine which subsystems should handle a conflict"""
+        
+        subsystems = set()
+        
+        # Map conflict types to relevant subsystems
+        if 'social' in conflict_type.lower():
+            subsystems.add(SubsystemType.SOCIAL)
+        
+        if 'power' in conflict_type.lower() or 'leverage' in conflict_type.lower():
+            subsystems.add(SubsystemType.LEVERAGE)
+        
+        # Core subsystems for any conflict
+        subsystems.update({
+            SubsystemType.TENSION,
+            SubsystemType.FLOW,
+            SubsystemType.STAKEHOLDER
+        })
+        
+        # If multiparty, ensure stakeholder system is extra active
+        if context.get('is_multiparty'):
+            # Stakeholder system will handle faction management
+            pass  # Already added above
+        
+        return subsystems
+    
+    def _aggregate_conflict_creation(self, responses: List[SubsystemResponse]) -> Dict[str, Any]:
+        """Aggregate subsystem responses into conflict creation result"""
+        result = {
+            'conflict_id': None,
+            'subsystem_data': {},
+            'initial_state': {},
+            'warnings': []
+        }
+        
+        for response in responses:
+            if response.success:
+                result['subsystem_data'][response.subsystem.value] = response.data
+                
+                # Extract conflict ID if provided
+                if 'conflict_id' in response.data:
+                    result['conflict_id'] = response.data['conflict_id']
+            else:
+                result['warnings'].append(f"{response.subsystem.value}: {response.data.get('error')}")
+        
+        return result
+    
+    def _aggregate_update_responses(self, responses: List[SubsystemResponse]) -> Dict[str, Any]:
+        """Aggregate subsystem responses for conflict update"""
+        result = {
+            'updated_state': {},
+            'side_effects': [],
+            'warnings': []
+        }
+        
+        for response in responses:
+            if response.success:
+                result['updated_state'][response.subsystem.value] = response.data
+                result['side_effects'].extend(response.side_effects)
+            else:
+                result['warnings'].append(f"{response.subsystem.value}: {response.data.get('error')}")
+        
+        return result
+    
+    def _aggregate_resolution_responses(self, responses: List[SubsystemResponse]) -> Dict[str, Any]:
+        """Aggregate subsystem responses for conflict resolution"""
+        result = {
+            'resolution_outcome': {},
+            'aftermath': {},
+            'legacy': {},
+            'warnings': []
+        }
+        
+        for response in responses:
+            if response.success:
+                subsystem_name = response.subsystem.value
+                
+                # Categorize response data
+                if 'outcome' in response.data:
+                    result['resolution_outcome'][subsystem_name] = response.data['outcome']
+                if 'aftermath' in response.data:
+                    result['aftermath'][subsystem_name] = response.data['aftermath']
+                if 'legacy' in response.data:
+                    result['legacy'][subsystem_name] = response.data['legacy']
+            else:
+                result['warnings'].append(f"{response.subsystem.value}: {response.data.get('error')}")
         
         return result
     
