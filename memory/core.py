@@ -1044,14 +1044,24 @@ class UnifiedMemoryManager:
             "memories_consolidated": len(consolidated),
             "memories_archived": archived
         }
-
+    
     @classmethod
-    @with_transaction
     async def create_tables(cls, conn: Optional[asyncpg.Connection] = None) -> None:
         """
         Static method: Initializes all required tables for unified memory.
-        Must be called as UnifiedMemoryManager.create_tables(conn), NOT as an instance method.
+        Must be called as UnifiedMemoryManager.create_tables(), NOT as an instance method.
         """
+        # Handle connection properly since we removed the decorator
+        if conn is None:
+            from db.connection import get_db_connection_context
+            async with get_db_connection_context() as conn:
+                await cls._create_tables_impl(conn)
+        else:
+            await cls._create_tables_impl(conn)
+    
+    @classmethod
+    async def _create_tables_impl(cls, conn: asyncpg.Connection) -> None:
+        """Implementation of table creation."""
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS unified_memories (
