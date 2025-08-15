@@ -7,7 +7,7 @@ Refactored to work as a subsystem under the Conflict Synthesizer orchestrator.
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -30,6 +30,43 @@ logger = logging.getLogger(__name__)
 # ===============================================================================
 # TENSION TYPES AND STRUCTURES (Preserved)
 # ===============================================================================
+
+class TensionObservation(TypedDict):
+    type: str
+    level: float
+    source: str
+    note: str
+
+class AnalyzeSceneTensionsResponse(TypedDict):
+    tension_score: float
+    should_generate_conflict: bool
+    primary_dynamic: str
+    observations: List[TensionObservation]
+    error: str
+
+class ModifyTensionResponse(TypedDict):
+    success: bool
+    tension_type: str
+    applied_change: float
+    new_level: float
+    clamped: bool
+    reason: str
+    side_effects: List[str]
+    error: str
+
+class TensionCategory(TypedDict):
+    name: str
+    level: float
+
+class TensionReportResponse(TypedDict):
+    total_categories: int
+    categories: List[TensionCategory]
+    overall_score: float
+    hotspots: List[str]
+    last_updated_iso: str
+    error: str
+
+
 
 class TensionType(Enum):
     """Different types of tension in the game"""
@@ -959,30 +996,65 @@ async def analyze_scene_tensions(
     scene_description: str,
     npcs_present: List[int],
     current_activity: str
-) -> Dict[str, Any]:
-    """Analyze tensions in current scene - routes through orchestrator"""
-    
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer
-    
+) -> AnalyzeSceneTensionsResponse:
+    """Analyze tensions in current scene - routes through orchestrator (strict schema)."""
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get orchestrator
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Process scene through orchestrator
-    scene_context = {
-        'description': scene_description,
-        'npcs': npcs_present,
-        'activity': current_activity
+
+    # Ask the TENSION subsystem directly for an analysis
+    event = SystemEvent(
+        event_id=f"tension_analyze_{datetime.now().timestamp()}",
+        event_type=EventType.STATE_SYNC,
+        source_subsystem=SubsystemType.SLICE_OF_LIFE,
+        payload={
+            'scene_description': scene_description,
+            'npcs': npcs_present,          # for subsystems expecting 'npcs'
+            'present_npcs': npcs_present,  # for subsystems expecting 'present_npcs'
+            'activity': current_activity,
+            'request': 'tension_analysis'
+        },
+        target_subsystems={SubsystemType.TENSION},
+        requires_response=True
+    )
+
+    responses = await synthesizer.emit_event(event) or []
+    data = {}
+    for r in responses:
+        if r.subsystem == SubsystemType.TENSION:
+            data = r.data or {}
+            break
+
+    # Normalize
+    score = float(data.get('tension_score', 0.0))
+    score = 0.0 if score < 0 else (1.0 if score > 1 else score)
+
+    raw_obs = data.get('tensions', []) or []
+    observations: List[TensionObservation] = []
+    for t in raw_obs[:20]:  # keep it bounded
+        level = float(t.get('level', 0.0))
+        level = 0.0 if level < 0 else (1.0 if level > 1 else level)
+        observations.append({
+            'type': str(t.get('type', 'ambient')),
+            'level': level,
+            'source': str(t.get('source', 'unknown')),
+            'note': str(t.get('notes', t.get('note', ''))),
+        })
+
+    return {
+        'tension_score': score,
+        'should_generate_conflict': bool(data.get('should_generate_conflict', False)),
+        'primary_dynamic': str(data.get('primary_dynamic', 'none')),
+        'observations': observations,
+        'error': "" if data else "No response from tension system",
     }
-    
-    result = await synthesizer.process_scene(scene_context)
-    
-    # Extract tension-specific data
-    tension_data = result.get('subsystem_data', {}).get('tension', {})
-    
-    return tension_data
+
 
 @function_tool
 async def modify_tension(
@@ -990,53 +1062,121 @@ async def modify_tension(
     tension_type: str,
     change: float,
     reason: str
-) -> Dict[str, Any]:
-    """Modify a specific tension level - routes through orchestrator"""
-    
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer
-    
+) -> ModifyTensionResponse:
+    """Modify a specific tension level - routes through orchestrator (strict schema)."""
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Emit tension change event
+
     event = SystemEvent(
         event_id=f"manual_tension_{tension_type}",
         event_type=EventType.TENSION_CHANGED,
         source_subsystem=SubsystemType.TENSION,
         payload={
             'tension_type': tension_type,
-            'change': change,
+            'change': float(change),
             'reason': reason
         },
+        target_subsystems={SubsystemType.TENSION},
         requires_response=True
     )
-    
-    responses = await synthesizer.emit_event(event)
-    
-    # Return aggregated response
-    if responses:
-        return responses[0].data
-    return {'error': 'No response from tension system'}
+
+    responses = await synthesizer.emit_event(event) or []
+    data = responses[0].data if responses else {}
+
+    new_level = float(data.get('new_level', 0.0))
+    clamped = bool(data.get('clamped', (new_level < 0 or new_level > 1)))
+    if new_level < 0: new_level = 0.0
+    if new_level > 1: new_level = 1.0
+
+    side_effects = data.get('side_effects', [])
+    if not isinstance(side_effects, list):
+        side_effects = [str(side_effects)]
+
+    return {
+        'success': bool(data.get('success', bool(responses))),
+        'tension_type': str(tension_type),
+        'applied_change': float(data.get('applied_change', change)),
+        'new_level': new_level,
+        'clamped': clamped,
+        'reason': str(reason),
+        'side_effects': [str(s) for s in side_effects[:20]],
+        'error': "" if responses else "No response from tension system",
+    }
+
 
 @function_tool
 async def get_tension_report(
     ctx: RunContextWrapper
-) -> Dict[str, Any]:
-    """Get comprehensive tension report - routes through orchestrator"""
-    
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer
-    
+) -> TensionReportResponse:
+    """Get comprehensive tension report - routes through orchestrator (strict schema)."""
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Get system state
-    state = await synthesizer.get_system_state()
-    
-    # Extract tension subsystem state
-    tension_state = state.get('subsystems', {}).get('tension', {})
-    
-    return tension_state
+
+    # Ask TENSION subsystem for a structured report
+    event = SystemEvent(
+        event_id=f"tension_report_{datetime.now().timestamp()}",
+        event_type=EventType.STATE_SYNC,
+        source_subsystem=SubsystemType.SLICE_OF_LIFE,
+        payload={'request': 'tension_report'},
+        target_subsystems={SubsystemType.TENSION},
+        requires_response=True
+    )
+
+    responses = await synthesizer.emit_event(event) or []
+    data = {}
+    for r in responses:
+        if r.subsystem == SubsystemType.TENSION:
+            data = r.data or {}
+            break
+
+    # Normalize
+    categories_raw = data.get('categories', data.get('tensions', {}))
+    categories: List[TensionCategory] = []
+    if isinstance(categories_raw, dict):
+        # map object -> list of {name, level}
+        for name, lvl in list(categories_raw.items())[:50]:
+            val = float(lvl)
+            if val < 0: val = 0.0
+            if val > 1: val = 1.0
+            categories.append({'name': str(name), 'level': val})
+    elif isinstance(categories_raw, list):
+        for item in categories_raw[:50]:
+            name = str(item.get('name', item.get('type', 'unknown')))
+            val = float(item.get('level', 0.0))
+            if val < 0: val = 0.0
+            if val > 1: val = 1.0
+            categories.append({'name': name, 'level': val})
+
+    overall = float(data.get('overall_score', data.get('tension_score', 0.0)))
+    if overall < 0: overall = 0.0
+    if overall > 1: overall = 1.0
+
+    hotspots_raw = data.get('hotspots', [])
+    if not isinstance(hotspots_raw, list):
+        hotspots_raw = [str(hotspots_raw)]
+    hotspots = [str(h) for h in hotspots_raw[:20]]
+
+    last_updated = data.get('last_updated') or datetime.now().isoformat()
+
+    return {
+        'total_categories': len(categories),
+        'categories': categories,
+        'overall_score': overall,
+        'hotspots': hotspots,
+        'last_updated_iso': str(last_updated),
+        'error': "" if data else "No response from tension system",
+    }
