@@ -8,7 +8,7 @@ import logging
 import json
 import random
 import asyncio
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from datetime import datetime, timedelta
 from enum import Enum
 from dataclasses import dataclass, field
@@ -69,6 +69,19 @@ class WorldEvent:
     faction_impacts: Dict[str, float]
     creates_opportunity: bool
     opportunity_window: Optional[int]
+
+class InitializeBackgroundWorldResponse(TypedDict):
+    world_initialized: bool
+    message: str
+
+class DailyBackgroundFlavorResponse(TypedDict):
+    world_tension: float
+    background_news: List[str]          # always a list (possibly empty)
+    ambient_effects: List[str]          # always a list (possibly empty)
+    overheard: str                      # empty string if none
+    optional_hook: str                  # empty string if none
+
+
 
 
 # ===============================================================================
@@ -887,64 +900,87 @@ class BackgroundConflictRipples:
 @function_tool
 async def initialize_background_world(
     ctx: RunContextWrapper
-) -> Dict[str, Any]:
+) -> InitializeBackgroundWorldResponse:
     """Initialize the background world with grand conflicts"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer
+
+    # Get synthesizer (keeps side effects consistent even if this does nothing yet)
     from logic.conflict_system.conflict_synthesizer import get_synthesizer
-    synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # The background subsystem will initialize through synthesizer
+    _ = await get_synthesizer(user_id, conversation_id)
+
     return {
         'world_initialized': True,
-        'message': 'Background world initialized through synthesizer'
+        'message': 'Background world initialized through synthesizer',
     }
 
 
 @function_tool
 async def get_daily_background_flavor(
     ctx: RunContextWrapper
-) -> Dict[str, Any]:
+) -> DailyBackgroundFlavorResponse:
     """Get today's background world flavor for atmospheric text"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Request background update through synthesizer
+
     event = SystemEvent(
         event_id=f"flavor_{datetime.now().timestamp()}",
         event_type=EventType.STATE_SYNC,
         source_subsystem=SubsystemType.SLICE_OF_LIFE,
         payload={'request': 'daily_flavor'},
         target_subsystems={SubsystemType.BACKGROUND},
-        requires_response=True
+        requires_response=True,
     )
-    
+
     responses = await synthesizer.emit_event(event)
-    
+
     if responses:
         for response in responses:
             if response.subsystem == SubsystemType.BACKGROUND:
-                update = response.data.get('background_update', {})
+                update = response.data.get('background_update', {}) or {}
+
+                # Defensive extraction with strict types for the tool response
+                world_tension = float(update.get('world_tension', 0.0))
+                news = update.get('news') or []
+                if not isinstance(news, list):
+                    news = [str(news)]
+
+                ripples = ((update.get('ripple_effects') or {}).get('ripples') or {})
+                ambient = ripples.get('ambient_mood') or []
+                if not isinstance(ambient, list):
+                    ambient = [str(ambient)]
+
+                overheard_snips = ripples.get('overheard_snippets') or []
+                if not isinstance(overheard_snips, list):
+                    overheard_snips = [str(overheard_snips)]
+                overheard = str(overheard_snips[0]) if overheard_snips else ""
+
+                optional_ops = update.get('optional_opportunities') or []
+                if not isinstance(optional_ops, list):
+                    optional_ops = [str(optional_ops)]
+                optional_hook = str(optional_ops[0]) if optional_ops else ""
+
                 return {
-                    'world_tension': update.get('world_tension', 0),
-                    'background_news': update.get('news', [])[:1],
-                    'ambient_effects': update.get('ripple_effects', {}).get('ripples', {}).get('ambient_mood'),
-                    'overheard': update.get('ripple_effects', {}).get('ripples', {}).get('overheard_snippets', [''])[0],
-                    'optional_hook': update.get('optional_opportunities', [None])[0]
+                    'world_tension': world_tension,
+                    'background_news': [str(x) for x in news[:1]],   # 0 or 1 item
+                    'ambient_effects': [str(x) for x in ambient],
+                    'overheard': overheard,
+                    'optional_hook': optional_hook,
                 }
-    
+
+    # Fallback with strict, non-nullable shapes
     return {
-        'world_tension': 0,
-        'background_news': None,
+        'world_tension': 0.0,
+        'background_news': [],
         'ambient_effects': [],
-        'overheard': None,
-        'optional_hook': None
+        'overheard': "",
+        'optional_hook': "",
     }
