@@ -585,13 +585,18 @@ class ConflictSynthesizer:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Create a new conflict with all subsystems participating"""
-        
-        # Determine which subsystems should be active
+    
+        import uuid
+    
+        # Generate a stable operation id so subsystems can reconcile deferred work
+        operation_id = f"create_{conflict_type}_{uuid.uuid4()}"
+    
+        # Determine which subsystems should be active (uses your existing helper)
         active_subsystems = self._determine_required_subsystems(conflict_type, context)
-        
+    
         # Create conflict event
         event = SystemEvent(
-            event_id=f"create_{conflict_type}_{datetime.now().timestamp()}",
+            event_id=operation_id,
             event_type=EventType.CONFLICT_CREATED,
             source_subsystem=SubsystemType.DETECTION,
             payload={
@@ -602,18 +607,39 @@ class ConflictSynthesizer:
             requires_response=True,
             priority=1
         )
-        
+    
         # Get responses from all subsystems
         responses = await self.emit_event(event)
-        
+    
         # Aggregate responses into conflict creation result
         result = self._aggregate_conflict_creation(responses)
-        
-        # Update metrics
-        self._global_metrics['total_conflicts'] += 1
-        self._global_metrics['active_conflicts'] += 1
-        
+    
+        # If we have a real conflict_id, emit a follow-up STATE_SYNC so
+        # subsystems that deferred work (e.g., stakeholders) can finalize.
+        conflict_id = result.get('conflict_id')
+        if conflict_id is not None:
+            # Optionally track state in-memory
+            self._conflict_states[conflict_id] = result
+    
+            await self.emit_event(SystemEvent(
+                event_id=f"conflict_ready_{operation_id}",
+                event_type=EventType.STATE_SYNC,
+                source_subsystem=SubsystemType.SLICE_OF_LIFE,  # neutral source for cross-cutting sync
+                payload={
+                    'operation_id': operation_id,     # lets subsystems match their deferrals
+                    'conflict_id': conflict_id,       # the actual id
+                    'context': context,               # pass-through convenience
+                },
+                requires_response=False,
+                priority=4
+            ))
+    
+            # Update metrics only when a conflict was truly created
+            self._global_metrics['total_conflicts'] += 1
+            self._global_metrics['active_conflicts'] += 1
+    
         return result
+
     
     async def update_conflict(
         self,
