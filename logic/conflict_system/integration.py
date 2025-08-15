@@ -1,7 +1,7 @@
 # logic/conflict_system/integration.py
 """
-Master Integration Module with LLM-powered orchestration
-Coordinates all conflict system modules into a unified experience
+Master Integration Module - Interface to ConflictSynthesizer
+Provides high-level API for game systems to interact with the conflict system
 """
 
 import logging
@@ -15,26 +15,6 @@ from datetime import datetime
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
-
-# Import all conflict system modules
-from logic.conflict_system.slice_of_life_conflicts import (
-    SliceOfLifeConflictManager, EmergentConflictDetector
-)
-from logic.conflict_system.enhanced_conflict_integration import (
-    EnhancedConflictSystemIntegration
-)
-from logic.conflict_system.tension import TensionSystem
-from logic.conflict_system.social_circle import SocialCircleConflictManager
-from logic.conflict_system.leverage import LeverageSystem
-from logic.conflict_system.multi_party_dynamics import MultiPartyConflictOrchestrator
-from logic.conflict_system.conflict_flow import ConflictFlowManager
-from logic.conflict_system.autonomous_stakeholder_actions import AutonomousStakeholderSystem
-from logic.conflict_system.background_grand_conflicts import BackgroundConflictManager
-from logic.conflict_system.conflict_victory import ConflictVictoryManager
-from logic.conflict_system.conflict_canon import ConflictCanonManager
-from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
-from logic.conflict_system.dynamic_conflict_template import DynamicConflictTemplateSystem
-from logic.conflict_system.edge_cases import ConflictEdgeCaseHandler
 
 logger = logging.getLogger(__name__)
 
@@ -66,571 +46,452 @@ class IntegrationState:
 
 
 # ===============================================================================
-# MASTER CONFLICT INTEGRATION
+# CONFLICT SYSTEM INTERFACE
 # ===============================================================================
 
-class MasterConflictIntegration:
-    """Master orchestrator for all conflict system modules"""
+class ConflictSystemInterface:
+    """
+    High-level interface to the conflict system.
+    Works through ConflictSynthesizer without duplicating orchestration.
+    """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
         
-        # Initialize all subsystems
-        self.slice_of_life = SliceOfLifeConflictManager(user_id, conversation_id)
-        self.emergence_detector = EmergentConflictDetector(user_id, conversation_id)
-        self.enhanced_integration = EnhancedConflictSystemIntegration(user_id, conversation_id)
-        self.tension_system = TensionSystem(user_id, conversation_id)
-        self.social_circle = SocialCircleConflictManager(user_id, conversation_id)
-        self.leverage_system = LeverageSystem(user_id, conversation_id)
-        self.multi_party = MultiPartyConflictOrchestrator(user_id, conversation_id)
-        self.flow_manager = ConflictFlowManager(user_id, conversation_id)
-        self.stakeholder_system = AutonomousStakeholderSystem(user_id, conversation_id)
-        self.background_manager = BackgroundConflictManager(user_id, conversation_id)
-        self.victory_manager = ConflictVictoryManager(user_id, conversation_id)
-        self.canon_manager = ConflictCanonManager(user_id, conversation_id)
-        self.synthesizer = ConflictSynthesizer(user_id, conversation_id)
-        self.template_system = DynamicConflictTemplateSystem(user_id, conversation_id)
-        self.edge_handler = ConflictEdgeCaseHandler(user_id, conversation_id)
-        
-        # Integration mode
+        # Current integration mode
         self.current_mode = IntegrationMode.EMERGENT
         
-        # Lazy-loaded agents
-        self._master_orchestrator = None
-        self._experience_designer = None
-        self._coherence_keeper = None
-        self._engagement_monitor = None
-        self._system_balancer = None
+        # Monitoring agents (lazy loaded)
+        self._experience_monitor = None
+        self._mode_optimizer = None
+        
+        # Cache for synthesizer reference
+        self._synthesizer_cache = None
     
     # ========== Agent Properties ==========
     
     @property
-    def master_orchestrator(self) -> Agent:
-        if self._master_orchestrator is None:
-            self._master_orchestrator = Agent(
-                name="Master Conflict Orchestrator",
+    def experience_monitor(self) -> Agent:
+        """Monitor overall player experience"""
+        if self._experience_monitor is None:
+            self._experience_monitor = Agent(
+                name="Experience Monitor",
                 instructions="""
-                Orchestrate all conflict systems into a unified experience.
-                
-                Coordinate:
-                - Which systems to activate when
-                - How systems interact
-                - Overall narrative flow
-                - Complexity management
-                - Player experience optimization
-                
-                Create seamless, engaging conflict experiences that feel natural.
-                Balance depth with accessibility, drama with playability.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._master_orchestrator
-    
-    @property
-    def experience_designer(self) -> Agent:
-        if self._experience_designer is None:
-            self._experience_designer = Agent(
-                name="Conflict Experience Designer",
-                instructions="""
-                Design the overall conflict experience for players.
-                
-                Focus on:
-                - Emotional journey
-                - Dramatic pacing
-                - Meaningful choices
-                - Satisfying resolutions
-                - Memorable moments
-                
-                Turn system interactions into compelling experiences.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._experience_designer
-    
-    @property
-    def coherence_keeper(self) -> Agent:
-        if self._coherence_keeper is None:
-            self._coherence_keeper = Agent(
-                name="Narrative Coherence Keeper",
-                instructions="""
-                Maintain narrative coherence across all conflict systems.
-                
-                Ensure:
-                - Consistent characterization
-                - Logical progression
-                - Timeline integrity
-                - Thematic unity
-                - World consistency
-                
-                Keep the story making sense no matter how complex it gets.
-                """,
-                model="gpt-5-nano",
-            )
-        return self._coherence_keeper
-    
-    @property
-    def engagement_monitor(self) -> Agent:
-        if self._engagement_monitor is None:
-            self._engagement_monitor = Agent(
-                name="Player Engagement Monitor",
-                instructions="""
-                Monitor and optimize player engagement with conflicts.
+                Monitor the overall conflict experience for the player.
                 
                 Track:
-                - Player interest signals
-                - Choice patterns
-                - Engagement drops
-                - Confusion indicators
-                - Satisfaction markers
+                - Engagement levels
+                - Narrative coherence
+                - Pacing and rhythm
+                - Emotional journey
+                - Satisfaction indicators
                 
-                Adjust the experience to keep players invested.
+                Recommend adjustments to optimize experience.
                 """,
                 model="gpt-5-nano",
             )
-        return self._engagement_monitor
+        return self._experience_monitor
     
     @property
-    def system_balancer(self) -> Agent:
-        if self._system_balancer is None:
-            self._system_balancer = Agent(
-                name="System Load Balancer",
+    def mode_optimizer(self) -> Agent:
+        """Optimize integration mode based on context"""
+        if self._mode_optimizer is None:
+            self._mode_optimizer = Agent(
+                name="Mode Optimizer",
                 instructions="""
-                Balance the load across conflict systems.
+                Determine optimal integration mode for current context.
                 
-                Manage:
-                - System activation
-                - Resource allocation
-                - Complexity distribution
-                - Performance optimization
-                - Graceful degradation
+                Consider:
+                - Player engagement patterns
+                - Story progression
+                - System load
+                - Narrative needs
+                - Player preferences
                 
-                Keep everything running smoothly without overwhelming anything.
+                Recommend mode changes to enhance experience.
                 """,
                 model="gpt-5-nano",
             )
-        return self._system_balancer
+        return self._mode_optimizer
     
-    # ========== Master Orchestration ==========
+    # ========== Synthesizer Access ==========
     
-    async def process_scene(
-        self,
-        scene_context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Process a scene through all relevant conflict systems"""
-        
-        # Determine which systems should be active
-        active_systems = await self._determine_active_systems(scene_context)
-        
-        # Check system health first
-        health_check = await self.edge_handler.scan_for_edge_cases()
-        if health_check:
-            await self._handle_edge_cases(health_check)
-        
-        # Process through active systems
-        results = {}
-        
-        if 'emergence' in active_systems:
-            tensions = await self.emergence_detector.detect_brewing_tensions()
-            results['emerging_tensions'] = tensions
-        
-        if 'tension' in active_systems:
-            tension_state = await self.tension_system.get_current_tension_state()
-            results['tension'] = tension_state
-        
-        if 'social' in active_systems:
-            social_dynamics = await self.social_circle.process_social_dynamics(
-                scene_context.get('present_npcs', [])
-            )
-            results['social'] = social_dynamics
-        
-        if 'background' in active_systems:
-            background = await self.background_manager.get_conversation_topics()
-            results['background_flavor'] = background
-        
-        if 'flow' in active_systems:
-            flow_state = await self.flow_manager.get_current_flow_state()
-            results['flow'] = flow_state
-        
-        # Check for victories
-        victory_checks = await self._check_all_victories()
-        if victory_checks:
-            results['victories'] = victory_checks
-        
-        # Synthesize if needed
-        synthesis = await self._check_for_synthesis()
-        if synthesis:
-            results['synthesis'] = synthesis
-        
-        # Generate integrated response
-        integrated = await self._integrate_results(results, scene_context)
-        
-        return integrated
+    async def _get_synthesizer(self):
+        """Get or cache synthesizer instance"""
+        if not self._synthesizer_cache:
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            self._synthesizer_cache = await get_synthesizer(self.user_id, self.conversation_id)
+        return self._synthesizer_cache
     
-    async def _determine_active_systems(
-        self,
-        context: Dict[str, Any]
-    ) -> Set[str]:
-        """Determine which systems should be active"""
-        
-        prompt = f"""
-        Determine which conflict systems to activate:
-        
-        Context: {json.dumps(context)}
-        Current Mode: {self.current_mode.value}
-        Active Conflicts: {await self._get_conflict_count()}
-        
-        Available systems:
-        - emergence: Detect new tensions
-        - tension: Manage tension levels
-        - social: Social dynamics
-        - leverage: Power dynamics
-        - multiparty: Complex stakeholder interactions
-        - flow: Pacing and rhythm
-        - background: World events
-        - victory: Check victory conditions
-        - synthesis: Combine conflicts
-        
-        Return JSON:
-        {{
-            "active_systems": ["system names to activate"],
-            "reasoning": "Why these systems",
-            "priority_system": "Most important system",
-            "integration_strategy": "How to combine them"
-        }}
-        """
-        
-        response = await Runner.run(self.master_orchestrator, prompt)
-        data = json.loads(response.output)
-        return set(data['active_systems'])
+    # ========== High-Level Operations ==========
     
-    async def _integrate_results(
-        self,
-        results: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Integrate results from all systems"""
-        
-        prompt = f"""
-        Integrate conflict system results into unified experience:
-        
-        Results: {json.dumps(results)}
-        Context: {json.dumps(context)}
-        Mode: {self.current_mode.value}
-        
-        Create integrated response that:
-        - Combines all active elements
-        - Maintains narrative coherence
-        - Provides clear player choices
-        - Sets appropriate mood
-        - Advances the story
-        
-        Return JSON:
-        {{
-            "narrative_summary": "What's happening",
-            "active_conflicts": ["current conflicts"],
-            "player_choices": [
-                {{
-                    "id": "choice_id",
-                    "text": "Choice text",
-                    "systems_affected": ["which systems this affects"],
-                    "potential_outcomes": ["possible results"]
-                }}
-            ],
-            "atmospheric_elements": ["mood and tone elements"],
-            "npc_behaviors": {{
-                "npc_id": "behavior influenced by conflicts"
-            }},
-            "world_state_changes": ["how the world changed"],
-            "next_beat": "What comes next"
-        }}
-        """
-        
-        response = await Runner.run(self.experience_designer, prompt)
-        return json.loads(response.output)
-    
-    # ========== Mode Management ==========
-    
-    async def set_integration_mode(
-        self,
-        mode: IntegrationMode,
-        context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Change the integration mode"""
+    async def initialize_system(self, mode: IntegrationMode = IntegrationMode.EMERGENT) -> Dict[str, Any]:
+        """Initialize the conflict system with specified mode"""
         
         self.current_mode = mode
         
-        # Adjust systems based on mode
-        adjustments = await self._calculate_mode_adjustments(mode, context)
+        # Get synthesizer (this initializes all subsystems)
+        synthesizer = await self._get_synthesizer()
         
-        # Apply adjustments
-        await self._apply_mode_adjustments(adjustments)
-        
-        return {
-            'mode_changed': True,
-            'new_mode': mode.value,
-            'adjustments': adjustments
-        }
-    
-    async def _calculate_mode_adjustments(
-        self,
-        mode: IntegrationMode,
-        context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Calculate adjustments for mode change"""
-        
-        prompt = f"""
-        Calculate system adjustments for mode change:
-        
-        New Mode: {mode.value}
-        Context: {json.dumps(context)}
-        
-        Modes:
-        - full_immersion: All systems active, maximum complexity
-        - story_focus: Prioritize narrative coherence
-        - social_dynamics: Emphasize relationships
-        - background_aware: World events prominent
-        - player_centric: Maximum player agency
-        - emergent: Natural pattern emergence
-        - guided: Active narrative guidance
-        
-        Return JSON:
-        {{
-            "system_weights": {{
-                "system_name": 0.0 to 1.0 priority
-            }},
-            "complexity_target": 0.0 to 1.0,
-            "pacing_preference": "slow/medium/fast",
-            "narrative_style": "descriptive style",
-            "player_agency_level": "low/medium/high",
-            "background_prominence": 0.0 to 1.0
-        }}
-        """
-        
-        response = await Runner.run(self.system_balancer, prompt)
-        return json.loads(response.output)
-    
-    async def _apply_mode_adjustments(
-        self,
-        adjustments: Dict[str, Any]
-    ):
-        """Apply mode adjustments to systems"""
-        
-        # Store adjustments in database
+        # Store mode preference
         async with get_db_connection_context() as conn:
             await conn.execute("""
                 INSERT INTO integration_settings
-                (user_id, conversation_id, mode, adjustments, updated_at)
-                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                (user_id, conversation_id, mode, updated_at)
+                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
                 ON CONFLICT (user_id, conversation_id)
-                DO UPDATE SET mode = $3, adjustments = $4, updated_at = CURRENT_TIMESTAMP
-            """, self.user_id, self.conversation_id,
-            self.current_mode.value, json.dumps(adjustments))
+                DO UPDATE SET mode = $3, updated_at = CURRENT_TIMESTAMP
+            """, self.user_id, self.conversation_id, mode.value)
+        
+        # Get initial state
+        state = await synthesizer.get_system_state()
+        
+        return {
+            'initialized': True,
+            'mode': mode.value,
+            'subsystems_loaded': len(state.get('subsystems', {})),
+            'system_health': state['metrics']['system_health']
+        }
     
-    # ========== Health Monitoring ==========
+    async def process_game_scene(
+        self,
+        scene_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Process a game scene through the conflict system"""
+        
+        # Add mode context
+        scene_data['integration_mode'] = self.current_mode.value
+        
+        # Process through synthesizer
+        synthesizer = await self._get_synthesizer()
+        result = await synthesizer.process_scene(scene_data)
+        
+        # Monitor experience
+        experience_quality = await self._assess_experience_quality(result)
+        
+        # Add experience metadata
+        result['experience_quality'] = experience_quality
+        
+        # Check if mode should change
+        if experience_quality < 0.5:
+            new_mode = await self._recommend_mode_change(scene_data, experience_quality)
+            if new_mode != self.current_mode:
+                result['recommended_mode_change'] = new_mode.value
+        
+        return result
     
-    async def get_system_health(self) -> IntegrationState:
-        """Get current health of integrated system"""
+    async def create_conflict(
+        self,
+        conflict_type: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Create a new conflict"""
         
-        # Get metrics
-        conflict_count = await self._get_conflict_count()
-        complexity = await self._calculate_complexity()
-        coherence = await self._assess_coherence()
-        engagement = await self._measure_engagement()
-        health = await self._calculate_system_health()
+        # Add mode-specific adjustments
+        context['integration_mode'] = self.current_mode.value
         
-        # Determine active modules
-        active_modules = await self._get_active_modules()
+        # Create through synthesizer
+        synthesizer = await self._get_synthesizer()
+        result = await synthesizer.create_conflict(conflict_type, context)
         
+        return result
+    
+    async def resolve_conflict(
+        self,
+        conflict_id: int,
+        resolution_type: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Resolve a conflict"""
+        
+        # Resolve through synthesizer
+        synthesizer = await self._get_synthesizer()
+        result = await synthesizer.resolve_conflict(
+            conflict_id,
+            resolution_type,
+            context
+        )
+        
+        return result
+    
+    async def get_system_status(self) -> IntegrationState:
+        """Get comprehensive system status"""
+        
+        synthesizer = await self._get_synthesizer()
+        state = await synthesizer.get_system_state()
+        
+        # Build integration state
         return IntegrationState(
             mode=self.current_mode,
-            active_modules=active_modules,
-            conflict_count=conflict_count,
-            complexity_score=complexity,
-            narrative_coherence=coherence,
-            player_engagement=engagement,
-            system_health=health
+            active_modules=set(state.get('subsystems', {}).keys()),
+            conflict_count=state['metrics']['active_conflicts'],
+            complexity_score=state['metrics']['complexity_score'],
+            narrative_coherence=state['metrics'].get('narrative_coherence', 1.0),
+            player_engagement=state['metrics'].get('player_engagement', 0.5),
+            system_health=state['metrics']['system_health']
         )
     
-    async def _get_conflict_count(self) -> int:
-        """Get count of active conflicts"""
+    async def optimize_experience(self) -> Dict[str, Any]:
+        """Optimize the conflict experience"""
         
+        # Get current state
+        state = await self.get_system_status()
+        
+        optimizations = []
+        
+        # Check various optimization opportunities
+        if state.complexity_score > 0.8:
+            optimizations.append(await self._reduce_complexity())
+        
+        if state.narrative_coherence < 0.5:
+            optimizations.append(await self._improve_coherence())
+        
+        if state.player_engagement < 0.3:
+            optimizations.append(await self._boost_engagement())
+        
+        if state.system_health < 0.5:
+            optimizations.append(await self._heal_system())
+        
+        return {
+            'optimizations_performed': optimizations,
+            'new_state': await self.get_system_status()
+        }
+    
+    # ========== Mode Management ==========
+    
+    async def set_mode(self, mode: IntegrationMode) -> Dict[str, Any]:
+        """Change the integration mode"""
+        
+        old_mode = self.current_mode
+        self.current_mode = mode
+        
+        # Calculate what changes
+        changes = await self._calculate_mode_changes(old_mode, mode)
+        
+        # Store preference
         async with get_db_connection_context() as conn:
-            count = await conn.fetchval("""
-                SELECT COUNT(*) FROM Conflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND is_active = true
-            """, self.user_id, self.conversation_id)
+            await conn.execute("""
+                UPDATE integration_settings
+                SET mode = $1, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = $2 AND conversation_id = $3
+            """, mode.value, self.user_id, self.conversation_id)
         
-        return count
+        return {
+            'mode_changed': True,
+            'previous_mode': old_mode.value,
+            'new_mode': mode.value,
+            'changes': changes
+        }
     
-    async def _calculate_complexity(self) -> float:
-        """Calculate overall system complexity"""
+    async def _calculate_mode_changes(
+        self,
+        old_mode: IntegrationMode,
+        new_mode: IntegrationMode
+    ) -> Dict[str, Any]:
+        """Calculate what changes between modes"""
         
-        conflict_count = await self._get_conflict_count()
+        changes = {
+            'subsystem_priorities': {},
+            'complexity_adjustment': 0,
+            'focus_shift': ""
+        }
         
-        # Get synthesis count
+        # Define mode characteristics
+        mode_profiles = {
+            IntegrationMode.FULL_IMMERSION: {
+                'complexity': 1.0,
+                'all_systems': True,
+                'focus': 'complete experience'
+            },
+            IntegrationMode.STORY_FOCUS: {
+                'complexity': 0.7,
+                'priority': ['canon', 'flow', 'victory'],
+                'focus': 'narrative progression'
+            },
+            IntegrationMode.SOCIAL_DYNAMICS: {
+                'complexity': 0.6,
+                'priority': ['social', 'multiparty', 'leverage'],
+                'focus': 'relationships'
+            },
+            IntegrationMode.BACKGROUND_AWARE: {
+                'complexity': 0.5,
+                'priority': ['background'],
+                'focus': 'world events'
+            },
+            IntegrationMode.PLAYER_CENTRIC: {
+                'complexity': 0.4,
+                'priority': ['victory', 'template'],
+                'focus': 'player agency'
+            },
+            IntegrationMode.EMERGENT: {
+                'complexity': 0.5,
+                'all_systems': True,
+                'focus': 'natural emergence'
+            },
+            IntegrationMode.GUIDED: {
+                'complexity': 0.6,
+                'priority': ['flow', 'template'],
+                'focus': 'curated experience'
+            }
+        }
+        
+        old_profile = mode_profiles[old_mode]
+        new_profile = mode_profiles[new_mode]
+        
+        changes['complexity_adjustment'] = new_profile['complexity'] - old_profile['complexity']
+        changes['focus_shift'] = f"{old_profile['focus']} -> {new_profile['focus']}"
+        
+        if 'priority' in new_profile:
+            for system in new_profile['priority']:
+                changes['subsystem_priorities'][system] = 'high'
+        
+        return changes
+    
+    # ========== Experience Optimization ==========
+    
+    async def _assess_experience_quality(self, scene_result: Dict[str, Any]) -> float:
+        """Assess the quality of the experience"""
+        
+        quality_score = 0.5  # Base score
+        
+        # Check for various quality indicators
+        if scene_result.get('choices'):
+            quality_score += 0.1  # Player has choices
+        
+        if scene_result.get('manifestations'):
+            quality_score += 0.1  # Conflicts are manifesting
+        
+        if scene_result.get('narrative_summary'):
+            quality_score += 0.1  # Good narrative flow
+        
+        if scene_result.get('victories'):
+            quality_score += 0.2  # Progress/resolution
+        
+        # Check for problems
+        if scene_result.get('edge_cases'):
+            quality_score -= 0.2  # System issues
+        
+        return max(0.0, min(1.0, quality_score))
+    
+    async def _recommend_mode_change(
+        self,
+        context: Dict[str, Any],
+        current_quality: float
+    ) -> IntegrationMode:
+        """Recommend a mode change based on context"""
+        
+        prompt = f"""
+        Recommend integration mode based on context:
+        
+        Current Mode: {self.current_mode.value}
+        Experience Quality: {current_quality:.1%}
+        Context: {json.dumps(context)}
+        
+        Available modes:
+        - full_immersion: All systems active
+        - story_focus: Prioritize narrative
+        - social_dynamics: Focus on relationships
+        - background_aware: Emphasize world events
+        - player_centric: Maximum player agency
+        - emergent: Natural pattern emergence
+        - guided: Curated experience
+        
+        Which mode would improve the experience?
+        Return just the mode name.
+        """
+        
+        response = await Runner.run(self.mode_optimizer, prompt)
+        
+        try:
+            mode_name = response.output.strip().lower().replace(' ', '_')
+            return IntegrationMode[mode_name.upper()]
+        except (KeyError, AttributeError):
+            return self.current_mode  # Keep current if recommendation fails
+    
+    async def _reduce_complexity(self) -> str:
+        """Reduce system complexity"""
+        synthesizer = await self._get_synthesizer()
+        
+        # Get lowest priority conflicts
         async with get_db_connection_context() as conn:
-            synthesis_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM conflict_synthesis
-                WHERE primary_conflict_id IN (
-                    SELECT conflict_id FROM Conflicts
-                    WHERE user_id = $1 AND conversation_id = $2
-                    AND is_active = true
-                )
-            """, self.user_id, self.conversation_id)
-        
-        # Calculate complexity (0-1)
-        base_complexity = min(1.0, conflict_count / 10)
-        synthesis_modifier = synthesis_count * 0.1
-        
-        return min(1.0, base_complexity + synthesis_modifier)
-    
-    async def _assess_coherence(self) -> float:
-        """Assess narrative coherence"""
-        
-        # Check for contradictions
-        edge_cases = await self.edge_handler.scan_for_edge_cases()
-        contradiction_count = sum(
-            1 for case in edge_cases
-            if case.case_type.value == 'contradiction'
-        )
-        
-        # Calculate coherence (1.0 = perfect, 0.0 = broken)
-        coherence = max(0.0, 1.0 - (contradiction_count * 0.2))
-        
-        return coherence
-    
-    async def _measure_engagement(self) -> float:
-        """Measure player engagement"""
-        
-        # Get recent player choices
-        async with get_db_connection_context() as conn:
-            recent_choices = await conn.fetchval("""
-                SELECT COUNT(*) FROM player_choices
-                WHERE user_id = $1 AND conversation_id = $2
-                AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour'
-            """, self.user_id, self.conversation_id)
-        
-        # Simple engagement metric
-        engagement = min(1.0, recent_choices / 10)
-        
-        return engagement
-    
-    async def _calculate_system_health(self) -> float:
-        """Calculate overall system health"""
-        
-        complexity = await self._calculate_complexity()
-        coherence = await self._assess_coherence()
-        engagement = await self._measure_engagement()
-        
-        # Weight factors
-        health = (
-            coherence * 0.4 +  # Most important
-            engagement * 0.3 +
-            (1.0 - complexity) * 0.3  # Lower complexity is healthier
-        )
-        
-        return health
-    
-    async def _get_active_modules(self) -> Set[str]:
-        """Get currently active modules"""
-        
-        active = set()
-        
-        # Check which modules have recent activity
-        async with get_db_connection_context() as conn:
-            # Check for recent tensions
-            tensions = await conn.fetchval("""
-                SELECT COUNT(*) FROM tension_events
-                WHERE user_id = $1 AND conversation_id = $2
-                AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour'
-            """, self.user_id, self.conversation_id)
-            if tensions > 0:
-                active.add('tension')
-            
-            # Check for social dynamics
-            social = await conn.fetchval("""
-                SELECT COUNT(*) FROM social_dynamics
-                WHERE user_id = $1 AND conversation_id = $2
-                AND updated_at > CURRENT_TIMESTAMP - INTERVAL '1 hour'
-            """, self.user_id, self.conversation_id)
-            if social > 0:
-                active.add('social')
-            
-            # Always include edge handler
-            active.add('edge_handler')
-        
-        return active
-    
-    # ========== Utility Methods ==========
-    
-    async def _check_all_victories(self) -> Optional[List[Dict[str, Any]]]:
-        """Check all conflicts for victory conditions"""
-        
-        victories = []
-        
-        async with get_db_connection_context() as conn:
-            active_conflicts = await conn.fetch("""
+            low_priority = await conn.fetch("""
                 SELECT conflict_id FROM Conflicts
                 WHERE user_id = $1 AND conversation_id = $2
                 AND is_active = true
+                AND intensity IN ('subtle', 'tension')
+                ORDER BY progress ASC
+                LIMIT 2
             """, self.user_id, self.conversation_id)
         
-        for conflict in active_conflicts:
-            # Get current state
-            state = {'conflict_id': conflict['conflict_id']}  # Simplified
-            achievements = await self.victory_manager.check_victory_conditions(
+        # Resolve them
+        for conflict in low_priority:
+            await synthesizer.resolve_conflict(
                 conflict['conflict_id'],
-                state
+                'natural_resolution',
+                {'reason': 'complexity_reduction'}
             )
-            
-            if achievements:
-                victories.extend(achievements)
         
-        return victories if victories else None
+        return f"Resolved {len(low_priority)} low-priority conflicts"
     
-    async def _check_for_synthesis(self) -> Optional[Dict[str, Any]]:
-        """Check if conflicts should be synthesized"""
+    async def _improve_coherence(self) -> str:
+        """Improve narrative coherence"""
+        synthesizer = await self._get_synthesizer()
         
-        conflict_count = await self._get_conflict_count()
+        # Trigger edge case detection and recovery
+        from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType, SubsystemType
         
-        if conflict_count >= 3:
-            # Get conflicts
-            async with get_db_connection_context() as conn:
-                conflicts = await conn.fetch("""
-                    SELECT conflict_id FROM Conflicts
-                    WHERE user_id = $1 AND conversation_id = $2
-                    AND is_active = true
-                    LIMIT 5
-                """, self.user_id, self.conversation_id)
-            
-            conflict_ids = [c['conflict_id'] for c in conflicts]
-            
-            # Analyze for synthesis
-            analysis = await self.synthesizer.analyze_conflicts_for_synthesis(
-                conflict_ids
+        event = SystemEvent(
+            event_id=f"coherence_{datetime.now().timestamp()}",
+            event_type=EventType.HEALTH_CHECK,
+            source_subsystem=SubsystemType.CANON,
+            payload={'check_coherence': True},
+            target_subsystems={SubsystemType.EDGE_HANDLER}
+        )
+        
+        await synthesizer.emit_event(event)
+        
+        return "Triggered coherence check and recovery"
+    
+    async def _boost_engagement(self) -> str:
+        """Boost player engagement"""
+        synthesizer = await self._get_synthesizer()
+        
+        # Generate an interesting conflict from template
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        
+        template_subsystem = synthesizer._subsystems.get(SubsystemType.TEMPLATE)
+        if template_subsystem:
+            # Create engaging conflict
+            await synthesizer.create_conflict(
+                'template_personal_boundaries',
+                {'boost_engagement': True}
             )
-            
-            if analysis['should_synthesize']:
-                return analysis
+            return "Generated engaging conflict"
         
-        return None
+        return "Engagement boost attempted"
     
-    async def _handle_edge_cases(
-        self,
-        edge_cases: List[Any]
-    ):
-        """Handle detected edge cases"""
+    async def _heal_system(self) -> str:
+        """Heal system issues"""
+        synthesizer = await self._get_synthesizer()
         
-        for case in edge_cases:
-            if case.severity > 0.7:  # High severity
-                # Auto-recover
-                await self.edge_handler.execute_recovery(case, 0)
+        # Trigger comprehensive health check
+        from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType
+        
+        event = SystemEvent(
+            event_id=f"heal_{datetime.now().timestamp()}",
+            event_type=EventType.HEALTH_CHECK,
+            source_subsystem=None,
+            payload={'comprehensive': True}
+        )
+        
+        await synthesizer.emit_event(event)
+        
+        return "System healing initiated"
 
 
 # ===============================================================================
-# MASTER INTEGRATION FUNCTIONS
+# PUBLIC API FUNCTIONS
 # ===============================================================================
 
 @function_tool
@@ -643,26 +504,16 @@ async def initialize_conflict_system(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    master = MasterConflictIntegration(user_id, conversation_id)
+    interface = ConflictSystemInterface(user_id, conversation_id)
     
-    # Set initial mode
-    await master.set_integration_mode(
-        IntegrationMode(mode),
-        {'initialization': True}
-    )
+    try:
+        integration_mode = IntegrationMode[mode.upper()]
+    except KeyError:
+        integration_mode = IntegrationMode.EMERGENT
     
-    # Initialize background world
-    await master.background_manager.orchestrator.generate_background_conflict()
+    result = await interface.initialize_system(integration_mode)
     
-    # Get initial state
-    state = await master.get_system_health()
-    
-    return {
-        'initialized': True,
-        'mode': state.mode.value,
-        'active_modules': list(state.active_modules),
-        'system_health': state.system_health
-    }
+    return result
 
 
 @function_tool
@@ -678,9 +529,9 @@ async def process_conflict_scene(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    master = MasterConflictIntegration(user_id, conversation_id)
+    interface = ConflictSystemInterface(user_id, conversation_id)
     
-    scene_context = {
+    scene_data = {
         'activity': activity,
         'location': location,
         'present_npcs': present_npcs,
@@ -688,7 +539,7 @@ async def process_conflict_scene(
         'timestamp': datetime.now().isoformat()
     }
     
-    result = await master.process_scene(scene_context)
+    result = await interface.process_game_scene(scene_data)
     
     return result
 
@@ -703,12 +554,13 @@ async def adjust_conflict_mode(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    master = MasterConflictIntegration(user_id, conversation_id)
+    interface = ConflictSystemInterface(user_id, conversation_id)
     
-    result = await master.set_integration_mode(
-        IntegrationMode(new_mode),
-        {'mode_change': True}
-    )
+    try:
+        mode = IntegrationMode[new_mode.upper()]
+        result = await interface.set_mode(mode)
+    except KeyError:
+        result = {'error': f'Invalid mode: {new_mode}'}
     
     return result
 
@@ -722,13 +574,9 @@ async def get_conflict_system_status(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    master = MasterConflictIntegration(user_id, conversation_id)
+    interface = ConflictSystemInterface(user_id, conversation_id)
     
-    # Get system health
-    state = await master.get_system_health()
-    
-    # Check for issues
-    edge_cases = await master.edge_handler.scan_for_edge_cases()
+    state = await interface.get_system_status()
     
     return {
         'mode': state.mode.value,
@@ -740,13 +588,6 @@ async def get_conflict_system_status(
             'engagement': state.player_engagement,
             'health': state.system_health
         },
-        'issues': [
-            {
-                'type': case.case_type.value,
-                'severity': case.severity
-            }
-            for case in edge_cases
-        ],
         'recommendation': 'healthy' if state.system_health > 0.7 else 'needs_attention'
     }
 
@@ -760,40 +601,55 @@ async def optimize_conflict_experience(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    master = MasterConflictIntegration(user_id, conversation_id)
+    interface = ConflictSystemInterface(user_id, conversation_id)
     
-    # Get current state
-    state = await master.get_system_health()
+    result = await interface.optimize_experience()
     
-    # Determine optimizations needed
-    optimizations = []
+    return result
+
+
+@function_tool
+async def create_contextual_conflict(
+    ctx: RunContextWrapper,
+    conflict_type: str,
+    participants: List[int],
+    context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Create a new conflict with context"""
     
-    if state.complexity_score > 0.8:
-        # Too complex - simplify
-        optimizations.append('reduce_complexity')
-        # Auto-resolve some conflicts
-        
-    if state.narrative_coherence < 0.5:
-        # Poor coherence - fix contradictions
-        optimizations.append('improve_coherence')
-        edge_cases = await master.edge_handler.scan_for_edge_cases()
-        for case in edge_cases:
-            await master.edge_handler.execute_recovery(case, 0)
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
     
-    if state.player_engagement < 0.3:
-        # Low engagement - add hooks
-        optimizations.append('boost_engagement')
-        # Generate new interesting conflict
-        await master.template_system.generate_conflict_from_template(
-            1,  # Use first template
-            {'boost_engagement': True}
-        )
+    interface = ConflictSystemInterface(user_id, conversation_id)
     
-    return {
-        'optimizations_performed': optimizations,
-        'new_health': (await master.get_system_health()).system_health,
-        'recommendations': [
-            'Continue monitoring' if state.system_health > 0.7
-            else 'Consider mode change'
-        ]
+    full_context = {
+        'participants': participants,
+        **context
     }
+    
+    result = await interface.create_conflict(conflict_type, full_context)
+    
+    return result
+
+
+@function_tool
+async def resolve_active_conflict(
+    ctx: RunContextWrapper,
+    conflict_id: int,
+    resolution_type: str = "natural",
+    resolution_context: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """Resolve an active conflict"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    interface = ConflictSystemInterface(user_id, conversation_id)
+    
+    result = await interface.resolve_conflict(
+        conflict_id,
+        resolution_type,
+        resolution_context or {}
+    )
+    
+    return result
