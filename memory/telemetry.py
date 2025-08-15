@@ -5,12 +5,11 @@ import logging
 import asyncio
 from typing import Dict, Any, Optional, List
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from logic.game_time_helper import get_game_datetime, get_game_iso_string
 
 from .connection import DBConnectionManager
-
 from memory.connection import get_connection_context
 
 logger = logging.getLogger("memory_telemetry")
@@ -49,10 +48,11 @@ class MemoryTelemetry:
         Record a telemetry event for a memory operation.
         Queues the event for background processing.
         """
-        # Create telemetry record using game time
-        timestamp_str = await get_game_iso_string(user_id, conversation_id)
+        # Get game time as datetime object, not string
+        timestamp = await get_game_datetime(user_id, conversation_id)
+        
         record = {
-            "timestamp": timestamp_str,
+            "timestamp": timestamp,  # Store as datetime object
             "operation": operation,
             "success": success,
             "duration": duration,
@@ -160,7 +160,6 @@ class MemoryTelemetry:
         try:
             # Get database connection using the proper context manager
             async with await get_connection_context() as conn:
-                # No need to start a transaction explicitly - use the connection directly
                 # Insert records in batch
                 await conn.executemany("""
                     INSERT INTO memory_telemetry 
@@ -168,7 +167,7 @@ class MemoryTelemetry:
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """, [
                     (
-                        record["timestamp"],
+                        record["timestamp"],  # Now this is a datetime object
                         record["operation"],
                         record["success"],
                         record["duration"],
@@ -336,4 +335,3 @@ class MemoryTelemetry:
         except Exception as e:
             logger.error(f"Error cleaning up old telemetry: {e}")
             return 0
-
