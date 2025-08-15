@@ -163,16 +163,19 @@ class MultiPartyConflictSubsystem:
         import weakref
         self.synthesizer = weakref.ref(synthesizer)
         return True
-    
+        
     async def handle_event(self, event) -> Any:
         """Handle an event from the synthesizer"""
         from logic.conflict_system.conflict_synthesizer import SubsystemResponse, SystemEvent, EventType
         
         try:
             if event.event_type == EventType.CONFLICT_CREATED:
-                # Check if this should be a multi-party conflict
+                # Check context for multiparty flag instead of conflict type
+                context = event.payload.get('context', {})
                 conflict_type = event.payload.get('conflict_type')
-                if 'faction' in conflict_type or 'multi' in conflict_type:
+                
+                # Check if this should be a multi-party conflict based on context
+                if context.get('is_multiparty') or 'faction' in conflict_type:
                     # Initialize as multi-party
                     conflict_id = event.payload.get('conflict_id')
                     factions = await self._initialize_factions(conflict_id)
@@ -218,8 +221,8 @@ class MultiPartyConflictSubsystem:
                             event_id=f"betrayal_{event.event_id}",
                             event_type=EventType.STATE_SYNC,
                             source_subsystem=self.subsystem_type,
-                            payload={'betrayal_executed': result['betrayal']},
-                            priority=3
+                            payload={'betrayal_occurred': result['betrayal']},
+                            priority=5
                         ))
                     
                     return SubsystemResponse(
@@ -229,34 +232,11 @@ class MultiPartyConflictSubsystem:
                         data=result,
                         side_effects=side_effects
                     )
-                    
+            
             elif event.event_type == EventType.PHASE_TRANSITION:
-                # Update faction dynamics based on phase
-                conflict_id = event.payload.get('conflict_id')
-                new_phase = event.payload.get('phase')
-                
-                if new_phase == 'climax':
-                    # Time for betrayals and power plays
-                    betrayals = await self._check_for_betrayals(conflict_id)
-                    
-                    side_effects = []
-                    for betrayal in betrayals:
-                        side_effects.append(SystemEvent(
-                            event_id=f"betrayal_{event.event_id}_{betrayal['betrayer_id']}",
-                            event_type=EventType.STATE_SYNC,
-                            source_subsystem=self.subsystem_type,
-                            payload=betrayal,
-                            priority=2
-                        ))
-                    
-                    return SubsystemResponse(
-                        subsystem=self.subsystem_type,
-                        event_id=event.event_id,
-                        success=True,
-                        data={'betrayals_triggered': len(betrayals)},
-                        side_effects=side_effects
-                    )
-                    
+                # Handle phase transitions for multi-party conflicts
+                return await self._handle_phase_transition(event)
+            
             elif event.event_type == EventType.HEALTH_CHECK:
                 return SubsystemResponse(
                     subsystem=self.subsystem_type,
