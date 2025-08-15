@@ -27,17 +27,34 @@ class ConflictGovernanceMixin:
         
         synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
         
-        # Map old conflict types to new slice-of-life types
+        # Extract conflict type - default to 'slice' for slice-of-life conflicts
         conflict_type = conflict_data.get('conflict_type', 'slice')
-        if conflict_type in ['major', 'minor', 'standard']:
-            # Convert old linear types to new types
-            conflict_type = 'slice'  # Default to slice-of-life
         
-        # Add Nyx governance metadata
-        context = conflict_data.copy()
-        context["governance_reason"] = reason
-        context["created_by"] = "nyx_governance"
+        # Map old linear conflict types to new open-world types
+        type_mapping = {
+            'major': 'social',           # Major conflicts become social dynamics
+            'minor': 'slice',           # Minor conflicts are slice-of-life
+            'standard': 'slice',        # Standard conflicts are slice-of-life
+            'catastrophic': 'background', # Catastrophic become background tensions
+            'political': 'social',      # Political conflicts are social
+            'economic': 'background',   # Economic tensions are background
+        }
         
+        conflict_type = type_mapping.get(conflict_type, conflict_type)
+        
+        # Build context for the synthesizer
+        context = {
+            'name': conflict_data.get('name', f'{conflict_type.title()} Conflict'),
+            'description': conflict_data.get('description', ''),
+            'participants': conflict_data.get('participants', []),
+            'location': conflict_data.get('location'),
+            'intensity': conflict_data.get('intensity', 'moderate'),
+            'governance_reason': reason,
+            'created_by': 'nyx_governance',
+            **conflict_data  # Include any additional fields
+        }
+        
+        # Create the conflict through synthesizer
         result = await synthesizer.create_conflict(conflict_type, context)
         
         # Record in governance
@@ -46,7 +63,9 @@ class ConflictGovernanceMixin:
             details={
                 "conflict_id": result.get("conflict_id"),
                 "conflict_type": conflict_type,
-                "reason": reason
+                "original_type": conflict_data.get('conflict_type'),
+                "reason": reason,
+                "synthesizer_result": result
             }
         )
         
