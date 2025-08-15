@@ -7,7 +7,7 @@ Integrated with ConflictSynthesizer as the central orchestrator
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict, NotRequired
 from enum import Enum
 from dataclasses import dataclass
 
@@ -53,6 +53,39 @@ class GeneratedConflict:
     customization: Dict[str, Any]
     narrative_hooks: List[str]
     unique_elements: List[str]
+
+class TemplateContextDTO(TypedDict, total=False):
+    # Common conflict/context fields (extend as needed, all optional)
+    participants: List[int]
+    stakeholders: List[int]
+    npcs: List[int]
+    location: str
+    location_id: int
+    scene_type: str
+    activity: str
+    description: str
+    intensity: str
+    intensity_level: float  # 0..1
+    hooks: List[str]
+    complexity: float       # 0..1
+
+class GenerateTemplatedConflictResponse(TypedDict):
+    conflict_id: int
+    status: str
+    conflict_type: str
+    template_used: int
+    narrative_hooks: List[str]
+    message: str
+    error: str
+
+class CreateTemplateResponse(TypedDict):
+    template_id: int
+    name: str
+    category: str
+    variable_count: int
+    complexity_min: float
+    complexity_max: float
+    error: str
 
 
 # ===============================================================================
@@ -836,57 +869,106 @@ class DynamicConflictTemplateSubsystem:
 async def generate_templated_conflict(
     ctx: RunContextWrapper,
     category: str,
-    context: Dict[str, Any]
-) -> Dict[str, Any]:
+    context: TemplateContextDTO,
+) -> GenerateTemplatedConflictResponse:
     """Generate a conflict from a template category through synthesizer"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Use synthesizer to create conflict
+
     from logic.conflict_system.conflict_synthesizer import get_synthesizer
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Create conflict with template flag
+
+    # Flatten: pass a single context dict (no nested "context" field)
+    merged_context: Dict = {
+        'use_template': True,
+        'template_category': category,
+        **dict(context or {})
+    }
+
     result = await synthesizer.create_conflict(
         f"template_{category}",
-        {
-            'use_template': True,
-            'context': context
-        }
+        merged_context,
     )
-    
-    return result
+
+    # Coerce into strict response
+    return {
+        'conflict_id': int(result.get('conflict_id', 0) or 0),
+        'status': str(result.get('status', 'created')),
+        'conflict_type': str(result.get('conflict_type', f"template_{category}")),
+        'template_used': int(result.get('template_used', 0) or 0),
+        'narrative_hooks': [str(h) for h in (result.get('narrative_hooks') or [])],
+        'message': str(result.get('message', "")),
+        'error': "",
+    }
 
 
 @function_tool
 async def create_custom_template(
     ctx: RunContextWrapper,
     category: str,
-    concept: str
-) -> Dict[str, Any]:
-    """Create a custom conflict template"""
-    
+    concept: str,
+) -> CreateTemplateResponse:
+    """Create a custom conflict template via the TEMPLATE subsystem"""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer and template subsystem
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
-    synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    template_subsystem = synthesizer._subsystems.get(SubsystemType.TEMPLATE)
-    if not template_subsystem:
-        return {'error': 'Template subsystem not available'}
-    
-    template = await template_subsystem.create_conflict_template(
-        TemplateCategory(category),
-        concept
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
     )
-    
+    synthesizer = await get_synthesizer(user_id, conversation_id)
+
+    # Ask TEMPLATE subsystem to create a template (no direct _subsystems access)
+    evt = SystemEvent(
+        event_id=f"create_template_{category}_{datetime.now().timestamp()}",
+        event_type=EventType.TEMPLATE_GENERATED,
+        source_subsystem=SubsystemType.TEMPLATE,
+        payload={'request': 'create_template', 'category': category, 'concept': concept},
+        target_subsystems={SubsystemType.TEMPLATE},
+        requires_response=True,
+        priority=3,
+    )
+
+    template_id = 0
+    name = ""
+    cat = category
+    variable_count = 0
+    comp_min = 0.0
+    comp_max = 0.0
+    error = "Template subsystem did not respond"
+
+    responses = await synthesizer.emit_event(evt)
+    if responses:
+        for r in responses:
+            if r.subsystem == SubsystemType.TEMPLATE:
+                data = r.data or {}
+                t = data.get('template') or data  # allow either shape
+                template_id = int(t.get('template_id', 0) or 0)
+                name = str(t.get('name', "") or "")
+                cat = str(t.get('category', category) or category)
+                # variable elements could be a list or count
+                ve = t.get('variable_elements')
+                if isinstance(ve, list):
+                    variable_count = len(ve)
+                else:
+                    variable_count = int(t.get('variable_count', 0) or 0)
+                # complexity range could be pair or dict
+                cr = t.get('complexity_range') or {}
+                if isinstance(cr, (list, tuple)) and len(cr) == 2:
+                    comp_min = float(cr[0] or 0.0)
+                    comp_max = float(cr[1] or 0.0)
+                else:
+                    comp_min = float(cr.get('min', 0.0) if isinstance(cr, dict) else 0.0)
+                    comp_max = float(cr.get('max', 0.0) if isinstance(cr, dict) else 0.0)
+                error = ""
+
     return {
-        'template_id': template.template_id,
-        'name': template.name,
-        'category': template.category.value,
-        'variable_count': len(template.variable_elements),
-        'complexity_range': template.complexity_range
+        'template_id': template_id,
+        'name': name,
+        'category': cat,
+        'variable_count': variable_count,
+        'complexity_min': comp_min,
+        'complexity_max': comp_max,
+        'error': error,
     }
