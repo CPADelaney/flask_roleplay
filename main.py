@@ -99,7 +99,6 @@ from middleware.security import validate_input
 # Nyx integration
 from logic.nyx_enhancements_integration import initialize_nyx_memory_system
 from nyx.integrate import get_central_governance
-from logic.conflict_system.conflict_integration import register_enhanced_integration
 
 # DB connection helper
 from db.connection import (
