@@ -7,7 +7,7 @@ Integrated with ConflictSynthesizer as the central orchestrator
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,6 +47,38 @@ class VictoryCondition:
     progress: float
     is_achieved: bool
     achievement_impact: Dict[str, float]
+
+
+class AchievementDTO(TypedDict, total=False):
+    id: int
+    name: str
+    description: str
+    points: float
+
+class PartialVictoryDTO(TypedDict, total=False):
+    stakeholder_id: int
+    description: str
+    progress: float
+
+class CheckVictoryResponse(TypedDict):
+    victory_achieved: bool
+    achievements: List[AchievementDTO]
+    partial_victories: List[PartialVictoryDTO]
+    epilogue: str
+    conflict_continues: bool
+    error: str
+
+class VictoryPathDTO(TypedDict):
+    stakeholder: int
+    type: str
+    description: str
+    requirements: List[str]
+    current_progress: float
+
+class VictoryPathsResponse(TypedDict):
+    conflict_id: int
+    victory_paths: List[VictoryPathDTO]
+    error: str
 
 
 # ===============================================================================
@@ -822,126 +854,171 @@ class ConflictVictorySubsystem:
 @function_tool
 async def check_for_victory(
     ctx: RunContextWrapper,
-    conflict_id: int
-) -> Dict[str, Any]:
+    conflict_id: int,
+) -> CheckVictoryResponse:
     """Check if any victory conditions have been met"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Use synthesizer to coordinate check
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Get current conflict state from synthesizer
+
+    # Get current conflict state (optional for the VICTORY system to use)
     conflict_state = await synthesizer.get_conflict_state(conflict_id)
-    
-    # Send update event
+
+    # Ask VICTORY to evaluate
     event = SystemEvent(
-        event_id=f"check_victory_{conflict_id}",
+        event_id=f"check_victory_{conflict_id}_{datetime.now().timestamp()}",
         event_type=EventType.CONFLICT_UPDATED,
         source_subsystem=SubsystemType.FLOW,
-        payload={
-            'conflict_id': conflict_id,
-            'state': conflict_state
-        },
+        payload={'conflict_id': conflict_id, 'state': conflict_state},
         target_subsystems={SubsystemType.VICTORY},
-        requires_response=True
+        requires_response=True,
+        priority=3,
     )
-    
+
+    achievements: List[AchievementDTO] = []
+    epilogue = ""
+    victory_achieved = False
+
     responses = await synthesizer.emit_event(event)
-    
-    for response in responses:
-        if response.subsystem == SubsystemType.VICTORY:
-            achievements = response.data.get('achievements', [])
-            
-            if achievements:
-                # Get epilogue
-                victory_subsystem = synthesizer._subsystems.get(SubsystemType.VICTORY)
-                epilogue = await victory_subsystem.generate_conflict_epilogue(
-                    conflict_id,
-                    {'achievements': achievements}
-                )
-                
-                return {
-                    'victory_achieved': True,
-                    'achievements': achievements,
-                    'epilogue': epilogue
-                }
-    
-    # Check for partial victories
-    victory_subsystem = synthesizer._subsystems.get(SubsystemType.VICTORY)
-    if victory_subsystem:
-        partial = await victory_subsystem.evaluate_partial_victories(conflict_id)
-        
-        return {
-            'victory_achieved': False,
-            'partial_victories': partial,
-            'conflict_continues': True
-        }
-    
+    if responses:
+        for r in responses:
+            if r.subsystem == SubsystemType.VICTORY:
+                data: Dict = r.data or {}
+                raw_achs = data.get('achievements') or []
+                # Coerce whatever shape into our DTO
+                for a in raw_achs:
+                    achievements.append({
+                        'id': int(a.get('id', 0) or 0),
+                        'name': str(a.get('name', "")),
+                        'description': str(a.get('description', "")),
+                        'points': float(a.get('points', 0.0) or 0.0),
+                    })
+                victory_achieved = bool(data.get('victory_achieved', bool(achievements)))
+
+    # If victory: request epilogue from VICTORY via event
+    if victory_achieved:
+        ep_event = SystemEvent(
+            event_id=f"epilogue_{conflict_id}_{datetime.now().timestamp()}",
+            event_type=EventType.CONFLICT_RESOLVED,
+            source_subsystem=SubsystemType.VICTORY,
+            payload={'conflict_id': conflict_id, 'achievements': achievements, 'request': 'generate_epilogue'},
+            target_subsystems={SubsystemType.VICTORY},
+            requires_response=True,
+            priority=3,
+        )
+        ep_responses = await synthesizer.emit_event(ep_event)
+        if ep_responses:
+            for r in ep_responses:
+                if r.subsystem == SubsystemType.VICTORY:
+                    epilogue = str((r.data or {}).get('epilogue', ""))
+
+    # If not victory: ask for partial victories
+    partial_victories: List[PartialVictoryDTO] = []
+    if not victory_achieved:
+        pv_event = SystemEvent(
+            event_id=f"partial_victories_{conflict_id}_{datetime.now().timestamp()}",
+            event_type=EventType.CONFLICT_UPDATED,
+            source_subsystem=SubsystemType.FLOW,
+            payload={'conflict_id': conflict_id, 'request': 'evaluate_partial_victories'},
+            target_subsystems={SubsystemType.VICTORY},
+            requires_response=True,
+            priority=4,
+        )
+        pv_responses = await synthesizer.emit_event(pv_event)
+        if pv_responses:
+            for r in pv_responses:
+                if r.subsystem == SubsystemType.VICTORY:
+                    for pv in (r.data or {}).get('partial_victories', []):
+                        partial_victories.append({
+                            'stakeholder_id': int(pv.get('stakeholder_id', 0) or 0),
+                            'description': str(pv.get('description', "")),
+                            'progress': float(pv.get('progress', 0.0) or 0.0),
+                        })
+
     return {
-        'victory_achieved': False,
-        'conflict_continues': True
+        'victory_achieved': victory_achieved,
+        'achievements': achievements,
+        'partial_victories': partial_victories,
+        'epilogue': epilogue,
+        'conflict_continues': not victory_achieved,
+        'error': "",
     }
 
 
 @function_tool
 async def generate_victory_paths(
     ctx: RunContextWrapper,
-    conflict_id: int
-) -> Dict[str, Any]:
+    conflict_id: int,
+) -> VictoryPathsResponse:
     """Generate possible victory paths for a conflict"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    victory_subsystem = synthesizer._subsystems.get(SubsystemType.VICTORY)
-    if not victory_subsystem:
-        return {'error': 'Victory subsystem not available'}
-    
-    # Get conflict and stakeholders
+
+    # Load conflict + stakeholders (keep shapes simple)
     async with get_db_connection_context() as conn:
-        conflict = await conn.fetchrow("""
-            SELECT * FROM Conflicts WHERE conflict_id = $1
-        """, conflict_id)
-        
-        stakeholders = await conn.fetch("""
-            SELECT * FROM conflict_stakeholders WHERE conflict_id = $1
-        """, conflict_id)
-    
+        conflict = await conn.fetchrow(
+            "SELECT conflict_id, conflict_type FROM Conflicts WHERE conflict_id = $1",
+            conflict_id
+        )
+        stakeholders = await conn.fetch(
+            "SELECT stakeholder_id, faction FROM conflict_stakeholders WHERE conflict_id = $1",
+            conflict_id
+        )
+
     if not conflict:
-        return {'error': 'Conflict not found'}
-    
-    # Generate victory conditions
+        return {'conflict_id': conflict_id, 'victory_paths': [], 'error': "Conflict not found"}
+
     stakeholder_data = [
-        {
-            'id': s['stakeholder_id'],
-            'role': s.get('faction', 'participant')
-        }
+        {'id': int(s['stakeholder_id']), 'role': str(s.get('faction') or 'participant')}
         for s in stakeholders
     ]
-    
-    conditions = await victory_subsystem.generate_victory_conditions(
-        conflict_id,
-        conflict['conflict_type'],
-        stakeholder_data
+
+    # Ask VICTORY to generate victory conditions
+    req = SystemEvent(
+        event_id=f"victory_paths_{conflict_id}_{datetime.now().timestamp()}",
+        event_type=EventType.STATE_SYNC,
+        source_subsystem=SubsystemType.VICTORY,
+        payload={
+            'request': 'generate_victory_conditions',
+            'conflict_id': conflict_id,
+            'conflict_type': str(conflict['conflict_type']),
+            'stakeholders': stakeholder_data,
+        },
+        target_subsystems={SubsystemType.VICTORY},
+        requires_response=True,
+        priority=4,
     )
-    
-    return {
-        'conflict_id': conflict_id,
-        'victory_paths': [
-            {
-                'stakeholder': c.stakeholder_id,
-                'type': c.victory_type.value,
-                'description': c.description,
-                'requirements': c.requirements,
-                'current_progress': c.progress
-            }
-            for c in conditions
-        ]
-    }
+
+    paths: List[VictoryPathDTO] = []
+    responses = await synthesizer.emit_event(req)
+    if responses:
+        for r in responses:
+            if r.subsystem == SubsystemType.VICTORY:
+                for c in (r.data or {}).get('conditions', []):
+                    # Coerce into our DTO
+                    paths.append({
+                        'stakeholder': int(
+                            c.get('stakeholder_id') or c.get('stakeholder') or 0
+                        ),
+                        'type': str(
+                            (c.get('victory_type') or c.get('type') or "")
+                            if not isinstance(c.get('victory_type'), dict)
+                            else c['victory_type'].get('value', "")
+                        ),
+                        'description': str(c.get('description', "")),
+                        'requirements': [str(x) for x in (c.get('requirements') or [])],
+                        'current_progress': float(c.get('progress', 0.0) or 0.0),
+                    })
+
+    return {'conflict_id': conflict_id, 'victory_paths': paths, 'error': ""}
