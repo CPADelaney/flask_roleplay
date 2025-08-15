@@ -240,33 +240,31 @@ class AgentGovernanceMixin:
             # Special case: Conflict system agents
             if agent_type == AgentType.CONFLICT_ANALYST:
                 try:
-                    # Import conflict system integration
-                    from logic.conflict_system.conflict_integration import (
-                        ConflictSystemIntegration,
-                        register_enhanced_integration
+                    # Import the new conflict synthesizer system
+                    from logic.conflict_system.conflict_synthesizer import (
+                        ConflictSynthesizer,
+                        get_synthesizer
                     )
                     
-                    # Create and register conflict system
-                    logger.info(f"[discover] initializing conflict system integration")
+                    # Create and register conflict synthesizer
+                    logger.info(f"[discover] initializing conflict synthesizer")
                     
-                    # Use the static registration method
-                    result = await register_enhanced_integration(self.user_id, self.conversation_id)
+                    # Get or create the synthesizer instance
+                    conflict_synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
                     
-                    if result.get("success"):
-                        conflict_system = result.get("integration")
-                        if conflict_system:
-                            agent_id = f"conflict_system_{self.conversation_id}"
-                            # Store as string value
-                            agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
-                            registrations.append((agent_type_str, agent_id))
-                            logger.info(f"[discover] queued conflict_system → {agent_id}")
+                    if conflict_synthesizer:
+                        agent_id = f"conflict_synthesizer_{self.conversation_id}"
+                        # Store as string value
+                        agent_type_str = agent_type.value if hasattr(agent_type, 'value') else str(agent_type)
+                        registrations.append((agent_type_str, agent_id))
+                        logger.info(f"[discover] queued conflict_synthesizer → {agent_id}")
                     else:
-                        logger.error(f"[discover] Failed to register conflict system: {result.get('message', 'Unknown error')}")
+                        logger.error(f"[discover] Failed to create conflict synthesizer")
                         
                 except ImportError as e:
-                    logger.error(f"[discover] Failed to import conflict system: {e}")
+                    logger.error(f"[discover] Failed to import conflict synthesizer: {e}")
                 except Exception as e:
-                    logger.error(f"[discover] Failed to initialize conflict system: {e}")
+                    logger.error(f"[discover] Failed to initialize conflict synthesizer: {e}")
                 continue
         
         # 2. Specialized open-world agents (from story_agent.specialized_agents)
