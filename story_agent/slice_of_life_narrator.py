@@ -540,6 +540,22 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
         location="current_location",
         participants=[]
     )
+    
+    # NEW: Check if conflicts should influence the scene
+    conflict_influences = []
+    if context.active_conflicts:
+        for conflict in context.active_conflicts[:2]:  # Check top 2 conflicts
+            if isinstance(conflict, dict):
+                # Check if scene participants are in conflict
+                conflict_participants = conflict.get('participants', [])
+                scene_participants = scene.participants
+                
+                if any(p in conflict_participants for p in scene_participants):
+                    conflict_influences.append({
+                        'type': conflict.get('type', 'unknown'),
+                        'intensity': conflict.get('intensity', 0.5),
+                        'description': conflict.get('description', '')
+                    })
 
     # Governance (safe to no-op if nyx_governance is None)
     governance_approved = True
@@ -549,7 +565,11 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
             approval = await context.nyx_governance.check_permission(
                 agent_type="narrator",
                 action_type="narrate_scene",
-                context={"scene": scene.model_dump(), "scene_type": payload.scene_type}
+                context={
+                    "scene": scene.model_dump(), 
+                    "scene_type": payload.scene_type,
+                    "has_conflicts": len(conflict_influences) > 0  # NEW
+                }
             )
             governance_approved = approval.get("approved", True)
             governance_notes = approval.get("notes")
@@ -566,10 +586,20 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
 
     # Build narration pieces
     scene_desc = await _generate_scene_description(context, scene, world_state, relationship_contexts)
+    
+    # NEW: Add conflict manifestations to description if present
+    if context.conflict_manifestations:
+        scene_desc += f" {context.conflict_manifestations[0]}"
+    
     atmosphere = await _generate_atmosphere(context, scene, world_state)
     tone = _select_narrative_tone(scene, world_state, relationship_contexts)
     focus = _select_scene_focus(scene, payload.player_action)
+    
+    # NEW: Generate conflict-aware power hints
     power_hints = await _generate_power_hints(context, scene, relationship_contexts)
+    if conflict_influences:
+        power_hints.append("Unresolved tensions simmer beneath the surface")
+    
     sensory = await _generate_sensory_details(context, scene, world_state)
 
     npc_obs = []
@@ -580,7 +610,9 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
     internal = None
     if hasattr(world_state, 'world_tension'):
         tension = world_state.world_tension
-        if getattr(tension, 'power_tension', 0) > 0.6 and hasattr(world_state, 'relationship_dynamics'):
+        # NEW: Consider conflict tension too
+        if (getattr(tension, 'power_tension', 0) > 0.6 or 
+            getattr(tension, 'unresolved_conflicts', 0) > 0) and hasattr(world_state, 'relationship_dynamics'):
             internal = await _generate_internal_monologue(context, scene, world_state.relationship_dynamics, relationship_contexts)
 
     emergent_elements = await _identify_emergent_elements(context, scene, relationship_contexts)
@@ -618,17 +650,17 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
                 conversation_id=context.conversation_id,
                 content=scene_desc,
                 memory_type="scene",
-                importance=0.7,
-                tags=["scene", scene.event_type.value],
+                importance=0.7 if not conflict_influences else 0.8,  # Higher importance if conflicts
+                tags=["scene", scene.event_type.value] + (["conflict_present"] if conflict_influences else []),
                 metadata={
                     "scene_type": scene.event_type.value,
                     "location": scene.location,
-                    "participants": scene.participants
+                    "participants": scene.participants,
+                    "conflicts_active": len(conflict_influences) > 0
                 }
             )
         )
 
-    # IMPORTANT: Return JSON string, not the model!
     return narration.model_dump_json()
     
 @function_tool
@@ -1732,13 +1764,28 @@ class SliceOfLifeNarrator:
         narration = result.data if hasattr(result, 'data') else result  # should be SliceOfLifeNarration
         return narration.scene_description
     
-    @track_performance("process_player_input")
     async def process_player_input(self, user_input: str) -> Dict[str, Any]:
         """Process player input and generate appropriate narration with full context"""
         await self.initialize()
         
         # Refresh context with player input
         await self.context.refresh_context(user_input)
+        
+        # NEW: Check if input triggers or affects conflicts
+        conflict_triggered = None
+        if self.context.conflict_synthesizer:
+            # Check if this input should trigger a conflict
+            scene_context = {
+                "scene_type": "player_input",
+                "player_action": user_input,
+                "participants": [npc['npc_id'] for npc in self.context.current_world_state.active_npcs[:3]]
+                if self.context.current_world_state else []
+            }
+            
+            conflict_result = await self.context.conflict_synthesizer.process_scene(scene_context)
+            
+            if conflict_result.get('conflicts_detected'):
+                conflict_triggered = conflict_result
         
         # Get world state and determine affected NPCs
         world_state = await self.context.world_director.get_world_state()
@@ -1781,7 +1828,8 @@ class SliceOfLifeNarrator:
                     "narrative": action_result.get("acknowledgment", ""),
                     "world_reaction": action_result.get("world_reaction", ""),
                     "dynamic_shift": action_result.get("dynamic_shift"),
-                    "governance_approved": action_result.get("governance_approved", True)
+                    "governance_approved": action_result.get("governance_approved", True),
+                    "conflict_triggered": conflict_triggered  # NEW
                 }
         
         # Process as scene action
@@ -1813,9 +1861,9 @@ class SliceOfLifeNarrator:
             "npc_reactions": action_result.get("npc_reactions", []),
             "dynamic_shift": action_result.get("dynamic_shift"),
             "governance_approved": action_result.get("governance_approved", True),
-            "system_triggers": narration.system_triggers if hasattr(narration, 'system_triggers') else []
+            "system_triggers": narration.system_triggers if hasattr(narration, 'system_triggers') else [],
+            "conflict_triggered": conflict_triggered  # NEW
         }
-    
     async def _process_player_action(self, action: str, world_state: Any, affected_npcs: List[int]) -> Dict[str, Any]:
         """Process player action for system consequences"""
         context = self.context
@@ -1914,6 +1962,15 @@ class SliceOfLifeNarrator:
         world_state = await self.context.world_director.get_world_state()
         npcs = npcs or []
         
+        # NEW: Check for conflict involvement
+        scene_conflicts = []
+        if self.context.active_conflicts:
+            for conflict in self.context.active_conflicts:
+                if isinstance(conflict, dict):
+                    conflict_npcs = conflict.get('participants', [])
+                    if any(npc in conflict_npcs for npc in npcs):
+                        scene_conflicts.append(conflict)
+        
         # Create scene event
         scene = SliceOfLifeEvent(
             event_type=ActivityType.ROUTINE if scene_type == "routine" else ActivityType.SOCIAL,
@@ -1960,7 +2017,10 @@ class SliceOfLifeNarrator:
         
         # Check for power dynamics
         power_moments = []
-        if world_state.world_tension.power_tension > 0.5 and npcs:
+        # NEW: Conflicts increase chance of power moments
+        power_chance = 0.5 if not scene_conflicts else 0.7
+        
+        if world_state.world_tension.power_tension > power_chance and npcs:
             for npc_id in npcs[:1]:  # One power moment per scene max
                 exchange = PowerExchange(
                     initiator_npc_id=npc_id,
@@ -1988,7 +2048,8 @@ class SliceOfLifeNarrator:
             "narration": narration,
             "dialogues": dialogues,
             "power_moments": power_moments,
-            "world_mood": world_state.world_mood.value if hasattr(world_state.world_mood, 'value') else str(world_state.world_mood)
+            "world_mood": world_state.world_mood.value if hasattr(world_state.world_mood, 'value') else str(world_state.world_mood),
+            "active_conflicts": scene_conflicts  # NEW
         }
     
     async def generate_emergent_narrative(self) -> Dict[str, Any]:
