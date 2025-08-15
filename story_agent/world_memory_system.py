@@ -14,7 +14,8 @@ from collections import defaultdict
 
 from db.connection import get_db_connection_context
 from context.memory_manager import get_memory_manager
-from logic.time_cycle import get_game_iso_string, get_current_time
+from logic.time_cycle import get_current_time
+from logic.game_time_helper import get_game_iso_string
 
 logger = logging.getLogger(__name__)
 
