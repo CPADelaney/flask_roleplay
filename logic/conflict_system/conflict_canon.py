@@ -1,7 +1,7 @@
 # logic/conflict_system/conflict_canon.py
 """
-Conflict Canon System with LLM-generated lore integration
-Integrated with ConflictSynthesizer as the central orchestrator
+Conflict Canon System integrated with Core Lore Canon
+Manages how conflicts become part of world lore through the unified canon system.
 """
 
 import logging
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 
+# Core canon system imports
 from lore.core.canon import (
     log_canonical_event,
     ensure_canonical_context,
@@ -21,6 +22,7 @@ from lore.core.canon import (
     update_entity_with_governance
 )
 from lore.core.context import CanonicalContext
+from embedding.vector_store import generate_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -56,18 +58,19 @@ class CanonicalEvent:
 
 
 # ===============================================================================
-# CONFLICT CANON SUBSYSTEM (Integrated with Synthesizer)
+# CONFLICT CANON SUBSYSTEM (Integrated with Core Canon)
 # ===============================================================================
 
 class ConflictCanonSubsystem:
     """
-    Canon subsystem that integrates with ConflictSynthesizer.
-    Manages how conflicts become part of world lore.
+    Canon subsystem integrated with Core Lore Canon System.
+    Manages how conflicts become part of world lore through the unified canon.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self.ctx = CanonicalContext(user_id, conversation_id)
         
         # Lazy-loaded agents
         self._lore_integrator = None
@@ -100,7 +103,6 @@ class ConflictCanonSubsystem:
     @property
     def dependencies(self) -> Set:
         """Return other subsystems this depends on"""
-        # Canon doesn't depend on others but others depend on it
         return set()
     
     @property
@@ -119,11 +121,12 @@ class ConflictCanonSubsystem:
         import weakref
         self.synthesizer = weakref.ref(synthesizer)
         
-        # Check for existing canonical events
+        # Check for existing canonical events in the unified system
         async with get_db_connection_context() as conn:
             count = await conn.fetchval("""
-                SELECT COUNT(*) FROM canonical_events
+                SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
+                AND 'conflict' = ANY(tags)
             """, self.user_id, self.conversation_id)
             
             if count == 0:
@@ -220,21 +223,23 @@ class ConflictCanonSubsystem:
     async def health_check(self) -> Dict[str, Any]:
         """Return health status of the subsystem"""
         async with get_db_connection_context() as conn:
-            # Check canonical events
+            # Check canonical events in unified system
             canon_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM canonical_events
+                SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
+                AND 'conflict' = ANY(tags)
             """, self.user_id, self.conversation_id)
             
             # Check for contradictions
             contradictions = await conn.fetchval("""
-                SELECT COUNT(*) FROM canonical_events ce1
-                JOIN canonical_events ce2 ON ce1.user_id = ce2.user_id
-                WHERE ce1.user_id = $1 AND ce1.conversation_id = $2
-                AND ce1.event_id < ce2.event_id
-                AND ce1.creates_precedent = true
-                AND ce2.creates_precedent = true
-                AND ce1.event_type = ce2.event_type
+                SELECT COUNT(*) FROM (
+                    SELECT event_text, COUNT(*) as cnt
+                    FROM CanonicalEvents
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND 'precedent' = ANY(tags)
+                    GROUP BY event_text
+                    HAVING COUNT(*) > 1
+                ) as duplicates
             """, self.user_id, self.conversation_id)
         
         return {
@@ -247,43 +252,49 @@ class ConflictCanonSubsystem:
     async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
         """Get canon-related data for a specific conflict"""
         async with get_db_connection_context() as conn:
+            # Get canonical events related to this conflict
             canonical = await conn.fetch("""
-                SELECT * FROM canonical_events 
-                WHERE conflict_id = $1
-            """, conflict_id)
+                SELECT * FROM CanonicalEvents 
+                WHERE user_id = $1 AND conversation_id = $2
+                AND $3 = ANY(tags)
+                ORDER BY significance DESC
+            """, self.user_id, self.conversation_id, f"conflict_id_{conflict_id}")
             
+            # Get precedents
             precedents = await conn.fetch("""
-                SELECT * FROM canonical_events
-                WHERE creates_precedent = true
-                AND event_id IN (
-                    SELECT event_id FROM canonical_events
-                    WHERE conflict_id = $1
-                )
-            """, conflict_id)
+                SELECT * FROM CanonicalEvents
+                WHERE user_id = $1 AND conversation_id = $2
+                AND 'precedent' = ANY(tags)
+                AND significance >= 7
+                ORDER BY significance DESC
+                LIMIT 5
+            """, self.user_id, self.conversation_id)
         
         return {
             'canonical_events': [dict(c) for c in canonical],
-            'precedents_set': [dict(p) for p in precedents]
+            'precedents_available': [dict(p) for p in precedents]
         }
     
     async def get_state(self) -> Dict[str, Any]:
         """Get current state of canon system"""
         async with get_db_connection_context() as conn:
             total = await conn.fetchval("""
-                SELECT COUNT(*) FROM canonical_events
+                SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
+                AND 'conflict' = ANY(tags)
             """, self.user_id, self.conversation_id)
             
             precedents = await conn.fetchval("""
-                SELECT COUNT(*) FROM canonical_events
+                SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND creates_precedent = true
+                AND 'precedent' = ANY(tags)
             """, self.user_id, self.conversation_id)
             
             recent = await conn.fetch("""
-                SELECT name, significance FROM canonical_events
+                SELECT event_text, significance FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                ORDER BY created_at DESC
+                AND 'conflict' = ANY(tags)
+                ORDER BY timestamp DESC
                 LIMIT 3
             """, self.user_id, self.conversation_id)
         
@@ -443,7 +454,6 @@ class ConflictCanonSubsystem:
         
         Conflict: {conflict['conflict_name']}
         Type: {conflict['conflict_type']}
-        Intensity: {conflict['intensity']}
         Resolution: {json.dumps(resolution_data)}
         Stakeholders: {len(stakeholders)}
         
@@ -488,9 +498,6 @@ class ConflictCanonSubsystem:
     ) -> CanonicalEvent:
         """Create a new canonical event using the core canon system"""
         
-        # Convert to canonical context
-        ctx = CanonicalContext(self.user_id, self.conversation_id)
-        
         # Generate canonical description
         prompt = f"""
         Create a canonical description for this event:
@@ -527,25 +534,45 @@ class ConflictCanonSubsystem:
         async with get_db_connection_context() as conn:
             # Use the core canon system to log the event
             await log_canonical_event(
-                ctx, conn,
+                self.ctx, conn,
                 f"{data['canonical_name']}: {data['canonical_description']}",
                 tags=[
-                    'conflict_resolution',
+                    'conflict',
+                    'resolution',
                     event_type.value,
                     conflict['conflict_type'],
+                    f"conflict_id_{conflict_id}",
                     'precedent' if data['creates_precedent'] else 'event'
                 ],
                 significance=int(significance * 10)  # Convert 0-1 to 1-10 scale
             )
             
-            # Store additional conflict-specific data in a separate table if needed
-            # But the main canonical event goes through the core system
+            # Store additional conflict-specific data
+            # First ensure the table exists
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS conflict_canon_details (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    conflict_id INTEGER,
+                    event_type TEXT,
+                    cultural_impact JSONB,
+                    creates_precedent BOOLEAN,
+                    legacy TEXT,
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                )
+            """)
+            
             event_id = await conn.fetchval("""
                 INSERT INTO conflict_canon_details
-                (conflict_id, event_type, cultural_impact, creates_precedent, legacy, metadata)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                (user_id, conversation_id, conflict_id, event_type, cultural_impact, 
+                 creates_precedent, legacy, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING id
-            """, conflict_id, event_type.value, 
+            """, self.user_id, self.conversation_id, conflict_id, event_type.value, 
             json.dumps(data['cultural_impact']), data['creates_precedent'], 
             legacy, json.dumps({'name': data['canonical_name']}))
         
@@ -598,20 +625,17 @@ class ConflictCanonSubsystem:
     ) -> Dict[str, Any]:
         """Check if a conflict aligns with established lore using core canon"""
         
-        ctx = CanonicalContext(self.user_id, self.conversation_id)
-        
         async with get_db_connection_context() as conn:
             # Use the core canon system's canonical events table
             canonical_events = await conn.fetch("""
                 SELECT * FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND significance >= 7  -- High significance precedents
+                AND significance >= 7
                 ORDER BY significance DESC, timestamp DESC
                 LIMIT 10
             """, self.user_id, self.conversation_id)
             
             # Check for related conflicts using semantic search
-            from embedding.vector_store import generate_embedding
             conflict_embedding = await generate_embedding(
                 f"{conflict_type} {json.dumps(conflict_context)}"
             )
@@ -626,6 +650,15 @@ class ConflictCanonSubsystem:
                 ORDER BY embedding <=> $1
                 LIMIT 5
             """, conflict_embedding, self.user_id, self.conversation_id)
+            
+            # Get active traditions from core canon
+            traditions = await conn.fetch("""
+                SELECT event_text, tags FROM CanonicalEvents
+                WHERE user_id = $1 AND conversation_id = $2
+                AND 'tradition' = ANY(tags)
+                ORDER BY timestamp DESC
+                LIMIT 5
+            """, self.user_id, self.conversation_id)
         
         prompt = f"""
         Check if this conflict aligns with established lore:
@@ -634,9 +667,11 @@ class ConflictCanonSubsystem:
         Context: {json.dumps(conflict_context)}
         Related Canon: {json.dumps([dict(e) for e in similar_events])}
         High-Significance Events: {json.dumps([dict(e) for e in canonical_events[:3]])}
+        Active Traditions: {json.dumps([dict(t) for t in traditions])}
         
         Analyze:
         - Does this respect established precedents?
+        - Does it honor cultural traditions?
         - Are there lore conflicts?
         - How can it build on existing canon?
         
@@ -645,6 +680,7 @@ class ConflictCanonSubsystem:
             "is_compliant": true/false,
             "conflicts": ["any lore conflicts"],
             "precedents_referenced": ["relevant precedents"],
+            "traditions_involved": ["relevant traditions"],
             "suggestions": ["how to better align with lore"],
             "enrichment_opportunities": ["ways to deepen lore connection"]
         }}
@@ -660,21 +696,36 @@ class ConflictCanonSubsystem:
     ) -> List[str]:
         """Generate how NPCs might reference a canonical event"""
         
-        # Get event details
+        # Get event details from unified canon
         async with get_db_connection_context() as conn:
             event = await conn.fetchrow("""
-                SELECT * FROM canonical_events WHERE event_id = $1
-            """, event_id)
+                SELECT * FROM CanonicalEvents 
+                WHERE user_id = $1 AND conversation_id = $2
+                AND id = $3
+            """, self.user_id, self.conversation_id, event_id)
             
             if not event:
-                return []
+                # Try conflict_canon_details as fallback
+                details = await conn.fetchrow("""
+                    SELECT * FROM conflict_canon_details WHERE id = $1
+                """, event_id)
+                
+                if not details:
+                    return []
+                    
+                # Use details to generate references
+                event = {
+                    'event_text': details.get('metadata', {}).get('name', 'Unknown Event'),
+                    'tags': ['conflict', details.get('event_type', '')],
+                    'significance': 5
+                }
         
         prompt = f"""
         Generate NPC references to this canonical event:
         
-        Event: {event['name']}
-        Description: {event['description']}
-        Legacy: {event['legacy']}
+        Event: {event['event_text']}
+        Tags: {event.get('tags', [])}
+        Significance: {event.get('significance', 5)}
         Context: {context}
         
         Create 5 different ways NPCs might reference this:
@@ -704,29 +755,74 @@ class ConflictCanonSubsystem:
     # ========== Helper Methods ==========
     
     async def _create_initial_lore(self):
-        """Create initial canonical events for world building"""
-        # This would create some founding myths and precedents
-        pass
-    
-    async def _create_initial_lore(self):
         """Create initial canonical events using core canon system"""
-        ctx = CanonicalContext(self.user_id, self.conversation_id)
         
         async with get_db_connection_context() as conn:
             # Create founding precedents using the core canon system
             founding_events = [
-                ("The First Accord", "Ancient agreement establishing conflict resolution through dialogue", 10),
-                ("The Great Schism", "Historical conflict that shaped modern power structures", 9),
-                ("The Reconciliation", "Legendary peace treaty that created lasting traditions", 8)
+                ("The First Accord", "Ancient agreement establishing conflict resolution through dialogue and mutual respect", 10),
+                ("The Great Schism", "Historical conflict that shaped modern power structures and social hierarchies", 9),
+                ("The Reconciliation", "Legendary peace treaty that created lasting traditions of forgiveness", 8),
+                ("The Breaking of Chains", "Revolutionary moment when old oppressive systems were overthrown", 9),
+                ("The Council of Equals", "Establishment of fair representation in conflict resolution", 7)
             ]
             
             for name, description, significance in founding_events:
                 await log_canonical_event(
-                    ctx, conn,
+                    self.ctx, conn,
                     f"{name}: {description}",
-                    tags=['founding_myth', 'precedent', 'historical'],
+                    tags=['founding_myth', 'precedent', 'historical', 'conflict'],
                     significance=significance
                 )
+    
+    async def _assess_conflict_significance(self, conflict_id: int) -> float:
+        """Assess how significant a conflict is for canon"""
+        async with get_db_connection_context() as conn:
+            conflict = await conn.fetchrow("""
+                SELECT * FROM Conflicts WHERE conflict_id = $1
+            """, conflict_id)
+            
+            stakeholders = await conn.fetchval("""
+                SELECT COUNT(*) FROM conflict_stakeholders 
+                WHERE conflict_id = $1
+            """, conflict_id)
+        
+        if not conflict:
+            return 0.0
+        
+        # Calculate significance
+        base_significance = 0.3
+        
+        # Type-based significance
+        type_scores = {
+            'political': 0.3,
+            'faction': 0.25,
+            'power': 0.25,
+            'social': 0.15,
+            'personal': 0.1,
+            'background': 0.05
+        }
+        base_significance += type_scores.get(conflict.get('conflict_type', ''), 0.1)
+        
+        # Multiple stakeholders add significance
+        base_significance += min(0.2, stakeholders * 0.05)
+        
+        # Progress/resolution adds significance
+        progress = conflict.get('progress', 0)
+        if progress >= 80:
+            base_significance += 0.1
+        
+        # Check for canonical references
+        canonical_refs = await conn.fetchval("""
+            SELECT COUNT(*) FROM CanonicalEvents
+            WHERE user_id = $1 AND conversation_id = $2
+            AND $3 = ANY(tags)
+        """, self.user_id, self.conversation_id, f"conflict_id_{conflict_id}")
+        
+        if canonical_refs > 0:
+            base_significance += 0.1
+        
+        return min(1.0, base_significance)
 
 
 # ===============================================================================
@@ -816,23 +912,82 @@ async def get_canonical_precedents(
     conversation_id = ctx.data.get('conversation_id')
     
     async with get_db_connection_context() as conn:
+        # Search in unified CanonicalEvents table
         precedents = await conn.fetch("""
-            SELECT ce.*, c.conflict_type
-            FROM canonical_events ce
-            LEFT JOIN Conflicts c ON ce.conflict_id = c.conflict_id
-            WHERE ce.user_id = $1 AND ce.conversation_id = $2
-            AND ce.creates_precedent = true
-            AND (ce.event_type LIKE $3 OR (c.conflict_type IS NOT NULL AND c.conflict_type LIKE $3))
-            ORDER BY ce.significance DESC
+            SELECT event_text, tags, significance, timestamp
+            FROM CanonicalEvents
+            WHERE user_id = $1 AND conversation_id = $2
+            AND 'precedent' = ANY(tags)
+            AND (
+                $3 = ANY(tags) OR
+                event_text ILIKE $4
+            )
+            ORDER BY significance DESC, timestamp DESC
             LIMIT 5
-        """, user_id, conversation_id, f"%{situation_type}%")
+        """, user_id, conversation_id, situation_type, f"%{situation_type}%")
     
     return [
         {
-            'event': p['name'],
-            'description': p['description'],
-            'precedent': p['legacy'],
-            'significance': p['significance']
+            'event': p['event_text'],
+            'tags': p['tags'],
+            'significance': p['significance'],
+            'established': p['timestamp'].isoformat() if p['timestamp'] else 'Unknown'
         }
         for p in precedents
     ]
+
+
+@function_tool
+async def generate_conflict_mythology(
+    ctx: RunContextWrapper,
+    conflict_id: int
+) -> str:
+    """Generate how a conflict has entered mythology"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    # Get canon subsystem
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
+    
+    canon_subsystem = synthesizer._subsystems.get(SubsystemType.CANON)
+    if not canon_subsystem:
+        return "The conflict has not yet entered mythology."
+    
+    # Get conflict details
+    async with get_db_connection_context() as conn:
+        conflict = await conn.fetchrow("""
+            SELECT * FROM Conflicts WHERE conflict_id = $1
+        """, conflict_id)
+        
+        # Get canonical events for this conflict
+        canonical_events = await conn.fetch("""
+            SELECT event_text, significance FROM CanonicalEvents
+            WHERE user_id = $1 AND conversation_id = $2
+            AND $3 = ANY(tags)
+            ORDER BY significance DESC
+        """, user_id, conversation_id, f"conflict_id_{conflict_id}")
+    
+    if not canonical_events:
+        return "This conflict has not yet become part of the canonical lore."
+    
+    prompt = f"""
+    Generate the mythological interpretation of this conflict:
+    
+    Conflict: {conflict['conflict_name'] if conflict else f'Conflict {conflict_id}'}
+    Type: {conflict['conflict_type'] if conflict else 'Unknown'}
+    Canonical Events: {json.dumps([dict(e) for e in canonical_events])}
+    
+    Write 2-3 paragraphs about how this conflict has entered mythology.
+    Include:
+    - How common people tell the story
+    - What lessons or morals are drawn
+    - How it has been embellished over time
+    - What symbols or metaphors represent it
+    
+    Make it feel like authentic folklore.
+    """
+    
+    response = await Runner.run(canon_subsystem.cultural_interpreter, prompt)
+    return response.output
