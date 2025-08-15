@@ -21,9 +21,6 @@ from .data_access import (
     LoreKnowledgeAccess
 )
 
-# Import memory system
-from memory.wrapper import MemorySystem
-
 # Import Nyx governance
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
@@ -567,6 +564,8 @@ class NPCLoreIntegration(BaseIntegration):
             npc_id: ID of the NPC
             knowledge_granted: Dictionary of granted knowledge
         """
+        # Import memory system
+        from memory.wrapper import MemorySystem
         # Get memory system for this NPC
         memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
         
