@@ -10,8 +10,6 @@ import logging
 from agents import Agent, function_tool, Runner, trace, ModelSettings
 from agents.run import RunConfig
 
-from logic.game_time_helper import get_game_timestamp, get_game_datetime
-
 @dataclass
 class CacheAnalytics:
     """Analytics data for cache performance."""
@@ -46,6 +44,7 @@ class CacheItem:
 
     async def initialize_timestamps(self):
         """Initialize timestamps using game time."""
+        from logic.game_time_helper import get_game_timestamp, get_game_datetime
         dt = await get_game_datetime(self.user_id, self.conversation_id)
         ts = dt.timestamp()
         self.last_access_time = ts
@@ -54,6 +53,7 @@ class CacheItem:
 
     async def access(self):
         """Record an access to this item."""
+        from logic.game_time_helper import get_game_timestamp, get_game_datetime
         self.access_count += 1
         self.last_access_time = await get_game_timestamp(self.user_id, self.conversation_id)
     
@@ -94,6 +94,7 @@ class LoreCache:
     
     async def get(self, namespace, key, user_id=None, conversation_id=None):
         """Get an item from the cache with async support and analytics."""
+        from logic.game_time_helper import get_game_timestamp, get_game_datetime
         uid = user_id or 0
         cid = conversation_id or 0
         start_time = await get_game_timestamp(uid, cid)
@@ -131,6 +132,7 @@ class LoreCache:
     
     async def set(self, namespace, key, value, ttl=None, user_id=None, conversation_id=None, priority=0):
         """Set an item in the cache with async support, priority, and size tracking."""
+        from logic.game_time_helper import get_game_timestamp, get_game_datetime
         full_key = self._create_key(namespace, key, user_id, conversation_id)
         uid = user_id or 0
         cid = conversation_id or 0
@@ -216,6 +218,7 @@ class LoreCache:
         Evict items based on priority, expiry, and access patterns.
         This is a more sophisticated eviction strategy than basic LRU.
         """
+        from logic.game_time_helper import get_game_timestamp, get_game_datetime
         # First, remove any expired items
         current_times: Dict[str, float] = {}
         expired_keys = []
@@ -381,6 +384,7 @@ class LoreCache:
     
     async def _adjust_item_ttls(self, pattern, namespace, new_ttl):
         """Adjust TTLs for cache items matching a pattern."""
+        from logic.game_time_helper import get_game_timestamp, get_game_datetime
         async with self._lock:
             namespace_prefix = f"{namespace}:"
             for key, item in self.cache.items():
