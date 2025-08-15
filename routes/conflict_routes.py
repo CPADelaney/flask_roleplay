@@ -125,19 +125,23 @@ async def create_conflict(user_id):
         
         context_data = data.get("context", {})
         
-        # Extract multiparty flag from context or participants
+        # Extract multiparty flag from context or auto-detect from participants
         participants = context_data.get("participants", [])
         is_multiparty = context_data.get("is_multiparty", len(participants) > 2)
         
-        # Add multiparty metadata to context
+        # Add multiparty metadata to context if applicable
         if is_multiparty:
             context_data["is_multiparty"] = True
             context_data["party_count"] = len(participants) if participants else context_data.get("party_count", 3)
-            context_data["multiparty_dynamics"] = context_data.get("multiparty_dynamics", {
-                "alliance_potential": True,
-                "shifting_sides": True,
-                "faction_formation": len(participants) > 4
-            })
+            
+            # Add multiparty dynamics if not already present
+            if "multiparty_dynamics" not in context_data:
+                context_data["multiparty_dynamics"] = {
+                    "alliance_potential": True,
+                    "shifting_sides": True,
+                    "faction_formation": len(participants) > 4 if participants else False,
+                    "betrayal_likelihood": "medium"
+                }
         
         # Check governance permission
         permission = await check_conflict_permission(
@@ -156,77 +160,33 @@ async def create_conflict(user_id):
             return jsonify({
                 "success": False,
                 "error": "Governance denied conflict creation",
-                "reasoning": permission.get("reasoning"),
-                "governance_blocked": True
+                "reasoning": permission.get("reasoning")
             }), 403
         
         # Apply any governance overrides
         if permission.get("override_action"):
-            override = permission["override_action"]
-            if "conflict_type" in override:
-                conflict_type = override["conflict_type"]
-            if "context" in override:
-                context_data.update(override["context"])
+            if "conflict_type" in permission["override_action"]:
+                conflict_type = permission["override_action"]["conflict_type"]
+            if "context" in permission["override_action"]:
+                context_data.update(permission["override_action"]["context"])
         
-        # Create context for the orchestration
-        ctx = create_context(user_id, conversation_id)
+        # Get synthesizer and create conflict
+        synthesizer = await get_synthesizer(user_id, conversation_id)
         
-        # Check if we should use governance's conflict system instead
-        governor = await get_central_governance(user_id, conversation_id)
-        if governor and hasattr(governor, 'create_conflict'):
-            # Use governance's conflict creation for better integration
-            result = await governor.create_conflict(
-                conflict_data={
-                    "name": context_data.get("name", f"{conflict_type} conflict"),
-                    "conflict_type": conflict_type,
-                    **context_data
-                },
-                reason=context_data.get("reason", "API request")
-            )
-            
-            # Format response
-            conflict_data = {
-                "conflict_id": result.get("conflict_id"),
-                "status": result.get("status", "created"),
-                "conflict_type": conflict_type,
-                "subsystem_data": result.get("subsystem_data", {})
-            }
-        else:
-            # Fallback to direct synthesizer usage
-            result = await orchestrate_conflict_creation(
-                ctx,
-                conflict_type=conflict_type,
-                context_json=json.dumps(context_data)
-            )
-            
-            # Parse the result
-            conflict_data = json.loads(result) if isinstance(result, str) else result
-        
-        # Report the action to governance
-        await report_action(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_system_{conversation_id}",
-            action={
-                "type": "create_conflict",
-                "conflict_type": conflict_type,
-                "context": context_data
-            },
-            result={
-                "success": True,
-                "conflict_id": conflict_data.get("conflict_id")
-            }
+        result = await synthesizer.create_conflict(
+            conflict_type=conflict_type,
+            context=context_data
         )
+        
+        logger.info(f"Created {conflict_type} conflict (multiparty: {is_multiparty}) for user {user_id}")
         
         return jsonify({
             "success": True,
-            "conflict": conflict_data,
-            "governance_metadata": {
-                "permission_tracking_id": permission.get("tracking_id", -1),
-                "directive_applied": permission.get("directive_applied", False)
-            }
+            "conflict": result,
+            "governance_notes": permission.get("notes"),
+            "is_multiparty": is_multiparty
         })
+        
     except Exception as e:
         logger.error(f"Error creating conflict: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
@@ -513,10 +473,10 @@ async def get_conflict_details(user_id, conflict_id):
         return jsonify({"error": str(e)}), 500
 
 # Updated conflict generation in the route
-@conflict_bp.route("/api/conflict/generate", methods=["POST"])
+@conflict_bp.route("/api/conflict/emergent", methods=["POST"])
 @require_login
 async def generate_emergent_conflict(user_id):
-    """Generate an emergent conflict based on current world state with governance approval."""
+    """Generate an emergent conflict based on current world state."""
     data = await request.get_json() or {}
     
     validation_error = await validate_request_data(data, ["conversation_id"])
@@ -526,37 +486,33 @@ async def generate_emergent_conflict(user_id):
     conversation_id = data["conversation_id"]
     
     try:
-        # Check governance permission for generating conflicts
+        # Check governance permission
         permission = await check_conflict_permission(
             user_id=user_id,
             conversation_id=conversation_id,
             action_type="generate_emergent_conflict",
-            conflict_data={
-                "intensity": data.get("intensity", "moderate"),
-                "participants": data.get("participants", []),
-                "location": data.get("location", "current"),
-                "trigger": data.get("trigger", "natural_progression")
-            }
+            conflict_data=data
         )
         
         if not permission["approved"]:
-            logger.warning(f"Emergent conflict generation denied by governance: {permission.get('reasoning')}")
             return jsonify({
                 "success": False,
                 "error": "Governance denied emergent conflict generation",
-                "reasoning": permission.get("reasoning"),
-                "governance_blocked": True
+                "reasoning": permission.get("reasoning")
             }), 403
         
-        # Get synthesizer
-        synthesizer = await get_synthesizer(user_id, conversation_id)
-        
         # Determine conflict type based on world state
-        state = await synthesizer.get_system_state()
-        
-        # Base conflict types (WHAT the conflict is about)
+        # Valid types (multiparty is NOT a type anymore)
         base_conflict_types = ["social", "slice", "background"]
-        weights = [0.35, 0.45, 0.2]  # Favor slice-of-life conflicts
+        
+        # Weight based on current state
+        weights = [0.4, 0.4, 0.2]  # Default weights
+        
+        # Adjust weights based on context
+        if data.get("trigger") == "relationship_tension":
+            weights = [0.7, 0.2, 0.1]
+        elif data.get("trigger") == "world_event":
+            weights = [0.1, 0.2, 0.7]
         
         import random
         conflict_type = random.choices(base_conflict_types, weights=weights)[0]
@@ -576,9 +532,18 @@ async def generate_emergent_conflict(user_id):
             "participants": participants,
             "location": data.get("location", "current"),
             "trigger": data.get("trigger", "natural_progression"),
-            "is_multiparty": is_multiparty,  # Add as a flag
+            "is_multiparty": is_multiparty,  # Add as a modifier flag
             "party_count": len(participants) if participants else (random.randint(3, 5) if is_multiparty else 2)
         }
+        
+        # Add multiparty dynamics if applicable
+        if is_multiparty:
+            context["multiparty_dynamics"] = {
+                "alliance_potential": random.random() > 0.4,
+                "shifting_sides": random.random() > 0.5,
+                "faction_formation": len(participants) > 4 if participants else random.random() > 0.6,
+                "betrayal_likelihood": random.choice(["low", "medium", "high"])
+            }
         
         # Add type-specific context
         if conflict_type == "social":
@@ -593,39 +558,28 @@ async def generate_emergent_conflict(user_id):
             }
         elif conflict_type == "background":
             context["background_context"] = {
-                "scope": random.choice(["neighborhood", "district", "city", "region"]),
-                "visibility": random.choice(["subtle", "noticeable", "prominent"])
+                "scope": random.choice(["local", "regional", "global"]),
+                "visibility": random.choice(["hidden", "rumored", "public"])
             }
         
-        # Create the conflict
-        result = await synthesizer.create_conflict(conflict_type, context)
+        # Generate through synthesizer
+        synthesizer = await get_synthesizer(user_id, conversation_id)
         
-        # Report the action to governance
-        await report_action(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id=f"conflict_generator_{conversation_id}",
-            action={
-                "type": "generate_emergent_conflict",
-                "conflict_type": conflict_type,
-                "is_multiparty": is_multiparty,
-                "context": context
-            },
-            result={
-                "success": True,
-                "conflict_id": result.get("conflict_id")
-            }
+        result = await synthesizer.create_conflict(
+            conflict_type=conflict_type,
+            context=context
         )
+        
+        # Log emergent generation
+        logger.info(f"Generated emergent {conflict_type} conflict (multiparty: {is_multiparty}) for user {user_id}")
         
         return jsonify({
             "success": True,
             "conflict": result,
-            "governance_metadata": {
-                "permission_tracking_id": permission.get("tracking_id", -1),
-                "directive_applied": permission.get("directive_applied", False)
-            }
+            "emergent": True,
+            "is_multiparty": is_multiparty
         })
+        
     except Exception as e:
         logger.error(f"Error generating emergent conflict: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
@@ -883,3 +837,4 @@ async def use_special_reward(user_id):
     except Exception as e:
         logger.error(f"Error using special reward: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
