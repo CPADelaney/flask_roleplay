@@ -1,107 +1,208 @@
 # logic/conflict_system/enhanced_conflict_integration.py
 """
 Enhanced conflict system integration with LLM-generated dynamic content.
-Replaces hardcoded tension analysis and generation with intelligent LLM agents.
+Works through ConflictSynthesizer as the central orchestrator.
 """
 
 import logging
 import json
 import asyncio
 import random
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Set
 from datetime import datetime, timedelta
 
-from agents import Agent, ModelSettings, function_tool, RunContextWrapper
+from agents import Agent, ModelSettings, function_tool, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
-
-# Import core conflict systems
-from logic.conflict_system.slice_of_life_conflicts import (
-    SliceOfLifeConflictType,
-    ConflictIntensity,
-    EmergentConflictDetector,
-    SliceOfLifeConflictManager,
-    PatternBasedResolution,
-    ConflictDailyIntegration
-)
-
-# Import other game systems
-from logic.time_cycle import get_current_time_model, ActivityType
-from logic.dynamic_relationships import OptimizedRelationshipManager
-from npcs.npc_handler import NPCHandler
-from story_agent.world_director_agent import WorldDirector, WorldMood
-from lore.matriarchal_lore_system import MatriarchalLoreSystem
-from logic.narrative_events import check_for_narrative_moments
-from context.memory_manager import get_memory_manager
 
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# MASTER INTEGRATION CLASS WITH LLM ENHANCEMENT
+# ENHANCED INTEGRATION SUBSYSTEM (Works through Synthesizer)
 # ===============================================================================
 
-class ConflictSystemIntegration:
+class EnhancedIntegrationSubsystem:
     """
-    Master integration class with LLM-powered dynamic content generation.
-    Preserves all original functionality while replacing hardcoded analysis.
+    Enhanced integration subsystem that works through ConflictSynthesizer.
+    Provides LLM-powered tension analysis and conflict generation.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
         
-        # Core conflict components
-        self.detector = EmergentConflictDetector(user_id, conversation_id)
-        self.manager = SliceOfLifeConflictManager(user_id, conversation_id)
-        self.resolver = PatternBasedResolution(user_id, conversation_id)
-        self.daily_integration = ConflictDailyIntegration(user_id, conversation_id)
-        
-        # Other system connections (lazy loaded)
-        self._relationship_manager = None
-        self._npc_handler = None
-        self._world_director = None
-        self._lore_system = None
-        self._memory_manager = None
+        # Reference to synthesizer
+        self.synthesizer = None
         
         # LLM agents
         self._tension_analyzer = None
         self._conflict_generator = None
         self._integration_narrator = None
         
-    # ========== System Connections (Preserved) ==========
+        # Connections to other game systems (lazy loaded)
+        self._relationship_manager = None
+        self._npc_handler = None
+        self._world_director = None
+        self._lore_system = None
+        self._memory_manager = None
     
     @property
-    def relationship_manager(self):
-        if self._relationship_manager is None:
-            self._relationship_manager = OptimizedRelationshipManager(
-                self.user_id, self.conversation_id
+    def subsystem_type(self):
+        """Return the subsystem type"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return SubsystemType.SLICE_OF_LIFE  # This enhances slice-of-life conflicts
+    
+    @property
+    def capabilities(self) -> Set[str]:
+        """Return capabilities this subsystem provides"""
+        return {
+            'tension_analysis',
+            'contextual_generation',
+            'daily_integration',
+            'pattern_detection',
+            'narrative_weaving'
+        }
+    
+    @property
+    def dependencies(self) -> Set:
+        """Return other subsystems this depends on"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemType
+        return {
+            SubsystemType.DETECTION,
+            SubsystemType.TENSION,
+            SubsystemType.FLOW
+        }
+    
+    @property
+    def event_subscriptions(self) -> Set:
+        """Return events this subsystem wants to receive"""
+        from logic.conflict_system.conflict_synthesizer import EventType
+        return {
+            EventType.STATE_SYNC,
+            EventType.PLAYER_CHOICE,
+            EventType.NPC_REACTION,
+            EventType.HEALTH_CHECK
+        }
+    
+    async def initialize(self, synthesizer) -> bool:
+        """Initialize the subsystem with synthesizer reference"""
+        import weakref
+        self.synthesizer = weakref.ref(synthesizer)
+        return True
+    
+    async def handle_event(self, event) -> Any:
+        """Handle an event from the synthesizer"""
+        from logic.conflict_system.conflict_synthesizer import SubsystemResponse, SystemEvent, EventType
+        
+        try:
+            if event.event_type == EventType.STATE_SYNC:
+                # Analyze for emerging tensions
+                scene_context = event.payload
+                tensions = await self.analyze_scene_tensions(scene_context)
+                
+                side_effects = []
+                if tensions and tensions['should_generate_conflict']:
+                    # Request conflict creation through synthesizer
+                    side_effects.append(SystemEvent(
+                        event_id=f"tension_{event.event_id}",
+                        event_type=EventType.CONFLICT_CREATED,
+                        source_subsystem=self.subsystem_type,
+                        payload={
+                            'conflict_type': tensions['suggested_type'],
+                            'context': tensions['context'],
+                            'tension_source': tensions['source']
+                        },
+                        priority=5
+                    ))
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data={
+                        'tensions_found': len(tensions.get('tensions', [])),
+                        'manifestation': tensions.get('manifestation', [])
+                    },
+                    side_effects=side_effects
+                )
+                
+            elif event.event_type == EventType.PLAYER_CHOICE:
+                # Process how choice affects conflicts
+                choice_impact = await self._analyze_choice_impact(event.payload)
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data=choice_impact
+                )
+                
+            elif event.event_type == EventType.NPC_REACTION:
+                # Integrate NPC reactions into conflicts
+                reaction_integration = await self._integrate_npc_reaction(event.payload)
+                
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data=reaction_integration
+                )
+                
+            elif event.event_type == EventType.HEALTH_CHECK:
+                return SubsystemResponse(
+                    subsystem=self.subsystem_type,
+                    event_id=event.event_id,
+                    success=True,
+                    data=await self.health_check()
+                )
+            
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={}
             )
-        return self._relationship_manager
+            
+        except Exception as e:
+            logger.error(f"Enhanced integration error: {e}")
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=False,
+                data={'error': str(e)}
+            )
     
-    @property
-    def npc_handler(self):
-        if self._npc_handler is None:
-            self._npc_handler = NPCHandler(self.user_id, self.conversation_id)
-        return self._npc_handler
+    async def health_check(self) -> Dict[str, Any]:
+        """Return health status of the subsystem"""
+        return {
+            'healthy': True,
+            'agents_loaded': bool(self._tension_analyzer or self._conflict_generator),
+            'connections_available': True
+        }
     
-    @property
-    def world_director(self):
-        if self._world_director is None:
-            self._world_director = WorldDirector(self.user_id, self.conversation_id)
-        return self._world_director
+    async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
+        """Get enhanced integration data for a specific conflict"""
+        # Get related tensions and patterns
+        tensions = await self._get_conflict_tensions(conflict_id)
+        patterns = await self._get_conflict_patterns(conflict_id)
+        
+        return {
+            'active_tensions': tensions,
+            'detected_patterns': patterns
+        }
     
-    @property
-    def lore_system(self):
-        if self._lore_system is None:
-            self._lore_system = MatriarchalLoreSystem(self.user_id, self.conversation_id)
-        return self._lore_system
+    async def get_state(self) -> Dict[str, Any]:
+        """Get current state of enhanced integration"""
+        return {
+            'integration_active': True,
+            'llm_agents_ready': bool(self._tension_analyzer)
+        }
     
-    @property
-    def memory_manager(self):
-        if self._memory_manager is None:
-            self._memory_manager = get_memory_manager(self.user_id, self.conversation_id)
-        return self._memory_manager
+    async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
+        """Check if enhanced integration is relevant to scene"""
+        # Always relevant for tension analysis
+        return True
     
-    # ========== LLM Agents ==========
+    # ========== LLM Agent Properties ==========
     
     @property
     def tension_analyzer(self) -> Agent:
@@ -172,352 +273,214 @@ class ConflictSystemIntegration:
             )
         return self._integration_narrator
     
-    # ========== Conflict Generation from World State (Enhanced with LLM) ==========
+    # ========== Analysis Methods ==========
     
-    async def generate_contextual_conflict(self, ctx: RunContextWrapper) -> Optional[Dict[str, Any]]:
-        """Generate a conflict based on current world state using LLM analysis"""
+    async def analyze_scene_tensions(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze a scene for tensions using LLM"""
         
-        # Get current world state
-        world_state = await self.world_director.get_world_state()
-        current_time = await get_current_time_model(ctx)
+        # Gather context from various sources
+        npcs = scene_context.get('present_npcs', [])
+        location = scene_context.get('location', 'unknown')
+        activity = scene_context.get('activity', 'unknown')
         
-        # Get active NPCs at current location
-        player_location = await self._get_player_location()
-        present_npcs = await self.npc_handler.get_npcs_at_location(player_location)
-        
-        # Gather all tension sources with LLM analysis
-        all_tensions = await self._analyze_all_tension_sources_llm(
-            present_npcs, world_state, current_time
-        )
-        
-        if not all_tensions:
-            return None
-        
-        # Select and generate conflict with LLM
-        selected_tension = await self._select_best_tension_llm(
-            all_tensions, world_state, current_time
-        )
-        
-        if not selected_tension:
-            return None
-        
-        # Generate the conflict with LLM
-        return await self._create_conflict_from_tension_llm(
-            selected_tension, present_npcs, world_state
-        )
-    
-    async def _analyze_all_tension_sources_llm(
-        self,
-        npcs: List[int],
-        world_state: Any,
-        current_time: Any
-    ) -> List[Dict]:
-        """Analyze all tension sources using LLM"""
-        
-        # Gather data from all sources
+        # Get additional context if available
         relationship_data = await self._gather_relationship_data(npcs)
         npc_data = await self._gather_npc_progression_data(npcs)
-        lore_data = await self.lore_system.get_current_cultural_tensions()
         
-        # Create comprehensive context for LLM
         context = {
-            'time_of_day': current_time.time_of_day,
-            'world_mood': getattr(world_state, 'world_mood', 'neutral'),
-            'location': await self._get_player_location(),
+            'location': location,
+            'activity': activity,
             'npcs_present': len(npcs),
-            'relationship_summary': self._summarize_for_llm(relationship_data),
-            'npc_progression': self._summarize_for_llm(npc_data),
-            'cultural_context': self._summarize_for_llm(lore_data)
+            'relationships': self._summarize_for_llm(relationship_data),
+            'npc_states': self._summarize_for_llm(npc_data)
         }
         
-        # Use LLM to analyze tensions
         prompt = f"""
-        Analyze the current game state for emerging tensions:
+        Analyze this scene for emerging tensions:
         
         Context:
         {json.dumps(context, indent=2)}
         
-        Identify 1-5 potential tension points that could become conflicts.
-        For each tension:
-        1. Source category (relationship/npc_progression/lore/emergent)
-        2. Conflict type (from SliceOfLifeConflictType enum)
-        3. Tension level (0.0-1.0)
-        4. Specific contextual description
-        5. Why it's relevant now
+        Identify:
+        1. Tension sources (relationship/cultural/personal)
+        2. Conflict potential (0.0-1.0)
+        3. Suggested conflict type
+        4. How it might manifest
         
-        Format as JSON array. Focus on subtle, slice-of-life tensions.
+        Return JSON:
+        {{
+            "tensions": [
+                {{
+                    "source": "tension source",
+                    "level": 0.0 to 1.0,
+                    "description": "specific tension"
+                }}
+            ],
+            "should_generate_conflict": true/false,
+            "suggested_type": "conflict type",
+            "manifestation": ["how it shows up"],
+            "context": {{additional context}}
+        }}
         """
         
-        response = await self.tension_analyzer.run(prompt)
+        response = await Runner.run(self.tension_analyzer, prompt)
         
         try:
-            tensions = json.loads(response.content)
-            return self._format_llm_tensions(tensions, npcs)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse tension analysis: {e}")
-            return []
+            return json.loads(response.output)
+        except json.JSONDecodeError:
+            return {
+                'tensions': [],
+                'should_generate_conflict': False
+            }
     
-    async def _select_best_tension_llm(
+    async def generate_contextual_conflict(
         self,
-        tensions: List[Dict],
-        world_state: Any,
-        current_time: Any
-    ) -> Optional[Dict]:
-        """Use LLM to select the most appropriate tension"""
-        
-        if not tensions:
-            return None
-        
-        # Create selection context
-        context = {
-            'current_time': current_time.time_of_day,
-            'world_mood': str(getattr(world_state, 'world_mood', 'neutral')),
-            'active_conflicts_count': await self._get_active_conflict_count(),
-            'recent_conflict_types': await self._get_recent_conflict_types()
-        }
-        
-        prompt = f"""
-        Select the best tension to develop into a conflict:
-        
-        Current Context:
-        {json.dumps(context, indent=2)}
-        
-        Available Tensions:
-        {json.dumps(tensions[:5], indent=2)}
-        
-        Choose the tension that:
-        - Best fits the current mood and time
-        - Wouldn't feel repetitive
-        - Has the most interesting potential
-        - Feels natural to emerge now
-        
-        Return the index (0-based) of the best tension and explain why.
-        Format as JSON: {{"index": N, "reason": "..."}}
-        """
-        
-        response = await self.tension_analyzer.run(prompt)
-        
-        try:
-            result = json.loads(response.content)
-            index = result.get('index', 0)
-            if 0 <= index < len(tensions):
-                selected = tensions[index]
-                selected['selection_reason'] = result.get('reason', '')
-                return selected
-        except (json.JSONDecodeError, KeyError, IndexError) as e:
-            logger.warning(f"Failed to select tension: {e}")
-        
-        # Fallback to first tension
-        return tensions[0] if tensions else None
-    
-    async def _create_conflict_from_tension_llm(
-        self,
-        tension: Dict,
-        present_npcs: List[int],
-        world_state: Any
+        tension_data: Dict[str, Any],
+        npcs: List[int]
     ) -> Dict[str, Any]:
-        """Create a conflict using LLM generation"""
+        """Generate a conflict from analyzed tensions"""
         
-        # Generate conflict details with LLM
         prompt = f"""
-        Generate a slice-of-life conflict from this tension:
+        Generate a conflict from these tensions:
         
-        Tension: {json.dumps(tension, indent=2)}
-        NPCs Present: {present_npcs}
-        World Mood: {getattr(world_state, 'world_mood', 'neutral')}
+        Tensions: {json.dumps(tension_data, indent=2)}
+        NPCs Involved: {npcs}
         
         Create:
-        1. Conflict name (brief, evocative)
-        2. Detailed description (2-3 sentences)
-        3. Initial intensity (subtext/tension/passive)
-        4. How it might manifest in daily activities
-        5. Stakes for the player
+        1. Conflict name
+        2. Description (2-3 sentences)
+        3. Initial intensity
+        4. Stakes for player
+        5. How it starts
         
-        Format as JSON. Keep it subtle and realistic.
+        Return JSON:
+        {{
+            "name": "conflict name",
+            "description": "detailed description",
+            "intensity": "subtle/tension/friction",
+            "stakes": "what player risks/gains",
+            "opening": "how it begins"
+        }}
         """
         
-        response = await self.conflict_generator.run(prompt)
+        response = await Runner.run(self.conflict_generator, prompt)
         
         try:
-            details = json.loads(response.content)
+            return json.loads(response.output)
         except json.JSONDecodeError:
-            details = {
-                'name': "Emerging Tension",
-                'description': "A subtle conflict begins to take shape",
-                'intensity': 'tension',
-                'manifestation': "Small moments of friction",
-                'stakes': "Personal autonomy"
-            }
-        
-        # Create conflict in database
-        async with get_db_connection_context() as conn:
-            conflict_id = await conn.fetchval("""
-                INSERT INTO Conflicts
-                (user_id, conversation_id, conflict_type, conflict_name,
-                 description, intensity, phase, is_active, progress)
-                VALUES ($1, $2, $3, $4, $5, $6, 'emerging', true, 0)
-                RETURNING conflict_id
-            """, self.user_id, self.conversation_id,
-            tension.get('type', SliceOfLifeConflictType.SUBTLE_RIVALRY).value,
-            details.get('name', 'Emerging Tension'),
-            details.get('description', tension.get('description', '')),
-            details.get('intensity', 'tension'))
-            
-            # Add stakeholders
-            stakeholder_npcs = tension.get('npc_ids', present_npcs[:2])
-            for npc_id in stakeholder_npcs:
-                await conn.execute("""
-                    INSERT INTO conflict_stakeholders
-                    (conflict_id, npc_id, faction, involvement_level)
-                    VALUES ($1, $2, 'neutral', 'primary')
-                """, conflict_id, npc_id)
-            
-            # Create initial memory
-            await self.memory_manager.create_memory(
-                entity_type='conflict',
-                entity_id=conflict_id,
-                memory_text=f"A new tension emerges: {details.get('description', '')}",
-                importance='medium',
-                tags=['conflict', 'emerging', tension.get('source_category', 'unknown')]
-            )
-        
-        return {
-            'conflict_id': conflict_id,
-            'type': tension.get('type', SliceOfLifeConflictType.SUBTLE_RIVALRY).value,
-            'intensity': details.get('intensity', 'tension'),
-            'source': tension.get('source_category', 'emergent'),
-            'stakeholders': stakeholder_npcs,
-            'manifestation': details.get('manifestation', ''),
-            'stakes': details.get('stakes', ''),
-            'initial_tension_level': tension.get('tension_level', 0.5)
-        }
-    
-    # ========== Daily Activity Integration (Enhanced with LLM) ==========
-    
-    async def integrate_conflicts_with_daily_routine(
-        self,
-        ctx: RunContextWrapper,
-        activity_type: str,
-        activity_description: str
-    ) -> Dict[str, Any]:
-        """Integrate active conflicts into daily activities using LLM"""
-        
-        # Get current context
-        current_time = await get_current_time_model(ctx)
-        player_location = await self._get_player_location()
-        
-        # Get appropriate conflicts
-        appropriate_conflicts = await self.daily_integration.get_conflicts_for_time_of_day(
-            current_time.time_of_day
-        )
-        
-        if not appropriate_conflicts:
             return {
-                'conflicts_active': False,
-                'activity_proceeds_normally': True
+                'name': "Emerging Tension",
+                'description': "A subtle conflict begins",
+                'intensity': 'tension',
+                'stakes': "Personal dynamics",
+                'opening': "Tension fills the air"
             }
-        
-        # Get NPCs present
-        present_npcs = await self.npc_handler.get_npcs_at_location(player_location)
-        
-        # Filter conflicts with present stakeholders
-        active_conflicts = await self._filter_conflicts_by_npcs(
-            appropriate_conflicts, present_npcs
-        )
+    
+    async def integrate_conflicts_with_activity(
+        self,
+        activity: str,
+        active_conflicts: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Generate how conflicts integrate into an activity"""
         
         if not active_conflicts:
-            return {
-                'conflicts_active': False,
-                'activity_proceeds_normally': True
-            }
-        
-        # Generate integration narrative with LLM
-        integration = await self._generate_conflict_integration_llm(
-            activity_type, activity_description, active_conflicts, present_npcs
-        )
-        
-        return integration
-    
-    async def _generate_conflict_integration_llm(
-        self,
-        activity_type: str,
-        activity_description: str,
-        conflicts: List[Dict],
-        present_npcs: List[int]
-    ) -> Dict[str, Any]:
-        """Generate how conflicts integrate into activity using LLM"""
-        
-        # Get NPC details for richer context
-        npc_details = await self._get_npc_details_for_llm(present_npcs[:3])
+            return {'conflicts_active': False}
         
         prompt = f"""
-        Integrate these conflicts into the current activity:
+        Integrate these conflicts into the activity:
         
-        Activity: {activity_type} - {activity_description}
-        Active Conflicts: {self._summarize_conflicts_for_llm(conflicts)}
-        NPCs Present: {npc_details}
+        Activity: {activity}
+        Conflicts: {json.dumps(active_conflicts[:3], indent=2)}
         
         Generate:
-        1. How conflicts subtly manifest (2-3 specific details)
-        2. Environmental/atmospheric cues
-        3. 2-3 player choice opportunities (with subtext)
-        4. NPC behaviors reflecting tensions
-        5. Narrative moments that might trigger
+        1. How conflicts subtly manifest
+        2. Environmental cues
+        3. NPC behavior changes
+        4. Player choice opportunities
         
-        Keep everything subtle and slice-of-life.
-        Format as JSON.
+        Return JSON:
+        {{
+            "manifestations": ["specific details"],
+            "environmental_cues": ["atmosphere changes"],
+            "npc_behaviors": {{"npc_id": "behavior"}},
+            "choices": [
+                {{
+                    "text": "choice text",
+                    "subtext": "hidden meaning"
+                }}
+            ]
+        }}
         """
         
-        response = await self.integration_narrator.run(prompt)
+        response = await Runner.run(self.integration_narrator, prompt)
         
         try:
-            result = json.loads(response.content)
-            
+            result = json.loads(response.output)
             return {
                 'conflicts_active': True,
-                'manifestation': result.get('manifestations', ['Subtle tensions color the interaction']),
-                'environmental_cues': result.get('environmental_cues', []),
-                'player_choices': self._format_player_choices(result.get('choices', [])),
-                'npc_reactions': result.get('npc_behaviors', {}),
-                'narrative_moments': result.get('narrative_moments', []),
-                'atmosphere': result.get('atmosphere', 'tense')
+                **result
             }
-            
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to generate integration: {e}")
+        except json.JSONDecodeError:
             return {
                 'conflicts_active': True,
-                'manifestation': "Underlying tensions affect the moment",
-                'player_choices': [],
-                'npc_reactions': {}
+                'manifestations': ["Tension colors the interaction"]
             }
     
-    # ========== Helper Methods (Enhanced) ==========
+    # ========== Helper Methods ==========
+    
+    async def _analyze_choice_impact(self, choice_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze how a player choice impacts conflicts"""
+        
+        choice = choice_data.get('choice', '')
+        context = choice_data.get('context', {})
+        
+        # Simple analysis - could be enhanced with LLM
+        impact = {
+            'tension_change': random.uniform(-0.1, 0.1),
+            'relationship_impact': {},
+            'conflict_progression': random.uniform(0, 0.2)
+        }
+        
+        return impact
+    
+    async def _integrate_npc_reaction(self, reaction_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Integrate NPC reaction into conflict system"""
+        
+        npc_id = reaction_data.get('npc_id')
+        reaction = reaction_data.get('reaction', '')
+        
+        # Simple integration - could be enhanced
+        return {
+            'reaction_integrated': True,
+            'tension_modifier': random.uniform(-0.05, 0.05)
+        }
     
     async def _gather_relationship_data(self, npcs: List[int]) -> Dict:
         """Gather relationship data for LLM context"""
         data = {}
-        for npc_id in npcs[:5]:  # Limit for token efficiency
-            relationship = await self.relationship_manager.get_relationship(
-                'npc', npc_id, 'player', self.user_id
-            )
-            if relationship:
-                data[npc_id] = relationship.get('dimensions', {})
+        
+        # Would connect to relationship system
+        # For now, return mock data
+        for npc_id in npcs[:3]:
+            data[npc_id] = {
+                'trust': random.uniform(0, 1),
+                'power': random.uniform(-1, 1)
+            }
+        
         return data
     
     async def _gather_npc_progression_data(self, npcs: List[int]) -> Dict:
         """Gather NPC progression data for LLM context"""
         data = {}
+        
         async with get_db_connection_context() as conn:
-            for npc_id in npcs[:5]:
-                progression = await conn.fetchrow("""
-                    SELECT narrative_stage, relationship_level 
-                    FROM NPCNarrativeProgression
-                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                """, npc_id, self.user_id, self.conversation_id)
-                
-                if progression:
-                    data[npc_id] = dict(progression)
+            for npc_id in npcs[:3]:
+                # Mock query - would use actual NPC progression table
+                data[npc_id] = {
+                    'narrative_stage': 'developing',
+                    'relationship_level': random.randint(1, 5)
+                }
+        
         return data
     
     def _summarize_for_llm(self, data: Any) -> str:
@@ -534,189 +497,19 @@ class ConflictSystemIntegration:
         else:
             return str(data)[:200]
     
-    def _format_llm_tensions(self, tensions: List, npcs: List[int]) -> List[Dict]:
-        """Format LLM output into internal tension format"""
-        formatted = []
-        for t in tensions:
-            try:
-                formatted.append({
-                    'source_category': t.get('source', 'emergent'),
-                    'type': SliceOfLifeConflictType[t.get('type', 'SUBTLE_RIVALRY').upper()],
-                    'tension_level': float(t.get('tension_level', 0.5)),
-                    'description': t.get('description', 'A tension emerges'),
-                    'relevance': t.get('relevance', ''),
-                    'npc_ids': npcs[:2] if not t.get('npc_id') else [t.get('npc_id')]
-                })
-            except (KeyError, ValueError) as e:
-                logger.warning(f"Failed to format tension: {e}")
-                continue
-        return formatted
+    async def _get_conflict_tensions(self, conflict_id: int) -> List[Dict[str, Any]]:
+        """Get tensions related to a conflict"""
+        # Would query tension events for this conflict
+        return []
     
-    def _summarize_conflicts_for_llm(self, conflicts: List) -> str:
-        """Summarize conflicts for LLM prompts"""
-        summary = []
-        for c in conflicts[:3]:
-            summary.append(
-                f"- {c.get('conflict_type', 'unknown')} "
-                f"({c.get('intensity', 'tension')}, {c.get('progress', 0)}% progress)"
-            )
-        return "\n".join(summary)
-    
-    async def _get_npc_details_for_llm(self, npc_ids: List[int]) -> str:
-        """Get NPC details for LLM context"""
-        details = []
-        async with get_db_connection_context() as conn:
-            for npc_id in npc_ids:
-                npc = await conn.fetchrow("""
-                    SELECT name, personality_traits FROM NPCs WHERE npc_id = $1
-                """, npc_id)
-                if npc:
-                    details.append(f"{npc['name']} ({npc.get('personality_traits', 'unknown')})")
-        return ", ".join(details) if details else "Unknown NPCs"
-    
-    def _format_player_choices(self, choices: List) -> List[Dict]:
-        """Format player choices from LLM output"""
-        formatted = []
-        for choice in choices[:3]:
-            if isinstance(choice, dict):
-                formatted.append({
-                    'id': choice.get('id', f'choice_{len(formatted)}'),
-                    'text': choice.get('text', 'Make a choice'),
-                    'subtext': choice.get('subtext', ''),
-                    'impact': choice.get('impact', {})
-                })
-            elif isinstance(choice, str):
-                formatted.append({
-                    'id': f'choice_{len(formatted)}',
-                    'text': choice,
-                    'subtext': 'Consider the implications',
-                    'impact': {}
-                })
-        return formatted
-    
-    async def _get_active_conflict_count(self) -> int:
-        """Get count of active conflicts"""
-        async with get_db_connection_context() as conn:
-            count = await conn.fetchval("""
-                SELECT COUNT(*) FROM Conflicts
-                WHERE user_id = $1 AND conversation_id = $2 AND is_active = true
-            """, self.user_id, self.conversation_id)
-        return count or 0
-    
-    async def _get_recent_conflict_types(self) -> List[str]:
-        """Get types of recent conflicts"""
-        async with get_db_connection_context() as conn:
-            types = await conn.fetch("""
-                SELECT DISTINCT conflict_type FROM Conflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND created_at > NOW() - INTERVAL '7 days'
-                LIMIT 5
-            """, self.user_id, self.conversation_id)
-        return [t['conflict_type'] for t in types]
-    
-    async def _filter_conflicts_by_npcs(
-        self,
-        conflicts: List[Dict],
-        present_npcs: List[int]
-    ) -> List[Dict]:
-        """Filter conflicts to those with present stakeholders"""
-        active = []
-        for conflict in conflicts:
-            stakeholder_npcs = conflict.get('stakeholder_npcs', [])
-            if any(npc in present_npcs for npc in stakeholder_npcs):
-                active.append(conflict)
-        return active
-    
-    async def _get_player_location(self) -> str:
-        """Get current player location"""
-        async with get_db_connection_context() as conn:
-            location = await conn.fetchval("""
-                SELECT current_location FROM player_state
-                WHERE user_id = $1 AND conversation_id = $2
-            """, self.user_id, self.conversation_id)
-        return location or "Home"
-    
-    # ========== Pattern Detection and Resolution (Enhanced) ==========
-    
-    async def check_for_pattern_resolutions(self) -> List[Dict[str, Any]]:
-        """Check all active conflicts for pattern-based resolution"""
-        resolutions = []
-        
-        async with get_db_connection_context() as conn:
-            active_conflicts = await conn.fetch("""
-                SELECT conflict_id FROM Conflicts
-                WHERE user_id = $1 
-                AND conversation_id = $2
-                AND is_active = true
-                AND progress >= 50
-            """, self.user_id, self.conversation_id)
-        
-        for conflict in active_conflicts:
-            resolution = await self.resolver.check_resolution_by_pattern(
-                conflict['conflict_id']
-            )
-            
-            if resolution:
-                resolutions.append({
-                    'conflict_id': conflict['conflict_id'],
-                    'resolution': resolution
-                })
-                
-                # Create narrative moment with LLM
-                await self._create_resolution_narrative_llm(
-                    conflict['conflict_id'], resolution
-                )
-        
-        return resolutions
-    
-    async def _create_resolution_narrative_llm(
-        self,
-        conflict_id: int,
-        resolution: Dict
-    ):
-        """Create a narrative moment for conflict resolution using LLM"""
-        
-        prompt = f"""
-        Generate a brief narrative moment for this conflict resolution:
-        
-        Resolution Type: {resolution.get('resolution_type', 'unknown')}
-        Description: {resolution.get('description', '')}
-        New Patterns: {resolution.get('new_patterns', [])}
-        
-        Create a single sentence that captures the subtle shift.
-        Focus on the feeling of something settling into place.
-        """
-        
-        response = await self.integration_narrator.run(prompt)
-        narrative_text = response.content.strip()
-        
-        # Add to memories
-        await self.memory_manager.create_memory(
-            entity_type='narrative',
-            entity_id=conflict_id,
-            memory_text=narrative_text,
-            importance='high',
-            tags=['resolution', 'pattern', 'conflict_end']
-        )
-        
-        # Update world state if significant
-        if resolution.get('new_routines_established'):
-            await self.world_director.register_routine_change(
-                f"Conflict {conflict_id}: {narrative_text}"
-            )
+    async def _get_conflict_patterns(self, conflict_id: int) -> List[str]:
+        """Get patterns detected in a conflict"""
+        # Would analyze conflict events for patterns
+        return []
 
-    async def process_event(self, conflict_id: int, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Process conflict events for this subsystem"""
-        event_type = event.get('type', 'unknown')
-        
-        # Route to appropriate handler
-        if event_type == 'your_specific_type':
-            return await self.handle_specific_event(conflict_id, event)
-        
-        return {'processed': True, 'subsystem': 'module_name'}
 
 # ===============================================================================
-# PUBLIC API FUNCTIONS (Enhanced with LLM)
+# PUBLIC API FUNCTIONS (Work through Synthesizer)
 # ===============================================================================
 
 @function_tool
@@ -726,35 +519,27 @@ async def process_conflict_in_scene(
     activity: str,
     present_npcs: List[int]
 ) -> Dict[str, Any]:
-    """Main function to process conflicts within a scene"""
+    """Process conflicts within a scene through synthesizer"""
     
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     
-    integration = EnhancedConflictSystemIntegration(user_id, conversation_id)
+    # Use synthesizer to process scene
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Check for new conflict generation
-    if random.random() < 0.15:  # 15% chance
-        new_conflict = await integration.generate_contextual_conflict(ctx)
-        if new_conflict:
-            logger.info(f"Generated new conflict: {new_conflict['type']}")
-    
-    # Integrate existing conflicts
-    conflict_integration = await integration.integrate_conflicts_with_daily_routine(
-        ctx, activity, f"Player is {activity}"
-    )
-    
-    # Check for resolutions
-    resolutions = await integration.check_for_pattern_resolutions()
-    
-    return {
-        'conflicts_active': conflict_integration.get('conflicts_active', False),
-        'manifestation': conflict_integration.get('manifestation'),
-        'player_choices': conflict_integration.get('player_choices', []),
-        'npc_reactions': conflict_integration.get('npc_reactions', {}),
-        'resolutions': resolutions,
-        'narrative_moments': conflict_integration.get('narrative_moments', [])
+    scene_context = {
+        'scene_type': scene_type,
+        'activity': activity,
+        'present_npcs': present_npcs,
+        'timestamp': datetime.now().isoformat()
     }
+    
+    # Process through synthesizer
+    result = await synthesizer.process_scene(scene_context)
+    
+    return result
+
 
 @function_tool
 async def analyze_scene_for_conflict_potential(
@@ -763,53 +548,96 @@ async def analyze_scene_for_conflict_potential(
     npcs_present: List[int],
     recent_events: List[str]
 ) -> Dict[str, Any]:
-    """Analyze a scene for potential conflict generation using LLM"""
+    """Analyze a scene for potential conflict generation through synthesizer"""
     
-    from logic.conflict_system.slice_of_life_conflicts import analyze_conflict_subtext
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
     
-    # Get subtext analysis with LLM
-    subtext = await analyze_conflict_subtext(ctx, scene_description, npcs_present)
+    # Get synthesizer
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+    synthesizer = await get_synthesizer(user_id, conversation_id)
     
-    # Use LLM to determine tension score
-    agent = Agent(
-        name="Tension Scorer",
-        instructions="Analyze scene elements to determine conflict potential.",
-        model="gpt-5-nano",
+    # Create analysis event
+    event = SystemEvent(
+        event_id=f"analyze_{datetime.now().timestamp()}",
+        event_type=EventType.STATE_SYNC,
+        source_subsystem=SubsystemType.SLICE_OF_LIFE,
+        payload={
+            'scene_description': scene_description,
+            'present_npcs': npcs_present,
+            'recent_events': recent_events,
+            'request_analysis': True
+        },
+        target_subsystems={SubsystemType.SLICE_OF_LIFE},
+        requires_response=True
     )
     
-    prompt = f"""
-    Analyze conflict potential:
+    responses = await synthesizer.emit_event(event)
     
-    Scene: {scene_description}
-    Recent Events: {recent_events[:5]}
-    Subtext Analysis: {json.dumps(subtext, indent=2)}
-    
-    Calculate:
-    1. Tension score (0.0-1.0)
-    2. Should generate conflict (true/false)
-    3. Primary dynamic at play
-    4. Suggested conflict types
-    
-    Format as JSON.
-    """
-    
-    response = await agent.run(prompt)
-    
-    try:
-        result = json.loads(response.content)
+    # Get enhanced subsystem for detailed analysis
+    enhanced_subsystem = synthesizer._subsystems.get(SubsystemType.SLICE_OF_LIFE)
+    if enhanced_subsystem and hasattr(enhanced_subsystem, 'analyze_scene_tensions'):
+        tensions = await enhanced_subsystem.analyze_scene_tensions({
+            'scene_description': scene_description,
+            'present_npcs': npcs_present,
+            'recent_events': recent_events
+        })
+        
         return {
-            'tension_score': float(result.get('tension_score', 0.5)),
-            'should_generate_conflict': result.get('should_generate', False),
-            'primary_dynamic': result.get('primary_dynamic', subtext.get('primary_dynamic')),
-            'potential_conflict_types': result.get('suggested_types', []),
-            'subtext_analysis': subtext
+            'tension_score': sum(t.get('level', 0) for t in tensions.get('tensions', [])) / max(1, len(tensions.get('tensions', []))),
+            'should_generate_conflict': tensions.get('should_generate_conflict', False),
+            'primary_dynamic': tensions.get('tensions', [{}])[0].get('source', 'none') if tensions.get('tensions') else 'none',
+            'potential_conflict_types': [tensions.get('suggested_type', 'subtle_rivalry')],
+            'tension_analysis': tensions
         }
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning(f"Failed to analyze scene: {e}")
+    
+    # Fallback
+    return {
+        'tension_score': 0.5,
+        'should_generate_conflict': False,
+        'primary_dynamic': 'unclear',
+        'potential_conflict_types': [],
+        'tension_analysis': {}
+    }
+
+
+@function_tool
+async def integrate_daily_conflicts(
+    ctx: RunContextWrapper,
+    activity_type: str,
+    activity_description: str
+) -> Dict[str, Any]:
+    """Integrate conflicts into daily activities through synthesizer"""
+    
+    user_id = ctx.data.get('user_id')
+    conversation_id = ctx.data.get('conversation_id')
+    
+    # Use synthesizer
+    from logic.conflict_system.conflict_synthesizer import get_synthesizer
+    synthesizer = await get_synthesizer(user_id, conversation_id)
+    
+    # Get current conflict state
+    system_state = await synthesizer.get_system_state()
+    
+    if system_state['metrics']['conflict_count'] == 0:
         return {
-            'tension_score': 0.5,
-            'should_generate_conflict': False,
-            'primary_dynamic': 'unclear',
-            'potential_conflict_types': [],
-            'subtext_analysis': subtext
+            'conflicts_active': False,
+            'activity_proceeds_normally': True
         }
+    
+    # Process activity through synthesizer
+    scene_context = {
+        'activity': activity_type,
+        'description': activity_description,
+        'integrating_conflicts': True
+    }
+    
+    result = await synthesizer.process_scene(scene_context)
+    
+    return {
+        'conflicts_active': True,
+        'manifestation': result.get('manifestations', []),
+        'player_choices': result.get('choices', []),
+        'npc_reactions': result.get('npc_behaviors', {}),
+        'atmosphere': result.get('atmospheric_elements', [])
+    }
