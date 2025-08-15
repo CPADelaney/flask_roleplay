@@ -2,18 +2,9 @@
 Event System
 
 This module provides a comprehensive event system that integrates with other game systems
-including NPCs, lore, conflicts, and artifacts. It handles event generation, processing,
-and propagation throughout the game world.
+including NPCs, lore, conflicts (via new synthesizer), and artifacts.
 
-Refactor highlights:
-- Cancellation-safe worker loop (no stray task_done calls)
-- PriorityQueue with true priority ordering
-- Single-init guard + configurable worker pool
-- Graceful shutdown with optional drain
-- Effective cancel semantics for queued events
-- Hardened metrics, IDs, logging
-
-Updated to properly use the new dynamic relationship system.
+REFACTORED: Updated to use new ConflictSynthesizer instead of ConflictResolutionSystem
 """
 
 from __future__ import annotations
@@ -26,7 +17,7 @@ from datetime import datetime
 from itertools import count
 from uuid import uuid4
 
-import asyncpg  # explicit import
+import asyncpg
 
 from agents import function_tool, RunContextWrapper, Agent, Runner, trace
 from nyx.integrate import get_central_governance
@@ -34,6 +25,9 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
 
 from db.connection import get_db_connection_context
+
+# NEW: Import the conflict synthesizer
+from logic.conflict_system.conflict_synthesizer import get_synthesizer, ConflictSynthesizer
 
 from logic.dynamic_relationships import OptimizedRelationshipManager
 from logic.artifact_system.artifact_manager import ArtifactManager
@@ -48,7 +42,7 @@ logger = logging.getLogger(__name__)
 class EventSystem:
     """
     Comprehensive event system that handles event generation, processing,
-    and propagation throughout the game world.
+    and propagation throughout the game world, now with new conflict synthesizer.
 
     Public API (unchanged):
       - await initialize()
@@ -76,8 +70,8 @@ class EventSystem:
         self.num_workers = max(1, int(num_workers))
         self._worker_tasks: List[asyncio.Task] = []
 
-        # core systems
-        self.conflict_resolution: Optional[ConflictResolutionSystem] = None
+        # core systems - UPDATED
+        self.conflict_synthesizer: Optional[ConflictSynthesizer] = None  # NEW
         self.artifact_manager: Optional[ArtifactManager] = None
         self.lore_system = None
         self.npc_learning: Optional[NPCLearningManager] = None
@@ -113,17 +107,23 @@ class EventSystem:
             if self.is_initialized:
                 return self
 
-            # Initialize core systems
-            self.conflict_resolution = ConflictResolutionSystem(self.user_id, self.conversation_id)
-            await self.conflict_resolution.initialize()
+            # Initialize conflict synthesizer - NEW
+            self.conflict_synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
+            logger.info(f"Initialized conflict synthesizer for event system")
 
+            # Initialize artifact manager
             self.artifact_manager = ArtifactManager(self.user_id, self.conversation_id)
             await self.artifact_manager.initialize()
 
             # Import LoreSystem lazily to avoid circular deps
-            from logic.lore.core.system import LoreSystem
-            self.lore_system = LoreSystem()
+            try:
+                from logic.lore.core.system import LoreSystem
+                self.lore_system = LoreSystem()
+            except ImportError:
+                logger.warning("LoreSystem not available")
+                self.lore_system = None
 
+            # Initialize relationship and NPC systems
             self.relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
             self.npc_learning = NPCLearningManager(self.user_id, self.conversation_id)
             self.belief_system = NPCBeliefSystemIntegration(self.user_id, self.conversation_id)
@@ -131,7 +131,7 @@ class EventSystem:
             # Initialize agents (best effort)
             await self._initialize_agents()
 
-            # Handlers
+            # Register handlers
             self._register_default_handlers()
 
             # Spawn worker tasks (guarded; idempotent)
@@ -186,19 +186,19 @@ class EventSystem:
             self.event_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_MANAGER,
                 agent_id="event_manager",
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
             )
 
             self.analysis_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_ANALYZER,
                 agent_id="event_analyzer",
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
             )
 
             self.propagation_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_PROPAGATOR,
                 agent_id="event_propagator",
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
             )
 
             self.agent_context = {
@@ -218,7 +218,11 @@ class EventSystem:
     # ---- handlers -----------------------------------------------------------------
 
     def _register_default_handlers(self):
+        """Register default event handlers"""
         self.register_handler("conflict_event", self._handle_conflict_event)
+        self.register_handler("conflict_created", self._handle_conflict_created)
+        self.register_handler("conflict_resolved", self._handle_conflict_resolved)
+        self.register_handler("conflict_scene", self._handle_conflict_scene)
         self.register_handler("artifact_event", self._handle_artifact_event)
         self.register_handler("lore_event", self._handle_lore_event)
         self.register_handler("npc_event", self._handle_npc_event)
@@ -331,6 +335,7 @@ class EventSystem:
                     continue
 
                 # Process + propagate
+                await self._process_event(event)
                 await self._propagate_event(event)
 
                 # Mark processed
@@ -486,29 +491,250 @@ class EventSystem:
             if "adaptation" in result:
                 learning["adaptations"].append({"timestamp": datetime.utcnow().isoformat(), "details": result["adaptation"]})
 
-    # ---- default handlers ---------------------------------------------------------
+    # ---- NEW: Updated Conflict Handlers ----
 
     async def _handle_conflict_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
-        """Route all conflict events through synthesizer"""
+        """Generic conflict event handler - routes to synthesizer"""
         try:
-            from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
+            if not self.conflict_synthesizer:
+                return {"error": "Conflict synthesizer not initialized"}
             
-            data = event["data"]
+            data = event.get("data", {})
+            
+            # Determine what kind of conflict operation this is
+            if "create" in data:
+                # Create new conflict
+                conflict_type = data.get("conflict_type", "slice")
+                context = data.get("context", {})
+                result = await self.conflict_synthesizer.create_conflict(conflict_type, context)
+                return {"created": True, "conflict": result}
+                
+            elif "resolve" in data:
+                # Resolve conflict
+                conflict_id = data.get("conflict_id")
+                if not conflict_id:
+                    return {"error": "No conflict_id provided for resolution"}
+                resolution_type = data.get("resolution_type", "natural")
+                context = data.get("context", {})
+                result = await self.conflict_synthesizer.resolve_conflict(
+                    conflict_id, resolution_type, context
+                )
+                return {"resolved": True, "resolution": result}
+                
+            elif "process_scene" in data:
+                # Process a scene through conflicts
+                scene_context = data.get("scene_context", {})
+                result = await self.conflict_synthesizer.process_scene(scene_context)
+                return {"processed": True, "scene_result": result}
+                
+            else:
+                # Get conflict state
+                conflict_id = data.get("conflict_id")
+                if conflict_id:
+                    state = await self.conflict_synthesizer.get_conflict_state(conflict_id)
+                    return {"state": state}
+                else:
+                    system_state = await self.conflict_synthesizer.get_system_state()
+                    return {"system_state": system_state}
+                    
+        except Exception as e:
+            logger.error(f"Error handling conflict event: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    async def _handle_conflict_created(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
+        """Handle a conflict creation event"""
+        try:
+            data = event.get("data", {})
+            conflict_type = data.get("conflict_type", "slice")
+            
+            # Extract context for conflict creation
+            context = {
+                "description": data.get("description", ""),
+                "participants": data.get("participants", []),
+                "location": data.get("location"),
+                "intensity": data.get("intensity", "moderate"),
+                "is_multiparty": data.get("is_multiparty", False),
+                "party_count": data.get("party_count"),
+                "trigger_event": event.get("id")
+            }
+            
+            # Check if it should be multiparty based on participants
+            if len(context["participants"]) > 2 and not context["is_multiparty"]:
+                context["is_multiparty"] = True
+                context["party_count"] = len(context["participants"])
+            
+            result = await self.conflict_synthesizer.create_conflict(conflict_type, context)
+            
+            # Create follow-up events if needed
+            if result.get("narrative_hooks"):
+                for hook in result["narrative_hooks"][:3]:  # Limit to 3 hooks
+                    await self.create_event(
+                        event_type="narrative_hook",
+                        event_data={
+                            "hook": hook,
+                            "conflict_id": result.get("conflict_id"),
+                            "source": "conflict_creation"
+                        },
+                        priority=3
+                    )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error handling conflict creation: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    async def _handle_conflict_resolved(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
+        """Handle a conflict resolution event"""
+        try:
+            data = event.get("data", {})
             conflict_id = data.get("conflict_id")
             
             if not conflict_id:
-                return {"error": "No conflict ID provided"}
+                return {"error": "No conflict_id provided"}
             
-            # Route through synthesizer
-            synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
-            return await synthesizer.process_conflict_event(conflict_id, data)
+            resolution_type = data.get("resolution_type", "natural")
+            context = {
+                "reason": data.get("reason"),
+                "victor": data.get("victor"),
+                "consequences": data.get("consequences", {}),
+                "trigger_event": event.get("id")
+            }
+            
+            result = await self.conflict_synthesizer.resolve_conflict(
+                conflict_id, resolution_type, context
+            )
+            
+            # Create follow-up events for consequences
+            if result.get("new_conflicts_created"):
+                for new_conflict_id in result["new_conflicts_created"]:
+                    await self.create_event(
+                        event_type="conflict_escalation",
+                        event_data={
+                            "parent_conflict": conflict_id,
+                            "new_conflict": new_conflict_id,
+                            "reason": "resolution_consequence"
+                        },
+                        priority=5
+                    )
+            
+            return result
             
         except Exception as e:
-            logger.error(f"Error handling conflict event: {e}")
+            logger.error(f"Error handling conflict resolution: {e}", exc_info=True)
             return {"error": str(e)}
+
+    async def _handle_conflict_scene(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
+        """Process a scene through the conflict system"""
+        try:
+            data = event.get("data", {})
+            scene_context = {
+                "scene_type": data.get("scene_type", "interaction"),
+                "location": data.get("location"),
+                "participants": data.get("participants", []),
+                "activity": data.get("activity"),
+                "mood": data.get("mood"),
+                "player_action": data.get("player_action")
+            }
+            
+            result = await self.conflict_synthesizer.process_scene(scene_context)
+            
+            # Check for emergent conflicts
+            if result.get("conflicts_detected"):
+                for conflict_id in result["conflicts_detected"]:
+                    await self.create_event(
+                        event_type="conflict_manifestation",
+                        event_data={
+                            "conflict_id": conflict_id,
+                            "scene_id": data.get("scene_id"),
+                            "manifestations": result.get("manifestations", [])
+                        },
+                        priority=4
+                    )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error processing conflict scene: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    # ---- Helper Methods for Conflict Integration ----
+
+    async def create_conflict_event(
+        self,
+        conflict_type: str,
+        context: Dict[str, Any],
+        priority: int = 5
+    ) -> Dict[str, Any]:
+        """Convenience method to create a conflict through the event system"""
+        return await self.create_event(
+            event_type="conflict_created",
+            event_data={
+                "conflict_type": conflict_type,
+                **context
+            },
+            priority=priority
+        )
+
+    async def resolve_conflict_event(
+        self,
+        conflict_id: int,
+        resolution_type: str,
+        context: Dict[str, Any],
+        priority: int = 5
+    ) -> Dict[str, Any]:
+        """Convenience method to resolve a conflict through the event system"""
+        return await self.create_event(
+            event_type="conflict_resolved",
+            event_data={
+                "conflict_id": conflict_id,
+                "resolution_type": resolution_type,
+                **context
+            },
+            priority=priority
+        )
+
+    async def check_conflict_triggers(
+        self,
+        scene_data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Check if current scene should trigger any conflicts"""
+        if not self.conflict_synthesizer:
+            return []
+        
+        # Get system state
+        system_state = await self.conflict_synthesizer.get_system_state()
+        
+        triggers = []
+        
+        # Check tension levels
+        if "metrics" in system_state:
+            metrics = system_state["metrics"]
+            if metrics.get("complexity_score", 0) > 0.7:
+                triggers.append({
+                    "type": "high_complexity",
+                    "suggested_conflict": "social",
+                    "reason": "System complexity is high"
+                })
+        
+        # Check active conflicts for escalation
+        active_conflicts = system_state.get("active_conflicts", [])
+        if len(active_conflicts) > 3:
+            triggers.append({
+                "type": "conflict_overload", 
+                "suggested_action": "resolve_some",
+                "reason": f"{len(active_conflicts)} active conflicts"
+            })
+        
+        return triggers
+
+    # ---- Existing handlers (kept as-is) ----
 
     async def _handle_artifact_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         try:
+            if not self.artifact_manager:
+                return {"error": "Artifact manager not initialized"}
+                
             data = event["data"]
             artifact_id = data.get("artifact_id")
             if not artifact_id:
@@ -525,6 +751,9 @@ class EventSystem:
 
     async def _handle_lore_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         try:
+            if not self.lore_system:
+                return {"error": "Lore system not initialized"}
+                
             data = event["data"]
             return await self.lore_system.process_lore_event(self.user_id, self.conversation_id, data)
         except Exception as e:
@@ -538,21 +767,27 @@ class EventSystem:
             if not npc_ids:
                 return {"error": "No NPC IDs provided"}
 
-            learning_result = await self.npc_learning.process_event_for_learning(
-                data.get("event_text", ""),
-                data.get("event_type", "unknown"),
-                npc_ids,
-                data.get("player_response"),
-            )
+            results = {}
+            
+            if self.npc_learning:
+                learning_result = await self.npc_learning.process_event_for_learning(
+                    data.get("event_text", ""),
+                    data.get("event_type", "unknown"),
+                    npc_ids,
+                    data.get("player_response"),
+                )
+                results["learning"] = learning_result
 
-            belief_result = await self.belief_system.process_event_for_beliefs(
-                data.get("event_text", ""),
-                data.get("event_type", "unknown"),
-                npc_ids,
-                data.get("factuality", 1.0),
-            )
+            if self.belief_system:
+                belief_result = await self.belief_system.process_event_for_beliefs(
+                    data.get("event_text", ""),
+                    data.get("event_type", "unknown"),
+                    npc_ids,
+                    data.get("factuality", 1.0),
+                )
+                results["beliefs"] = belief_result
 
-            return {"learning": learning_result, "beliefs": belief_result}
+            return results
         except Exception as e:
             logger.error(f"Error handling NPC event: {e}")
             return {"error": str(e)}
@@ -596,6 +831,9 @@ class EventSystem:
 
     async def _handle_time_event(self, event: Dict[str, Any], guidance: Optional[Dict] = None) -> Dict[str, Any]:
         try:
+            if not self.lore_system:
+                return {"error": "Lore system not initialized"}
+                
             data = event["data"]
             time_amount = data.get("time_amount", 0)
             time_unit = data.get("time_unit", "hours")
@@ -675,6 +913,3 @@ class EventSystem:
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
             return {"error": str(e)}
-
-
-
