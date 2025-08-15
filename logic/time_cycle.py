@@ -1431,6 +1431,117 @@ async def select_events_randomly(
     
     return events
 
+async def get_current_game_day(user_id: int, conversation_id: int, use_names: bool = True) -> Union[int, Dict[str, Any]]:
+    """
+    Get the current game day with optional custom calendar names.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        use_names: If True, returns dict with named values; if False, returns just day number
+        
+    Returns:
+        Either day as integer (1-30) or dict with named calendar values
+    """
+    year, month, day, time_of_day = await get_current_time(user_id, conversation_id)
+    
+    if not use_names:
+        return day
+    
+    # Load custom calendar names
+    from logic.calendar import load_calendar_names
+    calendar_names = await load_calendar_names(user_id, conversation_id)
+    
+    # Get the day of week (0-6) - simple calculation assuming 7-day weeks
+    # This calculates based on total days elapsed
+    total_days = ((year - 1) * MONTHS_PER_YEAR * DAYS_PER_MONTH) + \
+                 ((month - 1) * DAYS_PER_MONTH) + \
+                 (day - 1)
+    day_of_week_index = total_days % 7
+    
+    # Build the result with custom names
+    result = {
+        "day_number": day,
+        "day_of_week": calendar_names["days"][day_of_week_index] if day_of_week_index < len(calendar_names["days"]) else f"Day {day_of_week_index + 1}",
+        "month_name": calendar_names["months"][month - 1] if month <= len(calendar_names["months"]) else f"Month {month}",
+        "month_number": month,
+        "year_name": calendar_names["year_name"],
+        "year_number": year,
+        "time_of_day": time_of_day,
+        "full_date": f"{calendar_names['days'][day_of_week_index]}, {day} {calendar_names['months'][month - 1]}, {calendar_names['year_name']}",
+        "short_date": f"{day} {calendar_names['months'][month - 1][:3]}"  # First 3 letters of month
+    }
+    
+    return result
+
+async def get_formatted_game_date(user_id: int, conversation_id: int) -> str:
+    """
+    Get a nicely formatted game date string using custom calendar names.
+    
+    Returns:
+        Formatted date string like "Sol, 15 Aurora, The Eternal Cycle - Morning"
+    """
+    date_info = await get_current_game_day(user_id, conversation_id, use_names=True)
+    
+    if isinstance(date_info, dict):
+        return f"{date_info['day_of_week']}, {date_info['day_number']} {date_info['month_name']}, {date_info['year_name']} - {date_info['time_of_day']}"
+    else:
+        # Fallback if something went wrong
+        year, month, day, time_of_day = await get_current_time(user_id, conversation_id)
+        return f"Day {day}, Month {month}, Year {year} - {time_of_day}"
+
+async def get_calendar_context(user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """
+    Get full calendar context including current time and all naming.
+    Useful for narrative generation and conflict systems.
+    """
+    from logic.calendar import load_calendar_names
+    
+    year, month, day, time_of_day = await get_current_time(user_id, conversation_id)
+    calendar_names = await load_calendar_names(user_id, conversation_id)
+    
+    # Calculate day of week
+    total_days = ((year - 1) * MONTHS_PER_YEAR * DAYS_PER_MONTH) + \
+                 ((month - 1) * DAYS_PER_MONTH) + \
+                 (day - 1)
+    day_of_week_index = total_days % 7
+    
+    return {
+        "numeric": {
+            "year": year,
+            "month": month,
+            "day": day,
+            "time_of_day": time_of_day,
+            "day_of_week": day_of_week_index + 1  # 1-7 instead of 0-6
+        },
+        "named": {
+            "year": calendar_names["year_name"],
+            "month": calendar_names["months"][month - 1] if month <= len(calendar_names["months"]) else f"Month {month}",
+            "day_name": calendar_names["days"][day_of_week_index] if day_of_week_index < len(calendar_names["days"]) else f"Day {day_of_week_index + 1}",
+            "time_phase": time_of_day
+        },
+        "formatted": {
+            "full": f"{calendar_names['days'][day_of_week_index]}, {day} {calendar_names['months'][month - 1]}, {calendar_names['year_name']} - {time_of_day}",
+            "short": f"{day}/{month}/{year} {time_of_day}",
+            "narrative": f"It is {time_of_day.lower()} on {calendar_names['days'][day_of_week_index]}, the {day}{_get_ordinal_suffix(day)} of {calendar_names['months'][month - 1]}"
+        },
+        "calendar_names": calendar_names  # Include full naming system for reference
+    }
+
+def _get_ordinal_suffix(day: int) -> str:
+    """Get ordinal suffix for a day number (1st, 2nd, 3rd, etc.)"""
+    if 10 <= day % 100 <= 20:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+    return suffix
+
+# For backwards compatibility - simple version that just returns the day number
+async def get_current_game_day_simple(user_id: int, conversation_id: int) -> int:
+    """Simple version that just returns the day number for backwards compatibility."""
+    year, month, day, time_of_day = await get_current_time(user_id, conversation_id)
+    return day
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Enhanced Vital Crisis Narration (remains the same)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
