@@ -49,6 +49,12 @@ class ConflictContext(BaseModel):
     character_ids: Optional[List[int]] = None
     stakeholders: Optional[List[int]] = None
 
+    # Multi-party characteristics (NEW)
+    is_multiparty: Optional[bool] = False
+    party_count: Optional[int] = Field(None, ge=2)  # Number of distinct parties
+    multiparty_dynamics: Optional[Dict[str, Any]] = None  # Alliance potential, etc.
+    faction_data: Optional[List[Dict[str, Any]]] = None  # Info about each faction
+
     # Conflict-specific fields
     conflict_type: Optional[str] = None
     intensity: Optional[str] = None  # e.g., "tension", "friction"
@@ -300,7 +306,6 @@ class SubsystemType(Enum):
     FLOW = "flow"
     SOCIAL = "social"
     LEVERAGE = "leverage"
-    MULTIPARTY = "multiparty"
     BACKGROUND = "background"
     VICTORY = "victory"
     CANON = "canon"
@@ -581,6 +586,21 @@ class ConflictSynthesizer:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Create a new conflict through the appropriate subsystems"""
+        
+        # Validate conflict type - no more 'multiparty' as a type
+        valid_types = ['social', 'slice', 'background', 'political', 
+                      'economic', 'ideological', 'resource', 'personal']
+        
+        if conflict_type not in valid_types:
+            logger.warning(f"Unknown conflict type: {conflict_type}, defaulting to 'slice'")
+            conflict_type = 'slice'
+        
+        # Detect if this should be multiparty based on participants
+        participants = context.get('participants', [])
+        if len(participants) > 2 and not context.get('is_multiparty'):
+            context['is_multiparty'] = True
+            context['party_count'] = len(participants)
+            logger.info(f"Auto-detected multiparty conflict with {len(participants)} parties")
         
         # Generate unique ID
         import uuid
@@ -950,30 +970,34 @@ class ConflictSynthesizer:
     ) -> Set[SubsystemType]:
         """Determine which subsystems should handle an operation"""
         
-        # Use orchestrator agent if available
-        if self.orchestrator:
-            return await self._determine_with_llm(operation, conflict_type, context)
-        
-        # Fallback to rule-based
         subsystems = set()
         
         # Always include edge handler for safety
         subsystems.add(SubsystemType.EDGE_HANDLER)
         
-        # Based on conflict type
+        # Based on actual conflict type (not multiparty)
         if 'slice' in conflict_type.lower():
             subsystems.add(SubsystemType.SLICE_OF_LIFE)
         if 'social' in conflict_type.lower():
             subsystems.add(SubsystemType.SOCIAL)
-        if 'power' in conflict_type.lower():
+        if 'background' in conflict_type.lower():
+            subsystems.add(SubsystemType.BACKGROUND)
+        if 'power' in conflict_type.lower() or 'political' in conflict_type.lower():
             subsystems.add(SubsystemType.LEVERAGE)
         
-        # Always include these for any conflict
+        # Core subsystems for any conflict
         subsystems.update({
             SubsystemType.TENSION,
             SubsystemType.FLOW,
             SubsystemType.STAKEHOLDER
         })
+        
+        # If multiparty, ensure stakeholder system is extra active
+        if context.get('is_multiparty'):
+            # Stakeholder system will handle faction management
+            # The actual conflict type subsystems handle their domain
+            # with multiparty enhancement
+            pass  # Stakeholder already added above
         
         return subsystems
     
