@@ -8,13 +8,53 @@ import logging
 import json
 import asyncio
 import random
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from datetime import datetime, timedelta
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
+
+class ChoiceItem(TypedDict):
+    label: str
+    action: str
+    priority: int
+
+class NpcBehaviorItem(TypedDict):
+    npc_id: int
+    behavior: str
+
+class ProcessConflictInSceneResponse(TypedDict):
+    processed: bool
+    conflicts_active: bool
+    conflicts_detected: List[int]
+    manifestations: List[str]
+    choices: List[ChoiceItem]
+    npc_behaviors: List[NpcBehaviorItem]
+    error: str
+
+class TensionSignal(TypedDict):
+    source: str
+    level: float
+
+class AnalyzeSceneResponse(TypedDict):
+    tension_score: float
+    should_generate_conflict: bool
+    primary_dynamic: str
+    potential_conflict_types: List[str]
+    tension_signals: List[TensionSignal]
+    error: str
+
+class IntegrateDailyConflictsResponse(TypedDict):
+    conflicts_active: bool
+    activity_proceeds_normally: bool
+    manifestations: List[str]
+    player_choices: List[ChoiceItem]
+    npc_reactions: List[NpcBehaviorItem]
+    atmosphere: List[str]
+    error: str
+
 
 # ===============================================================================
 # ENHANCED INTEGRATION SUBSYSTEM (Works through Synthesizer)
@@ -518,27 +558,75 @@ async def process_conflict_in_scene(
     scene_type: str,
     activity: str,
     present_npcs: List[int]
-) -> Dict[str, Any]:
-    """Process conflicts within a scene through synthesizer"""
-    
+) -> ProcessConflictInSceneResponse:
+    """Process conflicts within a scene through synthesizer (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Use synthesizer to process scene
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
+
     scene_context = {
         'scene_type': scene_type,
         'activity': activity,
         'present_npcs': present_npcs,
-        'timestamp': datetime.now().isoformat()
+        'npcs': present_npcs,  # many subsystems look for `npcs`
+        'timestamp': datetime.now().isoformat(),
     }
-    
-    # Process through synthesizer
-    result = await synthesizer.process_scene(scene_context)
-    
-    return result
+
+    # 1) Process the scene for core manifestations/choices
+    synth_result = await synthesizer.process_scene(scene_context) or {}
+
+    # 2) Ask Stakeholder system explicitly for NPC behaviors (normalized)
+    behavior_evt = SystemEvent(
+        event_id=f"behaviors_{datetime.now().timestamp()}",
+        event_type=EventType.STATE_SYNC,
+        source_subsystem=SubsystemType.SLICE_OF_LIFE,
+        payload=scene_context,
+        target_subsystems={SubsystemType.STAKEHOLDER},
+        requires_response=True,
+        priority=5,
+    )
+    behavior_resps = await synthesizer.emit_event(behavior_evt) or []
+
+    npc_behaviors: List[NpcBehaviorItem] = []
+    for r in behavior_resps:
+        if r.subsystem == SubsystemType.STAKEHOLDER:
+            data = r.data or {}
+            raw = data.get('npc_behaviors', {})  # might be a dict {npc_id: behavior}
+            # normalize to list
+            for k, v in (raw.items() if isinstance(raw, dict) else []):
+                try:
+                    npc_id = int(k)
+                except Exception:
+                    continue
+                npc_behaviors.append({'npc_id': npc_id, 'behavior': str(v)})
+
+    # Normalize choices into a strict list
+    choices_src = synth_result.get('choices', []) or []
+    choices: List[ChoiceItem] = []
+    for c in choices_src:
+        # defensive coercion
+        label = str(c.get('label', c.get('text', 'Choice')))
+        action = str(c.get('action', c.get('id', 'unknown')))
+        try:
+            priority = int(c.get('priority', 5))
+        except Exception:
+            priority = 5
+        choices.append({'label': label, 'action': action, 'priority': priority})
+
+    return {
+        'processed': bool(synth_result.get('scene_processed', synth_result.get('processed', True))),
+        'conflicts_active': bool(synth_result.get('conflicts_active', False)),
+        'conflicts_detected': list(synth_result.get('conflicts_detected', []) or []),
+        'manifestations': list(synth_result.get('manifestations', []) or []),
+        'choices': choices,
+        'npc_behaviors': npc_behaviors,
+        'error': "",
+    }
 
 
 @function_tool
@@ -547,57 +635,74 @@ async def analyze_scene_for_conflict_potential(
     scene_description: str,
     npcs_present: List[int],
     recent_events: List[str]
-) -> Dict[str, Any]:
-    """Analyze a scene for potential conflict generation through synthesizer"""
-    
+) -> AnalyzeSceneResponse:
+    """Analyze a scene for potential conflict generation (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Create analysis event
-    event = SystemEvent(
+
+    evt = SystemEvent(
         event_id=f"analyze_{datetime.now().timestamp()}",
         event_type=EventType.STATE_SYNC,
         source_subsystem=SubsystemType.SLICE_OF_LIFE,
         payload={
             'scene_description': scene_description,
             'present_npcs': npcs_present,
+            'npcs': npcs_present,
             'recent_events': recent_events,
-            'request_analysis': True
+            'request_analysis': True,
         },
         target_subsystems={SubsystemType.SLICE_OF_LIFE},
-        requires_response=True
+        requires_response=True,
+        priority=5,
     )
-    
-    responses = await synthesizer.emit_event(event)
-    
-    # Get enhanced subsystem for detailed analysis
-    enhanced_subsystem = synthesizer._subsystems.get(SubsystemType.SLICE_OF_LIFE)
-    if enhanced_subsystem and hasattr(enhanced_subsystem, 'analyze_scene_tensions'):
-        tensions = await enhanced_subsystem.analyze_scene_tensions({
-            'scene_description': scene_description,
-            'present_npcs': npcs_present,
-            'recent_events': recent_events
-        })
-        
-        return {
-            'tension_score': sum(t.get('level', 0) for t in tensions.get('tensions', [])) / max(1, len(tensions.get('tensions', []))),
-            'should_generate_conflict': tensions.get('should_generate_conflict', False),
-            'primary_dynamic': tensions.get('tensions', [{}])[0].get('source', 'none') if tensions.get('tensions') else 'none',
-            'potential_conflict_types': [tensions.get('suggested_type', 'subtle_rivalry')],
-            'tension_analysis': tensions
-        }
-    
-    # Fallback
+
+    responses = await synthesizer.emit_event(evt) or []
+
+    best_signals: List[TensionSignal] = []
+    should_generate = False
+    primary_dynamic = "none"
+    suggested_types: List[str] = []
+    error = "no_response"
+
+    for r in responses:
+        if r.subsystem == SubsystemType.SLICE_OF_LIFE:
+            d = r.data or {}
+            tensions = d.get('tensions', []) or []
+            # Normalize signals
+            for t in tensions:
+                src = str(t.get('source', 'unknown'))
+                lvl = float(t.get('level', 0.0))
+                best_signals.append({'source': src, 'level': max(0.0, min(1.0, lvl))})
+            # Suggested type(s) and primary dynamic
+            suggested = d.get('suggested_type')
+            if suggested:
+                suggested_types.append(str(suggested))
+            if tensions:
+                # pick highest level as primary
+                primary = max(tensions, key=lambda x: float(x.get('level', 0.0)))
+                primary_dynamic = str(primary.get('source', primary_dynamic))
+            should_generate = bool(d.get('should_generate_conflict', False))
+            error = ""
+
+    # Compute tension score
+    if best_signals:
+        tension_score = sum(s['level'] for s in best_signals) / len(best_signals)
+    else:
+        tension_score = 0.0
+
     return {
-        'tension_score': 0.5,
-        'should_generate_conflict': False,
-        'primary_dynamic': 'unclear',
-        'potential_conflict_types': [],
-        'tension_analysis': {}
+        'tension_score': float(tension_score),
+        'should_generate_conflict': should_generate,
+        'primary_dynamic': primary_dynamic,
+        'potential_conflict_types': list(dict.fromkeys(suggested_types)),
+        'tension_signals': best_signals,
+        'error': error,
     }
 
 
@@ -606,38 +711,94 @@ async def integrate_daily_conflicts(
     ctx: RunContextWrapper,
     activity_type: str,
     activity_description: str
-) -> Dict[str, Any]:
-    """Integrate conflicts into daily activities through synthesizer"""
-    
+) -> IntegrateDailyConflictsResponse:
+    """Integrate conflicts into daily activities through synthesizer (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Use synthesizer
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Get current conflict state
-    system_state = await synthesizer.get_system_state()
-    
-    if system_state['metrics']['conflict_count'] == 0:
+
+    # Check if there are any active conflicts first
+    sys_state = await synthesizer.get_system_state() or {}
+    active_conflict_ids = sys_state.get('active_conflicts', []) or []
+    conflicts_active = len(active_conflict_ids) > 0
+
+    if not conflicts_active:
         return {
             'conflicts_active': False,
-            'activity_proceeds_normally': True
+            'activity_proceeds_normally': True,
+            'manifestations': [],
+            'player_choices': [],
+            'npc_reactions': [],
+            'atmosphere': [],
+            'error': "",
         }
-    
-    # Process activity through synthesizer
+
     scene_context = {
+        'scene_type': 'daily',
         'activity': activity_type,
-        'description': activity_description,
-        'integrating_conflicts': True
+        'activity_type': activity_type,
+        'scene_description': activity_description,
+        'integrating_conflicts': True,
+        'timestamp': datetime.now().isoformat(),
     }
-    
-    result = await synthesizer.process_scene(scene_context)
-    
+
+    synth_result = await synthesizer.process_scene(scene_context) or {}
+
+    # Ask Stakeholder system for NPC reactions for this activity
+    behavior_evt = SystemEvent(
+        event_id=f"daily_behaviors_{datetime.now().timestamp()}",
+        event_type=EventType.STATE_SYNC,
+        source_subsystem=SubsystemType.SLICE_OF_LIFE,
+        payload=scene_context,
+        target_subsystems={SubsystemType.STAKEHOLDER},
+        requires_response=True,
+        priority=5,
+    )
+    behavior_resps = await synthesizer.emit_event(behavior_evt) or []
+
+    npc_reactions: List[NpcBehaviorItem] = []
+    for r in behavior_resps:
+        if r.subsystem == SubsystemType.STAKEHOLDER:
+            data = r.data or {}
+            raw = data.get('npc_behaviors', {})
+            for k, v in (raw.items() if isinstance(raw, dict) else []):
+                try:
+                    npc_id = int(k)
+                except Exception:
+                    continue
+                npc_reactions.append({'npc_id': npc_id, 'behavior': str(v)})
+
+    # Normalize choices
+    choices_src = synth_result.get('choices', []) or []
+    player_choices: List[ChoiceItem] = []
+    for c in choices_src:
+        label = str(c.get('label', c.get('text', 'Choice')))
+        action = str(c.get('action', c.get('id', 'unknown')))
+        try:
+            priority = int(c.get('priority', 5))
+        except Exception:
+            priority = 5
+        player_choices.append({'label': label, 'action': action, 'priority': priority})
+
+    manifestations = list(synth_result.get('manifestations', []) or [])
+    atmosphere = list(
+        synth_result.get('atmospheric_elements', synth_result.get('atmosphere', [])) or []
+    )
+
+    # If nothing interesting happened, the activity may proceed normally even with conflicts present
+    activity_proceeds_normally = (not manifestations) and (not player_choices) and (not npc_reactions)
+
     return {
         'conflicts_active': True,
-        'manifestation': result.get('manifestations', []),
-        'player_choices': result.get('choices', []),
-        'npc_reactions': result.get('npc_behaviors', {}),
-        'atmosphere': result.get('atmospheric_elements', [])
+        'activity_proceeds_normally': activity_proceeds_normally,
+        'manifestations': manifestations,
+        'player_choices': player_choices,
+        'npc_reactions': npc_reactions,
+        'atmosphere': atmosphere,
+        'error': "",
     }
