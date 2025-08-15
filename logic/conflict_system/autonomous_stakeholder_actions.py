@@ -138,6 +138,8 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         self._reaction_generator = None
         self._strategy_planner = None
         self._personality_analyzer = None
+        self._pending_creations: Dict[str, Dict[str, Any]] = {}  # operation_id -> {npcs, conflict_type}
+
     
     # ========== ConflictSubsystem Interface Implementation ==========
     
@@ -225,6 +227,24 @@ class StakeholderAutonomySystem(ConflictSubsystem):
                 success=False,
                 data={'error': str(e)}
             )
+
+    async def _create_stakeholders_for_npcs(
+        self,
+        npcs: List[int],
+        conflict_id: int,
+        conflict_type: Optional[str]
+    ) -> List[Stakeholder]:
+        created: List[Stakeholder] = []
+        for npc_id in (npcs or [])[:5]:  # keep your safety cap
+            stakeholder = await self.create_stakeholder(
+                npc_id=npc_id,
+                conflict_id=conflict_id,
+                initial_role=self._determine_initial_role(conflict_type or "")
+            )
+            if stakeholder:
+                self._active_stakeholders[stakeholder.stakeholder_id] = stakeholder
+                created.append(stakeholder)
+        return created
     
     async def health_check(self) -> Dict[str, Any]:
         """Return health status"""
@@ -287,51 +307,56 @@ class StakeholderAutonomySystem(ConflictSubsystem):
     # ========== Event Handlers ==========
     
     async def _on_conflict_created(self, event: SystemEvent) -> SubsystemResponse:
-        """Handle new conflict creation - create stakeholders"""
-        
-        conflict_id = event.payload.get('conflict_id')
+        conflict_id = event.payload.get('conflict_id')          # may be missing
         conflict_type = event.payload.get('conflict_type')
-        context = event.payload.get('context', {})
-        
-        # Get NPCs involved
-        npcs = context.get('npcs', [])
-        
-        # Create stakeholders for NPCs
-        created_stakeholders = []
-        side_effects = []
-        
-        for npc_id in npcs[:5]:  # Limit stakeholders
-            stakeholder = await self.create_stakeholder(
-                npc_id,
-                conflict_id,
-                self._determine_initial_role(conflict_type)
+        context = event.payload.get('context', {}) or {}
+    
+        # Be flexible about where NPC lists live
+        npcs = (
+            context.get('npcs')
+            or context.get('present_npcs')
+            or context.get('participants')
+            or []
+        )
+    
+        # If we don't have a conflict_id yet, defer and wait for a STATE_SYNC with ids
+        if not conflict_id:
+            self._pending_creations[event.event_id] = {
+                'npcs': npcs,
+                'conflict_type': conflict_type,
+            }
+            return SubsystemResponse(
+                subsystem=self.subsystem_type,
+                event_id=event.event_id,
+                success=True,
+                data={
+                    'stakeholders_created': 0,
+                    'deferred': True,
+                    'operation_id': event.event_id,
+                },
             )
-            
-            if stakeholder:
-                self._active_stakeholders[stakeholder.stakeholder_id] = stakeholder
-                created_stakeholders.append(stakeholder)
-                
-                # Notify about stakeholder creation
-                side_effects.append(SystemEvent(
-                    event_id=f"stakeholder_created_{stakeholder.stakeholder_id}",
-                    event_type=EventType.STAKEHOLDER_ACTION,
-                    source_subsystem=self.subsystem_type,
-                    payload={
-                        'stakeholder_id': stakeholder.stakeholder_id,
-                        'action_type': 'joined_conflict',
-                        'role': stakeholder.current_role.value
-                    }
-                ))
-        
+    
+        # If we DO have the conflict_id, create now
+        created = await self._create_stakeholders_for_npcs(npcs, conflict_id, conflict_type)
+        side_effects = [
+            SystemEvent(
+                event_id=f"stakeholder_created_{s.stakeholder_id}",
+                event_type=EventType.STAKEHOLDER_ACTION,
+                source_subsystem=self.subsystem_type,
+                payload={'stakeholder_id': s.stakeholder_id, 'action_type': 'joined_conflict', 'role': s.current_role.value},
+            )
+            for s in created
+        ]
+    
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
             success=True,
             data={
-                'stakeholders_created': len(created_stakeholders),
-                'stakeholder_ids': [s.stakeholder_id for s in created_stakeholders]
+                'stakeholders_created': len(created),
+                'stakeholder_ids': [s.stakeholder_id for s in created],
             },
-            side_effects=side_effects
+            side_effects=side_effects,
         )
     
     async def _on_conflict_updated(self, event: SystemEvent) -> SubsystemResponse:
@@ -483,32 +508,39 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         )
     
     async def _on_state_sync(self, event: SystemEvent) -> SubsystemResponse:
-        """Sync state with scene processing"""
-        
-        scene_context = event.payload
+        """Sync state with scene processing (and finalize deferred stakeholder creation)."""
+        raw_payload = event.payload or {}
+        scene_context = raw_payload.get('scene_context', raw_payload)  # supports both shapes
+    
+        # >>> NEW: finalize any deferred stakeholder creation when conflict_id is known
+        created_after_defer = 0
+        op_id = raw_payload.get('operation_id')
+        cid = raw_payload.get('conflict_id')
+        if op_id and cid and op_id in self._pending_creations:
+            pending = self._pending_creations.pop(op_id)
+            created = await self._create_stakeholders_for_npcs(
+                npcs=pending.get('npcs') or [],
+                conflict_id=cid,
+                conflict_type=pending.get('conflict_type'),
+            )
+            created_after_defer = len(created)
+    
         npcs_present = scene_context.get('npcs', [])
-        
-        # Determine NPC behaviors based on stakeholder state
-        npc_behaviors = {}
-        
+        npc_behaviors: Dict[int, str] = {}
+    
         for npc_id in npcs_present:
             stakeholder = self._find_stakeholder_by_npc(npc_id)
             if stakeholder:
-                behavior = self._determine_scene_behavior(stakeholder)
-                npc_behaviors[npc_id] = behavior
-        
-        # Check for autonomous actions
+                npc_behaviors[npc_id] = self._determine_scene_behavior(stakeholder)
+    
         autonomous_actions = []
         for stakeholder in self._active_stakeholders.values():
             if stakeholder.npc_id in npcs_present:
                 if self._should_take_autonomous_action(stakeholder, scene_context):
-                    action = await self.make_autonomous_decision(
-                        stakeholder,
-                        scene_context
-                    )
+                    action = await self.make_autonomous_decision(stakeholder, scene_context)
                     if action:
                         autonomous_actions.append(action)
-        
+    
         return SubsystemResponse(
             subsystem=self.subsystem_type,
             event_id=event.event_id,
@@ -516,16 +548,13 @@ class StakeholderAutonomySystem(ConflictSubsystem):
             data={
                 'npc_behaviors': npc_behaviors,
                 'autonomous_actions': [
-                    {
-                        'stakeholder': a.stakeholder_id,
-                        'action': a.description,
-                        'type': a.action_type.value
-                    }
+                    {'stakeholder': a.stakeholder_id, 'action': a.description, 'type': a.action_type.value}
                     for a in autonomous_actions
-                ]
-            }
+                ],
+                'stakeholders_created_after_defer': created_after_defer,  # <<< visibility
+            },
         )
-    
+        
     async def _on_health_check(self, event: SystemEvent) -> SubsystemResponse:
         """Respond to health check"""
         
@@ -1126,17 +1155,14 @@ async def create_conflict_stakeholder(
     npc_id: int,
     conflict_id: int,
     suggested_role: Optional[str] = None
-) -> Dict[str, Any]:
+) -> str:  # <-- return JSON string
     """Create a stakeholder for a conflict - routes through orchestrator"""
-    
     from logic.conflict_system.conflict_synthesizer import get_synthesizer
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Emit stakeholder creation event
+
     event = SystemEvent(
         event_id=f"create_stakeholder_{npc_id}",
         event_type=EventType.STAKEHOLDER_ACTION,
@@ -1149,30 +1175,39 @@ async def create_conflict_stakeholder(
         },
         requires_response=True
     )
-    
+
     responses = await synthesizer.emit_event(event)
-    
-    if responses:
-        return responses[0].data
-    return {'error': 'Failed to create stakeholder'}
+    payload = responses[0].data if responses else {'error': 'Failed to create stakeholder'}
+    return json.dumps(payload, ensure_ascii=False)
 
 @function_tool
 async def stakeholder_take_action(
     ctx: RunContextWrapper,
     stakeholder_id: int,
-    conflict_state: Dict[str, Any],
-    options: Optional[List[str]] = None
-) -> Dict[str, Any]:
+    conflict_state_json: str,          # <-- JSON string instead of Dict
+    options_json: Optional[str] = None  # <-- JSON string instead of List[str]
+) -> str:                               # <-- return JSON string
     """Have a stakeholder take an autonomous action - routes through orchestrator"""
-    
     from logic.conflict_system.conflict_synthesizer import get_synthesizer
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Emit action event
+
+    try:
+        conflict_state: Dict[str, Any] = json.loads(conflict_state_json) if conflict_state_json else {}
+    except Exception:
+        conflict_state = {}
+
+    options: Optional[List[str]] = None
+    if options_json:
+        try:
+            parsed = json.loads(options_json)
+            if isinstance(parsed, list):
+                options = parsed
+        except Exception:
+            options = None
+
     event = SystemEvent(
         event_id=f"stakeholder_action_{stakeholder_id}",
         event_type=EventType.STAKEHOLDER_ACTION,
@@ -1184,9 +1219,7 @@ async def stakeholder_take_action(
         },
         requires_response=True
     )
-    
+
     responses = await synthesizer.emit_event(event)
-    
-    if responses:
-        return responses[0].data
-    return {'error': 'Failed to execute action'}
+    payload = responses[0].data if responses else {'error': 'Failed to execute action'}
+    return json.dumps(payload, ensure_ascii=False)
