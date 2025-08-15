@@ -209,6 +209,11 @@ from nyx.nyx_governance import (
 from nyx.integrate import get_central_governance
 from nyx.directive_handler import DirectiveHandler
 
+from logic.conflict_system.conflict_synthesizer import (
+    get_synthesizer,
+    ConflictSynthesizer
+)
+
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
@@ -256,13 +261,13 @@ class CompleteWorldDirectorContext:
     universal_updater: Optional[UniversalUpdaterAgent] = None
     
     # Memory and reveals
-    memory_manager: Optional[Any] = None  # Will use class methods
-    reveal_manager: Optional[Any] = None  # Will use class methods
+    memory_manager: Optional[Any] = None
+    reveal_manager: Optional[Any] = None
     
     # Relationships
     relationship_manager: Optional[OptimizedRelationshipManager] = None
     
-    # Addictions - COMPLETE
+    # Addictions
     addiction_context: Optional[AddictionContext] = None
     
     # Events and activities
@@ -284,6 +289,9 @@ class CompleteWorldDirectorContext:
     # Calendar
     calendar_names: Optional[Dict[str, Any]] = None
     
+    # NEW: Add conflict synthesizer
+    conflict_synthesizer: Optional[ConflictSynthesizer] = None
+    
     # State tracking
     current_world_state: Optional[CompleteWorldState] = None
     
@@ -302,11 +310,15 @@ class CompleteWorldDirectorContext:
             # Initialize OpenAI manager
             self.openai_manager = OpenAIClientManager()
             
-            # Initialize addiction context - IMPORTANT
+            # Initialize addiction context
             self.addiction_context = AddictionContext(self.user_id, self.conversation_id)
             await self.addiction_context.initialize()
             
-            # Initialize event system
+            # NEW: Initialize conflict synthesizer BEFORE event system
+            self.conflict_synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
+            logger.info("Initialized conflict synthesizer")
+            
+            # Initialize event system (now it won't fail)
             self.event_system = EventSystem(self.user_id, self.conversation_id)
             await self.event_system.initialize()
             
@@ -327,10 +339,13 @@ class CompleteWorldDirectorContext:
             self.directive_handler = DirectiveHandler(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
-                agent_type="world_director",  # or AgentType.WORLD_DIRECTOR if that enum exists
+                agent_type="world_director",
                 agent_id=f"world_director_{self.conversation_id}",
-                governance=self.nyx_governor  # Pass the governance instance
+                governance=self.nyx_governor
             )
+            
+            # Initialize relationship manager
+            self.relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
             
             # Load calendar names
             self.calendar_names = await load_calendar_names(self.user_id, self.conversation_id)
@@ -415,25 +430,105 @@ class CompleteWorldDirectorContext:
                 self.user_id, self.conversation_id
             )
             
-            # Calculate world mood
+            # NEW: Get conflict state
+            conflict_state = {}
+            active_conflicts = []
+            conflict_manifestations = []
+            if self.conflict_synthesizer:
+                try:
+                    conflict_system_state = await self.conflict_synthesizer.get_system_state()
+                    
+                    # Extract active conflicts
+                    active_conflicts = conflict_system_state.get('active_conflicts', [])
+                    
+                    # Build detailed conflict state
+                    conflict_state = {
+                        'active_conflicts': active_conflicts,
+                        'complexity_score': conflict_system_state.get('metrics', {}).get('complexity_score', 0),
+                        'total_conflicts': conflict_system_state.get('metrics', {}).get('total_conflicts', 0),
+                        'resolved_conflicts': conflict_system_state.get('metrics', {}).get('resolved_conflicts', 0),
+                        'subsystem_states': conflict_system_state.get('subsystem_states', {})
+                    }
+                    
+                    # Check if any conflicts should manifest in current scene
+                    if active_conflicts:
+                        scene_context = {
+                            "scene_type": "world_state_check",
+                            "location": location_data,
+                            "participants": [npc['npc_id'] for npc in npcs[:3]],
+                            "time_of_day": current_time.time_of_day if hasattr(current_time, 'time_of_day') else "afternoon"
+                        }
+                        
+                        scene_result = await self.conflict_synthesizer.process_scene(scene_context)
+                        if scene_result.get('manifestations'):
+                            conflict_manifestations = scene_result['manifestations']
+                            
+                except Exception as e:
+                    logger.warning(f"Could not get conflict state: {e}")
+            
+            # Calculate world mood (updated to consider conflicts)
             world_mood = self._calculate_complete_world_mood(
                 hidden_stats, vitals, stat_combinations,
                 addiction_status, active_cravings,
-                revelation is not None
+                revelation is not None,
+                len(active_conflicts) > 0  # Consider active conflicts
             )
             
-            # Calculate tensions
+            # Calculate tensions (updated to include conflict state)
             tensions = self._calculate_all_tensions(
                 hidden_stats, vitals, stat_combinations,
-                addiction_status, rel_overview
+                addiction_status, rel_overview,
+                conflict_state  # Pass conflict state
             )
             
-            # FIXED: Convert model instances to dicts for Pydantic
+            # Build world tension object
+            world_tension = WorldTension(
+                overall_tension=sum(tensions.values()) / len(tensions) if tensions else 0,
+                social_tension=tensions.get('relationship', 0),
+                power_tension=tensions.get('obedience', 0),
+                sexual_tension=tensions.get('lust', 0),
+                emotional_tension=tensions.get('dependency', 0),
+                addiction_tension=tensions.get('addiction', 0),
+                vital_tension=tensions.get('vital', 0),
+                unresolved_conflicts=len(active_conflicts),
+                tension_sources=list(tensions.keys())
+            )
+            
+            # Build relationship dynamics
+            relationship_dynamics = RelationshipDynamics(
+                player_submission_level=hidden_stats.get('obedience', 0),
+                player_resistance_level=hidden_stats.get('willpower', 50),
+                player_corruption_level=hidden_stats.get('corruption', 0),
+                acceptance_level=100 - hidden_stats.get('mental_resilience', 100),
+                dominant_npc_ids=[npc['npc_id'] for npc in npcs if npc.get('dominance', 0) > 60],
+                supportive_npc_ids=[],
+                adversarial_npc_ids=[],
+                intimate_npc_ids=[npc['npc_id'] for npc in npcs if npc.get('relationship', {}).get('dimensions', {}).get('intimacy', 0) > 60]
+            )
+            
+            # Determine available activities based on state
+            available_activities = []
+            if vitals.fatigue < 80:
+                available_activities.append({"type": "work", "available": True})
+            if vitals.hunger < 30:
+                available_activities.append({"type": "eat", "priority": "high"})
+            
+            # Add conflict-related activities if conflicts are active
+            if active_conflicts:
+                for conflict in active_conflicts[:3]:  # Limit to 3 most relevant
+                    if isinstance(conflict, dict):
+                        available_activities.append({
+                            "type": "conflict_interaction",
+                            "conflict_id": conflict.get('id'),
+                            "description": f"Deal with {conflict.get('type', 'ongoing')} conflict"
+                        })
+            
+            # Convert model instances to dicts for Pydantic
             return CompleteWorldState(
-                current_time=current_time.model_dump() if hasattr(current_time, 'model_dump') else current_time.dict(),
+                current_time=current_time.model_dump() if hasattr(current_time, 'model_dump') else current_time.dict() if hasattr(current_time, 'dict') else current_time,
                 calendar_names=self.calendar_names or {},
                 calendar_events=calendar_events,
-                player_vitals=vitals.model_dump() if hasattr(vitals, 'model_dump') else vitals.dict(),
+                player_vitals=vitals.model_dump() if hasattr(vitals, 'model_dump') else vitals.dict() if hasattr(vitals, 'dict') else vitals,
                 visible_stats=visible_stats,
                 hidden_stats=hidden_stats,
                 active_stat_combinations=stat_combinations,
@@ -454,6 +549,7 @@ class CompleteWorldDirectorContext:
                 npc_masks={npc['npc_id']: npc.get('mask', {}) for npc in npcs if 'npc_id' in npc},
                 npc_narrative_stages={npc['npc_id']: npc.get('narrative_stage', '') for npc in npcs if 'npc_id' in npc},
                 relationship_states={},
+                relationship_dynamics=relationship_dynamics,
                 relationship_overview=rel_overview,
                 pending_relationship_events=rel_events.get('events', []),
                 addiction_status=addiction_status,
@@ -463,11 +559,15 @@ class CompleteWorldDirectorContext:
                 currency_system=currency_system,
                 recent_transactions=[],
                 world_mood=world_mood,
+                world_tension=world_tension,
                 tension_factors=tensions,
-                environmental_factors={},
+                environmental_factors={
+                    "conflict_manifestations": conflict_manifestations,
+                    "conflict_complexity": conflict_state.get('complexity_score', 0)
+                },
                 location_data=location_data,
-                ongoing_events=[],
-                available_activities=[],
+                ongoing_events=active_conflicts,  # Active conflicts are ongoing events
+                available_activities=available_activities,
                 event_history=[],
                 nyx_directives=[]
             )
@@ -564,7 +664,8 @@ class CompleteWorldDirectorContext:
     def _calculate_complete_world_mood(
         self, hidden_stats: Dict, vitals: VitalsData,
         stat_combinations: List[Dict], addiction_status: Dict,
-        active_cravings: List[Dict], has_revelation: bool
+        active_cravings: List[Dict], has_revelation: bool,
+        has_active_conflicts: bool  # NEW parameter
     ) -> WorldMood:
         """Calculate world mood from ALL factors (SYNCHRONOUS)"""
         # Critical overrides
@@ -576,6 +677,14 @@ class CompleteWorldDirectorContext:
             return WorldMood.CRAVING
         if has_revelation:
             return WorldMood.DREAMLIKE
+        
+        # NEW: Conflict-based moods
+        if has_active_conflicts:
+            # Active conflicts increase tension
+            if hidden_stats.get('mental_resilience', 100) < 30:
+                return WorldMood.CHAOTIC
+            else:
+                return WorldMood.TENSE
         
         # Special combinations
         for combo in stat_combinations:
@@ -616,10 +725,12 @@ class CompleteWorldDirectorContext:
     def _calculate_all_tensions(
         self, hidden_stats: Dict, vitals: VitalsData,
         stat_combinations: List[Dict], addiction_status: Dict,
-        rel_overview: Optional[Dict]
+        rel_overview: Optional[Dict],
+        conflict_state: Dict  # NEW parameter
     ) -> Dict[str, float]:
         """Calculate ALL tension factors"""
         tensions = {}
+    
         
         # Vital tensions
         tensions['vital'] = 0.0
@@ -640,6 +751,13 @@ class CompleteWorldDirectorContext:
         tensions['willpower'] = (100 - hidden_stats.get('willpower', 100)) / 100
         tensions['confidence'] = (100 - hidden_stats.get('confidence', 100)) / 100
         tensions['mental_resilience'] = (100 - hidden_stats.get('mental_resilience', 100)) / 100
+
+        # NEW: Conflict tensions
+        tensions['conflict'] = 0.0
+        if conflict_state:
+            active_count = len(conflict_state.get('active_conflicts', []))
+            complexity = conflict_state.get('complexity_score', 0)
+            tensions['conflict'] = min(1.0, (active_count * 0.2) + (complexity * 0.5))
         
         # Addiction tensions
         tensions['addiction'] = 0.0
@@ -708,6 +826,50 @@ class CompleteWorldDirectorContext:
         except Exception as e:
             logger.error(f"Error checking revelations: {e}")
             return None
+
+    async def check_for_conflict_triggers(self) -> List[Dict[str, Any]]:
+        """Check if current world state should trigger new conflicts"""
+        triggers = []
+        
+        if not self.context or not self.context.conflict_synthesizer:
+            return triggers
+        
+        state = self.context.current_world_state
+        
+        # Check tension levels
+        if state.tension_factors.get('conflict', 0) < 0.3:  # Low conflict tension
+            if state.tension_factors.get('relationship', 0) > 0.6:
+                triggers.append({
+                    "type": "relationship_conflict",
+                    "reason": "High relationship tension with low conflict activity",
+                    "suggested_type": "social"
+                })
+        
+        # Check for stat combinations that suggest conflict
+        for combo in state.active_stat_combinations:
+            if combo.get('name') == 'Breaking Point':
+                triggers.append({
+                    "type": "breaking_point_conflict", 
+                    "reason": "Player at breaking point",
+                    "suggested_type": "personal"
+                })
+        
+        # Check NPC stages for conflict potential
+        advanced_npcs = [
+            npc for npc in state.active_npcs
+            if npc.get('narrative_stage') in ['Veil Thinning', 'Full Revelation']
+        ]
+        
+        if len(advanced_npcs) > 1:
+            triggers.append({
+                "type": "multi_npc_conflict",
+                "reason": f"{len(advanced_npcs)} NPCs at advanced stages",
+                "suggested_type": "social",
+                "is_multiparty": True,
+                "participants": [npc['npc_id'] for npc in advanced_npcs]
+            })
+        
+        return triggers
     
     async def _safe_check_narrative_moments(self) -> List[Dict[str, Any]]:
         """Safely check narrative moments"""
@@ -813,7 +975,7 @@ class CompleteWorldDirectorContext:
 async def generate_complete_slice_of_life_event(
     ctx: RunContextWrapper[CompleteWorldDirectorContext]
 ) -> Dict[str, Any]:
-    """Generate event considering ALL systems including addictions and dreams"""
+    """Generate event considering ALL systems including conflicts"""
     context = ctx.context
     world_state = context.current_world_state
     
@@ -822,8 +984,37 @@ async def generate_complete_slice_of_life_event(
     get_chatgpt_response = chatgpt_funcs['get_chatgpt_response']
     create_semantic_abstraction = chatgpt_funcs['create_semantic_abstraction']
     
+    
     try:
-        # Check for priority events first
+        # NEW: Check for conflict-driven events
+        if context.conflict_synthesizer:
+            conflict_system_state = await context.conflict_synthesizer.get_system_state()
+            active_conflicts = conflict_system_state.get('active_conflicts', [])
+            
+            # If there are active conflicts, check if they should manifest
+            if active_conflicts:
+                # Process current scene through conflict system
+                scene_context = {
+                    "scene_type": "slice_of_life",
+                    "location": world_state.location_data,
+                    "participants": [npc['npc_id'] for npc in world_state.active_npcs[:3]],
+                    "world_mood": world_state.world_mood.value,
+                    "time_of_day": world_state.current_time.time_of_day
+                }
+                
+                conflict_result = await context.conflict_synthesizer.process_scene(scene_context)
+                
+                # If conflicts manifest, prioritize that
+                if conflict_result.get('manifestations'):
+                    return {
+                        "event_type": "conflict_manifestation",
+                        "title": "Tensions Surface",
+                        "description": conflict_result['manifestations'][0] if conflict_result['manifestations'] else "Underlying tensions become apparent",
+                        "conflicts_active": True,
+                        "conflict_data": conflict_result,
+                        "choices": conflict_result.get('player_choices', []),
+                        "npc_behaviors": conflict_result.get('npc_behaviors', {})
+                    }
         
         # 1. Check for addiction cravings
         if world_state.active_cravings:
@@ -1196,6 +1387,29 @@ async def process_complete_player_choice(
     generate_text_completion = chatgpt_funcs['generate_text_completion']
 
     try:
+        # NEW: Check if choice affects conflicts
+        if context.conflict_synthesizer and choice_data.npc_id:
+            # Check if this NPC is involved in any conflicts
+            conflict_state = await context.conflict_synthesizer.get_system_state()
+            
+            for conflict in conflict_state.get('active_conflicts', []):
+                if isinstance(conflict, dict):
+                    participants = conflict.get('participants', [])
+                    if choice_data.npc_id in participants:
+                        # This choice might affect the conflict
+                        scene_context = {
+                            "scene_type": "player_choice",
+                            "participants": [choice_data.npc_id],
+                            "player_action": choice_data.text,
+                            "conflict_id": conflict.get('id')
+                        }
+                        
+                        conflict_result = await context.conflict_synthesizer.process_scene(scene_context)
+                        
+                        if conflict_result.get('state_changes'):
+                            results.effects.append(kvlist_from_obj({
+                                "conflict_impact": conflict_result['state_changes']
+                            }))
         # 1) Stats
         if choice_data.stat_impacts:
             try:
