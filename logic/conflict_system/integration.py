@@ -8,7 +8,7 @@ import logging
 import json
 import random
 import asyncio
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict, NotRequired
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +31,77 @@ class IntegrationMode(Enum):
     PLAYER_CENTRIC = "player_centric"  # Focus on player agency
     EMERGENT = "emergent"  # Let patterns emerge naturally
     GUIDED = "guided"  # Actively guide experience
+
+class InitializeConflictSystemResponse(TypedDict):
+    initialized: bool
+    mode: str
+    active_modules: List[str]
+    message: str
+    error: str
+
+class ChoiceItem(TypedDict):
+    label: str
+    action: str
+    priority: int
+
+class NpcBehaviorItem(TypedDict):
+    npc_id: int
+    behavior: str
+
+class ProcessConflictSceneResponse(TypedDict):
+    processed: bool
+    conflicts_active: bool
+    conflicts_detected: List[int]
+    manifestations: List[str]
+    choices: List[ChoiceItem]
+    npc_behaviors: List[NpcBehaviorItem]
+    atmosphere: List[str]
+    error: str
+
+class AdjustConflictModeResponse(TypedDict):
+    success: bool
+    mode: str
+    message: str
+    error: str
+
+class StatusMetricsDTO(TypedDict):
+    conflict_count: int
+    complexity: float
+    coherence: float
+    engagement: float
+    health: float
+
+class ConflictSystemStatusResponse(TypedDict):
+    mode: str
+    active_modules: List[str]
+    metrics: StatusMetricsDTO
+    recommendation: str
+    error: str
+
+class OptimizeConflictExperienceResponse(TypedDict):
+    success: bool
+    applied_changes: List[str]
+    recommendation: str
+    new_mode: str
+    error: str
+
+class CreateContextualConflictResponse(TypedDict):
+    conflict_id: int
+    status: str
+    conflict_type: str
+    message: str
+    created_at: str
+    error: str
+
+class ResolveActiveConflictResponse(TypedDict):
+    conflict_id: int
+    resolved: bool
+    resolution_type: str
+    outcome: str
+    victory_achieved: bool
+    epilogue: str
+    error: str
+
 
 
 @dataclass
@@ -498,22 +569,32 @@ class ConflictSystemInterface:
 async def initialize_conflict_system(
     ctx: RunContextWrapper,
     mode: str = "emergent"
-) -> Dict[str, Any]:
-    """Initialize the master conflict system"""
-    
+) -> InitializeConflictSystemResponse:
+    """Initialize the master conflict system (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     interface = ConflictSystemInterface(user_id, conversation_id)
-    
+
     try:
         integration_mode = IntegrationMode[mode.upper()]
     except KeyError:
         integration_mode = IntegrationMode.EMERGENT
-    
-    result = await interface.initialize_system(integration_mode)
-    
-    return result
+
+    result = await interface.initialize_system(integration_mode) or {}
+
+    active_modules = list(result.get('active_modules', [])) or []
+    # Ensure strings only
+    active_modules = [str(m) for m in active_modules]
+
+    return {
+        'initialized': bool(result.get('initialized', True)),
+        'mode': str(result.get('mode', getattr(integration_mode, 'value', 'emergent'))),
+        'active_modules': active_modules,
+        'message': str(result.get('message', '')),
+        'error': "",
+    }
 
 
 @function_tool
@@ -523,89 +604,146 @@ async def process_conflict_scene(
     location: str,
     present_npcs: List[int],
     recent_events: List[str]
-) -> Dict[str, Any]:
-    """Process a scene through the conflict system"""
-    
+) -> ProcessConflictSceneResponse:
+    """Process a scene through the conflict system (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     interface = ConflictSystemInterface(user_id, conversation_id)
-    
+
     scene_data = {
         'activity': activity,
         'location': location,
         'present_npcs': present_npcs,
+        'npcs': present_npcs,  # some subsystems expect `npcs`
         'recent_events': recent_events,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.now().isoformat(),
     }
-    
-    result = await interface.process_game_scene(scene_data)
-    
-    return result
+
+    raw = await interface.process_game_scene(scene_data) or {}
+
+    # Normalize choices
+    choices_raw = raw.get('choices', []) or []
+    choices: List[ChoiceItem] = []
+    for c in choices_raw:
+        label = str(c.get('label', c.get('text', 'Choice')))
+        action = str(c.get('action', c.get('id', 'unknown')))
+        try:
+            priority = int(c.get('priority', 5))
+        except Exception:
+            priority = 5
+        choices.append({'label': label, 'action': action, 'priority': priority})
+
+    # Normalize npc_behaviors (dict -> list)
+    npc_behaviors: List[NpcBehaviorItem] = []
+    rb = raw.get('npc_behaviors', {})
+    if isinstance(rb, dict):
+        for k, v in rb.items():
+            try:
+                npc_id = int(k)
+            except Exception:
+                continue
+            npc_behaviors.append({'npc_id': npc_id, 'behavior': str(v)})
+
+    atmosphere = list(
+        raw.get('atmospheric_elements', raw.get('atmosphere', [])) or []
+    )
+
+    return {
+        'processed': bool(raw.get('processed', raw.get('scene_processed', True))),
+        'conflicts_active': bool(raw.get('conflicts_active', False)),
+        'conflicts_detected': list(raw.get('conflicts_detected', []) or []),
+        'manifestations': list(raw.get('manifestations', []) or []),
+        'choices': choices,
+        'npc_behaviors': npc_behaviors,
+        'atmosphere': atmosphere,
+        'error': "",
+    }
 
 
 @function_tool
 async def adjust_conflict_mode(
     ctx: RunContextWrapper,
     new_mode: str
-) -> Dict[str, Any]:
-    """Adjust the conflict system integration mode"""
-    
+) -> AdjustConflictModeResponse:
+    """Adjust the conflict system integration mode (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     interface = ConflictSystemInterface(user_id, conversation_id)
-    
+
     try:
         mode = IntegrationMode[new_mode.upper()]
-        result = await interface.set_mode(mode)
+        result = await interface.set_mode(mode) or {}
+        return {
+            'success': True,
+            'mode': str(result.get('mode', mode.value)),
+            'message': str(result.get('message', '')),
+            'error': "",
+        }
     except KeyError:
-        result = {'error': f'Invalid mode: {new_mode}'}
-    
-    return result
+        return {
+            'success': False,
+            'mode': 'unknown',
+            'message': '',
+            'error': f'Invalid mode: {new_mode}',
+        }
 
 
 @function_tool
 async def get_conflict_system_status(
     ctx: RunContextWrapper
-) -> Dict[str, Any]:
-    """Get comprehensive status of conflict system"""
-    
+) -> ConflictSystemStatusResponse:
+    """Get comprehensive status of conflict system (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     interface = ConflictSystemInterface(user_id, conversation_id)
-    
     state = await interface.get_system_status()
-    
+
+    # Defensive normalization
+    active_modules = [str(m) for m in list(getattr(state, 'active_modules', []))]
+    metrics = {
+        'conflict_count': int(getattr(state, 'conflict_count', 0)),
+        'complexity': float(getattr(state, 'complexity_score', 0.0)),
+        'coherence': float(getattr(state, 'narrative_coherence', 0.0)),
+        'engagement': float(getattr(state, 'player_engagement', 0.0)),
+        'health': float(getattr(state, 'system_health', 1.0)),
+    }
+    recommendation = 'healthy' if metrics['health'] > 0.7 else 'needs_attention'
+
     return {
-        'mode': state.mode.value,
-        'active_modules': list(state.active_modules),
-        'metrics': {
-            'conflict_count': state.conflict_count,
-            'complexity': state.complexity_score,
-            'coherence': state.narrative_coherence,
-            'engagement': state.player_engagement,
-            'health': state.system_health
-        },
-        'recommendation': 'healthy' if state.system_health > 0.7 else 'needs_attention'
+        'mode': str(getattr(getattr(state, 'mode', None), 'value', 'emergent')),
+        'active_modules': active_modules,
+        'metrics': metrics,
+        'recommendation': recommendation,
+        'error': "",
     }
 
 
 @function_tool
 async def optimize_conflict_experience(
     ctx: RunContextWrapper
-) -> Dict[str, Any]:
-    """Optimize the conflict experience based on current state"""
-    
+) -> OptimizeConflictExperienceResponse:
+    """Optimize the conflict experience based on current state (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     interface = ConflictSystemInterface(user_id, conversation_id)
-    
-    result = await interface.optimize_experience()
-    
-    return result
+    raw = await interface.optimize_experience() or {}
+
+    applied_changes = [str(c) for c in raw.get('changes', [])] if isinstance(raw.get('changes', []), list) else []
+    return {
+        'success': bool(raw.get('success', True)),
+        'applied_changes': applied_changes,
+        'recommendation': str(raw.get('recommendation', '')),
+        'new_mode': str(raw.get('mode', '')),
+        'error': "",
+    }
 
 
 @function_tool
@@ -613,23 +751,37 @@ async def create_contextual_conflict(
     ctx: RunContextWrapper,
     conflict_type: str,
     participants: List[int],
-    context: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Create a new conflict with context"""
-    
+    context_json: str  # <- JSON string instead of Dict[str, Any]
+) -> CreateContextualConflictResponse:
+    """Create a new conflict with context (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     interface = ConflictSystemInterface(user_id, conversation_id)
-    
+
+    try:
+        extra_ctx = json.loads(context_json) if context_json else {}
+        if not isinstance(extra_ctx, dict):
+            extra_ctx = {}
+    except Exception:
+        extra_ctx = {}
+
     full_context = {
         'participants': participants,
-        **context
+        **extra_ctx,
     }
-    
-    result = await interface.create_conflict(conflict_type, full_context)
-    
-    return result
+
+    raw = await interface.create_conflict(conflict_type, full_context) or {}
+
+    return {
+        'conflict_id': int(raw.get('conflict_id', 0)),
+        'status': str(raw.get('status', 'created')),
+        'conflict_type': str(raw.get('conflict_type', conflict_type)),
+        'message': str(raw.get('message', '')),
+        'created_at': str(raw.get('created_at', datetime.now().isoformat())),
+        'error': "",
+    }
 
 
 @function_tool
@@ -637,19 +789,30 @@ async def resolve_active_conflict(
     ctx: RunContextWrapper,
     conflict_id: int,
     resolution_type: str = "natural",
-    resolution_context: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    """Resolve an active conflict"""
-    
+    resolution_context_json: Optional[str] = None  # <- JSON string for strict input
+) -> ResolveActiveConflictResponse:
+    """Resolve an active conflict (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     interface = ConflictSystemInterface(user_id, conversation_id)
-    
-    result = await interface.resolve_conflict(
-        conflict_id,
-        resolution_type,
-        resolution_context or {}
-    )
-    
-    return result
+
+    try:
+        rctx = json.loads(resolution_context_json) if resolution_context_json else {}
+        if not isinstance(rctx, dict):
+            rctx = {}
+    except Exception:
+        rctx = {}
+
+    raw = await interface.resolve_conflict(conflict_id, resolution_type, rctx) or {}
+
+    return {
+        'conflict_id': int(raw.get('conflict_id', conflict_id)),
+        'resolved': bool(raw.get('resolved', True)),
+        'resolution_type': str(raw.get('resolution_type', resolution_type)),
+        'outcome': str(raw.get('outcome', '')),
+        'victory_achieved': bool(raw.get('victory_achieved', False)),
+        'epilogue': str(raw.get('epilogue', '')),
+        'error': "",
+    }
