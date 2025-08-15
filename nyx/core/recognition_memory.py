@@ -603,8 +603,8 @@ class RecognitionMemorySystem:
                 )
             ],
             output_type=List[RecognitionResult],
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.4)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
     
     def _create_salience_detector_agent(self) -> Agent:
@@ -641,8 +641,8 @@ class RecognitionMemorySystem:
                 _leverage_context_awareness
             ],
             output_type=SalienceAnalysisOutput,
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.3)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
         
     def _create_memory_query_agent(self) -> Agent:
@@ -677,8 +677,8 @@ class RecognitionMemorySystem:
                 _combine_query_results,
                 _track_query_performance
             ],
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.3)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
         
     def _create_trigger_extraction_agent(self) -> Agent:
@@ -711,8 +711,8 @@ class RecognitionMemorySystem:
                 _calibrate_trigger_parameters
             ],
             output_type=TriggerExtractionOutput,
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.4)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
         
     def _create_relevance_filter_agent(self) -> Agent:
@@ -749,8 +749,8 @@ class RecognitionMemorySystem:
                 _assess_conversational_impact
             ],
             output_type=RecognitionFilterOutput,
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.3)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
     
     # Main public methods
