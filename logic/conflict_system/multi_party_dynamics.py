@@ -780,7 +780,7 @@ class MultiPartyConflictSubsystem:
                 Create compelling power dynamics.
                 """,
                 tools=[],
-                model=ModelSettings(model="gpt-4o", temperature=0.8)
+                model=ModelSettings(model="gpt-5-nano")
             )
         return self._faction_strategist
     
@@ -799,7 +799,7 @@ class MultiPartyConflictSubsystem:
                 Create realistic alliance terms and conditions.
                 """,
                 tools=[],
-                model=ModelSettings(model="gpt-4o", temperature=0.7)
+                model=ModelSettings(model="gpt-5-nano")
             )
         return self._alliance_broker
     
@@ -818,7 +818,7 @@ class MultiPartyConflictSubsystem:
                 Balance shock value with believability.
                 """,
                 tools=[],
-                model=ModelSettings(model="gpt-4o", temperature=0.9)
+                model=ModelSettings(model="gpt-5-nano")
             )
         return self._betrayal_orchestrator
     
@@ -835,7 +835,7 @@ class MultiPartyConflictSubsystem:
                 Account for relationship dynamics.
                 """,
                 tools=[],
-                model=ModelSettings(model="gpt-4o", temperature=0.6)
+                model=ModelSettings(model="gpt-5-nano")
             )
         return self._negotiation_mediator
     
@@ -852,7 +852,7 @@ class MultiPartyConflictSubsystem:
                 Account for relationship-based factors.
                 """,
                 tools=[],
-                model=ModelSettings(model="gpt-4o", temperature=0.5)
+                model=ModelSettings(model="gpt-5-nano")
             )
         return self._outcome_predictor
 
