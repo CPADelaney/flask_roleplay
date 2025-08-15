@@ -230,7 +230,6 @@ class CreativeMemoryIntegrationContext:
         # Enhanced parameters for production
         self.min_memory_length = 20  # Minimum memory length for processing
         self.max_abstraction_depth = 3  # Maximum levels of abstraction
-        self.creativity_temperature = 0.7  # Controls randomness in creative generation
         self.coherence_threshold = 0.6  # Minimum coherence score for outputs
 
 class CreativeMemoryIntegration:
@@ -351,8 +350,8 @@ class CreativeMemoryIntegration:
                       tool_name_override="blend_memory_with_novelty",
                       tool_description_override="Blend recognized memory with novel idea generation")
             ],
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.6)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
     
     def _create_wit_generation_agent(self) -> Agent:
@@ -384,8 +383,8 @@ class CreativeMemoryIntegration:
                 function_tool(self._create_wordplay)
             ],
             output_type=ContextualWit,
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.7)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
     
     def _create_insight_generation_agent(self) -> Agent:
@@ -417,8 +416,8 @@ class CreativeMemoryIntegration:
                 function_tool(self._abstract_principles)
             ],
             output_type=CreativeInsight,
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.6)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
     
     def _create_memory_novelty_agent(self) -> Agent:
@@ -451,8 +450,8 @@ class CreativeMemoryIntegration:
                 function_tool(self._apply_creative_technique),
                 function_tool(self._transform_memory)
             ],
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.7)
+            model="gpt-5-nano",
+            model_settings=ModelSettings()
         )
     
     # Enhanced tool functions for production use
