@@ -14,6 +14,14 @@ from dataclasses import dataclass
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 
+from lore.core.canon import (
+    log_canonical_event,
+    ensure_canonical_context,
+    find_or_create_entity,
+    update_entity_with_governance
+)
+from lore.core.context import CanonicalContext
+
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
@@ -478,7 +486,10 @@ class ConflictCanonSubsystem:
         event_type: CanonEventType,
         significance: float
     ) -> CanonicalEvent:
-        """Create a new canonical event"""
+        """Create a new canonical event using the core canon system"""
+        
+        # Convert to canonical context
+        ctx = CanonicalContext(self.user_id, self.conversation_id)
         
         # Generate canonical description
         prompt = f"""
@@ -513,17 +524,30 @@ class ConflictCanonSubsystem:
         # Generate legacy
         legacy = await self._generate_legacy(conflict, resolution_data, data)
         
-        # Store in database
         async with get_db_connection_context() as conn:
+            # Use the core canon system to log the event
+            await log_canonical_event(
+                ctx, conn,
+                f"{data['canonical_name']}: {data['canonical_description']}",
+                tags=[
+                    'conflict_resolution',
+                    event_type.value,
+                    conflict['conflict_type'],
+                    'precedent' if data['creates_precedent'] else 'event'
+                ],
+                significance=int(significance * 10)  # Convert 0-1 to 1-10 scale
+            )
+            
+            # Store additional conflict-specific data in a separate table if needed
+            # But the main canonical event goes through the core system
             event_id = await conn.fetchval("""
-                INSERT INTO canonical_events
-                (user_id, conversation_id, conflict_id, event_type, name, description,
-                 significance, cultural_impact, creates_precedent, legacy)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                RETURNING event_id
-            """, self.user_id, self.conversation_id, conflict_id, event_type.value,
-            data['canonical_name'], data['canonical_description'], significance,
-            json.dumps(data['cultural_impact']), data['creates_precedent'], legacy)
+                INSERT INTO conflict_canon_details
+                (conflict_id, event_type, cultural_impact, creates_precedent, legacy, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
+            """, conflict_id, event_type.value, 
+            json.dumps(data['cultural_impact']), data['creates_precedent'], 
+            legacy, json.dumps({'name': data['canonical_name']}))
         
         return CanonicalEvent(
             event_id=event_id,
@@ -572,35 +596,47 @@ class ConflictCanonSubsystem:
         conflict_type: str,
         conflict_context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Check if a conflict aligns with established lore"""
+        """Check if a conflict aligns with established lore using core canon"""
         
-        # Get relevant lore
+        ctx = CanonicalContext(self.user_id, self.conversation_id)
+        
         async with get_db_connection_context() as conn:
+            # Use the core canon system's canonical events table
             canonical_events = await conn.fetch("""
-                SELECT * FROM canonical_events
+                SELECT * FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND creates_precedent = true
-                ORDER BY significance DESC
+                AND significance >= 7  -- High significance precedents
+                ORDER BY significance DESC, timestamp DESC
                 LIMIT 10
             """, self.user_id, self.conversation_id)
             
-            traditions = await conn.fetch("""
-                SELECT * FROM cultural_traditions
-                WHERE user_id = $1 AND conversation_id = $2
-                AND is_active = true
-            """, self.user_id, self.conversation_id)
+            # Check for related conflicts using semantic search
+            from embedding.vector_store import generate_embedding
+            conflict_embedding = await generate_embedding(
+                f"{conflict_type} {json.dumps(conflict_context)}"
+            )
+            
+            similar_events = await conn.fetch("""
+                SELECT event_text, tags, significance,
+                       1 - (embedding <=> $1) AS similarity
+                FROM CanonicalEvents
+                WHERE user_id = $2 AND conversation_id = $3
+                AND embedding IS NOT NULL
+                AND 1 - (embedding <=> $1) > 0.7
+                ORDER BY embedding <=> $1
+                LIMIT 5
+            """, conflict_embedding, self.user_id, self.conversation_id)
         
         prompt = f"""
         Check if this conflict aligns with established lore:
         
         Conflict Type: {conflict_type}
         Context: {json.dumps(conflict_context)}
-        Established Precedents: {json.dumps([dict(e) for e in canonical_events])}
-        Active Traditions: {json.dumps([dict(t) for t in traditions])}
+        Related Canon: {json.dumps([dict(e) for e in similar_events])}
+        High-Significance Events: {json.dumps([dict(e) for e in canonical_events[:3]])}
         
         Analyze:
         - Does this respect established precedents?
-        - Does it honor cultural traditions?
         - Are there lore conflicts?
         - How can it build on existing canon?
         
@@ -609,7 +645,6 @@ class ConflictCanonSubsystem:
             "is_compliant": true/false,
             "conflicts": ["any lore conflicts"],
             "precedents_referenced": ["relevant precedents"],
-            "traditions_involved": ["relevant traditions"],
             "suggestions": ["how to better align with lore"],
             "enrichment_opportunities": ["ways to deepen lore connection"]
         }}
@@ -673,42 +708,25 @@ class ConflictCanonSubsystem:
         # This would create some founding myths and precedents
         pass
     
-    async def _assess_conflict_significance(self, conflict_id: int) -> float:
-        """Assess how significant a conflict is for canon"""
+    async def _create_initial_lore(self):
+        """Create initial canonical events using core canon system"""
+        ctx = CanonicalContext(self.user_id, self.conversation_id)
+        
         async with get_db_connection_context() as conn:
-            conflict = await conn.fetchrow("""
-                SELECT * FROM Conflicts WHERE conflict_id = $1
-            """, conflict_id)
+            # Create founding precedents using the core canon system
+            founding_events = [
+                ("The First Accord", "Ancient agreement establishing conflict resolution through dialogue", 10),
+                ("The Great Schism", "Historical conflict that shaped modern power structures", 9),
+                ("The Reconciliation", "Legendary peace treaty that created lasting traditions", 8)
+            ]
             
-            stakeholders = await conn.fetchval("""
-                SELECT COUNT(*) FROM conflict_stakeholders 
-                WHERE conflict_id = $1
-            """, conflict_id)
-        
-        if not conflict:
-            return 0.0
-        
-        # Calculate significance
-        base_significance = 0.3
-        
-        # Intensity adds significance
-        intensity_scores = {
-            'confrontation': 0.3,
-            'opposition': 0.2,
-            'friction': 0.1,
-            'tension': 0.05,
-            'subtle': 0.0
-        }
-        base_significance += intensity_scores.get(conflict['intensity'], 0)
-        
-        # Multiple stakeholders add significance
-        base_significance += min(0.2, stakeholders * 0.05)
-        
-        # Progress/resolution adds significance
-        if conflict['progress'] >= 80:
-            base_significance += 0.1
-        
-        return min(1.0, base_significance)
+            for name, description, significance in founding_events:
+                await log_canonical_event(
+                    ctx, conn,
+                    f"{name}: {description}",
+                    tags=['founding_myth', 'precedent', 'historical'],
+                    significance=significance
+                )
 
 
 # ===============================================================================
