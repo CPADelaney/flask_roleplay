@@ -7,7 +7,7 @@ Integrated with ConflictSynthesizer as the central orchestrator
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, TypedDict
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -45,6 +45,29 @@ class EdgeCase:
     description: str
     detection_context: Dict[str, Any]
     recovery_options: List[Dict[str, Any]]
+
+class EdgeCaseItem(TypedDict):
+    subsystem: str        # e.g., "flow", "tension"
+    issue: str            # brief description
+    severity: str         # e.g., "low" | "medium" | "high" | "critical"
+    recoverable: bool     # whether an automated recovery is suggested
+
+class ScanIssuesResponse(TypedDict):
+    issues_found: int
+    edge_cases: List[EdgeCaseItem]
+    error: str
+
+class RecoveryResultItem(TypedDict):
+    case_type: str        # the issue/category recovered
+    success: bool
+    action: str           # the action taken / label for the recovery path
+
+class AutoRecoverResponse(TypedDict):
+    issues_found: int
+    recoveries_attempted: int
+    recovery_results: List[RecoveryResultItem]
+    error: str
+
 
 
 # ===============================================================================
@@ -1195,68 +1218,150 @@ class ConflictEdgeCaseSubsystem:
 @function_tool
 async def scan_for_conflict_issues(
     ctx: RunContextWrapper
-) -> Dict[str, Any]:
-    """Scan for edge cases in conflict system through synthesizer"""
-    
+) -> ScanIssuesResponse:
+    """Scan for edge cases in conflict system through synthesizer."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Use synthesizer to perform health check
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Emit health check event
+
+    # Ask EDGE_HANDLER to run a scan (health check request)
     event = SystemEvent(
         event_id=f"scan_{datetime.now().timestamp()}",
         event_type=EventType.HEALTH_CHECK,
         source_subsystem=SubsystemType.SLICE_OF_LIFE,
         payload={'request': 'edge_case_scan'},
         target_subsystems={SubsystemType.EDGE_HANDLER},
-        requires_response=True
+        requires_response=True,
+        priority=3,
     )
-    
+
+    items: List[EdgeCaseItem] = []
+    error = "Edge handler did not respond"
+
     responses = await synthesizer.emit_event(event)
-    
-    for response in responses:
-        if response.subsystem == SubsystemType.EDGE_HANDLER:
-            return response.data
-    
-    return {'issues_found': 0, 'edge_cases': []}
+    if responses:
+        for r in responses:
+            if r.subsystem == SubsystemType.EDGE_HANDLER:
+                data = r.data or {}
+                # Accept a variety of shapes and normalize to a fixed list
+                raw_cases = data.get('edge_cases') or data.get('issues') or []
+                for rc in raw_cases:
+                    # Defensive coercion with sane defaults
+                    subsystem = str(rc.get('subsystem', 'unknown'))
+                    issue = str(rc.get('issue', rc.get('description', 'unknown')))
+                    severity = str(rc.get('severity', 'medium'))
+                    recoverable = bool(rc.get('recoverable', False))
+                    items.append({
+                        'subsystem': subsystem,
+                        'issue': issue,
+                        'severity': severity,
+                        'recoverable': recoverable,
+                    })
+                error = ""
+
+    return {
+        'issues_found': len(items),
+        'edge_cases': items,
+        'error': error,
+    }
 
 
 @function_tool
 async def auto_recover_conflicts(
     ctx: RunContextWrapper
-) -> Dict[str, Any]:
-    """Automatically recover from detected edge cases"""
-    
+) -> AutoRecoverResponse:
+    """Automatically recover from detected edge cases via the synthesizer."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer and edge handler
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    edge_handler = synthesizer._subsystems.get(SubsystemType.EDGE_HANDLER)
-    if not edge_handler:
-        return {'error': 'Edge handler not available'}
-    
-    # Scan for edge cases
-    edge_cases = await edge_handler.scan_for_edge_cases()
-    
-    recoveries = []
+
+    # 1) Ask EDGE_HANDLER to scan for edge cases
+    scan_evt = SystemEvent(
+        event_id=f"scan_{datetime.now().timestamp()}",
+        event_type=EventType.HEALTH_CHECK,
+        source_subsystem=SubsystemType.SLICE_OF_LIFE,
+        payload={'request': 'edge_case_scan'},
+        target_subsystems={SubsystemType.EDGE_HANDLER},
+        requires_response=True,
+        priority=3,
+    )
+
+    scan_responses = await synthesizer.emit_event(scan_evt)
+
+    edge_cases = []
+    if scan_responses:
+        for r in scan_responses:
+            if r.subsystem == SubsystemType.EDGE_HANDLER:
+                data = r.data or {}
+                edge_cases = data.get('edge_cases') or data.get('issues') or []
+                break
+
+    recovery_results: List[RecoveryResultItem] = []
+    error = ""
+
+    # 2) For each case, ask EDGE_HANDLER to execute the first recovery option (if any)
     for case in edge_cases:
-        if case.recovery_options:
-            # Execute first recovery option
-            result = await edge_handler.execute_recovery(case, 0)
-            recoveries.append({
-                'case_type': case.case_type.value,
-                'success': result.get('success', False),
-                'action': result.get('action', 'unknown')
+        # We’ll be defensive about shapes
+        case_type = str(case.get('case_type', case.get('type', 'unknown')))
+        recovery_options = case.get('recovery_options') or []
+        option_index = 0 if recovery_options else None
+
+        if option_index is None:
+            recovery_results.append({
+                'case_type': case_type,
+                'success': False,
+                'action': 'no_recovery_options',
             })
-    
+            continue
+
+        recover_evt = SystemEvent(
+            event_id=f"recover_{case_type}_{datetime.now().timestamp()}",
+            event_type=EventType.EDGE_CASE_DETECTED,
+            source_subsystem=SubsystemType.EDGE_HANDLER,
+            payload={
+                'request': 'execute_recovery',
+                'case': case,              # original case payload (EDGE_HANDLER knows its shape)
+                'option_index': option_index,
+            },
+            target_subsystems={SubsystemType.EDGE_HANDLER},
+            requires_response=True,
+            priority=2,
+        )
+
+        recover_resps = await synthesizer.emit_event(recover_evt)
+        # Default outcome
+        success = False
+        action_label = 'unknown'
+
+        if recover_resps:
+            for rr in recover_resps:
+                if rr.subsystem == SubsystemType.EDGE_HANDLER:
+                    rd = rr.data or {}
+                    success = bool(rd.get('success', False))
+                    action_label = str(rd.get('action', action_label))
+                    break
+
+        recovery_results.append({
+            'case_type': case_type,
+            'success': success,
+            'action': action_label,
+        })
+
     return {
         'issues_found': len(edge_cases),
-        'recoveries_attempted': len(recoveries),
-        'recovery_results': recoveries
+        'recoveries_attempted': len([r for r in recovery_results]),
+        'recovery_results': recovery_results,
+        'error': error,
     }
