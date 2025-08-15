@@ -60,9 +60,10 @@ from logic.time_cycle import (
     VitalsData,
     CurrentTimeData,
     ActivityType,
-    get_current_time,
-    get_game_iso_string
+    get_current_time
 )
+
+from logic.game_time_helper import get_game_iso_string
 
 # Initialize logger
 logger = logging.getLogger(__name__)
