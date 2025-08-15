@@ -54,18 +54,17 @@ from logic.dynamic_relationships import (
 logger = logging.getLogger(__name__)
 
 # Environment variable overrides with sensible defaults
-_DEFAULT_LORE_MODEL = os.getenv("OPENAI_LORE_MODEL", "gpt-4o-mini")
-_DEFAULT_MEMORY_MODEL = os.getenv("OPENAI_MEMORY_MODEL", "gpt-4o-mini")
-_DEFAULT_ATMOSPHERE_MODEL = os.getenv("OPENAI_ATMOSPHERE_MODEL", "gpt-4o-mini")
-_DEFAULT_LOCATION_MODEL = os.getenv("OPENAI_LOCATION_MODEL", "gpt-4o-mini")
-_DEFAULT_POETRY_MODEL = os.getenv("OPENAI_POETRY_MODEL", "gpt-4o-mini")
-_DEFAULT_EPISODE_MODEL = os.getenv("OPENAI_EPISODE_MODEL", "gpt-4o-mini")
+_DEFAULT_LORE_MODEL = os.getenv("OPENAI_LORE_MODEL", "gpt-5-nano")
+_DEFAULT_MEMORY_MODEL = os.getenv("OPENAI_MEMORY_MODEL", "gpt-5-nano")
+_DEFAULT_ATMOSPHERE_MODEL = os.getenv("OPENAI_ATMOSPHERE_MODEL", "gpt-5-nano")
+_DEFAULT_LOCATION_MODEL = os.getenv("OPENAI_LOCATION_MODEL", "gpt-5-nano")
+_DEFAULT_POETRY_MODEL = os.getenv("OPENAI_POETRY_MODEL", "gpt-5-nano")
+_DEFAULT_EPISODE_MODEL = os.getenv("OPENAI_EPISODE_MODEL", "gpt-5-nano")
 
 # Performance settings
 MAX_CONCURRENT_GPT_CALLS = int(os.getenv("MAX_CONCURRENT_GPT_CALLS", "3"))
 ENABLE_GPT_CACHE = os.getenv("ENABLE_GPT_CACHE", "true").lower() == "true"
 MAX_TOKEN_SAFETY = int(os.getenv("MAX_TOKEN_SAFETY", "8000"))
-DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
 
 # Semantic similarity threshold for duplicate detection
 SIMILARITY_THRESHOLD = 0.85
@@ -168,7 +167,6 @@ class GPTService:
         system_prompt: str,
         user_prompt: str,
         response_model: type[BaseModel],
-        temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = 3,
         use_cache: bool = True
     ) -> BaseModel:
@@ -192,13 +190,10 @@ class GPTService:
             
             for attempt in range(max_retries):
                 try:
-                    retry_temp = temperature - (0.1 * attempt)
-                    
                     raw_response = await self._make_gpt_call(
                         model=model,
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
-                        temperature=retry_temp
                     )
                     
                     data = self._parse_json_response(raw_response)
@@ -226,7 +221,7 @@ class GPTService:
             raise last_error
     
     async def _make_gpt_call(
-        self, model: str, system_prompt: str, user_prompt: str, temperature: float
+        self, model: str, system_prompt: str, user_prompt: str
     ) -> str:
         """Make actual GPT call - isolated for mocking in tests"""
         from npcs.new_npc_creation import _responses_json_call
@@ -235,7 +230,6 @@ class GPTService:
             model=model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            temperature=temperature
         )
     
     def _parse_json_response(self, response: str) -> dict:
@@ -658,7 +652,6 @@ Generate varied episodes with different moods and stakes."""
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_model=EpisodeGeneration,
-                temperature=0.8
             )
             
             # Process and add IDs
@@ -852,7 +845,6 @@ What is she doing right now?"""
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     response_model=QueenScheduleInit,
-                    temperature=0.6
                 )
                 
                 return result.dict()
@@ -1083,7 +1075,6 @@ Write an atmospheric introduction (3-4 paragraphs)."""
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_model=AtmosphereData,
-                temperature=0.8
             )
             
             # Store atmosphere through governance
@@ -1369,7 +1360,6 @@ Generate ONLY new atmospheric details that complement the existing description."
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_model=LocationEnhancement,
-                temperature=0.6
             )
             
             # Propose enhancement through governance
@@ -1412,7 +1402,6 @@ Expand the description with atmospheric details while keeping all established fa
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_model=LocationEnhancement,
-                temperature=0.6
             )
             
             # Merge base data with enhancement
@@ -1521,7 +1510,6 @@ Do NOT change core character elements."""
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_model=CharacterEvolution,
-                temperature=0.7
             )
             
             # Prepare evolution updates
@@ -1620,7 +1608,6 @@ Generate unique personality and backstory details."""
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     response_model=NPCEnhancement,
-                    temperature=0.7
                 )
                 
                 # Create NPC through governance
