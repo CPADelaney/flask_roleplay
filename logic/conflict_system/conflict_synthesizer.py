@@ -1168,16 +1168,21 @@ async def get_synthesizer(user_id: int, conversation_id: int) -> ConflictSynthes
 async def orchestrate_conflict_creation(
     ctx: RunContextWrapper,
     conflict_type: str,
-    context: ConflictContextDTO,   # <-- TypedDict input
-) -> Dict[str, Any]:               # <-- plain dict output
+    context_json: str,  # JSON string instead of object
+) -> str:               # return JSON string
+    """Create a conflict. Accepts JSON string, returns JSON string."""
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     synthesizer = await get_synthesizer(user_id, conversation_id)
 
-    # context is already a dict-like
-    result = await synthesizer.create_conflict(conflict_type, dict(context))
+    # Parse input JSON
+    try:
+        context: Dict[str, Any] = json.loads(context_json) if context_json else {}
+    except Exception:
+        context = {}
 
-    # Build response dict (previously you constructed a Pydantic response here)
+    result = await synthesizer.create_conflict(conflict_type, context)
+
     response_data = {
         'conflict_id': result.get('conflict_id', 0),
         'status': result.get('status', 'created'),
@@ -1195,18 +1200,25 @@ async def orchestrate_conflict_creation(
         'conflict_details': result.get('conflict_details'),
         'subsystem_responses': result.get('subsystem_responses'),
     }
-    return {k: v for k, v in response_data.items() if v is not None}
-
+    payload = {k: v for k, v in response_data.items() if v is not None}
+    return json.dumps(payload, ensure_ascii=False)
+    
 @function_tool
 async def orchestrate_scene_processing(
     ctx: RunContextWrapper,
-    scene_context: SceneContextDTO,   # <-- TypedDict input
-) -> Dict[str, Any]:                  # <-- plain dict output
+    scene_context_json: str,  # JSON string
+) -> str:                     # JSON string
+    """Process a scene. Accepts JSON string, returns JSON string."""
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     synthesizer = await get_synthesizer(user_id, conversation_id)
 
-    result = await synthesizer.process_scene(dict(scene_context))
+    try:
+        scene_context: Dict[str, Any] = json.loads(scene_context_json) if scene_context_json else {}
+    except Exception:
+        scene_context = {}
+
+    result = await synthesizer.process_scene(scene_context)
 
     response_data = {
         'scene_id': result.get('scene_id'),
@@ -1230,20 +1242,27 @@ async def orchestrate_scene_processing(
         'experience_quality': result.get('experience_quality'),
         'recommended_mode_change': result.get('recommended_mode_change'),
     }
-    return {k: v for k, v in response_data.items() if v is not None}
+    payload = {k: v for k, v in response_data.items() if v is not None}
+    return json.dumps(payload, ensure_ascii=False)
 
 @function_tool
 async def orchestrate_conflict_resolution(
     ctx: RunContextWrapper,
     conflict_id: int,
     resolution_type: str,
-    context: ConflictContextDTO,    # <-- TypedDict input
-) -> Dict[str, Any]:                # <-- plain dict output
+    context_json: str,  # JSON string
+) -> str:               # JSON string
+    """Resolve a conflict. Accepts JSON string, returns JSON string."""
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
     synthesizer = await get_synthesizer(user_id, conversation_id)
 
-    result = await synthesizer.resolve_conflict(conflict_id, resolution_type, dict(context))
+    try:
+        context: Dict[str, Any] = json.loads(context_json) if context_json else {}
+    except Exception:
+        context = {}
+
+    result = await synthesizer.resolve_conflict(conflict_id, resolution_type, context)
 
     response_data = {
         'conflict_id': result.get('conflict_id', conflict_id),
@@ -1265,20 +1284,21 @@ async def orchestrate_conflict_resolution(
         'canonical_event': result.get('canonical_event'),
         'resolution_data': result.get('resolution_data'),
     }
-    return {k: v for k, v in response_data.items() if v is not None}
+    payload = {k: v for k, v in response_data.items() if v is not None}
+    return json.dumps(payload, ensure_ascii=False)
 
 @function_tool
 async def get_orchestrated_system_state(
     ctx: RunContextWrapper
-) -> Dict[str, Any]:
-    """Get complete system state from orchestrator (strict JSON shape)."""
+) -> str:  # JSON string
+    """Get complete system state (strict JSON shape)."""
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
 
     synthesizer = await get_synthesizer(user_id, conversation_id)
     raw = await synthesizer.get_system_state()
 
-    # Derive a friendly health label from the numeric score
+    # derive label
     health_score = float(raw.get("metrics", {}).get("system_health", 1.0))
     if health_score >= 0.8:
         health_label = "ok"
@@ -1287,12 +1307,10 @@ async def get_orchestrated_system_state(
     else:
         health_label = "critical"
 
-    # Shape active_conflicts into ConflictInfo dicts
     now_iso = datetime.utcnow().isoformat()
     active_conflicts: List[Dict[str, Any]] = []
     for item in raw.get("active_conflicts", []):
         if isinstance(item, dict):
-            # If the synthesizer later returns rich details, coerce to the expected keys
             active_conflicts.append({
                 "id": item.get("id") or item.get("conflict_id"),
                 "type": item.get("type") or item.get("conflict_type") or "unknown",
@@ -1301,7 +1319,6 @@ async def get_orchestrated_system_state(
                 "severity": item.get("severity"),
             })
         else:
-            # Current implementation returns IDs; fabricate minimal record
             active_conflicts.append({
                 "id": int(item),
                 "type": "unknown",
@@ -1310,7 +1327,6 @@ async def get_orchestrated_system_state(
                 "severity": None,
             })
 
-    # Subsystem states -> string labels
     subsystem_states = {
         name: ("healthy" if (info or {}).get("healthy", True) else "issue")
         for name, info in raw.get("health", {}).items()
@@ -1318,11 +1334,11 @@ async def get_orchestrated_system_state(
 
     shaped: Dict[str, Any] = {
         "active_conflicts": active_conflicts,
-        "pending_events": [],  # populate when you track a queue externally
+        "pending_events": [],  # populate when available
         "system_health": health_label,
         "total_conflicts": int(raw.get("metrics", {}).get("total_conflicts", 0)),
         "total_resolutions": int(raw.get("metrics", {}).get("resolved_conflicts", 0)),
         "subsystem_states": subsystem_states,
         "last_update": now_iso,
     }
-    return shaped
+    return json.dumps(shaped, ensure_ascii=False)
