@@ -21,24 +21,31 @@ class ConflictGovernanceMixin:
         if not self._initialized:
             await self.initialize()
         
-        from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
+        from logic.conflict_system.conflict_synthesizer import get_synthesizer
         
         logger.info(f"NYX: Creating conflict through synthesizer: {conflict_data.get('name', 'Unnamed')}")
         
-        synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
+        synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
+        
+        # Map old conflict types to new slice-of-life types
+        conflict_type = conflict_data.get('conflict_type', 'slice')
+        if conflict_type in ['major', 'minor', 'standard']:
+            # Convert old linear types to new types
+            conflict_type = 'slice'  # Default to slice-of-life
         
         # Add Nyx governance metadata
-        conflict_data["governance_reason"] = reason
-        conflict_data["created_by"] = "nyx_governance"
+        context = conflict_data.copy()
+        context["governance_reason"] = reason
+        context["created_by"] = "nyx_governance"
         
-        result = await synthesizer.create_conflict(conflict_data)
+        result = await synthesizer.create_conflict(conflict_type, context)
         
         # Record in governance
         await self._record_narrative_event(
             event_type="conflict_created",
             details={
                 "conflict_id": result.get("conflict_id"),
-                "synthesis_active": result.get("synthesis_active", True),
+                "conflict_type": conflict_type,
                 "reason": reason
             }
         )
