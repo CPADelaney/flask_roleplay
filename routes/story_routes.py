@@ -9,7 +9,6 @@ import random
 import contextlib
 from datetime import datetime, date, timedelta
 from quart import Blueprint, request, jsonify, session
-from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from logic.activity_analyzer import ActivityAnalyzer
 from logic.npc_narrative_progression import (
     check_for_npc_revelation,
@@ -26,6 +25,7 @@ from logic.narrative_events import (
     initialize_player_stats,
     analyze_narrative_tone
 )
+from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
 
 # Import utility modules
 from utils.db_helpers import db_transaction, with_transaction, handle_database_operation, fetch_row_async, fetch_all_async, execute_async
@@ -1853,30 +1853,65 @@ async def next_storybeat():
             response["resource_error"] = str(e)
         tracker.end_phase()
     
-        # Process conflicts
+        # Process conflicts using new synthesizer
         tracker.start_phase("conflicts")
         try:
-            conflict_integration = ConflictSystemIntegration(user_id, conv_id)
+            # Get the conflict synthesizer
+            conflict_synthesizer = await get_synthesizer(user_id, conv_id)
             
-            # Check for active conflicts
-            active_conflicts = await conflict_integration.get_active_conflicts()
+            # Get current system state including active conflicts
+            system_state = await conflict_synthesizer.get_system_state()
+            active_conflicts = []
             
-            # If time advanced, run daily update
+            # Get detailed state for each active conflict
+            for conflict_id in system_state.get("active_conflicts", []):
+                conflict_state = await conflict_synthesizer.get_conflict_state(conflict_id)
+                active_conflicts.append(conflict_state)
+            
+            # If time advanced, emit a state sync event for daily updates
             conflict_update = None
             if time_result.get("time_advanced", False):
-                conflict_update = await conflict_integration.run_daily_update()
+                daily_event = SystemEvent(
+                    event_id=f"daily_update_{conv_id}_{datetime.now().timestamp()}",
+                    event_type=EventType.STATE_SYNC,
+                    source_subsystem=SubsystemType.SLICE_OF_LIFE,
+                    payload={
+                        "type": "daily_update",
+                        "new_day": time_result.get("new_time", {}).get("day"),
+                        "time_of_day": time_result.get("new_time", {}).get("time_of_day")
+                    },
+                    priority=3
+                )
+                await conflict_synthesizer.emit_event(daily_event)
+                conflict_update = {"daily_update_triggered": True}
             
             # Process activity impact on conflicts
             impact_result = None
             activity_type = action_type if "action_type" in locals() else "conversation"
-            impact_result = await conflict_integration.process_activity_for_conflict_impact(
-                activity_type, 
-                user_input
+            
+            # Emit player action event to the synthesizer
+            player_action_event = SystemEvent(
+                event_id=f"player_action_{conv_id}_{datetime.now().timestamp()}",
+                event_type=EventType.PLAYER_CHOICE,
+                source_subsystem=SubsystemType.SLICE_OF_LIFE,
+                payload={
+                    "activity_type": activity_type,
+                    "user_input": user_input,
+                    "location": context.get("location"),
+                    "involved_npcs": [resp.get("npc_id") for resp in npc_responses] if npc_responses else []
+                },
+                priority=2
             )
+            
+            responses = await conflict_synthesizer.emit_event(player_action_event)
+            if responses:
+                impact_result = {"processed": True, "responses": len(responses)}
             
             # Add conflict info to response
             response["conflicts"] = {
                 "active": active_conflicts,
+                "system_health": system_state.get("metrics", {}).get("system_health", 1.0),
+                "complexity_score": system_state.get("metrics", {}).get("complexity_score", 0.0),
                 "updates": conflict_update,
                 "impact": impact_result
             }
@@ -1895,60 +1930,26 @@ async def next_storybeat():
         # 8.5 Process conflict evolution based on player action
         tracker.start_phase("conflict_evolution")
         if active_conflicts:
-            # Notify conflict system of player action
-            await on_player_major_action(
-                user_id,
-                conversation_id,
-                "player_input",  # action type
-                {
-                    "description": user_input,
-                    "involved_npcs": [resp.npc_id for resp in npc_responses],
-                    "location": current_location
-                }
-            )
+            # Process scene with conflict context
+            scene_context = {
+                "user_input": user_input,
+                "location": context.get("location"),
+                "involved_npcs": [resp.get("npc_id") for resp in npc_responses] if npc_responses else [],
+                "time_of_day": context.get("time_of_day"),
+                "player_action": True
+            }
             
-            # Generate story beats for active conflicts affected by this action
-            from story_agent.tools import generate_conflict_beat, ConflictBeatGenerationParams
+            # Use the synthesizer's scene processing
+            scene_result = await conflict_synthesizer.process_scene(scene_context)
             
-            for conflict in active_conflicts[:2]:  # Process top 2 conflicts to avoid overload
-                # Check if any responding NPCs are stakeholders in this conflict
-                conflict_stakeholder_ids = {
-                    s['npc_id'] for s in conflict.get('stakeholders', []) 
-                    if s.get('entity_type') == 'npc'
-                }
+            # Add any conflict manifestations to the response
+            if scene_result.get("manifestations"):
+                response["conflict_manifestations"] = scene_result["manifestations"]
+            
+            # Add any new choices presented by conflicts
+            if scene_result.get("choices"):
+                response["conflict_choices"] = scene_result["choices"]
                 
-                involved_npc_ids = [
-                    resp.npc_id for resp in npc_responses 
-                    if resp.npc_id in conflict_stakeholder_ids
-                ]
-                
-                if involved_npc_ids or conflict.get('player_involvement', {}).get('involvement_level') != 'none':
-                    # Generate a story beat for this conflict
-                    beat_params = ConflictBeatGenerationParams(
-                        conflict_id=conflict['conflict_id'],
-                        recent_action=user_input,
-                        involved_npcs=involved_npc_ids
-                    )
-                    
-                    beat_ctx = RunContextWrapper(context={
-                        'user_id': user_id,
-                        'conversation_id': conversation_id
-                    })
-                    
-                    beat_result = await generate_conflict_beat(beat_ctx, beat_params)
-                    
-                    if beat_result.get('success'):
-                        logger.info(f"Generated conflict beat for {conflict['conflict_name']}")
-                        
-                        # Store beat result for potential inclusion in response
-                        if 'conflict_beats' not in response:
-                            response['conflict_beats'] = []
-                            
-                        response['conflict_beats'].append({
-                            'conflict_name': conflict['conflict_name'],
-                            'beat': beat_result['generated_beat']['beat_description'],
-                            'impact': beat_result['generated_beat']['impact_summary']
-                        })
         tracker.end_phase()
 
         # 9) *** Call your Nyx agent instead of direct GPT. ***
@@ -2421,9 +2422,13 @@ async def generate_scene():
         # Get story context
         story_context = await get_story_context(user_id, conv_id)
         
-        # Get active conflicts
-        conflict_system = await get_conflict_system(user_id, conv_id)
-        active_conflicts = await conflict_system.get_active_conflicts()
+        # Get active conflicts from synthesizer
+        conflict_synthesizer = await get_synthesizer(user_id, conv_id)
+        system_state = await conflict_synthesizer.get_system_state()
+        active_conflicts = []
+        for conflict_id in system_state.get("active_conflicts", []):
+            conflict_state = await conflict_synthesizer.get_conflict_state(conflict_id)
+            active_conflicts.append(conflict_state)
         
         # Get relevant lore
         lore_system = await get_lore_system(user_id, conv_id)
@@ -2467,9 +2472,13 @@ async def generate_conversation():
         # Get story context
         story_context = await get_story_context(user_id, conv_id)
         
-        # Get active conflicts
-        conflict_system = await get_conflict_system(user_id, conv_id)
-        active_conflicts = await conflict_system.get_active_conflicts()
+        # Get active conflicts from synthesizer
+        conflict_synthesizer = await get_synthesizer(user_id, conv_id)
+        system_state = await conflict_synthesizer.get_system_state()
+        active_conflicts = []
+        for conflict_id in system_state.get("active_conflicts", []):
+            conflict_state = await conflict_synthesizer.get_conflict_state(conflict_id)
+            active_conflicts.append(conflict_state)
         
         # Get relevant lore
         lore_system = await get_lore_system(user_id, conv_id)
@@ -2704,10 +2713,32 @@ async def end_of_day():
             -15, "metabolism", "Overnight metabolism"
         )
 
-        # Process conflict daily updates
-        conflict_integration = ConflictSystemIntegration(user_id, int(conv_id))
-        conflict_update = await conflict_integration.run_daily_update()
-
+        # Process conflict daily updates using synthesizer
+        conflict_synthesizer = await get_synthesizer(user_id, int(conv_id))
+        
+        # Emit end of day event
+        eod_event = SystemEvent(
+            event_id=f"end_of_day_{conv_id}_{datetime.now().timestamp()}",
+            event_type=EventType.STATE_SYNC,
+            source_subsystem=SubsystemType.SLICE_OF_LIFE,
+            payload={
+                "type": "end_of_day",
+                "year": year,
+                "month": month,
+                "day": day
+            },
+            priority=1
+        )
+        
+        await conflict_synthesizer.emit_event(eod_event)
+        
+        # Get updated system state
+        system_state = await conflict_synthesizer.get_system_state()
+        conflict_update = {
+            "active_conflicts": len(system_state.get("active_conflicts", [])),
+            "system_health": system_state.get("metrics", {}).get("system_health", 1.0),
+            "complexity_score": system_state.get("metrics", {}).get("complexity_score", 0.0)
+        }
         # Clear caches for new day
         NPC_CACHE.clear()
         LOCATION_CACHE.clear()
