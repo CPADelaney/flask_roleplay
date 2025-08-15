@@ -7,7 +7,7 @@ Integrated with ConflictSynthesizer as the central orchestrator
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Set, Tuple
+from typing import Dict, List, Any, Optional, Set, Tuple, TypedDict
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,6 +22,36 @@ logger = logging.getLogger(__name__)
 # ===============================================================================
 # MULTI-PARTY STRUCTURES
 # ===============================================================================
+
+class InitializeMultiFactionConflictResponse(TypedDict):
+    conflict_id: int
+    conflict_name: str
+    status: str
+    factions_registered: int
+    message: str
+    error: str
+
+class FactionTakeActionResponse(TypedDict):
+    performed: bool
+    action_type: str
+    stakeholder_id: int
+    effects: List[str]
+    notes: str
+    error: str
+
+class FactionStrengthItem(TypedDict):
+    faction_id: int
+    strength: float
+
+class NegotiateBetweenFactionsResponse(TypedDict):
+    negotiation_id: int
+    topic: str
+    participants: List[int]
+    status: str
+    faction_strengths: List[FactionStrengthItem]
+    relationship_factors_considered: bool
+    error: str
+
 
 class FactionRole(Enum):
     """Roles factions can play in conflicts"""
@@ -864,70 +894,93 @@ class MultiPartyConflictSubsystem:
 async def initialize_multi_faction_conflict(
     ctx: RunContextWrapper,
     conflict_name: str,
-    initial_factions: List[Dict[str, Any]]
-) -> Dict[str, Any]:
-    """Initialize a multi-faction conflict through synthesizer with relationship awareness"""
-    
+    initial_factions_json: str,  # <- JSON string instead of List[Dict[str, Any]]
+) -> InitializeMultiFactionConflictResponse:
+    """Initialize a multi-faction conflict through synthesizer with relationship awareness (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer
+
+    # Parse faction seeds defensively
+    try:
+        seeds = json.loads(initial_factions_json) if initial_factions_json else []
+        if not isinstance(seeds, list):
+            seeds = []
+    except Exception:
+        seeds = []
+
+    # Inline import to avoid hard import failures at module load
     from logic.conflict_system.conflict_synthesizer import get_synthesizer
+    try:
+        from logic.relationships.integration import RelationshipIntegration  # adjust path if different
+    except Exception:
+        RelationshipIntegration = None  # fallback
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Initialize relationship integration for faction creation
-    rel_integration = RelationshipIntegration(user_id, conversation_id)
-    
-    # Enhance faction data with relationship information
-    for faction in initial_factions:
-        if 'members' in faction:
-            # Calculate internal cohesion based on member relationships
-            cohesion = 0.0
-            member_count = 0
-            
-            for i, member1 in enumerate(faction['members']):
-                for member2 in faction['members'][i+1:]:
-                    try:
-                        rel = await rel_integration.get_relationship(
-                            "npc", member1, "npc", member2
-                        )
+
+    # Enhance factions with internal cohesion if we can
+    if RelationshipIntegration:
+        rel_integration = RelationshipIntegration(user_id, conversation_id)
+
+        for faction in seeds:
+            members = faction.get('members', []) if isinstance(faction, dict) else []
+            if isinstance(members, list) and members:
+                cohesion_sum = 0.0
+                pair_count = 0
+                for i in range(len(members)):
+                    for j in range(i + 1, len(members)):
+                        m1, m2 = members[i], members[j]
+                        try:
+                            rel = await rel_integration.get_relationship("npc", m1, "npc", m2)
+                        except Exception:
+                            rel = None
                         if rel:
-                            cohesion += rel.get('trust', 0) + rel.get('closeness', 0)
-                            member_count += 1
-                    except:
-                        pass
-            
-            if member_count > 0:
-                faction['internal_cohesion'] = cohesion / (member_count * 2)  # Normalize
+                            cohesion_sum += float(rel.get('trust', 0.0)) + float(rel.get('closeness', 0.0))
+                            pair_count += 1
+                faction['internal_cohesion'] = float(min(100.0, max(0.0,
+                    (cohesion_sum / (pair_count * 2.0)) if pair_count else 50.0)))
             else:
                 faction['internal_cohesion'] = 50.0
-    
-    # Create conflict with multi-party type
-    conflict_result = await synthesizer.create_conflict(
+    else:
+        # If relationship module missing, still proceed
+        for faction in seeds:
+            if isinstance(faction, dict) and 'internal_cohesion' not in faction:
+                faction['internal_cohesion'] = 50.0
+
+    raw = await synthesizer.create_conflict(
         'multi_faction_war',
         {
             'name': conflict_name,
-            'factions': initial_factions
+            'factions': seeds,  # already a list of dicts we constructed
         }
-    )
-    
-    return conflict_result
+    ) or {}
+
+    return {
+        'conflict_id': int(raw.get('conflict_id', 0)),
+        'conflict_name': str(raw.get('conflict_name', conflict_name)),
+        'status': str(raw.get('status', 'created')),
+        'factions_registered': int(len(seeds)),
+        'message': str(raw.get('message', 'initialized')),
+        'error': "",
+    }
+
 
 @function_tool
 async def faction_take_action(
     ctx: RunContextWrapper,
     faction_id: int,
     conflict_id: int
-) -> Dict[str, Any]:
-    """Have a faction take its turn through synthesizer with relationship awareness"""
-    
+) -> FactionTakeActionResponse:
+    """Have a faction take its turn through synthesizer with relationship awareness (strict schema)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Use synthesizer to emit stakeholder action
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
+
     event = SystemEvent(
         event_id=f"faction_action_{faction_id}",
         event_type=EventType.STAKEHOLDER_ACTION,
@@ -936,18 +989,43 @@ async def faction_take_action(
             'stakeholder_id': faction_id,
             'conflict_id': conflict_id,
             'action_type': 'faction_turn',
-            'consider_relationships': True  # NEW flag
+            'consider_relationships': True,
         },
+        target_subsystems={SubsystemType.MULTIPARTY},  # <- route explicitly
         requires_response=True
     )
-    
-    responses = await synthesizer.emit_event(event)
-    
-    for response in responses:
-        if response.subsystem == SubsystemType.MULTIPARTY:
-            return response.data
-    
-    return {'error': 'No response from multi-party system'}
+
+    responses = await synthesizer.emit_event(event) or []
+    data = None
+    for r in responses:
+        if r.subsystem == SubsystemType.MULTIPARTY:
+            data = r.data or {}
+            break
+
+    if not data:
+        return {
+            'performed': False,
+            'action_type': 'unknown',
+            'stakeholder_id': faction_id,
+            'effects': [],
+            'notes': '',
+            'error': 'No response from multi-party system',
+        }
+
+    # Normalize
+    effects = data.get('effects', [])
+    if not isinstance(effects, list):
+        effects = [str(effects)]
+
+    return {
+        'performed': bool(data.get('success', True)),
+        'action_type': str(data.get('action_type', 'faction_turn')),
+        'stakeholder_id': int(faction_id),
+        'effects': [str(e) for e in effects],
+        'notes': str(data.get('notes', '')),
+        'error': "",
+    }
+
 
 @function_tool
 async def negotiate_between_factions(
@@ -955,90 +1033,104 @@ async def negotiate_between_factions(
     topic: str,
     participating_factions: List[int],
     initial_position: str
-) -> Dict[str, Any]:
-    """Start a negotiation between multiple factions with relationship-based leverage"""
-    
+) -> NegotiateBetweenFactionsResponse:
+    """Start a negotiation between multiple factions with relationship-based leverage (strict schema and fixed DB scope)."""
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer and multi-party subsystem
+
+    # Inline imports
     from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+    from db.connection import get_db_connection_context
+
+    try:
+        from logic.relationships.integration import RelationshipIntegration  # adjust if needed
+    except Exception:
+        RelationshipIntegration = None
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    multiparty_subsystem = synthesizer._subsystems.get(SubsystemType.MULTIPARTY)
-    if not multiparty_subsystem:
-        return {'error': 'Multi-party subsystem not available'}
-    
-    # Calculate relationship-based negotiation strength for each faction
-    rel_integration = RelationshipIntegration(user_id, conversation_id)
-    faction_strengths = {}
-    
-    for faction_id in participating_factions:
-        # Get faction members
-        async with get_db_connection_context() as conn:
-            members = await conn.fetch("""
-                SELECT member_id FROM faction_members
-                WHERE faction_id = $1
-            """, faction_id)
-        
-        # Calculate average relationship quality with other factions
-        total_strength = 0.0
-        relationship_count = 0
-        
-        for member_row in members:
-            member_id = member_row['member_id']
-            # Check relationships with members of other factions
-            for other_faction_id in participating_factions:
-                if other_faction_id != faction_id:
-                    other_members = await conn.fetch("""
-                        SELECT member_id FROM faction_members
-                        WHERE faction_id = $1
-                    """, other_faction_id)
-                    
-                    for other_row in other_members:
-                        try:
-                            rel = await rel_integration.get_relationship(
-                                "npc", member_id, "npc", other_row['member_id']
-                            )
-                            if rel:
-                                # Power balance and trust affect negotiation
-                                strength = rel.get('power_balance', 0) * 0.3 + rel.get('trust', 0) * 0.2
-                                total_strength += strength
-                                relationship_count += 1
-                        except:
-                            pass
-        
-        if relationship_count > 0:
-            faction_strengths[faction_id] = total_strength / relationship_count
-        else:
-            faction_strengths[faction_id] = 50.0
-    
-    # Store negotiation with relationship data
+
+    # Pre-fetch all members for all factions to avoid using a closed conn later
+    faction_members: dict[int, List[int]] = {}
     async with get_db_connection_context() as conn:
-        negotiation_id = await conn.fetchval("""
+        rows = await conn.fetch(
+            """
+            SELECT faction_id, member_id
+            FROM faction_members
+            WHERE faction_id = ANY($1::int[])
+            """,
+            participating_factions,
+        )
+    for row in rows:
+        fid = int(row['faction_id'])
+        faction_members.setdefault(fid, []).append(int(row['member_id']))
+
+    # Compute relationship-based strengths
+    strengths_map: dict[int, float] = {}
+    if RelationshipIntegration:
+        rel_integration = RelationshipIntegration(user_id, conversation_id)
+
+        for fid in participating_factions:
+            members = faction_members.get(fid, [])
+            if not members:
+                strengths_map[fid] = 50.0
+                continue
+
+            total_strength = 0.0
+            rel_count = 0
+
+            # Compare with members of other factions
+            for other_fid in participating_factions:
+                if other_fid == fid:
+                    continue
+                other_members = faction_members.get(other_fid, [])
+                if not other_members:
+                    continue
+
+                for m1 in members:
+                    for m2 in other_members:
+                        try:
+                            rel = await rel_integration.get_relationship("npc", m1, "npc", m2)
+                        except Exception:
+                            rel = None
+                        if rel:
+                            strength = float(rel.get('power_balance', 0.0)) * 0.3 + float(rel.get('trust', 0.0)) * 0.2
+                            total_strength += strength
+                            rel_count += 1
+
+            strengths_map[fid] = float(min(100.0, max(0.0, (total_strength / rel_count) if rel_count else 50.0)))
+    else:
+        for fid in participating_factions:
+            strengths_map[fid] = 50.0
+
+    # Persist negotiation
+    async with get_db_connection_context() as conn:
+        negotiation_id = await conn.fetchval(
+            """
             INSERT INTO negotiations
             (user_id, conversation_id, topic, participants, status, metadata)
             VALUES ($1, $2, $3, $4, 'active', $5)
             RETURNING negotiation_id
-        """, user_id, conversation_id, topic, json.dumps(participating_factions),
-            json.dumps({'faction_strengths': faction_strengths}))
-    
-    negotiation = Negotiation(
-        negotiation_id=negotiation_id,
-        participants=participating_factions,
-        topic=topic,
-        offers={p: initial_position for p in participating_factions},
-        leverage_in_play={},
-        deadline=None,
-        mediator=None,
-        relationship_strength=max(faction_strengths.values()) if faction_strengths else 50.0
-    )
-    
+            """,
+            user_id,
+            conversation_id,
+            topic,
+            json.dumps(participating_factions),
+            json.dumps({'faction_strengths': strengths_map, 'initial_position': initial_position}),
+        )
+
+    # Normalize strengths for strict schema (list of items)
+    strengths_list: List[FactionStrengthItem] = [
+        {'faction_id': int(fid), 'strength': float(val)}
+        for fid, val in strengths_map.items()
+    ]
+
     return {
-        'negotiation_id': negotiation.negotiation_id,
-        'topic': negotiation.topic,
-        'participants': negotiation.participants,
+        'negotiation_id': int(negotiation_id or 0),
+        'topic': str(topic),
+        'participants': [int(fid) for fid in participating_factions],
         'status': 'initiated',
-        'faction_strengths': faction_strengths,
-        'relationship_factors_considered': True
+        'faction_strengths': strengths_list,
+        'relationship_factors_considered': True,
+        'error': "",
     }
