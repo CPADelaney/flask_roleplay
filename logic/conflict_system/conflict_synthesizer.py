@@ -10,8 +10,8 @@ No other module should attempt to orchestrate - they only handle their specific 
 import logging
 import json
 import asyncio
-from typing import Dict, List, Any, Optional, Set, Type, Callable
-from pydantic import BaseModel, Field
+from typing import Dict, List, Any, Optional, Set, Type, Callable, TypedDict, NotRequired
+from pydantic import BaseModel, Field, ConfigDict  
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,8 +29,272 @@ logger = logging.getLogger(__name__)
 # ORCHESTRATION TYPES
 # ===============================================================================
 
+class ConflictContext(BaseModel):
+    """Context data for conflict operations."""
+    model_config = ConfigDict(extra="ignore")
+
+    # Scene-related fields
+    scene_type: Optional[str] = None
+    scene_description: Optional[str] = None
+    activity: Optional[str] = None
+    activity_type: Optional[str] = None
+    location: Optional[str] = None
+    location_id: Optional[int] = None
+    timestamp: Optional[str] = None  # ISO-8601 preferred
+
+    # Participant fields (various names used across modules)
+    participants: Optional[List[int]] = None
+    present_npcs: Optional[List[int]] = None
+    npcs: Optional[List[int]] = None
+    character_ids: Optional[List[int]] = None
+    stakeholders: Optional[List[int]] = None
+
+    # Conflict-specific fields
+    conflict_type: Optional[str] = None
+    intensity: Optional[str] = None  # e.g., "tension", "friction"
+    intensity_level: Optional[float] = Field(None, ge=0.0, le=1.0)
+    description: Optional[str] = None
+    phase: Optional[str] = None
+
+    # Context and history
+    recent_events: Optional[List[str]] = None
+    evidence: Optional[List[str]] = None
+    tension_source: Optional[str] = None
+
+    # Template and generation fields
+    use_template: Optional[bool] = None
+    template_id: Optional[int] = None
+    generation_data: Optional[Dict[str, Any]] = None
+    hooks: Optional[List[str]] = None
+    complexity: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+    # Integration mode and processing flags
+    integration_mode: Optional[str] = None
+    integrating_conflicts: Optional[bool] = None
+    boost_engagement: Optional[bool] = None
+
+    # Flexible metadata for additional fields
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ConflictCreationResponse(BaseModel):
+    """Response model for conflict creation."""
+    model_config = ConfigDict(extra="ignore")
+
+    conflict_id: int = Field(..., ge=0)
+    conflict_type: Optional[str] = None
+    conflict_name: Optional[str] = None
+    status: str
+    message: Optional[str] = None
+    created_at: Optional[str] = None  # ISO-8601
+
+    # Phase and flow information
+    initial_phase: Optional[str] = None
+    pacing_style: Optional[str] = None
+
+    # Stakeholder information
+    stakeholders_created: Optional[int] = None
+    stakeholder_ids: Optional[List[int]] = None
+
+    # Template information
+    template_used: Optional[int] = None
+    generated_conflict: Optional[int] = None
+    narrative_hooks: Optional[List[str]] = None
+
+    # Additional details
+    conflict_details: Optional[Dict[str, Any]] = None
+    subsystem_responses: Optional[Dict[str, Any]] = None
+
+
+class SceneContext(BaseModel):
+    """Context for scene processing."""
+    model_config = ConfigDict(extra="ignore")
+
+    # Identification
+    scene_id: int
+    scene_type: str
+
+    # Participants & place
+    characters_present: List[int]
+    location_id: int
+
+    # Optional timing & linkage
+    timestamp: Optional[str] = None  # ISO-8601
+    previous_scene_id: Optional[int] = None
+
+    # Optional content
+    action_sequence: Optional[List[str]] = None
+    dialogue: Optional[List[Dict[str, str]]] = None
+
+
+class SceneProcessingResponse(BaseModel):
+    """Response from scene processing."""
+    model_config = ConfigDict(extra="ignore")
+
+    scene_id: Optional[int] = None
+    processed: bool
+
+    # Conflict manifestations
+    conflicts_active: Optional[bool] = None
+    conflicts_detected: Optional[List[int]] = None
+    manifestations: Optional[List[str]] = None
+
+    # Events and tensions
+    events_triggered: Optional[List[str]] = None
+    tensions_detected: Optional[int] = None
+    slice_of_life_active: Optional[bool] = None
+
+    # Suggestions and choices
+    next_scene_suggestions: Optional[List[str]] = None
+    player_choices: Optional[List[Dict[str, Any]]] = None
+    choices: Optional[List[Dict[str, Any]]] = None
+
+    # NPC behaviors and reactions
+    npc_behaviors: Optional[Dict[str, Any]] = None
+    npc_reactions: Optional[Dict[str, Any]] = None
+
+    # Environmental and atmospheric elements
+    atmospheric_elements: Optional[List[str]] = None
+    atmosphere: Optional[List[str]] = None
+    environmental_cues: Optional[List[str]] = None
+
+    # State changes
+    state_changes: Optional[Dict[str, Any]] = None
+
+    # Subsystem data
+    subsystem_data: Optional[Dict[str, Any]] = None
+
+    # Experience quality metrics
+    experience_quality: Optional[float] = None
+    recommended_mode_change: Optional[str] = None
+
+
+class ConflictResolutionResponse(BaseModel):
+    """Response from conflict resolution."""
+    model_config = ConfigDict(extra="ignore")
+
+    conflict_id: int = Field(..., ge=0)
+    resolved: bool
+    resolution_type: str
+    outcome: Optional[str] = None
+
+    # Victory and achievement information
+    victory_achieved: Optional[bool] = None
+    achievements: Optional[List[Dict[str, Any]]] = None
+    partial_victories: Optional[List[Dict[str, Any]]] = None
+
+    # Impacts and consequences
+    impacts: Optional[List[str]] = None
+    consequences: Optional[Dict[str, Any]] = None
+    immediate_consequences: Optional[Dict[str, Any]] = None
+    long_term_consequences: Optional[Dict[str, Any]] = None
+
+    # New conflicts or tensions
+    new_conflicts_created: Optional[List[int]] = None
+
+    # Narrative elements
+    epilogue: Optional[str] = None
+    resolution_narrative: Optional[str] = None
+    legacy: Optional[str] = None
+
+    # Canon and precedent
+    became_canonical: Optional[bool] = None
+    canonical_event: Optional[int] = None
+
+    # Additional resolution data
+    resolution_data: Optional[Dict[str, Any]] = None
+
+
+# For complex nested structures, create specific models
+class ConflictInfo(BaseModel):
+    """Individual conflict information."""
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    type: str
+    status: str
+    created_at: str  # ISO-8601
+    severity: Optional[float] = None
+
+
+class EventInfo(BaseModel):
+    """Individual event information."""
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    type: str
+    status: str
+    scheduled_at: Optional[str] = None  # ISO-8601
+
+
+class SystemStateResponse(BaseModel):
+    """Complete system state response."""
+    model_config = ConfigDict(extra="ignore")
+
+    active_conflicts: List[ConflictInfo]
+    pending_events: List[EventInfo]
+    system_health: str
+    total_conflicts: int
+    total_resolutions: int
+    subsystem_states: Dict[str, str]
+    last_update: str  # ISO-8601
+
+class ConflictContextDTO(TypedDict, total=False):
+    # Scene-related
+    scene_type: str
+    scene_description: str
+    activity: str
+    activity_type: str
+    location: str
+    location_id: int
+    timestamp: str  # ISO-8601
+
+    # Participants
+    participants: List[int]
+    present_npcs: List[int]
+    npcs: List[int]
+    character_ids: List[int]
+    stakeholders: List[int]
+
+    # Conflict specifics
+    conflict_type: str
+    intensity: str
+    intensity_level: float
+    description: str
+    phase: str
+
+    # Context & history
+    recent_events: List[str]
+    evidence: List[str]
+    tension_source: str
+
+    # Template / generation
+    use_template: bool
+    template_id: int
+    generation_data: Dict[str, Any]
+    hooks: List[str]
+    complexity: float  # 0..1
+
+    # Processing flags
+    integration_mode: str
+    integrating_conflicts: bool
+    boost_engagement: bool
+
+    # Flexible metadata
+    metadata: Dict[str, Any]
+
+
+class SceneContextDTO(TypedDict, total=False):
+    scene_id: int
+    scene_type: str
+    characters_present: List[int]
+    location_id: int
+    timestamp: NotRequired[str]            # ISO-8601
+    previous_scene_id: NotRequired[int]
+    action_sequence: NotRequired[List[str]]
+    dialogue: NotRequired[List[Dict[str, str]]]
+
 class SubsystemType(Enum):
-    """Types of conflict subsystems"""
     TENSION = "tension"
     STAKEHOLDER = "stakeholder"
     FLOW = "flow"
@@ -47,34 +311,23 @@ class SubsystemType(Enum):
     RESOLUTION = "resolution"
 
 class EventType(Enum):
-    """Types of events that flow through the system"""
-    # Lifecycle events
     CONFLICT_CREATED = "conflict_created"
     CONFLICT_UPDATED = "conflict_updated"
     CONFLICT_RESOLVED = "conflict_resolved"
-    
-    # State change events
     TENSION_CHANGED = "tension_changed"
     PHASE_TRANSITION = "phase_transition"
     INTENSITY_CHANGED = "intensity_changed"
-    
-    # Action events
     STAKEHOLDER_ACTION = "stakeholder_action"
     PLAYER_CHOICE = "player_choice"
     NPC_REACTION = "npc_reaction"
-    
-    # System events
     EDGE_CASE_DETECTED = "edge_case_detected"
     CANON_ESTABLISHED = "canon_established"
     TEMPLATE_GENERATED = "template_generated"
-    
-    # Meta events
     HEALTH_CHECK = "health_check"
     STATE_SYNC = "state_sync"
 
 @dataclass
 class SystemEvent:
-    """An event that flows through the orchestration system"""
     event_id: str
     event_type: EventType
     source_subsystem: SubsystemType
@@ -86,244 +339,11 @@ class SystemEvent:
 
 @dataclass
 class SubsystemResponse:
-    """Response from a subsystem to an event"""
     subsystem: SubsystemType
     event_id: str
     success: bool
     data: Dict[str, Any]
     side_effects: List[SystemEvent] = field(default_factory=list)
-
-@dataclass
-class ConflictContext:
-    """Shared context for a conflict operation"""
-    conflict_id: Optional[int]
-    operation: str
-    participants: List[int]
-    location: str
-    timestamp: datetime
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-class ConflictContext(BaseModel):
-    """Context data for conflict operations"""
-    # Scene-related fields
-    scene_type: Optional[str] = None
-    scene_description: Optional[str] = None
-    activity: Optional[str] = None
-    activity_type: Optional[str] = None
-    location: Optional[str] = None
-    location_id: Optional[int] = None
-    timestamp: Optional[str] = None
-    
-    # Participant fields (various names used across modules)
-    participants: Optional[List[int]] = None
-    present_npcs: Optional[List[int]] = None
-    npcs: Optional[List[int]] = None
-    character_ids: Optional[List[int]] = None
-    stakeholders: Optional[List[int]] = None
-    
-    # Conflict-specific fields
-    conflict_type: Optional[str] = None
-    intensity: Optional[str] = None  # Often string like "tension", "friction" etc.
-    intensity_level: Optional[float] = Field(None, ge=0.0, le=1.0)
-    description: Optional[str] = None
-    phase: Optional[str] = None
-    
-    # Context and history
-    recent_events: Optional[List[str]] = None
-    evidence: Optional[List[str]] = None
-    tension_source: Optional[str] = None
-    
-    # Template and generation fields
-    use_template: Optional[bool] = None
-    template_id: Optional[int] = None
-    generation_data: Optional[Dict[str, Any]] = None
-    hooks: Optional[List[str]] = None
-    complexity: Optional[float] = Field(None, ge=0.0, le=1.0)
-    
-    # Integration mode and processing flags
-    integration_mode: Optional[str] = None
-    integrating_conflicts: Optional[bool] = None
-    boost_engagement: Optional[bool] = None
-    
-    # Flexible metadata for additional fields
-    metadata: Optional[Dict[str, Any]] = None  # Changed to Any for flexibility
-
-class SceneContext(BaseModel):
-    """Context data for scene processing"""
-    # Scene identification
-    scene_id: Optional[int] = None
-    scene_type: Optional[str] = None
-    scene_description: Optional[str] = None
-    
-    # Activity and location
-    activity: Optional[str] = None
-    activity_type: Optional[str] = None
-    location: Optional[str] = None
-    location_id: Optional[int] = None
-    
-    # Participants
-    present_npcs: Optional[List[int]] = None
-    npcs: Optional[List[int]] = None
-    npcs_present: Optional[List[int]] = None
-    characters_present: Optional[List[int]] = None
-    
-    # Context and state
-    recent_events: Optional[List[str]] = None
-    current_conflicts: Optional[List[int]] = None
-    active_tensions: Optional[Dict[str, float]] = None
-    
-    # Time information
-    timestamp: Optional[str] = None
-    time_of_day: Optional[str] = None
-    game_day: Optional[int] = None
-    
-    # Processing flags
-    creating_conflict: Optional[bool] = None
-    resolving_conflict: Optional[bool] = None
-    integrating_conflicts: Optional[bool] = None
-    request_analysis: Optional[bool] = None
-    
-    # Integration mode
-    integration_mode: Optional[str] = None
-    
-    # Flexible metadata
-    metadata: Optional[Dict[str, Any]] = None  
-
-class ConflictCreationResponse(BaseModel):
-    """Response model for conflict creation"""
-    conflict_id: int
-    conflict_type: Optional[str] = None
-    conflict_name: Optional[str] = None
-    status: str
-    message: Optional[str] = None
-    created_at: Optional[str] = None
-    
-    # Phase and flow information
-    initial_phase: Optional[str] = None
-    pacing_style: Optional[str] = None
-    
-    # Stakeholder information
-    stakeholders_created: Optional[int] = None
-    stakeholder_ids: Optional[List[int]] = None
-    
-    # Template information
-    template_used: Optional[int] = None
-    generated_conflict: Optional[int] = None
-    narrative_hooks: Optional[List[str]] = None
-    
-    # Additional details
-    conflict_details: Optional[Dict[str, Any]] = None
-    subsystem_responses: Optional[Dict[str, Any]] = None
-
-class SceneContext(BaseModel):
-    """Context for scene processing"""
-    scene_id: int
-    scene_type: str
-    characters_present: List[int]
-    location_id: int
-    timestamp: Optional[str] = None
-    previous_scene_id: Optional[int] = None
-    action_sequence: Optional[List[str]] = None
-    dialogue: Optional[List[Dict[str, str]]] = None
-
-class SceneProcessingResponse(BaseModel):
-    """Response from scene processing"""
-    scene_id: Optional[int] = None
-    processed: bool
-    
-    # Conflict manifestations
-    conflicts_active: Optional[bool] = None
-    conflicts_detected: Optional[List[int]] = None
-    manifestations: Optional[List[str]] = None
-    
-    # Events and tensions
-    events_triggered: Optional[List[str]] = None
-    tensions_detected: Optional[int] = None
-    slice_of_life_active: Optional[bool] = None
-    
-    # Suggestions and choices
-    next_scene_suggestions: Optional[List[str]] = None
-    player_choices: Optional[List[Dict[str, Any]]] = None
-    choices: Optional[List[Dict[str, Any]]] = None
-    
-    # NPC behaviors and reactions
-    npc_behaviors: Optional[Dict[str, Any]] = None
-    npc_reactions: Optional[Dict[str, Any]] = None
-    
-    # Environmental and atmospheric elements
-    atmospheric_elements: Optional[List[str]] = None
-    atmosphere: Optional[List[str]] = None
-    environmental_cues: Optional[List[str]] = None
-    
-    # State changes
-    state_changes: Optional[Dict[str, Any]] = None
-    
-    # Subsystem data
-    subsystem_data: Optional[Dict[str, Any]] = None
-    
-    # Experience quality metrics
-    experience_quality: Optional[float] = None
-    recommended_mode_change: Optional[str] = None
-
-class ConflictResolutionResponse(BaseModel):
-    """Response from conflict resolution"""
-    conflict_id: int
-    resolved: bool
-    resolution_type: str
-    outcome: Optional[str] = None
-    
-    # Victory and achievement information
-    victory_achieved: Optional[bool] = None
-    achievements: Optional[List[Dict[str, Any]]] = None
-    partial_victories: Optional[List[Dict[str, Any]]] = None
-    
-    # Impacts and consequences
-    impacts: Optional[List[str]] = None
-    consequences: Optional[Dict[str, Any]] = None
-    immediate_consequences: Optional[Dict[str, Any]] = None
-    long_term_consequences: Optional[Dict[str, Any]] = None
-    
-    # New conflicts or tensions
-    new_conflicts_created: Optional[List[int]] = None
-    
-    # Narrative elements
-    epilogue: Optional[str] = None
-    resolution_narrative: Optional[str] = None
-    legacy: Optional[str] = None
-    
-    # Canon and precedent
-    became_canonical: Optional[bool] = None
-    canonical_event: Optional[int] = None
-    
-    # Additional resolution data
-    resolution_data: Optional[Dict[str, Any]] = None
-
-# For complex nested structures, create specific models
-class ConflictInfo(BaseModel):
-    """Individual conflict information"""
-    id: int
-    type: str
-    status: str
-    created_at: str
-    severity: Optional[float] = None
-
-class EventInfo(BaseModel):
-    """Individual event information"""
-    id: int
-    type: str
-    status: str
-    scheduled_at: Optional[str] = None
-
-class SystemStateResponse(BaseModel):
-    """Complete system state response"""
-    active_conflicts: List[ConflictInfo]  # Use specific models instead of Dict[str, Any]
-    pending_events: List[EventInfo]       # Use specific models instead of Dict[str, Any]
-    system_health: str
-    total_conflicts: int
-    total_resolutions: int
-    subsystem_states: Dict[str, str]      # This is OK as it has specific types
-    last_update: str
-
 
 # ===============================================================================
 # SUBSYSTEM INTERFACE
@@ -901,6 +921,24 @@ class ConflictSynthesizer:
         # Clear event queue if too large
         if self._event_queue.qsize() > 100:
             self._event_queue = asyncio.Queue()
+
+    async def process_scene(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Route a scene through relevant subsystems and synthesize a result."""
+        active = await self._determine_active_subsystems(scene_context)
+
+        # Build a routing event (STATE_SYNC is a reasonable generic event type)
+        event = SystemEvent(
+            event_id=f"scene_{datetime.now().timestamp()}",
+            event_type=EventType.STATE_SYNC,
+            source_subsystem=SubsystemType.SLICE_OF_LIFE,
+            payload={"scene_context": scene_context},
+            target_subsystems=active,
+            requires_response=True,
+            priority=5,
+        )
+
+        responses = await self.emit_event(event)
+        return self._synthesize_scene_result(responses, scene_context)
     
     # ========== Helper Methods ==========
     
@@ -1130,22 +1168,16 @@ async def get_synthesizer(user_id: int, conversation_id: int) -> ConflictSynthes
 async def orchestrate_conflict_creation(
     ctx: RunContextWrapper,
     conflict_type: str,
-    context: ConflictContext
-) -> ConflictCreationResponse:
-    """Create a conflict through the orchestrator"""
-    
+    context: ConflictContextDTO,   # <-- TypedDict input
+) -> Dict[str, Any]:               # <-- plain dict output
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Convert Pydantic model to dict for internal processing
-    # Filter out None values to keep the dict clean
-    context_dict = context.model_dump(exclude_none=True)
-    
-    result = await synthesizer.create_conflict(conflict_type, context_dict)
-    
-    # Map the result to the response model, handling various possible fields
+
+    # context is already a dict-like
+    result = await synthesizer.create_conflict(conflict_type, dict(context))
+
+    # Build response dict (previously you constructed a Pydantic response here)
     response_data = {
         'conflict_id': result.get('conflict_id', 0),
         'status': result.get('status', 'created'),
@@ -1161,32 +1193,21 @@ async def orchestrate_conflict_creation(
         'generated_conflict': result.get('generated_conflict'),
         'narrative_hooks': result.get('narrative_hooks'),
         'conflict_details': result.get('conflict_details'),
-        'subsystem_responses': result.get('subsystem_responses')
+        'subsystem_responses': result.get('subsystem_responses'),
     }
-    
-    # Filter out None values
-    response_data = {k: v for k, v in response_data.items() if v is not None}
-    
-    return ConflictCreationResponse(**response_data)
+    return {k: v for k, v in response_data.items() if v is not None}
 
 @function_tool
 async def orchestrate_scene_processing(
     ctx: RunContextWrapper,
-    scene_context: SceneContext
-) -> SceneProcessingResponse:
-    """Process a scene through the conflict system"""
-    
+    scene_context: SceneContextDTO,   # <-- TypedDict input
+) -> Dict[str, Any]:                  # <-- plain dict output
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Convert Pydantic model to dict for internal processing
-    context_dict = scene_context.model_dump(exclude_none=True)
-    
-    result = await synthesizer.process_scene(context_dict)
-    
-    # Map the result to the response model, handling various possible fields
+
+    result = await synthesizer.process_scene(dict(scene_context))
+
     response_data = {
         'scene_id': result.get('scene_id'),
         'processed': result.get('processed', True),
@@ -1207,38 +1228,23 @@ async def orchestrate_scene_processing(
         'state_changes': result.get('state_changes'),
         'subsystem_data': result.get('subsystem_data'),
         'experience_quality': result.get('experience_quality'),
-        'recommended_mode_change': result.get('recommended_mode_change')
+        'recommended_mode_change': result.get('recommended_mode_change'),
     }
-    
-    # Filter out None values
-    response_data = {k: v for k, v in response_data.items() if v is not None}
-    
-    return SceneProcessingResponse(**response_data)
+    return {k: v for k, v in response_data.items() if v is not None}
 
 @function_tool
 async def orchestrate_conflict_resolution(
     ctx: RunContextWrapper,
     conflict_id: int,
     resolution_type: str,
-    context: ConflictContext
-) -> ConflictResolutionResponse:
-    """Resolve a conflict through the orchestrator"""
-    
+    context: ConflictContextDTO,    # <-- TypedDict input
+) -> Dict[str, Any]:                # <-- plain dict output
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    # Convert Pydantic model to dict for internal processing
-    context_dict = context.model_dump(exclude_none=True)
-    
-    result = await synthesizer.resolve_conflict(
-        conflict_id, 
-        resolution_type, 
-        context_dict
-    )
-    
-    # Map the result to the response model, handling various possible fields
+
+    result = await synthesizer.resolve_conflict(conflict_id, resolution_type, dict(context))
+
     response_data = {
         'conflict_id': result.get('conflict_id', conflict_id),
         'resolved': result.get('resolved', True),
@@ -1257,38 +1263,66 @@ async def orchestrate_conflict_resolution(
         'legacy': result.get('legacy'),
         'became_canonical': result.get('became_canonical'),
         'canonical_event': result.get('canonical_event'),
-        'resolution_data': result.get('resolution_data')
+        'resolution_data': result.get('resolution_data'),
     }
-    
-    # Filter out None values
-    response_data = {k: v for k, v in response_data.items() if v is not None}
-    
-    return ConflictResolutionResponse(**response_data)
+    return {k: v for k, v in response_data.items() if v is not None}
 
 @function_tool
 async def get_orchestrated_system_state(
     ctx: RunContextWrapper
-) -> SystemStateResponse:
-    """Get complete system state from orchestrator"""
-    
+) -> Dict[str, Any]:
+    """Get complete system state from orchestrator (strict JSON shape)."""
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    result = await synthesizer.get_system_state()
-    
-    # Convert nested dicts to models if needed
-    if 'active_conflicts' in result and isinstance(result['active_conflicts'], list):
-        result['active_conflicts'] = [
-            ConflictInfo(**conflict) if isinstance(conflict, dict) else conflict
-            for conflict in result['active_conflicts']
-        ]
-    
-    if 'pending_events' in result and isinstance(result['pending_events'], list):
-        result['pending_events'] = [
-            EventInfo(**event) if isinstance(event, dict) else event
-            for event in result['pending_events']
-        ]
-    
-    # Convert result to Pydantic model
-    return SystemStateResponse(**result)
+    raw = await synthesizer.get_system_state()
+
+    # Derive a friendly health label from the numeric score
+    health_score = float(raw.get("metrics", {}).get("system_health", 1.0))
+    if health_score >= 0.8:
+        health_label = "ok"
+    elif health_score >= 0.5:
+        health_label = "degraded"
+    else:
+        health_label = "critical"
+
+    # Shape active_conflicts into ConflictInfo dicts
+    now_iso = datetime.utcnow().isoformat()
+    active_conflicts: List[Dict[str, Any]] = []
+    for item in raw.get("active_conflicts", []):
+        if isinstance(item, dict):
+            # If the synthesizer later returns rich details, coerce to the expected keys
+            active_conflicts.append({
+                "id": item.get("id") or item.get("conflict_id"),
+                "type": item.get("type") or item.get("conflict_type") or "unknown",
+                "status": item.get("status") or "active",
+                "created_at": item.get("created_at") or now_iso,
+                "severity": item.get("severity"),
+            })
+        else:
+            # Current implementation returns IDs; fabricate minimal record
+            active_conflicts.append({
+                "id": int(item),
+                "type": "unknown",
+                "status": "active",
+                "created_at": now_iso,
+                "severity": None,
+            })
+
+    # Subsystem states -> string labels
+    subsystem_states = {
+        name: ("healthy" if (info or {}).get("healthy", True) else "issue")
+        for name, info in raw.get("health", {}).items()
+    }
+
+    shaped: Dict[str, Any] = {
+        "active_conflicts": active_conflicts,
+        "pending_events": [],  # populate when you track a queue externally
+        "system_health": health_label,
+        "total_conflicts": int(raw.get("metrics", {}).get("total_conflicts", 0)),
+        "total_resolutions": int(raw.get("metrics", {}).get("resolved_conflicts", 0)),
+        "subsystem_states": subsystem_states,
+        "last_update": now_iso,
+    }
+    return shaped
