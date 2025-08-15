@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from collections import defaultdict
 import weakref
+from lore.core.canon import log_canonical_event, ensure_canonical_context
+from lore.core.context import CanonicalContext
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
@@ -341,6 +343,11 @@ class ConflictSynthesizer:
         import uuid
         operation_id = str(uuid.uuid4())
         
+        # Create canonical context for lore system
+        from lore.core.context import CanonicalContext
+        from lore.core.canon import log_canonical_event
+        ctx = CanonicalContext(self.user_id, self.conversation_id)
+        
         # Determine which subsystems to involve
         involved_subsystems = await self._determine_subsystems_for_operation(
             'create_conflict', conflict_type, context
@@ -371,38 +378,131 @@ class ConflictSynthesizer:
             self._conflict_states[conflict_data['conflict_id']] = conflict_data
             self._global_metrics['total_conflicts'] += 1
             self._global_metrics['active_conflicts'] += 1
+            
+            # Log the conflict creation canonically using the core canon system
+            async with get_db_connection_context() as conn:
+                # Extract meaningful details from context
+                participants = context.get('participants', [])
+                location = context.get('location', 'Unknown location')
+                description = context.get('description', f'A {conflict_type} conflict')
+                intensity = context.get('intensity', 'moderate')
+                
+                # Build a descriptive event text
+                event_text = f"New {conflict_type} conflict initiated"
+                if participants:
+                    if len(participants) == 1:
+                        event_text += f" involving {participants[0]}"
+                    elif len(participants) == 2:
+                        event_text += f" between {participants[0]} and {participants[1]}"
+                    else:
+                        event_text += f" involving {len(participants)} parties"
+                
+                if location != 'Unknown location':
+                    event_text += f" at {location}"
+                
+                event_text += f": {description}"
+                
+                # Determine significance based on conflict type and intensity
+                significance_map = {
+                    'political': 7,
+                    'social': 5,
+                    'personal': 4,
+                    'faction': 8,
+                    'power': 8,
+                    'slice': 3,
+                    'background': 3,
+                    'multiparty': 7
+                }
+                base_significance = significance_map.get(conflict_type.lower(), 5)
+                
+                # Adjust for intensity
+                intensity_modifiers = {
+                    'subtle': -1,
+                    'moderate': 0,
+                    'high': 1,
+                    'extreme': 2
+                }
+                significance = min(10, max(1, base_significance + intensity_modifiers.get(intensity, 0)))
+                
+                # Log the canonical event
+                await log_canonical_event(
+                    ctx, conn,
+                    event_text,
+                    tags=[
+                        'conflict',
+                        'creation',
+                        conflict_type,
+                        intensity,
+                        f"conflict_id_{conflict_data['conflict_id']}"
+                    ],
+                    significance=significance
+                )
+                
+                # If this conflict involves NPCs, log their involvement
+                if 'npc_ids' in context:
+                    for npc_id in context['npc_ids']:
+                        # Get NPC name if possible
+                        npc = await conn.fetchrow(
+                            "SELECT npc_name FROM NPCStats WHERE npc_id = $1",
+                            npc_id
+                        )
+                        npc_name = npc['npc_name'] if npc else f"NPC {npc_id}"
+                        
+                        await log_canonical_event(
+                            ctx, conn,
+                            f"{npc_name} became involved in {conflict_type} conflict",
+                            tags=[
+                                'npc_involvement',
+                                'conflict',
+                                f"npc_{npc_id}",
+                                f"conflict_id_{conflict_data['conflict_id']}"
+                            ],
+                            significance=3
+                        )
+                
+                # Check if this conflict should reference historical precedents
+                if conflict_type in ['political', 'faction', 'power']:
+                    # Look for similar past conflicts
+                    similar_conflicts = await conn.fetch("""
+                        SELECT event_text, tags, significance
+                        FROM CanonicalEvents
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND 'conflict' = ANY(tags)
+                        AND $3 = ANY(tags)
+                        AND significance >= 7
+                        ORDER BY timestamp DESC
+                        LIMIT 3
+                    """, self.user_id, self.conversation_id, conflict_type)
+                    
+                    if similar_conflicts:
+                        # Store references to precedents
+                        conflict_data['historical_precedents'] = [
+                            dict(p) for p in similar_conflicts
+                        ]
+                        
+                        # Update the conflict with precedent awareness
+                        precedent_event = SystemEvent(
+                            event_id=f"precedent_{operation_id}",
+                            event_type=EventType.STATE_SYNC,
+                            source_subsystem=SubsystemType.CANON,
+                            payload={
+                                'conflict_id': conflict_data['conflict_id'],
+                                'precedents': conflict_data['historical_precedents'],
+                                'message': 'Historical precedents identified for this conflict'
+                            },
+                            target_subsystems={SubsystemType.CANON},
+                            requires_response=False,
+                            priority=5
+                        )
+                        await self.emit_event(precedent_event)
+            
+            # Update complexity score based on conflict creation
+            self._global_metrics['complexity_score'] = min(
+                1.0,
+                self._global_metrics['complexity_score'] + 0.1
+            )
         
         return conflict_data
-    
-    async def process_scene(
-        self,
-        scene_context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Process a scene through relevant conflict subsystems"""
-        
-        # Check system health first
-        if self._global_metrics['system_health'] < 0.3:
-            await self._emergency_recovery()
-        
-        # Determine active subsystems for this scene
-        active_subsystems = await self._determine_active_subsystems(scene_context)
-        
-        # Create scene processing event
-        event = SystemEvent(
-            event_id=f"scene_{datetime.now().timestamp()}",
-            event_type=EventType.STATE_SYNC,
-            source_subsystem=SubsystemType.SLICE_OF_LIFE,
-            payload=scene_context,
-            target_subsystems=active_subsystems,
-            requires_response=True,
-            priority=3
-        )
-        
-        # Process through subsystems
-        responses = await self.emit_event(event)
-        
-        # Synthesize responses into scene result
-        return self._synthesize_scene_result(responses, scene_context)
     
     async def resolve_conflict(
         self,
@@ -414,6 +514,9 @@ class ConflictSynthesizer:
         
         # Get conflict state
         conflict_state = self._conflict_states.get(conflict_id, {})
+        
+        # Create canonical context
+        ctx = CanonicalContext(self.user_id, self.conversation_id)
         
         # Create resolution event
         event = SystemEvent(
@@ -432,6 +535,28 @@ class ConflictSynthesizer:
         
         # Process resolution
         responses = await self.emit_event(event)
+        result = self._aggregate_resolution_result(responses)
+        
+        # Log the resolution canonically
+        if result['resolved']:
+            async with get_db_connection_context() as conn:
+                conflict_name = conflict_state.get('conflict_name', f'Conflict {conflict_id}')
+                await log_canonical_event(
+                    ctx, conn,
+                    f"Conflict resolved: {conflict_name} through {resolution_type}",
+                    tags=['conflict', 'resolution', resolution_type],
+                    significance=7
+                )
+                
+                # Log consequences as canonical events if significant
+                for consequence in result.get('consequences', []):
+                    if consequence.get('significance', 0) >= 5:
+                        await log_canonical_event(
+                            ctx, conn,
+                            f"Consequence of {conflict_name}: {consequence.get('description', '')}",
+                            tags=['conflict_consequence', 'ripple_effect'],
+                            significance=consequence.get('significance', 5)
+                        )
         
         # Update metrics
         self._global_metrics['active_conflicts'] -= 1
@@ -441,7 +566,7 @@ class ConflictSynthesizer:
         if conflict_id in self._conflict_states:
             del self._conflict_states[conflict_id]
         
-        return self._aggregate_resolution_result(responses)
+        return result
     
     # ========== State Management ==========
     
