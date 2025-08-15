@@ -7,7 +7,7 @@ Manages how conflicts become part of world lore through the unified canon system
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict, NotRequired
 from enum import Enum
 from dataclasses import dataclass
 
@@ -55,6 +55,33 @@ class CanonicalEvent:
     referenced_by: List[str]  # NPCs or systems that reference this
     creates_precedent: bool
     legacy: str
+
+class CanonizationInputDTO(TypedDict, total=False):
+    resolution_type: str
+    outcome: str
+    summary: str
+    significance: float
+    tags: List[str]
+    notable_consequences: List[str]
+    victory_achieved: bool
+
+class CanonizationResponse(TypedDict):
+    became_canonical: bool
+    canonical_event_id: int
+    reason: str
+    significance: float
+    tags: List[str]
+
+class LoreAlignmentResponse(TypedDict):
+    is_compliant: bool
+    conflicts: List[str]
+    suggestions: List[str]
+
+class CanonicalPrecedent(TypedDict):
+    event: str
+    tags: List[str]
+    significance: float
+    established: str  # ISO-8601 string
 
 
 # ===============================================================================
@@ -833,39 +860,50 @@ class ConflictCanonSubsystem:
 async def canonize_conflict_resolution(
     ctx: RunContextWrapper,
     conflict_id: int,
-    resolution_data: Dict[str, Any]
-) -> Dict[str, Any]:
+    resolution: CanonizationInputDTO,   # <-- strict input
+) -> CanonizationResponse:              # <-- strict output
     """Evaluate and potentially canonize a conflict resolution"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get synthesizer and emit event
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SystemEvent, EventType, SubsystemType
+
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
+
     event = SystemEvent(
         event_id=f"canonize_{conflict_id}",
         event_type=EventType.CONFLICT_RESOLVED,
         source_subsystem=SubsystemType.RESOLUTION,
         payload={
             'conflict_id': conflict_id,
-            'context': resolution_data
+            'context': dict(resolution),  # ensure plain dict
         },
         target_subsystems={SubsystemType.CANON},
-        requires_response=True
+        requires_response=True,
     )
-    
+
     responses = await synthesizer.emit_event(event)
-    
+
     if responses:
         for response in responses:
             if response.subsystem == SubsystemType.CANON:
-                return response.data
-    
+                data = response.data or {}
+                return {
+                    'became_canonical': bool(data.get('became_canonical', False)),
+                    'canonical_event_id': int(data.get('canonical_event', 0) or 0),
+                    'reason': str(data.get('reason', "")),
+                    'significance': float(data.get('significance', 0.0) or 0.0),
+                    'tags': [str(t) for t in (data.get('tags') or [])],
+                }
+
     return {
         'became_canonical': False,
-        'reason': 'Canon system did not respond'
+        'canonical_event_id': 0,
+        'reason': 'Canon system did not respond',
+        'significance': 0.0,
+        'tags': [],
     }
 
 
@@ -873,121 +911,141 @@ async def canonize_conflict_resolution(
 async def check_conflict_lore_alignment(
     ctx: RunContextWrapper,
     conflict_type: str,
-    participants: List[int]
-) -> Dict[str, Any]:
+    participants: List[int],
+) -> LoreAlignmentResponse:
     """Check if a potential conflict aligns with established lore"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get canon subsystem through synthesizer
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
+
+    # Prefer routing via an event instead of reaching into _subsystems
+    from logic.conflict_system.conflict_synthesizer import (
+        get_synthesizer, SystemEvent, EventType, SubsystemType
+    )
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
-    canon_subsystem = synthesizer._subsystems.get(SubsystemType.CANON)
-    if canon_subsystem:
-        context = {
+
+    event = SystemEvent(
+        event_id=f"lore_align_{conflict_type}_{datetime.now().timestamp()}",
+        event_type=EventType.STATE_SYNC,
+        source_subsystem=SubsystemType.CANON,
+        payload={
+            'request': 'check_lore_compliance',
             'conflict_type': conflict_type,
             'participants': participants,
-            'location': ctx.data.get('location', 'unknown')
-        }
-        
-        return await canon_subsystem.check_lore_compliance(conflict_type, context)
-    
+            'location': ctx.data.get('location', 'unknown'),
+        },
+        target_subsystems={SubsystemType.CANON},
+        requires_response=True,
+    )
+
+    responses = await synthesizer.emit_event(event)
+
+    if responses:
+        for response in responses:
+            if response.subsystem == SubsystemType.CANON:
+                data = response.data or {}
+                return {
+                    'is_compliant': bool(data.get('is_compliant', True)),
+                    'conflicts': [str(x) for x in (data.get('conflicts') or [])],
+                    'suggestions': [str(x) for x in (data.get('suggestions') or [])],
+                }
+
+    # Fallback
     return {
         'is_compliant': True,
         'conflicts': [],
-        'suggestions': ['Canon system not available']
+        'suggestions': ['Canon system not available'],
     }
 
 
 @function_tool
 async def get_canonical_precedents(
     ctx: RunContextWrapper,
-    situation_type: str
-) -> List[Dict[str, Any]]:
+    situation_type: str,
+) -> List[CanonicalPrecedent]:
     """Get relevant canonical precedents for a situation"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
+
+    precedents: List[CanonicalPrecedent] = []
+
     async with get_db_connection_context() as conn:
-        # Search in unified CanonicalEvents table
-        precedents = await conn.fetch("""
+        rows = await conn.fetch("""
             SELECT event_text, tags, significance, timestamp
             FROM CanonicalEvents
             WHERE user_id = $1 AND conversation_id = $2
-            AND 'precedent' = ANY(tags)
-            AND (
+              AND 'precedent' = ANY(tags)
+              AND (
                 $3 = ANY(tags) OR
                 event_text ILIKE $4
-            )
+              )
             ORDER BY significance DESC, timestamp DESC
             LIMIT 5
         """, user_id, conversation_id, situation_type, f"%{situation_type}%")
-    
-    return [
-        {
-            'event': p['event_text'],
-            'tags': p['tags'],
-            'significance': p['significance'],
-            'established': p['timestamp'].isoformat() if p['timestamp'] else 'Unknown'
-        }
-        for p in precedents
-    ]
+
+    for p in rows:
+        tags = p['tags'] or []
+        if not isinstance(tags, list):
+            tags = [str(tags)]
+        precedents.append({
+            'event': str(p['event_text'] or ""),
+            'tags': [str(t) for t in tags],
+            'significance': float(p['significance'] or 0.0),
+            'established': (p['timestamp'].isoformat() if p['timestamp'] else ""),
+        })
+
+    return precedents
 
 
 @function_tool
 async def generate_conflict_mythology(
     ctx: RunContextWrapper,
-    conflict_id: int
+    conflict_id: int,
 ) -> str:
     """Generate how a conflict has entered mythology"""
-    
+
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
-    
-    # Get canon subsystem
+
     from logic.conflict_system.conflict_synthesizer import get_synthesizer, SubsystemType
     synthesizer = await get_synthesizer(user_id, conversation_id)
-    
+
     canon_subsystem = synthesizer._subsystems.get(SubsystemType.CANON)
     if not canon_subsystem:
         return "The conflict has not yet entered mythology."
-    
-    # Get conflict details
+
     async with get_db_connection_context() as conn:
         conflict = await conn.fetchrow("""
             SELECT * FROM Conflicts WHERE conflict_id = $1
         """, conflict_id)
-        
-        # Get canonical events for this conflict
+
         canonical_events = await conn.fetch("""
             SELECT event_text, significance FROM CanonicalEvents
             WHERE user_id = $1 AND conversation_id = $2
-            AND $3 = ANY(tags)
+              AND $3 = ANY(tags)
             ORDER BY significance DESC
         """, user_id, conversation_id, f"conflict_id_{conflict_id}")
-    
+
     if not canonical_events:
         return "This conflict has not yet become part of the canonical lore."
-    
+
     prompt = f"""
     Generate the mythological interpretation of this conflict:
-    
+
     Conflict: {conflict['conflict_name'] if conflict else f'Conflict {conflict_id}'}
     Type: {conflict['conflict_type'] if conflict else 'Unknown'}
     Canonical Events: {json.dumps([dict(e) for e in canonical_events])}
-    
+
     Write 2-3 paragraphs about how this conflict has entered mythology.
     Include:
     - How common people tell the story
     - What lessons or morals are drawn
     - How it has been embellished over time
     - What symbols or metaphors represent it
-    
+
     Make it feel like authentic folklore.
     """
-    
+
     response = await Runner.run(canon_subsystem.cultural_interpreter, prompt)
     return response.output
