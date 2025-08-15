@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field, ConfigDict
 from agents import Agent, Runner, function_tool, RunContextWrapper
 from agents.model_settings import ModelSettings
 
+from logic.conflict_system.conflict_synthesizer import get_synthesizer, ConflictSynthesizer
+
 # Database
 from db.connection import get_db_connection_context
 
@@ -333,6 +335,9 @@ class NarratorContext:
     _vector_service: Optional[Any] = None
     _performance_monitor: Optional[Any] = None
     
+    # NEW: Add conflict synthesizer
+    _conflict_synthesizer: Optional[ConflictSynthesizer] = None
+    
     # Cached data
     current_world_state: Optional[Any] = None
     active_memories: List[Any] = field(default_factory=list)
@@ -345,6 +350,10 @@ class NarratorContext:
     player_stats: Optional[Dict[str, Any]] = None
     active_addictions: Optional[Dict[str, Any]] = None
     current_vitals: Optional[Dict[str, Any]] = None
+    
+    # NEW: Conflict data
+    active_conflicts: List[Dict[str, Any]] = field(default_factory=list)
+    conflict_manifestations: List[str] = field(default_factory=list)
     
     @property
     def world_director(self):
@@ -374,7 +383,15 @@ class NarratorContext:
     def nyx_governance(self):
         # Don't do async initialization here - just return what we have
         return self._nyx_governance
+
+    @property
+    def governance_active(self) -> bool:
+        return self.nyx_governance is not None
     
+    @property
+    def conflict_synthesizer(self):
+        return self._conflict_synthesizer
+        
     async def initialize(self):
         """Initialize all lazy-loaded components"""
         if self._world_director is None:
@@ -399,10 +416,11 @@ class NarratorContext:
         
         if self._performance_monitor is None:
             self._performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
+        
+        # NEW: Initialize conflict synthesizer
+        if self._conflict_synthesizer is None:
+            self._conflict_synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
     
-    @property
-    def governance_active(self) -> bool:
-        return self.nyx_governance is not None
     
     async def refresh_context(self, input_text: str = ""):
         """Refresh all context data"""
@@ -431,6 +449,24 @@ class NarratorContext:
             
             # Update world state
             self.current_world_state = await self.world_director.get_world_state()
+            
+            # NEW: Get conflict state
+            if self.conflict_synthesizer:
+                try:
+                    conflict_state = await self.conflict_synthesizer.get_system_state()
+                    self.active_conflicts = conflict_state.get('active_conflicts', [])
+                    
+                    # Check for manifestations in current context
+                    if self.active_conflicts:
+                        scene_context = {
+                            "scene_type": "narrative_check",
+                            "input_text": input_text,
+                            "location": self.current_context.get('location', 'unknown')
+                        }
+                        scene_result = await self.conflict_synthesizer.process_scene(scene_context)
+                        self.conflict_manifestations = scene_result.get('manifestations', [])
+                except Exception as e:
+                    logger.warning(f"Could not get conflict state: {e}")
             
             # Detect system intersections
             await self._detect_system_intersections()
@@ -466,6 +502,19 @@ class NarratorContext:
         # Check memory patterns
         if self.active_memories and len(self.active_memories) > 3:
             self.system_intersections.append("memory_accumulation")
+        
+        # NEW: Check conflict intersections
+        if self.active_conflicts:
+            self.system_intersections.append(f"active_conflicts:{len(self.active_conflicts)}")
+            
+            # Check for specific conflict types
+            for conflict in self.active_conflicts:
+                if isinstance(conflict, dict):
+                    conflict_type = conflict.get('type', 'unknown')
+                    if conflict_type == 'social' and len(conflict.get('participants', [])) > 2:
+                        self.system_intersections.append("multiparty_social_conflict")
+                    elif conflict_type == 'power':
+                        self.system_intersections.append("power_struggle_active")
 
 # ===============================================================================
 # Core Narration Functions with Governance & Context
