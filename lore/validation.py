@@ -21,7 +21,6 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps, lru_cache
 import hashlib
 from pydantic import BaseModel, ValidationError, Field
-from logic.game_time_helper import get_game_timestamp, get_game_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +213,7 @@ class LoreError(Exception):
 
     async def initialize_timestamps(self):
         """Asynchronously initialize timestamp fields using game time."""
+        from logic.game_time_helper import get_game_timestamp, get_game_datetime
         if self.user_id is None or self.conversation_id is None:
             utc_now = datetime.utcnow()
             self.timestamp = utc_now
