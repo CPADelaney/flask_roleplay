@@ -241,10 +241,7 @@ class AgentGovernanceMixin:
             if agent_type == AgentType.CONFLICT_ANALYST:
                 try:
                     # Import the new conflict synthesizer system
-                    from logic.conflict_system.conflict_synthesizer import (
-                        ConflictSynthesizer,
-                        get_synthesizer
-                    )
+                    from logic.conflict_system.conflict_synthesizer import get_synthesizer
                     
                     # Create and register conflict synthesizer
                     logger.info(f"[discover] initializing conflict synthesizer")
@@ -266,9 +263,22 @@ class AgentGovernanceMixin:
                 except Exception as e:
                     logger.error(f"[discover] Failed to initialize conflict synthesizer: {e}")
                 continue
-        
+                    
         # 2. Specialized open-world agents (from story_agent.specialized_agents)
         try:
+            # First try to patch the import if needed
+            import sys
+            import types
+            
+            # Create a mock time_cycle module with the needed function if it doesn't exist
+            if 'logic.time_cycle' in sys.modules:
+                time_cycle_module = sys.modules['logic.time_cycle']
+                if not hasattr(time_cycle_module, 'get_game_iso_string'):
+                    # Add the function from game_time_helper
+                    from logic.game_time_helper import get_game_iso_string
+                    time_cycle_module.get_game_iso_string = get_game_iso_string
+            
+            # Now try to import specialized agents
             from story_agent.specialized_agents import (
                 initialize_specialized_agents,
                 OpenWorldAgentType
@@ -276,15 +286,13 @@ class AgentGovernanceMixin:
             
             specialized = initialize_specialized_agents()
             for key, agent_instance in specialized.items():
-                # Map to governance agent types if available
                 agent_id = f"{key}_{self.conversation_id}"
-                # Note: These are slice-of-life agents, not conflict agents
-                # They handle daily life, relationships, etc.
-                # Since these don't have a specific AgentType enum, we use the key as agent_type
                 registrations.append((key, agent_id))
                 logger.info(f"[discover] queued specialized agent {key} → {agent_id}")
+                
         except ImportError as e:
-            logger.error(f"[discover] Failed to load specialized agents: {e}")
+            logger.warning(f"[discover] Specialized agents not available: {e}")
+            # These are optional, so we can continue without them
         except Exception as e:
             logger.error(f"[discover] Failed to load specialized agents: {e}")
         
