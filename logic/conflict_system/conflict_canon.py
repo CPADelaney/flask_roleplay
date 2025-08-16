@@ -153,7 +153,7 @@ class ConflictCanonSubsystem:
             count = await conn.fetchval("""
                 SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND 'conflict' = ANY(tags)
+                AND tags @> '["conflict"]'
             """, self.user_id, self.conversation_id)
             
             if count == 0:
