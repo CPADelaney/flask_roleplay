@@ -3175,6 +3175,40 @@ async def create_all_tables():
                 ON Stakeholders(npc_id);
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS victory_conditions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    conflict_id INTEGER NOT NULL,
+                    condition_type VARCHAR(100) NOT NULL,
+                    condition_name TEXT NOT NULL,
+                    description TEXT,
+                    target_value FLOAT,
+                    current_value FLOAT DEFAULT 0,
+                    is_achieved BOOLEAN DEFAULT FALSE,
+                    achievement_date TIMESTAMP,
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE,
+                    UNIQUE(user_id, conversation_id, conflict_id, condition_type)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_victory_conditions_conflict
+                ON victory_conditions(conflict_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_victory_conditions_lookup
+                ON victory_conditions(user_id, conversation_id, conflict_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_victory_conditions_achieved
+                ON victory_conditions(is_achieved) WHERE is_achieved = TRUE;
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS BackgroundConflicts (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
