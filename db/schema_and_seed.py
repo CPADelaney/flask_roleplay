@@ -3128,6 +3128,102 @@ async def create_all_tables():
                 END $$;
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS TensionLevels (
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    tension_type VARCHAR(50) NOT NULL,
+                    level FLOAT NOT NULL DEFAULT 0.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, conversation_id, tension_type),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_tension_levels_lookup
+                ON TensionLevels(user_id, conversation_id);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS Stakeholders (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    conflict_id INTEGER NOT NULL,
+                    npc_id INTEGER NOT NULL,
+                    faction_id INTEGER,
+                    role VARCHAR(100),
+                    motivation TEXT,
+                    influence_level INTEGER DEFAULT 50,
+                    loyalty INTEGER DEFAULT 50,
+                    resources_committed JSONB DEFAULT '{}',
+                    actions_taken JSONB DEFAULT '[]',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE,
+                    UNIQUE(user_id, conversation_id, conflict_id, npc_id)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_stakeholders_conflict
+                ON Stakeholders(conflict_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_stakeholders_npc
+                ON Stakeholders(npc_id);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS BackgroundConflicts (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    conflict_type VARCHAR(100) NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    scale VARCHAR(50) DEFAULT 'regional',
+                    intensity FLOAT DEFAULT 0.5,
+                    visibility FLOAT DEFAULT 0.3,
+                    factions_involved JSONB DEFAULT '[]',
+                    key_events JSONB DEFAULT '[]',
+                    potential_spillovers JSONB DEFAULT '[]',
+                    status VARCHAR(50) DEFAULT 'simmering',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_background_conflicts_lookup
+                ON BackgroundConflicts(user_id, conversation_id, status);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS conflict_templates (
+                    id SERIAL PRIMARY KEY,
+                    template_name VARCHAR(200) NOT NULL,
+                    conflict_type VARCHAR(100) NOT NULL,
+                    description TEXT,
+                    required_elements JSONB DEFAULT '{}',
+                    optional_elements JSONB DEFAULT '{}',
+                    complexity_level INTEGER DEFAULT 3,
+                    tags JSONB DEFAULT '[]',
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(template_name)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conflict_templates_type
+                ON conflict_templates(conflict_type);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conflict_templates_active
+                ON conflict_templates(is_active) WHERE is_active = TRUE;
+                ''',
+                '''
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
