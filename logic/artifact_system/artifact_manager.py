@@ -136,11 +136,12 @@ class ArtifactManager:
     # =====================================================
     
     @property
-    def conflict_resolution(self):
-        """Lazy load conflict resolution system."""
+    def conflict_synthesizer(self):
+        """Lazy load conflict synthesizer."""
         if self._conflict_resolution is None:
-            from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
-            self._conflict_resolution = ConflictResolutionSystem(self.user_id, self.conversation_id)
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
+            # This will need to be awaited when used
+            self._conflict_resolution = get_synthesizer(self.user_id, self.conversation_id)
         return self._conflict_resolution
     
     @property
@@ -191,10 +192,10 @@ class ArtifactManager:
                 from nyx.integrate import get_central_governance
                 self._governor = await get_central_governance(self.user_id, self.conversation_id)
                 
-                # Initialize conflict resolution (lazy loaded)
-                from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
-                self._conflict_resolution = ConflictResolutionSystem(self.user_id, self.conversation_id)
-                await self._conflict_resolution.initialize()
+                # Initialize conflict synthesizer (lazy loaded)
+                from logic.conflict_system.conflict_synthesizer import get_synthesizer
+                self._conflict_resolution = await get_synthesizer(self.user_id, self.conversation_id)
+                # Note: get_synthesizer already initializes the subsystems
                 
                 # Initialize lore generator with the governor
                 from lore.lore_generator import DynamicLoreGenerator
@@ -622,28 +623,35 @@ class ArtifactManager:
                                 integration_type: str = "power") -> Dict[str, Any]:
         """Integrate artifact with conflict through synthesizer"""
         try:
-            from logic.conflict_system.conflict_synthesizer import ConflictSynthesizer
+            from logic.conflict_system.conflict_synthesizer import get_synthesizer
             
             artifact = self.active_artifacts.get(artifact_id)
             if not artifact:
                 return {"success": False, "error": "Artifact not found"}
             
-            # Route through synthesizer
-            synthesizer = ConflictSynthesizer(self.user_id, self.conversation_id)
+            # Get synthesizer instance
+            synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
             
-            event = {
-                "type": "artifact_integration",
-                "artifact_id": artifact_id,
-                "artifact": artifact,
-                "integration_type": integration_type
+            # Create context for the conflict update
+            update_data = {
+                "artifact_integration": {
+                    "artifact_id": artifact_id,
+                    "artifact": artifact,
+                    "integration_type": integration_type
+                }
             }
             
-            result = await synthesizer.process_conflict_event(conflict_id, event)
+            # Use synthesizer's update_conflict method
+            result = await synthesizer.update_conflict(
+                conflict_id,
+                "artifact_integration",
+                update_data
+            )
             
             # Update artifact state based on result
-            if result.get("success"):
+            if result.get("updated_state"):
                 artifact["integrated_with_conflict"] = conflict_id
-                artifact["integration_effects"] = result.get("effects", [])
+                artifact["integration_effects"] = result.get("side_effects", [])
             
             return result
             
@@ -963,5 +971,6 @@ async def ensure_artifacts_table(conn):
 # =====================================================
 
 __all__ = ['ArtifactManager', 'ensure_artifacts_table']
+
 
 
