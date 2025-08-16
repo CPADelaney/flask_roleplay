@@ -153,7 +153,7 @@ class ConflictCanonSubsystem:
             count = await conn.fetchval("""
                 SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND tags @> '["conflict"]'
+                AND tags ? 'conflict'
             """, self.user_id, self.conversation_id)
             
             if count == 0:
@@ -657,9 +657,10 @@ class ConflictCanonSubsystem:
             canonical_events = await conn.fetch("""
                 SELECT * FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
+                AND tags @> '["precedent"]'
                 AND significance >= 7
-                ORDER BY significance DESC, timestamp DESC
-                LIMIT 10
+                ORDER BY significance DESC
+                LIMIT 5
             """, self.user_id, self.conversation_id)
             
             # Check for related conflicts using semantic search
@@ -843,7 +844,7 @@ class ConflictCanonSubsystem:
         canonical_refs = await conn.fetchval("""
             SELECT COUNT(*) FROM CanonicalEvents
             WHERE user_id = $1 AND conversation_id = $2
-            AND $3 = ANY(tags)
+            AND tags @> to_jsonb($3::text)
         """, self.user_id, self.conversation_id, f"conflict_id_{conflict_id}")
         
         if canonical_refs > 0:
