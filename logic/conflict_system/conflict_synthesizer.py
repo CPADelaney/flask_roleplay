@@ -477,10 +477,10 @@ class ConflictSynthesizer:
         from logic.conflict_system.social_circle import SocialCircleConflictSubsystem
         from logic.conflict_system.leverage import LeverageSubsystem
         from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
-        from logic.conflict_system.conflict_victory import VictoryConditionSubsystem
+        from logic.conflict_system.conflict_victory import ConflictVictorySubsystem
         from logic.conflict_system.conflict_canon import ConflictCanonSubsystem
         from logic.conflict_system.dynamic_conflict_template import DynamicConflictTemplateSubsystem
-        from logic.conflict_system.edge_cases import EdgeCaseDetectionSubsystem
+        from logic.conflict_system.edge_cases import ConflictEdgeCaseSubsystem
         from logic.conflict_system.slice_of_life_conflicts import SliceOfLifeConflictSubsystem
         from logic.conflict_system.enhanced_conflict_integration import EnhancedIntegrationSubsystem
         
@@ -492,10 +492,10 @@ class ConflictSynthesizer:
             SocialCircleConflictSubsystem(self.user_id, self.conversation_id),
             LeverageSubsystem(self.user_id, self.conversation_id),
             BackgroundConflictSubsystem(self.user_id, self.conversation_id),
-            VictoryConditionSubsystem(self.user_id, self.conversation_id),
+            ConflictVictorySubsystem(self.user_id, self.conversation_id),
             ConflictCanonSubsystem(self.user_id, self.conversation_id),
             DynamicConflictTemplateSubsystem(self.user_id, self.conversation_id),
-            EdgeCaseDetectionSubsystem(self.user_id, self.conversation_id),
+            ConflictEdgeCaseSubsystem(self.user_id, self.conversation_id),
             SliceOfLifeConflictSubsystem(self.user_id, self.conversation_id),
             EnhancedIntegrationSubsystem(self.user_id, self.conversation_id),
         ]
