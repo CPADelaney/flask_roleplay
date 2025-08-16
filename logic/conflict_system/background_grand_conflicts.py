@@ -353,12 +353,13 @@ class BackgroundConflictSubsystem:
             recent_news = await conn.fetch("""
                 SELECT headline, content FROM BackgroundNews
                 WHERE user_id = $1 AND conversation_id = $2
-                AND game_day > (SELECT current_day FROM game_calendar 
-                               WHERE user_id = $3 AND conversation_id = $4) - 7
+                AND game_day > (SELECT CAST(value AS INTEGER) FROM CurrentRoleplay 
+                               WHERE user_id = $3 AND conversation_id = $4 
+                               AND key = 'CurrentDay') - 7
                 ORDER BY game_day DESC
                 LIMIT 10
-            """, self.user_id, self.conversation_id, self.user_id, self.conversation_id)
-        
+            """, user_id, conversation_id, user_id, conversation_id)
+                    
         topics = []
         for news in recent_news:
             topics.append(f"Did you hear about {news['headline']}?")
@@ -725,7 +726,7 @@ class BackgroundNewsGenerator:
             """, self.user_id, self.conversation_id, conflict.conflict_id,
             news_data['headline'], news_data['source'], 
             news_data['content'], news_data['reliability'],
-            await get_current_game_day(self.user_id, self.conversation_id))
+            await get_current_game_day(self.user_id, self.conversation_id, use_names=False))  # Add use_names=False
         
         return news_data
 
