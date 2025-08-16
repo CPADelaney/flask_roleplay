@@ -466,14 +466,14 @@ class ConflictCanonSubsystem:
         # Get conflict details
         async with get_db_connection_context() as conn:
             conflict = await conn.fetchrow("""
-                SELECT * FROM Conflicts WHERE conflict_id = $1
+                SELECT *, id as conflict_id FROM Conflicts WHERE id = $1
             """, conflict_id)
             
             if not conflict:
                 return None
             
             stakeholders = await conn.fetch("""
-                SELECT * FROM conflict_stakeholders WHERE conflict_id = $1
+                SELECT * FROM ConflictStakeholders WHERE conflict_id = $1
             """, conflict_id)
         
         prompt = f"""
@@ -807,11 +807,11 @@ class ConflictCanonSubsystem:
         """Assess how significant a conflict is for canon"""
         async with get_db_connection_context() as conn:
             conflict = await conn.fetchrow("""
-                SELECT * FROM Conflicts WHERE conflict_id = $1
+                SELECT *, id as conflict_id FROM Conflicts WHERE id = $1
             """, conflict_id)
-            
+                        
             stakeholders = await conn.fetchval("""
-                SELECT COUNT(*) FROM conflict_stakeholders 
+                SELECT COUNT(*) FROM ConflictStakeholders 
                 WHERE conflict_id = $1
             """, conflict_id)
         
@@ -1018,7 +1018,7 @@ async def generate_conflict_mythology(
 
     async with get_db_connection_context() as conn:
         conflict = await conn.fetchrow("""
-            SELECT * FROM Conflicts WHERE conflict_id = $1
+            SELECT *, id as conflict_id FROM Conflicts WHERE id = $1
         """, conflict_id)
 
         canonical_events = await conn.fetch("""
