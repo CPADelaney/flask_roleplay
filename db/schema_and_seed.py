@@ -1422,6 +1422,7 @@ async def create_all_tables():
                     description TEXT,
                     progress REAL DEFAULT 0.0,
                     phase TEXT DEFAULT 'brewing',
+                    intensity REAL DEFAULT 0.5,
                     start_day INTEGER,
                     estimated_duration INTEGER,
                     success_rate REAL,
