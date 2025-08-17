@@ -1487,20 +1487,27 @@ async def process_complete_player_choice(
         # 4) Activity
         if choice_data.activity_type:
             try:
-                activity_result = await process_activity_vitals(
-                    context.user_id, context.conversation_id,
-                    context.player_name, choice_data.activity_type,
-                    choice_data.intensity or 1.0
+                # Import the new processor
+                from logic.stats_logic import process_world_activity
+                
+                # Process activity with dynamic effects
+                activity_result = await process_world_activity(
+                    context.user_id,
+                    context.conversation_id,
+                    choice_data.activity_type,
+                    context.player_name,
+                    intensity=choice_data.intensity or 1.0,
+                    npc_id=choice_data.npc_id
                 )
+                
                 results.activity_result = kvlist_from_obj(activity_result)
-
-                if choice_data.activity_type in ACTIVITY_EFFECTS:
-                    effect_result = await apply_activity_effects(
-                        context.user_id, context.conversation_id,
-                        choice_data.activity_type,
-                        choice_data.intensity or 1.0
-                    )
-                    results.effects.append(kvlist_from_obj(effect_result))
+                
+                # Add effects to the results
+                if activity_result.get("effects"):
+                    results.effects.append(kvlist_from_obj({
+                        "activity_effects": activity_result["effects"]
+                    }))
+                    
             except Exception as e:
                 logger.error(f"Error processing activity: {e}")
                 results.effects.append(kvlist_from_obj({"error": f"Activity processing failed: {e}"}))
