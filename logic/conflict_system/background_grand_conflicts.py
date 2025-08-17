@@ -533,7 +533,7 @@ class BackgroundConflictOrchestrator:
         """
         
         response = await Runner.run(self.world_event_agent, prompt)
-        data = json.loads(response.output)
+        data = json.loads(response.content)
         
         # Create database entry
         async with get_db_connection_context() as conn:
@@ -608,7 +608,7 @@ class BackgroundConflictOrchestrator:
         """
         
         response = await Runner.run(self.development_agent, prompt)
-        data = json.loads(response.output)
+        data = json.loads(response.content)
         
         # Update database
         async with get_db_connection_context() as conn:
@@ -714,7 +714,7 @@ class BackgroundNewsGenerator:
         """
         
         response = await Runner.run(self.news_generator, prompt)
-        news_data = json.loads(response.output)
+        news_data = json.loads(response.content)
         
         # Store in database
         async with get_db_connection_context() as conn:
