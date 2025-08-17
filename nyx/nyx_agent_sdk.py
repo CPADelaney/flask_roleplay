@@ -330,6 +330,135 @@ async def _ensure_world_state_from_ctx(app_ctx: Any):
     except Exception:
         return None
 
+def _extract_last_assistant_text(resp) -> str:
+    """Extract the last assistant message text from response"""
+    msgs = [c for c in resp if c.get("type") == "message" and c.get("role") == "assistant"]
+    if not msgs:
+        return ""
+    parts = msgs[-1].get("content") or []
+    for part in reversed(parts):
+        if part.get("type") == "output_text" and part.get("text"):
+            return part["text"]
+    return ""
+
+def _did_call_tool(resp, tool_name: str) -> bool:
+    """Check if a specific tool was called in the response"""
+    for c in resp:
+        if c.get("type") in ("function_call", "function_call_output") and c.get("name") == tool_name:
+            return True
+    return False
+
+def _tool_output(resp, name: str):
+    """Extract tool output data from response, return {} if not found"""
+    outs = [c for c in resp if c.get("type") == "function_call_output" and c.get("name") == name]
+    if not outs:
+        return {}
+    try:
+        raw = outs[-1].get("output")
+        # Agents SDK often stores JSON string in .output
+        return json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        return {}
+
+Here are the complete updated snippets to fix your issues:
+1. Add Helper Functions (place near top of file after imports)
+pythondef _extract_last_assistant_text(resp) -> str:
+    """Extract the last assistant message text from response"""
+    msgs = [c for c in resp if c.get("type") == "message" and c.get("role") == "assistant"]
+    if not msgs:
+        return ""
+    parts = msgs[-1].get("content") or []
+    for part in reversed(parts):
+        if part.get("type") == "output_text" and part.get("text"):
+            return part["text"]
+    return ""
+
+def _did_call_tool(resp, tool_name: str) -> bool:
+    """Check if a specific tool was called in the response"""
+    for c in resp:
+        if c.get("type") in ("function_call", "function_call_output") and c.get("name") == tool_name:
+            return True
+    return False
+
+def _tool_output(resp, name: str):
+    """Extract tool output data from response, return {} if not found"""
+    outs = [c for c in resp if c.get("type") == "function_call_output" and c.get("name") == name]
+    if not outs:
+        return {}
+    try:
+        raw = outs[-1].get("output")
+        # Agents SDK often stores JSON string in .output
+        return json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        return {}
+2. Robust Response Assembler
+pythondef assemble_nyx_response(resp: list) -> Dict[str, Any]:
+    """Assemble final response from agent run with fallbacks"""
+    
+    # Extract tool outputs
+    scene = _tool_output(resp, "narrate_slice_of_life_scene")
+    world = _tool_output(resp, "check_world_state")
+    npc = _tool_output(resp, "simulate_npc_autonomy")
+    img = _tool_output(resp, "decide_image_generation")
+    updates = _tool_output(resp, "generate_universal_updates")
+    emergent = _tool_output(resp, "generate_emergent_event")
+    
+    # 1) Get narrative - prefer tool, fall back to assistant text
+    narrative = scene.get("narrative")
+    if not narrative or not narrative.strip():
+        narrative = _extract_last_assistant_text(resp)
+    if not narrative:
+        narrative = "The scene unfolds quietly."
+    
+    # 2) Extract metadata with safe defaults
+    available = scene.get("available_activities") or ["observe", "browse", "leave", "interact"]
+    world_mood = scene.get("world_mood") or world.get("world_mood") or "neutral"
+    time_of_day = scene.get("time_of_day") or world.get("time_of_day") or "Unknown"
+    emergent_opportunities = scene.get("emergent_opportunities") or []
+    power_undertones = scene.get("power_undertones") or ["subtle control dynamics"]
+    
+    # Handle tension level safely
+    tension_level = scene.get("tension_level")
+    if not isinstance(tension_level, (int, float)):
+        tension_level = 3  # default medium tension
+    
+    # Image generation decision
+    should_image = bool(
+        img.get("should_generate") or 
+        img.get("generate_image") or 
+        scene.get("generate_image") or 
+        False
+    )
+    image_prompt = (
+        img.get("image_prompt") or 
+        scene.get("image_prompt") or 
+        scene.get("image_description") or 
+        None
+    )
+    
+    # 3) Build response
+    return {
+        "narrative": narrative,
+        "world": {
+            "mood": world_mood,
+            "time_of_day": time_of_day,
+            "tension_level": tension_level,
+        },
+        "choices": available,
+        "emergent": emergent_opportunities,
+        "undertones": power_undertones,
+        "image": {
+            "should_generate": should_image,
+            "prompt": image_prompt
+        },
+        "universal_updates": updates.get("updates_generated", False),
+        "nyx_commentary": scene.get("nyx_commentary"),
+        "telemetry": {
+            "tools_called": sorted({c.get("name") for c in resp if c.get("type") == "function_call"}),
+            "tools_with_output": sorted({c.get("name") for c in resp if c.get("type") == "function_call_output"})
+        }
+    }
+
 # ===== Constants and Configuration =====
 class Config:
     """Configuration constants to avoid magic numbers"""
@@ -3007,7 +3136,7 @@ async def process_user_input(
     user_input: str,
     context_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Process user input with MAXIMUM DEBUGGING"""
+    """Process user input with post-run enforcement and robust assembly"""
     trace_id = uuid.uuid4().hex[:8]
     start_time = time.time()
     nyx_context = None
@@ -3039,7 +3168,7 @@ async def process_user_input(
             logger.debug(f"[{trace_id}] ✓ Story agent imports successful")
         except Exception as e:
             logger.error(f"[{trace_id}] ✗ Story agent import failed: {e}")
-            raise
+            # Don't raise - these are optional
 
         # ===== STEP 2: Context initialization =====
         logger.debug(f"[{trace_id}] Step 2: Initializing NyxContext...")
@@ -3061,11 +3190,10 @@ async def process_user_input(
         logger.debug(f"[{trace_id}] Step 3: Integrating world systems...")
         try:
             if nyx_context.world_director and nyx_context.world_director.context:
-                # FIX: Remove 'await' - current_world_state is a regular attribute, not a coroutine
+                # Fixed: Remove 'await' - current_world_state is a regular attribute
                 world_state = nyx_context.world_director.context.current_world_state
                 nyx_context.current_world_state = world_state
                 
-                # Also fix the debug log - world_state might be None or an object, not a dict
                 if world_state:
                     if hasattr(world_state, 'model_dump'):
                         logger.debug(f"[{trace_id}] ✓ World state integrated: {list(world_state.model_dump().keys())}")
@@ -3216,11 +3344,9 @@ async def process_user_input(
         
         # ===== STEP 9: Running the agent =====
         logger.debug(f"[{trace_id}] Step 9: Running agent...")
-        response_parts = []
-        metadata = {}
         
         try:
-            # Use Runner.run() instead of stream()
+            # Run the agent
             result = await Runner.run(
                 nyx_main_agent,
                 user_input,
@@ -3228,52 +3354,187 @@ async def process_user_input(
                 run_config=run_config
             )
             
-            # Extract the response from the result
-            if hasattr(result, 'final_output'):
-                response_text = str(result.final_output)
-            elif hasattr(result, 'output'):
-                response_text = str(result.output)
-            elif hasattr(result, 'text'):
-                response_text = str(result.text)
-            else:
-                # Try to extract any string representation
-                response_text = str(result)
+            # Convert result to list format for processing
+            # Different SDK versions may have different structures
+            resp = []
             
-            # Extract metadata if available
-            if hasattr(result, 'metadata'):
-                metadata = result.metadata
-            elif hasattr(result, 'trace'):
-                metadata['trace'] = result.trace
+            # Try different ways to extract the response history
+            if hasattr(result, 'messages'):
+                resp = result.messages
+            elif hasattr(result, 'history'):
+                resp = result.history
+            elif hasattr(result, 'events'):
+                resp = result.events
+            elif hasattr(result, '__iter__'):
+                # If result is iterable, try to use it directly
+                try:
+                    resp = list(result)
+                except:
+                    pass
+            
+            # If we still don't have a response list, create minimal structure
+            if not resp:
+                response_text = ""
+                if hasattr(result, 'final_output'):
+                    response_text = str(result.final_output)
+                elif hasattr(result, 'output'):
+                    response_text = str(result.output)
+                elif hasattr(result, 'text'):
+                    response_text = str(result.text)
+                else:
+                    response_text = str(result)
+                
+                resp = [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": response_text}]
+                    }
+                ]
             
             logger.debug(f"[{trace_id}] Agent run completed successfully")
+            logger.debug(f"[{trace_id}] Response structure has {len(resp)} items")
             
         except Exception as e:
             logger.error(f"[{trace_id}] ✗ Agent run failed: {e}", exc_info=True)
             raise
         
+        # ===== POST-RUN ENFORCEMENT =====
+        logger.debug(f"[{trace_id}] Post-run enforcement check...")
+        
+        # Check and inject generate_universal_updates if missing
+        if not _did_call_tool(resp, "generate_universal_updates"):
+            narrative = _extract_last_assistant_text(resp)
+            if narrative and len(narrative) > 20:  # Only if we have substantial text
+                try:
+                    logger.info(f"[{trace_id}] Injecting generate_universal_updates...")
+                    update_result = await generate_universal_updates_impl(nyx_context, narrative)
+                    
+                    # Add a synthetic tool output to resp for the assembler
+                    resp.append({
+                        "type": "function_call_output",
+                        "name": "generate_universal_updates",
+                        "output": json.dumps({
+                            "success": update_result.success,
+                            "updates_generated": update_result.updates_generated,
+                            "source": "post_run_injection"
+                        })
+                    })
+                    logger.debug(f"[{trace_id}] ✓ Universal updates injected")
+                except Exception as e:
+                    logger.exception(f"[{trace_id}] Post-run universal updates failed: {e}")
+        
+        # Check and inject decide_image_generation if missing
+        if not _did_call_tool(resp, "decide_image_generation"):
+            narrative = _extract_last_assistant_text(resp)
+            if narrative and len(narrative) > 20:
+                try:
+                    logger.info(f"[{trace_id}] Injecting decide_image_generation...")
+                    wrapper = RunContextWrapper(context=nyx_context)
+                    image_result = await decide_image_generation(
+                        wrapper,
+                        DecideImageInput(scene_text=narrative[:500])  # Limit length
+                    )
+                    
+                    # Add synthetic output
+                    resp.append({
+                        "type": "function_call_output",
+                        "name": "decide_image_generation",
+                        "output": image_result  # Already JSON string
+                    })
+                    logger.debug(f"[{trace_id}] ✓ Image decision injected")
+                except Exception as e:
+                    logger.exception(f"[{trace_id}] Post-run image decision failed: {e}")
+        
         # ===== STEP 10: Response assembly =====
         logger.debug(f"[{trace_id}] Step 10: Assembling response...")
         
-        result = {
-            'response': response_text if response_text else "I couldn't generate a response.",
-            'metadata': metadata,
-            'trace_id': trace_id,
-            'processing_time': time.time() - start_time,
-        }
-        
-        logger.info(f"[{trace_id}] ========== PROCESS COMPLETE ==========")
-        logger.info(f"[{trace_id}] Response length: {len(response_text)}")
-        logger.info(f"[{trace_id}] Processing time: {result['processing_time']:.2f}s")
-        
-        return result
+        try:
+            assembled = assemble_nyx_response(resp)
+            
+            # Save any state changes that occurred during processing
+            if nyx_context:
+                try:
+                    await _save_context_state(nyx_context)
+                    logger.debug(f"[{trace_id}] ✓ Context state saved")
+                except Exception as e:
+                    logger.error(f"[{trace_id}] Failed to save context state: {e}")
+            
+            result = {
+                'response': assembled['narrative'],
+                'metadata': {
+                    'world': assembled['world'],
+                    'choices': assembled['choices'],
+                    'emergent': assembled['emergent'],
+                    'image': assembled['image'],
+                    'telemetry': assembled['telemetry'],
+                    'nyx_commentary': assembled.get('nyx_commentary'),
+                    'universal_updates': assembled.get('universal_updates', False)
+                },
+                'trace_id': trace_id,
+                'processing_time': time.time() - start_time,
+            }
+            
+            logger.info(f"[{trace_id}] ========== PROCESS COMPLETE ==========")
+            logger.info(f"[{trace_id}] Response length: {len(assembled['narrative'])}")
+            logger.info(f"[{trace_id}] Tools called: {assembled['telemetry']['tools_called']}")
+            logger.info(f"[{trace_id}] Tools with output: {assembled['telemetry']['tools_with_output']}")
+            logger.info(f"[{trace_id}] Processing time: {result['processing_time']:.2f}s")
+            
+            # Track performance metrics
+            nyx_context.update_performance("response_times", result['processing_time'])
+            nyx_context.update_performance("successful_actions", nyx_context.performance_metrics.get("successful_actions", 0) + 1)
+            nyx_context.update_performance("total_actions", nyx_context.performance_metrics.get("total_actions", 0) + 1)
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"[{trace_id}] Assembly failed, using fallback")
+            
+            # Fallback assembly - try to extract whatever we can
+            narrative = _extract_last_assistant_text(resp)
+            if not narrative:
+                # Last resort - look for any text in the response
+                for item in resp:
+                    if isinstance(item, dict):
+                        if item.get("type") == "message" and item.get("content"):
+                            for content_part in item.get("content", []):
+                                if content_part.get("type") == "output_text":
+                                    narrative = content_part.get("text", "")
+                                    if narrative:
+                                        break
+                            if narrative:
+                                break
+            
+            if not narrative:
+                narrative = "I encountered an issue generating the response."
+            
+            return {
+                'response': narrative,
+                'metadata': {
+                    'error': 'assembly_failed',
+                    'details': str(e),
+                    'partial_telemetry': {
+                        'resp_items': len(resp),
+                        'has_messages': any(r.get("type") == "message" for r in resp if isinstance(r, dict))
+                    }
+                },
+                'trace_id': trace_id,
+                'processing_time': time.time() - start_time,
+            }
         
     except Exception as e:
         logger.error(f"[{trace_id}] ========== PROCESS FAILED ==========")
         logger.error(f"[{trace_id}] Fatal error in process_user_input", exc_info=True)
         
-        # Return error response
+        # Track error
+        if nyx_context:
+            nyx_context.log_error(e, {"user_input": user_input, "context_data": context_data})
+            nyx_context.update_performance("failed_actions", nyx_context.performance_metrics.get("failed_actions", 0) + 1)
+            nyx_context.update_performance("total_actions", nyx_context.performance_metrics.get("total_actions", 0) + 1)
+        
         return {
-            'response': "I encountered an error processing your request.",
+            'response': "I encountered an error processing your request. Please try again.",
             'error': str(e),
             'trace_id': trace_id,
             'processing_time': time.time() - start_time,
@@ -3283,10 +3544,12 @@ async def process_user_input(
         # Cleanup
         if nyx_context:
             try:
-                await nyx_context.cleanup()
-                logger.debug(f"[{trace_id}] Context cleaned up")
+                # No longer need explicit cleanup since we're using context managers
+                logger.debug(f"[{trace_id}] Context cleanup complete")
             except:
                 pass
+        
+        logger.info(f"[{trace_id}] ========== REQUEST LIFECYCLE COMPLETE ==========")
 
 async def _save_context_state(ctx: NyxContext):
     """Save context state to database"""
