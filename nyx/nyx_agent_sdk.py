@@ -2793,13 +2793,12 @@ async def simulate_npc_autonomy(
     ctx: RunContextWrapper[NyxContext],
     payload: SimulateAutonomyInput
 ) -> str:
-    """Simulate autonomous NPC actions with dynamic activity processing."""
+    """Simulate autonomous NPC actions with context-aware activity processing."""
     app_ctx = _get_app_ctx(ctx)
     wd = getattr(app_ctx, "world_director", None)
     if not wd:
         return json.dumps({"error": "world_director not available"}, ensure_ascii=False)
     
-    # Import the new activity processor
     from logic.stats_logic import process_world_activity
     
     try:
@@ -2820,67 +2819,87 @@ async def simulate_npc_autonomy(
     
     safe_result = _jsafe(result)
     
+    # Build world context from available data
+    world_context = {}
+    
+    # Extract world state if available
+    if hasattr(app_ctx, 'current_world_state') and app_ctx.current_world_state:
+        ws = app_ctx.current_world_state
+        try:
+            # Get world mood
+            if hasattr(ws, 'world_mood'):
+                mood = ws.world_mood
+                world_context['world_mood'] = mood.value if hasattr(mood, 'value') else str(mood)
+            
+            # Get time of day
+            if hasattr(ws, 'current_time'):
+                time_data = ws.current_time
+                if hasattr(time_data, 'time_of_day'):
+                    world_context['time_of_day'] = str(time_data.time_of_day)
+            
+            # Get stats
+            if hasattr(ws, 'hidden_stats'):
+                world_context['hidden_stats'] = ws.hidden_stats
+            if hasattr(ws, 'visible_stats'):
+                world_context['visible_stats'] = ws.visible_stats
+            
+            # Get NPCs
+            if hasattr(ws, 'active_npcs'):
+                world_context['active_npcs'] = ws.active_npcs[:3]  # Limit to 3 for context
+            
+            # Get addictions
+            if hasattr(ws, 'addiction_status'):
+                world_context['addiction_status'] = ws.addiction_status
+            
+            # Get relationships
+            if hasattr(ws, 'relationship_dynamics'):
+                world_context['relationship_dynamics'] = ws.relationship_dynamics
+            
+            # Get location
+            if hasattr(ws, 'location_data'):
+                world_context['location'] = ws.location_data
+                
+        except Exception as e:
+            logger.debug(f"Could not extract full world context: {e}")
+    
     # Check if vitals update failed
     if isinstance(safe_result, dict):
         vitals_result = safe_result.get('vitals_updated', {})
         
-        # If vitals update failed with "Unknown activity", fix it
         if not vitals_result.get('success') and 'Unknown activity' in str(vitals_result.get('error', '')):
-            # Extract the activity that failed
+            # Extract the activity
             activity_name = 'unknown'
             
-            # Try to find the activity in various places
+            # Find activity in results
             if 'time' in safe_result:
                 time_data = safe_result['time']
                 if isinstance(time_data, dict):
                     activity_name = time_data.get('activity_mood') or time_data.get('activity') or 'unknown'
             
-            # Look in action log for activities
-            action_log = []
-            candidate = []
-            if isinstance(safe_result, list):
-                candidate = safe_result
-            elif isinstance(safe_result, dict):
-                for key in ("actions", "npc_actions", "events", "log"):
-                    if isinstance(safe_result.get(key), list):
-                        candidate = safe_result[key]
-                        break
-            
-            for entry in candidate or []:
-                if isinstance(entry, dict):
-                    found_activity = entry.get("action") or entry.get("current_activity") or entry.get("activity")
-                    if found_activity and found_activity != 'unknown':
-                        activity_name = found_activity
-                        break
-            
-            # Process the activity through our dynamic system
+            # Process with full world context
             try:
                 activity_result = await process_world_activity(
                     user_id=app_ctx.user_id,
                     conversation_id=app_ctx.conversation_id,
                     activity_name=activity_name,
                     player_name="Chase",
+                    world_context=world_context,  # Pass the context!
                     hours=payload.hours
                 )
                 
-                # Replace the failed vitals_updated with our successful result
+                # Replace failed vitals_updated
                 safe_result['vitals_updated'] = {
                     'success': True,
                     'activity': activity_name,
                     'effects': activity_result.get('effects', {}),
-                    'method': 'dynamic_generation'
+                    'method': 'contextual_generation',
+                    'context_used': bool(world_context)
                 }
                 
-                # Also update hunger if it was processed
-                if 'hunger' in safe_result and activity_result.get('hunger_update'):
-                    safe_result['hunger'].update(activity_result['hunger_update'])
-                    
             except Exception as e:
-                logger.warning(f"Dynamic activity processing failed: {e}")
-                # Keep the original error but mark it as handled
-                safe_result['vitals_updated']['handled'] = True
+                logger.warning(f"Contextual activity processing failed: {e}")
     
-    # Build action log as before
+    # Build action log and process NPC actions with context
     action_log = []
     candidate = []
     if isinstance(safe_result, list):
@@ -2899,35 +2918,19 @@ async def simulate_npc_autonomy(
                 "time": entry.get("time") or entry.get("timestamp"),
             }
             action_log.append(action_entry)
-            
-            # Also process each NPC action for stat effects if needed
-            if action_entry.get("action") and action_entry["action"] != 'unknown':
-                try:
-                    # Process NPC actions that might affect the player
-                    npc_activity = action_entry["action"]
-                    if any(keyword in npc_activity.lower() for keyword in ['command', 'order', 'require', 'demand']):
-                        # This NPC action might affect player stats
-                        await process_world_activity(
-                            user_id=app_ctx.user_id,
-                            conversation_id=app_ctx.conversation_id,
-                            activity_name=f"responding to {npc_activity}",
-                            player_name="Chase",
-                            intensity=0.5  # Lighter effect for NPC actions
-                        )
-                except Exception as e:
-                    logger.debug(f"NPC action processing skipped: {e}")
         else:
             action_log.append({"entry": str(entry)})
     
-    # Build output
     out = {
         "advanced_time_hours": payload.hours,
         "npc_actions": safe_result,
         "npc_action_log": action_log,
         "nyx_observation": "While you were away, the others kept moving… and watching.",
+        "context_aware": bool(world_context)  # Flag showing we used context
     }
     
     return json.dumps(out, ensure_ascii=False)
+    
 # ===== Guardrails =====
 
 async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent: Agent, input_data):
