@@ -430,7 +430,6 @@ class DynamicConflictTemplateSubsystem:
                 IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.7)
             )
         return self._template_creator
     
@@ -454,7 +453,6 @@ class DynamicConflictTemplateSubsystem:
                 IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
         return self._variation_generator
     
@@ -478,7 +476,6 @@ class DynamicConflictTemplateSubsystem:
                 IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.7)
             )
         return self._context_adapter
     
@@ -502,7 +499,6 @@ class DynamicConflictTemplateSubsystem:
                 IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.9)
             )
         return self._uniqueness_engine
     
@@ -526,7 +522,6 @@ class DynamicConflictTemplateSubsystem:
                 IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
-                model_settings=ModelSettings(temperature=0.8)
             )
         return self._hook_generator
     
