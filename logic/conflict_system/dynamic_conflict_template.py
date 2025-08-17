@@ -7,6 +7,7 @@ REFACTORED: Fixed RunResult attribute access issues and JSON parsing
 
 import logging
 import json
+import re
 import random
 from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict, NotRequired
 from enum import Enum
