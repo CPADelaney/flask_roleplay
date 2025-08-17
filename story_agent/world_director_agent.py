@@ -2008,39 +2008,66 @@ class CompleteWorldDirector:
             }
     
     async def advance_time(self, hours: int = 1) -> Dict[str, Any]:
-        """Advance time with ALL system updates"""
+        """Advance time with ALL system updates including dynamic activities."""
         try:
             await self.initialize()
             
             if not self.context:
                 return {"error": "Context not initialized"}
             
+            # Import the activity processor
+            from logic.stats_logic import process_world_activity
+            
             results = {}
             
             # Advance time
             try:
+                from logic.time_cycle import advance_time_with_events
                 time_result = await advance_time_with_events(
                     self.user_id, self.conversation_id,
                     activity_type="time_passage"
                 )
                 results['time'] = time_result
+                
+                # Extract and process any activity
+                activity = time_result.get('activity_mood') or time_result.get('activity') or 'idle'
+                
+                # Process the activity dynamically
+                activity_result = await process_world_activity(
+                    self.user_id,
+                    self.conversation_id,
+                    activity,
+                    self.context.player_name,
+                    hours=hours
+                )
+                
+                # Merge activity results
+                results['vitals_updated'] = activity_result['vitals_updated']
+                
             except Exception as e:
                 logger.error(f"Error advancing time: {e}")
-                results['time'] = {"error": str(e)}
+                results['time'] = {
+                    "error": str(e),
+                    "time_advanced": False,
+                    "vitals_updated": {"success": False, "error": str(e)}
+                }
             
-            # Update hunger over time
-            try:
-                hunger_result = await update_hunger_from_time(
-                    self.user_id, self.conversation_id,
-                    self.context.player_name, hours
-                )
-                results['hunger'] = hunger_result
-            except Exception as e:
-                logger.error(f"Error updating hunger: {e}")
-                results['hunger'] = {"error": str(e)}
+            # Update hunger over time (this now happens in process_world_activity)
+            if 'hunger_update' not in results:
+                try:
+                    from logic.stats_logic import update_hunger_from_time
+                    hunger_result = await update_hunger_from_time(
+                        self.user_id, self.conversation_id,
+                        self.context.player_name, hours
+                    )
+                    results['hunger'] = hunger_result
+                except Exception as e:
+                    logger.error(f"Error updating hunger: {e}")
+                    results['hunger'] = {"error": str(e)}
             
             # Check for automated reveals
             try:
+                from logic.memory_logic import ProgressiveRevealManager
                 reveals = await ProgressiveRevealManager.check_for_automated_reveals(
                     self.user_id, self.conversation_id
                 )
@@ -2070,7 +2097,8 @@ class CompleteWorldDirector:
                 "time": {},
                 "hunger": {},
                 "reveals": [],
-                "relationship_events": {'events': []}
+                "relationship_events": {'events': []},
+                "vitals_updated": {"success": False, "error": str(e)}
             }
 
 WorldDirector = CompleteWorldDirector
