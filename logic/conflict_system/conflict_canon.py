@@ -254,7 +254,7 @@ class ConflictCanonSubsystem:
             canon_count = await conn.fetchval("""
                 SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND 'conflict' = ANY(tags)
+                AND tags ? 'conflict'  -- Fixed: use ? operator for JSONB
             """, self.user_id, self.conversation_id)
             
             # Check for contradictions
@@ -263,7 +263,7 @@ class ConflictCanonSubsystem:
                     SELECT event_text, COUNT(*) as cnt
                     FROM CanonicalEvents
                     WHERE user_id = $1 AND conversation_id = $2
-                    AND 'precedent' = ANY(tags)
+                    AND tags ? 'precedent'  -- Fixed: use ? operator for JSONB
                     GROUP BY event_text
                     HAVING COUNT(*) > 1
                 ) as duplicates
@@ -283,7 +283,7 @@ class ConflictCanonSubsystem:
             canonical = await conn.fetch("""
                 SELECT * FROM CanonicalEvents 
                 WHERE user_id = $1 AND conversation_id = $2
-                AND $3 = ANY(tags)
+                AND tags ? $3  -- Fixed: use ? operator for JSONB
                 ORDER BY significance DESC
             """, self.user_id, self.conversation_id, f"conflict_id_{conflict_id}")
             
@@ -291,7 +291,7 @@ class ConflictCanonSubsystem:
             precedents = await conn.fetch("""
                 SELECT * FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND 'precedent' = ANY(tags)
+                AND tags ? 'precedent'  -- Fixed: use ? operator for JSONB
                 AND significance >= 7
                 ORDER BY significance DESC
                 LIMIT 5
@@ -308,19 +308,19 @@ class ConflictCanonSubsystem:
             total = await conn.fetchval("""
                 SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND 'conflict' = ANY(tags)
+                AND tags ? 'conflict'  -- Fixed: use ? operator for JSONB
             """, self.user_id, self.conversation_id)
             
             precedents = await conn.fetchval("""
                 SELECT COUNT(*) FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND 'precedent' = ANY(tags)
+                AND tags ? 'precedent'  -- Fixed: use ? operator for JSONB
             """, self.user_id, self.conversation_id)
             
             recent = await conn.fetch("""
                 SELECT event_text, significance FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND 'conflict' = ANY(tags)
+                AND tags ? 'conflict'  -- Fixed: use ? operator for JSONB
                 ORDER BY timestamp DESC
                 LIMIT 3
             """, self.user_id, self.conversation_id)
@@ -657,7 +657,7 @@ class ConflictCanonSubsystem:
             canonical_events = await conn.fetch("""
                 SELECT * FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND tags @> '["precedent"]'
+                AND tags @> '["precedent"]'::jsonb  -- Fixed: use @> operator for containment
                 AND significance >= 7
                 ORDER BY significance DESC
                 LIMIT 5
@@ -683,7 +683,7 @@ class ConflictCanonSubsystem:
             traditions = await conn.fetch("""
                 SELECT event_text, tags FROM CanonicalEvents
                 WHERE user_id = $1 AND conversation_id = $2
-                AND 'tradition' = ANY(tags)
+                AND tags ? 'tradition'  -- Fixed: use ? operator for JSONB
                 ORDER BY timestamp DESC
                 LIMIT 5
             """, self.user_id, self.conversation_id)
@@ -844,7 +844,7 @@ class ConflictCanonSubsystem:
         canonical_refs = await conn.fetchval("""
             SELECT COUNT(*) FROM CanonicalEvents
             WHERE user_id = $1 AND conversation_id = $2
-            AND tags @> to_jsonb($3::text)
+            AND tags @> to_jsonb($3::text)  -- Fixed: properly cast to JSONB
         """, self.user_id, self.conversation_id, f"conflict_id_{conflict_id}")
         
         if canonical_refs > 0:
@@ -976,9 +976,9 @@ async def get_canonical_precedents(
             SELECT event_text, tags, significance, timestamp
             FROM CanonicalEvents
             WHERE user_id = $1 AND conversation_id = $2
-              AND 'precedent' = ANY(tags)
+              AND tags ? 'precedent'  -- Fixed: use ? operator
               AND (
-                $3 = ANY(tags) OR
+                tags ? $3 OR  -- Fixed: use ? operator
                 event_text ILIKE $4
               )
             ORDER BY significance DESC, timestamp DESC
@@ -1024,7 +1024,7 @@ async def generate_conflict_mythology(
         canonical_events = await conn.fetch("""
             SELECT event_text, significance FROM CanonicalEvents
             WHERE user_id = $1 AND conversation_id = $2
-              AND $3 = ANY(tags)
+              AND tags ? $3  -- Fixed: use ? operator
             ORDER BY significance DESC
         """, user_id, conversation_id, f"conflict_id_{conflict_id}")
 
