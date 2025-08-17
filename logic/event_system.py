@@ -5,17 +5,20 @@ This module provides a comprehensive event system that integrates with other gam
 including NPCs, lore, conflicts (via new synthesizer), and artifacts.
 
 REFACTORED: Updated to use new ConflictSynthesizer instead of ConflictResolutionSystem
+REFACTORED: Added proper cleanup and shutdown handling for worker tasks
 """
 
 from __future__ import annotations
 
 import logging
 import json
-from typing import Dict, List, Any, Optional, Union, Tuple, Callable
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable, Set
 import asyncio
 from datetime import datetime
 from itertools import count
 from uuid import uuid4
+from contextlib import asynccontextmanager
+import weakref
 
 import asyncpg
 
@@ -37,6 +40,31 @@ from npcs.npc_learning_adaptation import NPCLearningManager
 from npcs.belief_system_integration import NPCBeliefSystemIntegration
 
 logger = logging.getLogger(__name__)
+
+# Global registry for active event systems (for cleanup during app shutdown)
+_active_event_systems: Set[weakref.ref] = set()
+
+def register_event_system(event_system: 'EventSystem'):
+    """Register an active event system for cleanup."""
+    _active_event_systems.add(weakref.ref(event_system))
+
+def unregister_event_system(event_system: 'EventSystem'):
+    """Unregister an event system after cleanup."""
+    _active_event_systems.discard(weakref.ref(event_system))
+
+async def cleanup_all_event_systems():
+    """Clean up all active event systems during app shutdown."""
+    tasks = []
+    for ref in list(_active_event_systems):
+        event_system = ref()
+        if event_system:
+            tasks.append(event_system.shutdown(drain=False, timeout=1.0))
+    
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    
+    _active_event_systems.clear()
+    logger.info("All event systems cleaned up")
 
 
 class EventSystem:
@@ -65,6 +93,10 @@ class EventSystem:
         # init flags/locks
         self.is_initialized = False
         self._init_lock = asyncio.Lock()
+        
+        # Shutdown management
+        self._shutdown_event = asyncio.Event()
+        self._is_shutting_down = False
 
         # worker pool
         self.num_workers = max(1, int(num_workers))
@@ -98,6 +130,16 @@ class EventSystem:
         self.agent_context = None
         self.agent_performance: Dict[str, Dict[str, Any]] = {}
         self.agent_learning: Dict[str, Dict[str, Any]] = {}
+
+    def __del__(self):
+        """Ensure workers are cancelled if object is destroyed."""
+        if hasattr(self, '_worker_tasks') and self._worker_tasks:
+            for task in self._worker_tasks:
+                if not task.done():
+                    try:
+                        task.cancel()
+                    except Exception:
+                        pass
 
     # ---- lifecycle ----------------------------------------------------------------
 
@@ -136,17 +178,23 @@ class EventSystem:
 
             # Spawn worker tasks (guarded; idempotent)
             self._start_workers()
+            
+            # Register for global cleanup
+            register_event_system(self)
 
             self.is_initialized = True
             logger.info(f"Event system initialized for user={self.user_id} convo={self.conversation_id} workers={len(self._worker_tasks)}")
         return self
 
     def _start_workers(self):
-        # start exactly num_workers workers if not already running
+        """Start exactly num_workers workers if not already running."""
         alive = [t for t in self._worker_tasks if not t.done()]
         missing = self.num_workers - len(alive)
-        for _ in range(max(0, missing)):
-            task = asyncio.create_task(self._process_event_queue(), name=f"EventSystemWorker-{self.user_id}-{self.conversation_id}")
+        for i in range(max(0, missing)):
+            task = asyncio.create_task(
+                self._process_event_queue(), 
+                name=f"EventSystemWorker-{self.user_id}-{self.conversation_id}-{i}"
+            )
             self._worker_tasks.append(task)
 
     async def shutdown(self, drain: bool = False, timeout: float = 5.0):
@@ -154,27 +202,39 @@ class EventSystem:
         Stop worker tasks. If drain=True, wait for the queue to empty (best effort).
         Call this during application shutdown.
         """
-        if drain:
+        if self._is_shutting_down:
+            return  # Prevent double shutdown
+        
+        self._is_shutting_down = True
+        self._shutdown_event.set()  # Signal workers to stop
+        
+        logger.info(f"Shutting down EventSystem for user={self.user_id} convo={self.conversation_id}")
+        
+        if drain and not self.event_queue.empty():
             try:
+                logger.info(f"Draining {self.event_queue.qsize()} pending events...")
                 await asyncio.wait_for(self.event_queue.join(), timeout=timeout)
             except asyncio.TimeoutError:
-                logger.warning("EventSystem drain timeout; continuing shutdown")
+                logger.warning(f"EventSystem drain timeout after {timeout}s; continuing shutdown")
 
-        # cancel workers
+        # Cancel workers gracefully
         for t in self._worker_tasks:
             if not t.done():
                 t.cancel()
 
-        for t in self._worker_tasks:
-            try:
-                await t
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"Worker ended with error during shutdown: {e}")
+        # Wait for cancellation to complete
+        if self._worker_tasks:
+            results = await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                    logger.error(f"Worker {i} ended with error during shutdown: {result}")
 
         self._worker_tasks.clear()
-        logger.info("EventSystem shutdown complete")
+        
+        # Unregister from global cleanup
+        unregister_event_system(self)
+        
+        logger.info(f"EventSystem shutdown complete for user={self.user_id} convo={self.conversation_id}")
 
     # ---- agents -------------------------------------------------------------------
 
@@ -318,49 +378,77 @@ class EventSystem:
         """Worker: process events from the priority queue (cancellation-safe)."""
         worker_name = asyncio.current_task().get_name() if asyncio.current_task() else "EventSystemWorker"
         logger.debug(f"{worker_name} started")
-        while True:
-            try:
-                # Only call task_done for items successfully fetched
-                item = await self.event_queue.get()
-            except asyncio.CancelledError:
-                logger.info(f"{worker_name} cancelled; exiting")
-                break
+        
+        try:
+            while not self._is_shutting_down:
+                item = None
+                try:
+                    # Use wait_for with a timeout to periodically check shutdown status
+                    try:
+                        item = await asyncio.wait_for(
+                            self.event_queue.get(), 
+                            timeout=1.0  # Check for shutdown every second
+                        )
+                    except asyncio.TimeoutError:
+                        # Check if we should shut down
+                        if self._is_shutting_down:
+                            break
+                        continue  # Try again
+                        
+                except asyncio.CancelledError:
+                    logger.info(f"{worker_name} cancelled; exiting gracefully")
+                    break
 
-            try:
-                _neg_prio, _seq, event = item
-
-                # Skip cancelled events
-                if event.get("status") == "cancelled":
-                    logger.debug(f"{worker_name} skipping cancelled event {event.get('id')}")
+                if item is None:
                     continue
 
-                # Process + propagate
-                await self._process_event(event)
-                await self._propagate_event(event)
+                # Process the item
+                try:
+                    _neg_prio, _seq, event = item
 
-                # Mark processed
-                async with GameTimeContext(self.user_id, self.conversation_id) as game_time:
-                    event["processed_at"] = (await game_time.to_datetime()).isoformat()
-                event["status"] = "processed"
+                    # Skip cancelled events
+                    if event.get("status") == "cancelled":
+                        logger.debug(f"{worker_name} skipping cancelled event {event.get('id')}")
+                        continue
 
-                # History trim
-                self.event_history.append(event)
-                if len(self.event_history) > self.max_history:
-                    self.event_history = self.event_history[-self.max_history :]
+                    # Check for shutdown before processing
+                    if self._is_shutting_down:
+                        logger.debug(f"{worker_name} shutting down, skipping event {event.get('id')}")
+                        break
 
-                self._update_agent_performance("event_processing", True)
+                    # Process + propagate
+                    await self._process_event(event)
+                    await self._propagate_event(event)
 
-            except asyncio.CancelledError:
-                # We fetched an item; pair the task_done with it, then exit
-                raise
-            except Exception as e:
-                logger.error(f"Error processing event queue: {e}")
-                self._update_agent_performance("event_processing", False)
-            finally:
-                # Pair with the 'get' above — safe even if processing failed
-                self.event_queue.task_done()
+                    # Mark processed
+                    async with GameTimeContext(self.user_id, self.conversation_id) as game_time:
+                        event["processed_at"] = (await game_time.to_datetime()).isoformat()
+                    event["status"] = "processed"
 
-        logger.debug(f"{worker_name} exited")
+                    # History trim
+                    self.event_history.append(event)
+                    if len(self.event_history) > self.max_history:
+                        self.event_history = self.event_history[-self.max_history :]
+
+                    self._update_agent_performance("event_processing", True)
+
+                except asyncio.CancelledError:
+                    # Re-raise cancellation
+                    raise
+                except Exception as e:
+                    logger.error(f"Error processing event: {e}", exc_info=True)
+                    self._update_agent_performance("event_processing", False)
+                finally:
+                    # Always mark task as done if we got an item
+                    if item is not None:
+                        self.event_queue.task_done()
+                        
+        except asyncio.CancelledError:
+            logger.info(f"{worker_name} cancelled during shutdown")
+        except Exception as e:
+            logger.error(f"{worker_name} unexpected error: {e}", exc_info=True)
+        finally:
+            logger.debug(f"{worker_name} exited cleanly")
 
     async def _process_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """Process a single event."""
@@ -909,7 +997,28 @@ class EventSystem:
                 "active_events": active_count,
                 "queued_events": queued_size,
                 "workers": len([t for t in self._worker_tasks if not t.done()]),
+                "is_shutting_down": self._is_shutting_down,
             }
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
             return {"error": str(e)}
+
+
+# ---- Context Manager for EventSystem ----
+
+@asynccontextmanager
+async def create_event_system(user_id: int, conversation_id: int, **kwargs):
+    """
+    Context manager for EventSystem that ensures proper cleanup.
+    
+    Usage:
+        async with create_event_system(user_id, conversation_id) as event_system:
+            await event_system.create_event(...)
+            # EventSystem will be properly shut down when exiting the context
+    """
+    event_system = EventSystem(user_id, conversation_id, **kwargs)
+    try:
+        await event_system.initialize()
+        yield event_system
+    finally:
+        await event_system.shutdown(drain=True, timeout=2.0)
