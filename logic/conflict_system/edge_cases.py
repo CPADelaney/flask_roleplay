@@ -620,7 +620,7 @@ class ConflictEdgeCaseSubsystem:
                     JOIN conflict_stakeholders cs2 ON cs1.npc_id = cs2.npc_id
                     WHERE cs1.conflict_id = c1.conflict_id
                     AND cs2.conflict_id = c2.conflict_id
-                    AND cs1.faction != cs2.faction
+                    AND cs1.faction_id != cs2.faction_id
                 )
             """, self.user_id, self.conversation_id)
         
