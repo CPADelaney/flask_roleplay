@@ -2034,7 +2034,7 @@ class CompleteWorldDirector:
             
             # Check for automated reveals
             try:
-                reveals = await check_for_automated_reveals(
+                reveals = await ProgressiveRevealManager.check_for_automated_reveals(
                     self.user_id, self.conversation_id
                 )
                 results['reveals'] = reveals
@@ -2044,14 +2044,12 @@ class CompleteWorldDirector:
             
             # Drain relationship events
             try:
-                rel_events = await drain_relationship_events_tool(
-                    RunContextWrapper({
-                        'user_id': self.user_id,
-                        'conversation_id': self.conversation_id
-                    }),
-                    max_events=10
-                )
-                results['relationship_events'] = rel_events
+                from logic.dynamic_relationships import event_generator
+                events = await event_generator.drain_events(max_events=10)
+                results['relationship_events'] = {
+                    'events': events,
+                    'count': len(events)
+                }
             except Exception as e:
                 logger.error(f"Error draining relationship events: {e}")
                 results['relationship_events'] = {'events': []}
