@@ -451,7 +451,7 @@ class ConflictEdgeCaseSubsystem:
                 WHERE c.user_id = $1 AND c.conversation_id = $2
                 AND c.is_active = true
                 GROUP BY c.conflict_id
-                HAVING COUNT(cs.stakeholder_id) = 0
+                HAVING COUNT(cs.npc_id) = 0  -- Check for NPCs as stakeholders
             """, self.user_id, self.conversation_id)
         
         for conflict in orphaned:
