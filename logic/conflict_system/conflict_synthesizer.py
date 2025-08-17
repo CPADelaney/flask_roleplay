@@ -9,6 +9,7 @@ No other module should attempt to orchestrate - they only handle their specific 
 
 import logging
 import json
+import re
 import asyncio
 from typing import Dict, List, Any, Optional, Set, Type, Callable, TypedDict, NotRequired
 from pydantic import BaseModel, Field, ConfigDict  
