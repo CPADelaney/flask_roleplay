@@ -653,17 +653,25 @@ async def categorize_items(
 
 async def inventory_operation_safety(ctx, agent, input_data):
     """Input guardrail for inventory operations"""
+    
+    # Get the current player name from context
+    current_player = ctx.context.player_name if hasattr(ctx.context, 'player_name') else "Chase"
+    
     safety_agent = Agent(
         name="Inventory Safety Monitor",
-        instructions="""
+        instructions=f"""
         You check if inventory operations are appropriate and safe.
+        
+        The current player is: {current_player}
+        They can access their own inventory without restriction.
+        
         Ensure that:
         1. Item names are appropriate for a femdom RPG context
         2. Item effects don't breach ethical guidelines
         3. The operation quantity is reasonable
         4. Categories are appropriate
         
-        Flag operations that seem potentially harmful or exploitative.
+        Only flag if trying to access OTHER players' inventories or if content is inappropriate.
         """,
         output_type=InventorySafety,
         model="gpt-5-nano"
