@@ -2,6 +2,7 @@
 """
 Dynamic Conflict Template System with LLM-generated variations
 Integrated with ConflictSynthesizer as the central orchestrator
+REFACTORED: Fixed RunResult attribute access issues
 """
 
 import logging
@@ -10,11 +11,45 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict, NotRequired
 from enum import Enum
 from dataclasses import dataclass
+from datetime import datetime
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
+
+# ===============================================================================
+# HELPER FUNCTION FOR RUNNER RESPONSE EXTRACTION
+# ===============================================================================
+
+def extract_runner_response(response) -> str:
+    """
+    Extract the actual response text from a Runner.run() result.
+    Handles different possible RunResult structures.
+    """
+    # Try different attributes in order of likelihood
+    if hasattr(response, 'output'):
+        return response.output
+    elif hasattr(response, 'data'):
+        return response.data
+    elif hasattr(response, 'result'):
+        return response.result
+    elif hasattr(response, 'content'):
+        return response.content
+    elif hasattr(response, 'text'):
+        return response.text
+    elif hasattr(response, 'messages') and response.messages:
+        # If it's a list of messages, get the last one
+        last_message = response.messages[-1]
+        if hasattr(last_message, 'text'):
+            return last_message.text
+        elif hasattr(last_message, 'content'):
+            return last_message.content
+        else:
+            return str(last_message)
+    else:
+        # Fallback to string representation
+        return str(response)
 
 # ===============================================================================
 # TEMPLATE TYPES
@@ -159,19 +194,23 @@ class DynamicConflictTemplateSubsystem:
         self.synthesizer = weakref.ref(synthesizer)
         
         # Create initial templates if none exist
-        async with get_db_connection_context() as conn:
-            template_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM conflict_templates
-                WHERE user_id = $1 AND conversation_id = $2
-            """, self.user_id, self.conversation_id)
-            
-            if template_count == 0:
-                # Create base templates for each category
-                for category in list(TemplateCategory)[:3]:  # Start with 3 templates
-                    await self.create_conflict_template(
-                        category,
-                        f"Base {category.value} template"
-                    )
+        try:
+            async with get_db_connection_context() as conn:
+                template_count = await conn.fetchval("""
+                    SELECT COUNT(*) FROM conflict_templates
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                if template_count == 0:
+                    # Create base templates for each category
+                    for category in list(TemplateCategory)[:3]:  # Start with 3 templates
+                        await self.create_conflict_template(
+                            category,
+                            f"Base {category.value} template"
+                        )
+        except Exception as e:
+            logger.error(f"Error initializing templates: {e}")
+            # Continue even if templates can't be created
         
         return True
     
@@ -258,69 +297,83 @@ class DynamicConflictTemplateSubsystem:
     
     async def health_check(self) -> Dict[str, Any]:
         """Return health status of the subsystem"""
-        async with get_db_connection_context() as conn:
-            template_count = await conn.fetchval("""
-                SELECT COUNT(*) FROM conflict_templates
-                WHERE user_id = $1 AND conversation_id = $2
-            """, self.user_id, self.conversation_id)
+        try:
+            async with get_db_connection_context() as conn:
+                template_count = await conn.fetchval("""
+                    SELECT COUNT(*) FROM conflict_templates
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                # Check template usage
+                used_count = await conn.fetchval("""
+                    SELECT COUNT(DISTINCT template_id) FROM Conflicts
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND template_id IS NOT NULL
+                """, self.user_id, self.conversation_id)
             
-            # Check template usage
-            used_count = await conn.fetchval("""
-                SELECT COUNT(DISTINCT template_id) FROM Conflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND template_id IS NOT NULL
-            """, self.user_id, self.conversation_id)
-        
-        return {
-            'healthy': template_count > 0,
-            'total_templates': template_count,
-            'templates_used': used_count,
-            'usage_ratio': used_count / template_count if template_count > 0 else 0,
-            'issue': 'No templates available' if template_count == 0 else None
-        }
+            return {
+                'healthy': template_count > 0,
+                'total_templates': template_count,
+                'templates_used': used_count,
+                'usage_ratio': used_count / template_count if template_count > 0 else 0,
+                'issue': 'No templates available' if template_count == 0 else None
+            }
+        except Exception as e:
+            logger.error(f"Health check error: {e}")
+            return {
+                'healthy': False,
+                'issue': str(e)
+            }
     
     async def get_conflict_data(self, conflict_id: int) -> Dict[str, Any]:
         """Get template-related data for a specific conflict"""
-        async with get_db_connection_context() as conn:
-            conflict = await conn.fetchrow("""
-                SELECT template_id, generation_data FROM Conflicts
-                WHERE conflict_id = $1
-            """, conflict_id)
-        
-        if conflict and conflict['template_id']:
-            template = await self._get_template(conflict['template_id'])
-            generation_data = json.loads(conflict.get('generation_data', '{}'))
+        try:
+            async with get_db_connection_context() as conn:
+                conflict = await conn.fetchrow("""
+                    SELECT template_id, generation_data FROM Conflicts
+                    WHERE conflict_id = $1
+                """, conflict_id)
             
-            return {
-                'template_used': template.name if template else 'Unknown',
-                'template_category': template.category.value if template else None,
-                'unique_elements': generation_data.get('unique_elements', []),
-                'variation_seed': generation_data.get('seed', 'default')
-            }
+            if conflict and conflict['template_id']:
+                template = await self._get_template(conflict['template_id'])
+                generation_data = json.loads(conflict.get('generation_data', '{}'))
+                
+                return {
+                    'template_used': template.name if template else 'Unknown',
+                    'template_category': template.category.value if template else None,
+                    'unique_elements': generation_data.get('unique_elements', []),
+                    'variation_seed': generation_data.get('seed', 'default')
+                }
+        except Exception as e:
+            logger.error(f"Error getting conflict data: {e}")
         
         return {'template_used': None}
     
     async def get_state(self) -> Dict[str, Any]:
         """Get current state of template system"""
-        async with get_db_connection_context() as conn:
-            # Get most used templates
-            popular_templates = await conn.fetch("""
-                SELECT template_id, COUNT(*) as usage_count
-                FROM Conflicts
-                WHERE user_id = $1 AND conversation_id = $2
-                AND template_id IS NOT NULL
-                GROUP BY template_id
-                ORDER BY usage_count DESC
-                LIMIT 3
-            """, self.user_id, self.conversation_id)
-        
-        return {
-            'popular_templates': [
-                {'id': t['template_id'], 'usage': t['usage_count']}
-                for t in popular_templates
-            ],
-            'cache_size': len(self._template_cache)
-        }
+        try:
+            async with get_db_connection_context() as conn:
+                # Get most used templates
+                popular_templates = await conn.fetch("""
+                    SELECT template_id, COUNT(*) as usage_count
+                    FROM Conflicts
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND template_id IS NOT NULL
+                    GROUP BY template_id
+                    ORDER BY usage_count DESC
+                    LIMIT 3
+                """, self.user_id, self.conversation_id)
+            
+            return {
+                'popular_templates': [
+                    {'id': t['template_id'], 'usage': t['usage_count']}
+                    for t in popular_templates
+                ],
+                'cache_size': len(self._template_cache)
+            }
+        except Exception as e:
+            logger.error(f"Error getting state: {e}")
+            return {'error': str(e)}
     
     async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
         """Check if template system is relevant to scene"""
@@ -489,41 +542,47 @@ class DynamicConflictTemplateSubsystem:
         }}
         """
         
-        response = await Runner.run(self.template_creator, prompt)
-        data = json.loads(response.output)
-        
-        # Store template
-        async with get_db_connection_context() as conn:
-            template_id = await conn.fetchval("""
-                INSERT INTO conflict_templates
-                (user_id, conversation_id, category, name, base_structure, 
-                 variable_elements, contextual_modifiers, complexity_min, complexity_max)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                RETURNING template_id
-            """, self.user_id, self.conversation_id, category.value, data['name'],
-            json.dumps(data['base_structure']),
-            json.dumps(data['variable_elements']),
-            json.dumps(data['contextual_modifiers']),
-            data['complexity_range']['minimum'],
-            data['complexity_range']['maximum'])
-        
-        template = ConflictTemplate(
-            template_id=template_id,
-            category=category,
-            name=data['name'],
-            base_structure=data['base_structure'],
-            variable_elements=data['variable_elements'],
-            contextual_modifiers=data['contextual_modifiers'],
-            complexity_range=(
+        try:
+            response = await Runner.run(self.template_creator, prompt)
+            response_text = extract_runner_response(response)
+            data = json.loads(response_text)
+            
+            # Store template
+            async with get_db_connection_context() as conn:
+                template_id = await conn.fetchval("""
+                    INSERT INTO conflict_templates
+                    (user_id, conversation_id, category, name, base_structure, 
+                     variable_elements, contextual_modifiers, complexity_min, complexity_max)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    RETURNING template_id
+                """, self.user_id, self.conversation_id, category.value, data['name'],
+                json.dumps(data['base_structure']),
+                json.dumps(data['variable_elements']),
+                json.dumps(data['contextual_modifiers']),
                 data['complexity_range']['minimum'],
-                data['complexity_range']['maximum']
+                data['complexity_range']['maximum'])
+            
+            template = ConflictTemplate(
+                template_id=template_id,
+                category=category,
+                name=data['name'],
+                base_structure=data['base_structure'],
+                variable_elements=data['variable_elements'],
+                contextual_modifiers=data['contextual_modifiers'],
+                complexity_range=(
+                    data['complexity_range']['minimum'],
+                    data['complexity_range']['maximum']
+                )
             )
-        )
-        
-        # Cache template
-        self._template_cache[template_id] = template
-        
-        return template
+            
+            # Cache template
+            self._template_cache[template_id] = template
+            
+            return template
+            
+        except Exception as e:
+            logger.error(f"Error creating template: {e}")
+            raise
     
     async def generate_conflict_from_template(
         self,
@@ -532,38 +591,43 @@ class DynamicConflictTemplateSubsystem:
     ) -> GeneratedConflict:
         """Generate a unique conflict from a template"""
         
-        # Get template
-        template = await self._get_template(template_id)
-        if not template:
-            raise ValueError(f"Template {template_id} not found")
-        
-        # Generate variation
-        variation = await self._generate_variation(template, context)
-        
-        # Adapt to context
-        adapted = await self._adapt_to_context(variation, context)
-        
-        # Add unique elements
-        unique = await self._add_unique_elements(adapted, context)
-        
-        # Generate hooks
-        hooks = await self._generate_narrative_hooks(unique, context)
-        
-        # Create the conflict through synthesizer
-        conflict_id = await self._create_conflict_from_generation(
-            template,
-            unique,
-            hooks
-        )
-        
-        return GeneratedConflict(
-            conflict_id=conflict_id,
-            template_id=template_id,
-            variation_seed=unique['seed'],
-            customization=unique['customization'],
-            narrative_hooks=hooks,
-            unique_elements=unique['unique_elements']
-        )
+        try:
+            # Get template
+            template = await self._get_template(template_id)
+            if not template:
+                raise ValueError(f"Template {template_id} not found")
+            
+            # Generate variation
+            variation = await self._generate_variation(template, context)
+            
+            # Adapt to context
+            adapted = await self._adapt_to_context(variation, context)
+            
+            # Add unique elements
+            unique = await self._add_unique_elements(adapted, context)
+            
+            # Generate hooks
+            hooks = await self._generate_narrative_hooks(unique, context)
+            
+            # Create the conflict through synthesizer
+            conflict_id = await self._create_conflict_from_generation(
+                template,
+                unique,
+                hooks
+            )
+            
+            return GeneratedConflict(
+                conflict_id=conflict_id,
+                template_id=template_id,
+                variation_seed=unique['seed'],
+                customization=unique['customization'],
+                narrative_hooks=hooks,
+                unique_elements=unique['unique_elements']
+            )
+            
+        except Exception as e:
+            logger.error(f"Error generating from template: {e}")
+            raise
     
     async def _generate_variation(
         self,
@@ -604,7 +668,8 @@ class DynamicConflictTemplateSubsystem:
         """
         
         response = await Runner.run(self.variation_generator, prompt)
-        return json.loads(response.output)
+        response_text = extract_runner_response(response)
+        return json.loads(response_text)
     
     async def _adapt_to_context(
         self,
@@ -642,8 +707,9 @@ class DynamicConflictTemplateSubsystem:
         """
         
         response = await Runner.run(self.context_adapter, prompt)
+        response_text = extract_runner_response(response)
         adapted = variation.copy()
-        adapted['context_adaptation'] = json.loads(response.output)
+        adapted['context_adaptation'] = json.loads(response_text)
         return adapted
     
     async def _add_unique_elements(
@@ -679,7 +745,8 @@ class DynamicConflictTemplateSubsystem:
         """
         
         response = await Runner.run(self.uniqueness_engine, prompt)
-        unique_data = json.loads(response.output)
+        response_text = extract_runner_response(response)
+        unique_data = json.loads(response_text)
         
         adapted['unique_elements'] = unique_data['unique_elements']
         adapted['signature_content'] = unique_data
@@ -721,7 +788,8 @@ class DynamicConflictTemplateSubsystem:
         """
         
         response = await Runner.run(self.hook_generator, prompt)
-        data = json.loads(response.output)
+        response_text = extract_runner_response(response)
+        data = json.loads(response_text)
         return data['hooks']
     
     async def _create_conflict_from_generation(
@@ -791,72 +859,82 @@ class DynamicConflictTemplateSubsystem:
         if template_id in self._template_cache:
             return self._template_cache[template_id]
         
-        async with get_db_connection_context() as conn:
-            template_data = await conn.fetchrow("""
-                SELECT * FROM conflict_templates WHERE template_id = $1
-            """, template_id)
-        
-        if template_data:
-            template = ConflictTemplate(
-                template_id=template_id,
-                category=TemplateCategory(template_data['category']),
-                name=template_data['name'],
-                base_structure=json.loads(template_data['base_structure']),
-                variable_elements=json.loads(template_data['variable_elements']),
-                contextual_modifiers=json.loads(template_data['contextual_modifiers']),
-                complexity_range=(
-                    template_data['complexity_min'],
-                    template_data['complexity_max']
+        try:
+            async with get_db_connection_context() as conn:
+                template_data = await conn.fetchrow("""
+                    SELECT * FROM conflict_templates WHERE template_id = $1
+                """, template_id)
+            
+            if template_data:
+                template = ConflictTemplate(
+                    template_id=template_id,
+                    category=TemplateCategory(template_data['category']),
+                    name=template_data['name'],
+                    base_structure=json.loads(template_data['base_structure']),
+                    variable_elements=json.loads(template_data['variable_elements']),
+                    contextual_modifiers=json.loads(template_data['contextual_modifiers']),
+                    complexity_range=(
+                        template_data['complexity_min'],
+                        template_data['complexity_max']
+                    )
                 )
-            )
-            self._template_cache[template_id] = template
-            return template
+                self._template_cache[template_id] = template
+                return template
+        except Exception as e:
+            logger.error(f"Error getting template: {e}")
         
         return None
     
     async def _select_template(self, conflict_type: str) -> Optional[int]:
         """Select appropriate template for conflict type"""
         
-        async with get_db_connection_context() as conn:
-            template = await conn.fetchrow("""
-                SELECT template_id FROM conflict_templates
-                WHERE user_id = $1 AND conversation_id = $2
-                AND category LIKE $3
-                ORDER BY RANDOM()
-                LIMIT 1
-            """, self.user_id, self.conversation_id, f"%{conflict_type}%")
-        
-        return template['template_id'] if template else None
+        try:
+            async with get_db_connection_context() as conn:
+                template = await conn.fetchrow("""
+                    SELECT template_id FROM conflict_templates
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND category LIKE $3
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                """, self.user_id, self.conversation_id, f"%{conflict_type}%")
+            
+            return template['template_id'] if template else None
+        except Exception as e:
+            logger.error(f"Error selecting template: {e}")
+            return None
     
     async def _evolve_random_template(self) -> bool:
         """Evolve a random template based on usage"""
         
-        async with get_db_connection_context() as conn:
-            # Get a template with usage
-            template = await conn.fetchrow("""
-                SELECT t.*, COUNT(c.conflict_id) as usage_count
-                FROM conflict_templates t
-                LEFT JOIN Conflicts c ON t.template_id = c.template_id
-                WHERE t.user_id = $1 AND t.conversation_id = $2
-                GROUP BY t.template_id
-                HAVING COUNT(c.conflict_id) > 0
-                ORDER BY RANDOM()
-                LIMIT 1
-            """, self.user_id, self.conversation_id)
-        
-        if template:
-            # Simple evolution: adjust complexity range based on success
-            new_min = max(0.1, template['complexity_min'] - 0.05)
-            new_max = min(1.0, template['complexity_max'] + 0.05)
+        try:
+            async with get_db_connection_context() as conn:
+                # Get a template with usage
+                template = await conn.fetchrow("""
+                    SELECT t.*, COUNT(c.conflict_id) as usage_count
+                    FROM conflict_templates t
+                    LEFT JOIN Conflicts c ON t.template_id = c.template_id
+                    WHERE t.user_id = $1 AND t.conversation_id = $2
+                    GROUP BY t.template_id
+                    HAVING COUNT(c.conflict_id) > 0
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
             
-            await conn.execute("""
-                UPDATE conflict_templates
-                SET complexity_min = $1, complexity_max = $2,
-                    last_evolved = CURRENT_TIMESTAMP
-                WHERE template_id = $3
-            """, new_min, new_max, template['template_id'])
-            
-            return True
+            if template:
+                # Simple evolution: adjust complexity range based on success
+                new_min = max(0.1, template['complexity_min'] - 0.05)
+                new_max = min(1.0, template['complexity_max'] + 0.05)
+                
+                await conn.execute("""
+                    UPDATE conflict_templates
+                    SET complexity_min = $1, complexity_max = $2,
+                        last_evolved = CURRENT_TIMESTAMP
+                    WHERE template_id = $3
+                """, new_min, new_max, template['template_id'])
+                
+                return True
+        except Exception as e:
+            logger.error(f"Error evolving template: {e}")
         
         return False
 
