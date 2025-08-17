@@ -2,7 +2,7 @@
 """
 Dynamic Conflict Template System with LLM-generated variations
 Integrated with ConflictSynthesizer as the central orchestrator
-REFACTORED: Fixed RunResult attribute access issues
+REFACTORED: Fixed RunResult attribute access issues and JSON parsing
 """
 
 import logging
@@ -14,7 +14,14 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
-from db.connection import get_db_connection_context
+
+# Import get_db_connection_context with proper error handling
+try:
+    from db.connection import get_db_connection_context
+except ImportError:
+    # Fallback for testing
+    async def get_db_connection_context():
+        raise NotImplementedError("Database connection not available")
 
 logger = logging.getLogger(__name__)
 
@@ -25,31 +32,37 @@ logger = logging.getLogger(__name__)
 def extract_runner_response(response) -> str:
     """
     Extract the actual response text from a Runner.run() result.
-    Handles different possible RunResult structures.
+    Handles different possible RunResult structures with better error handling.
     """
+    if response is None:
+        logger.warning("Runner response is None")
+        return ""
+    
     # Try different attributes in order of likelihood
-    if hasattr(response, 'output'):
-        return response.output
-    elif hasattr(response, 'data'):
-        return response.data
-    elif hasattr(response, 'result'):
-        return response.result
-    elif hasattr(response, 'content'):
-        return response.content
-    elif hasattr(response, 'text'):
-        return response.text
+    if hasattr(response, 'output') and response.output:
+        return str(response.output)
+    elif hasattr(response, 'data') and response.data:
+        return str(response.data)
+    elif hasattr(response, 'result') and response.result:
+        return str(response.result)
+    elif hasattr(response, 'content') and response.content:
+        return str(response.content)
+    elif hasattr(response, 'text') and response.text:
+        return str(response.text)
     elif hasattr(response, 'messages') and response.messages:
         # If it's a list of messages, get the last one
         last_message = response.messages[-1]
         if hasattr(last_message, 'text'):
-            return last_message.text
+            return str(last_message.text)
         elif hasattr(last_message, 'content'):
-            return last_message.content
+            return str(last_message.content)
         else:
             return str(last_message)
     else:
         # Fallback to string representation
-        return str(response)
+        result = str(response)
+        logger.debug(f"Using string fallback for response: {result[:100]}...")
+        return result
 
 # ===============================================================================
 # TEMPLATE TYPES
@@ -202,12 +215,19 @@ class DynamicConflictTemplateSubsystem:
                 """, self.user_id, self.conversation_id)
                 
                 if template_count == 0:
+                    logger.info("No templates found, creating initial templates...")
                     # Create base templates for each category
                     for category in list(TemplateCategory)[:3]:  # Start with 3 templates
-                        await self.create_conflict_template(
-                            category,
-                            f"Base {category.value} template"
-                        )
+                        try:
+                            await self.create_conflict_template(
+                                category,
+                                f"Base {category.value} template"
+                            )
+                            logger.info(f"Created template for {category.value}")
+                        except Exception as e:
+                            logger.error(f"Failed to create template for {category.value}: {e}")
+                            # Continue with other templates
+                            continue
         except Exception as e:
             logger.error(f"Error initializing templates: {e}")
             # Continue even if templates can't be created
@@ -406,8 +426,11 @@ class DynamicConflictTemplateSubsystem:
                 - Enable emergent storytelling
                 
                 Templates should be seeds for infinite stories, not rigid patterns.
+                
+                IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
+                model_settings=ModelSettings(temperature=0.7)
             )
         return self._template_creator
     
@@ -427,8 +450,11 @@ class DynamicConflictTemplateSubsystem:
                 - Create memorable experiences
                 
                 Each variation should feel like a unique story, not a copy.
+                
+                IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
+                model_settings=ModelSettings(temperature=0.8)
             )
         return self._variation_generator
     
@@ -448,8 +474,11 @@ class DynamicConflictTemplateSubsystem:
                 - Feel organic to the world
                 
                 Make templated conflicts feel bespoke to the moment.
+                
+                IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
+                model_settings=ModelSettings(temperature=0.7)
             )
         return self._context_adapter
     
@@ -469,8 +498,11 @@ class DynamicConflictTemplateSubsystem:
                 - Leave lasting impressions
                 
                 Every conflict should have something players remember.
+                
+                IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
+                model_settings=ModelSettings(temperature=0.9)
             )
         return self._uniqueness_engine
     
@@ -490,8 +522,11 @@ class DynamicConflictTemplateSubsystem:
                 - Build anticipation
                 
                 Make players WANT to engage with the conflict.
+                
+                IMPORTANT: Always respond with valid JSON only, no explanatory text.
                 """,
                 model="gpt-5-nano",
+                model_settings=ModelSettings(temperature=0.8)
             )
         return self._hook_generator
     
@@ -512,7 +547,7 @@ class DynamicConflictTemplateSubsystem:
         
         Design a template that can generate hundreds of unique conflicts.
         
-        Return JSON:
+        Return ONLY valid JSON (no other text):
         {{
             "name": "Template name",
             "base_structure": {{
@@ -543,11 +578,41 @@ class DynamicConflictTemplateSubsystem:
         """
         
         try:
+            # Run the agent with better error handling
+            logger.debug(f"Creating template for category: {category.value}")
             response = await Runner.run(self.template_creator, prompt)
             response_text = extract_runner_response(response)
-            data = json.loads(response_text)
             
-            # Store template
+            if not response_text:
+                logger.error("Empty response from template creator")
+                # Provide a fallback template
+                response_text = self._get_fallback_template(category, base_concept)
+            
+            # Clean the response text (remove any markdown or code blocks)
+            response_text = response_text.strip()
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.startswith("```"):
+                response_text = response_text[3:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            # Parse JSON with better error handling
+            try:
+                data = json.loads(response_text)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {e}")
+                logger.debug(f"Response text: {response_text[:500]}...")
+                # Use fallback template
+                data = json.loads(self._get_fallback_template(category, base_concept))
+            
+            # Validate required fields
+            if not all(key in data for key in ['name', 'base_structure', 'variable_elements', 'contextual_modifiers', 'complexity_range']):
+                logger.warning("Missing required fields in template data, using defaults")
+                data = self._ensure_template_fields(data, category, base_concept)
+            
+            # Store template in database
             async with get_db_connection_context() as conn:
                 template_id = await conn.fetchval("""
                     INSERT INTO conflict_templates
@@ -559,8 +624,8 @@ class DynamicConflictTemplateSubsystem:
                 json.dumps(data['base_structure']),
                 json.dumps(data['variable_elements']),
                 json.dumps(data['contextual_modifiers']),
-                data['complexity_range']['minimum'],
-                data['complexity_range']['maximum'])
+                data['complexity_range'].get('minimum', 0.2),
+                data['complexity_range'].get('maximum', 0.9))
             
             template = ConflictTemplate(
                 template_id=template_id,
@@ -570,19 +635,70 @@ class DynamicConflictTemplateSubsystem:
                 variable_elements=data['variable_elements'],
                 contextual_modifiers=data['contextual_modifiers'],
                 complexity_range=(
-                    data['complexity_range']['minimum'],
-                    data['complexity_range']['maximum']
+                    data['complexity_range'].get('minimum', 0.2),
+                    data['complexity_range'].get('maximum', 0.9)
                 )
             )
             
             # Cache template
             self._template_cache[template_id] = template
+            logger.info(f"Successfully created template: {template.name}")
             
             return template
             
         except Exception as e:
-            logger.error(f"Error creating template: {e}")
+            logger.error(f"Error creating template: {e}", exc_info=True)
             raise
+    
+    def _get_fallback_template(self, category: TemplateCategory, base_concept: str) -> str:
+        """Provide a fallback template when LLM fails"""
+        fallback = {
+            "name": f"{category.value.replace('_', ' ').title()} Template",
+            "base_structure": {
+                "core_tension": f"A {category.value} conflict",
+                "stakeholder_roles": ["protagonist", "antagonist", "mediator"],
+                "progression_phases": ["setup", "escalation", "climax", "resolution"],
+                "resolution_conditions": ["victory", "compromise", "defeat", "stalemate"]
+            },
+            "variable_elements": [
+                "Setting location",
+                "Time of day",
+                "Number of participants",
+                "Stakes level",
+                "Public vs private",
+                "Emotional intensity",
+                "Physical vs verbal",
+                "Resource type",
+                "Authority involvement",
+                "Witness presence"
+            ],
+            "contextual_modifiers": {
+                "personality_axes": ["aggressive-passive", "cooperative-competitive"],
+                "environmental_factors": ["crowded-isolated", "formal-casual"],
+                "cultural_variables": ["traditional-modern", "hierarchical-egalitarian"],
+                "power_modifiers": ["equal-unequal", "official-unofficial"]
+            },
+            "generation_rules": {
+                "required_elements": ["core_tension", "stakeholders"],
+                "optional_elements": ["witnesses", "mediators"],
+                "exclusions": ["violence", "illegal_activity"]
+            },
+            "complexity_range": {
+                "minimum": 0.2,
+                "maximum": 0.9
+            }
+        }
+        return json.dumps(fallback)
+    
+    def _ensure_template_fields(self, data: Dict[str, Any], category: TemplateCategory, base_concept: str) -> Dict[str, Any]:
+        """Ensure all required template fields exist"""
+        defaults = json.loads(self._get_fallback_template(category, base_concept))
+        
+        for key, value in defaults.items():
+            if key not in data:
+                data[key] = value
+        
+        return data
     
     async def generate_conflict_from_template(
         self,
@@ -619,10 +735,10 @@ class DynamicConflictTemplateSubsystem:
             return GeneratedConflict(
                 conflict_id=conflict_id,
                 template_id=template_id,
-                variation_seed=unique['seed'],
-                customization=unique['customization'],
+                variation_seed=unique.get('seed', 'default'),
+                customization=unique.get('customization', {}),
                 narrative_hooks=hooks,
-                unique_elements=unique['unique_elements']
+                unique_elements=unique.get('unique_elements', [])
             )
             
         except Exception as e:
@@ -634,7 +750,7 @@ class DynamicConflictTemplateSubsystem:
         template: ConflictTemplate,
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Generate a variation from template"""
+        """Generate a variation from template with better error handling"""
         
         prompt = f"""
         Generate a unique variation from this template:
@@ -644,13 +760,9 @@ class DynamicConflictTemplateSubsystem:
         Variable Elements: {json.dumps(template.variable_elements)}
         Context: {json.dumps(context)}
         
-        Create a variation that:
-        - Uses the base structure
-        - Varies 3-5 variable elements
-        - Feels fresh and original
-        - Fits the context
+        Create a variation that uses the base structure and varies 3-5 variable elements.
         
-        Return JSON:
+        Return ONLY valid JSON:
         {{
             "seed": "Unique identifier for this variation",
             "core_tension": "Specific tension for this instance",
@@ -667,16 +779,49 @@ class DynamicConflictTemplateSubsystem:
         }}
         """
         
-        response = await Runner.run(self.variation_generator, prompt)
-        response_text = extract_runner_response(response)
-        return json.loads(response_text)
+        try:
+            response = await Runner.run(self.variation_generator, prompt)
+            response_text = extract_runner_response(response)
+            
+            # Clean and parse response
+            response_text = response_text.strip()
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+            
+            if not response_text:
+                # Return a default variation
+                return self._get_default_variation(template)
+            
+            return json.loads(response_text)
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Error generating variation: {e}")
+            return self._get_default_variation(template)
+    
+    def _get_default_variation(self, template: ConflictTemplate) -> Dict[str, Any]:
+        """Provide a default variation when generation fails"""
+        return {
+            "seed": f"variation_{datetime.now().timestamp()}",
+            "core_tension": template.base_structure.get('core_tension', 'A conflict emerges'),
+            "stakeholder_configuration": {
+                "roles": template.base_structure.get('stakeholder_roles', ['participant']),
+                "relationships": ["neutral"]
+            },
+            "chosen_variables": {
+                var: "default" for var in template.variable_elements[:3]
+            },
+            "progression_path": template.base_structure.get('progression_phases', ['start', 'middle', 'end']),
+            "resolution_options": template.base_structure.get('resolution_conditions', ['resolved']),
+            "twist_potential": "An unexpected turn of events"
+        }
     
     async def _adapt_to_context(
         self,
         variation: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Adapt variation to specific context"""
+        """Adapt variation to specific context with error handling"""
         
         prompt = f"""
         Adapt this conflict variation to the specific context:
@@ -687,18 +832,10 @@ class DynamicConflictTemplateSubsystem:
         Time of Day: {context.get('time', 'unknown')}
         Recent Events: {json.dumps(context.get('recent_events', []))}
         
-        Adapt by:
-        - Fitting the location perfectly
-        - Using NPC personalities
-        - Matching the time/mood
-        - Building on recent events
-        
-        Return JSON:
+        Return ONLY valid JSON:
         {{
             "location_integration": "How location shapes conflict",
-            "npc_motivations": {{
-                "npc_id": "specific motivation"
-            }},
+            "npc_motivations": {{}},
             "temporal_factors": "How timing affects it",
             "continuity_connections": ["links to recent events"],
             "environmental_obstacles": ["location-specific challenges"],
@@ -706,18 +843,49 @@ class DynamicConflictTemplateSubsystem:
         }}
         """
         
-        response = await Runner.run(self.context_adapter, prompt)
-        response_text = extract_runner_response(response)
-        adapted = variation.copy()
-        adapted['context_adaptation'] = json.loads(response_text)
-        return adapted
+        try:
+            response = await Runner.run(self.context_adapter, prompt)
+            response_text = extract_runner_response(response)
+            
+            # Clean and parse
+            response_text = response_text.strip()
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+            
+            if not response_text:
+                adaptation = self._get_default_adaptation(context)
+            else:
+                adaptation = json.loads(response_text)
+            
+            adapted = variation.copy()
+            adapted['context_adaptation'] = adaptation
+            return adapted
+            
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Error adapting to context: {e}")
+            adapted = variation.copy()
+            adapted['context_adaptation'] = self._get_default_adaptation(context)
+            return adapted
+    
+    def _get_default_adaptation(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Provide default adaptation when generation fails"""
+        return {
+            "location_integration": f"Takes place in {context.get('location', 'the current location')}",
+            "npc_motivations": {},
+            "temporal_factors": "Happens at an opportune moment",
+            "continuity_connections": [],
+            "environmental_obstacles": [],
+            "atmospheric_elements": ["tense", "uncertain"]
+        }
     
     async def _add_unique_elements(
         self,
         adapted: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Add unique memorable elements"""
+        """Add unique memorable elements with error handling"""
         
         prompt = f"""
         Add unique elements to make this conflict memorable:
@@ -725,14 +893,7 @@ class DynamicConflictTemplateSubsystem:
         Conflict: {json.dumps(adapted)}
         Player History: {json.dumps(context.get('player_history', []))}
         
-        Add:
-        - A memorable quirk or detail
-        - An unexpected element
-        - A quotable moment
-        - A visual or sensory detail
-        - Something players will talk about
-        
-        Return JSON:
+        Return ONLY valid JSON:
         {{
             "unique_elements": [
                 "List of 3-5 unique elements"
@@ -744,26 +905,59 @@ class DynamicConflictTemplateSubsystem:
         }}
         """
         
-        response = await Runner.run(self.uniqueness_engine, prompt)
-        response_text = extract_runner_response(response)
-        unique_data = json.loads(response_text)
-        
-        adapted['unique_elements'] = unique_data['unique_elements']
-        adapted['signature_content'] = unique_data
-        adapted['customization'] = {
-            'base_variation': adapted.get('seed', 'unknown'),
-            'context_layer': adapted.get('context_adaptation', {}),
-            'unique_layer': unique_data
+        try:
+            response = await Runner.run(self.uniqueness_engine, prompt)
+            response_text = extract_runner_response(response)
+            
+            # Clean and parse
+            response_text = response_text.strip()
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+            
+            if not response_text:
+                unique_data = self._get_default_unique_elements()
+            else:
+                unique_data = json.loads(response_text)
+            
+            adapted['unique_elements'] = unique_data.get('unique_elements', [])
+            adapted['signature_content'] = unique_data
+            adapted['customization'] = {
+                'base_variation': adapted.get('seed', 'unknown'),
+                'context_layer': adapted.get('context_adaptation', {}),
+                'unique_layer': unique_data
+            }
+            
+            return adapted
+            
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Error adding unique elements: {e}")
+            unique_data = self._get_default_unique_elements()
+            adapted['unique_elements'] = unique_data['unique_elements']
+            adapted['signature_content'] = unique_data
+            return adapted
+    
+    def _get_default_unique_elements(self) -> Dict[str, Any]:
+        """Provide default unique elements when generation fails"""
+        return {
+            "unique_elements": [
+                "An unexpected alliance forms",
+                "A hidden truth is revealed",
+                "The stakes suddenly increase"
+            ],
+            "memorable_quote": "This changes everything.",
+            "signature_moment": "A dramatic confrontation",
+            "sensory_detail": "The tension is palpable",
+            "conversation_piece": "The unexpected twist"
         }
-        
-        return adapted
     
     async def _generate_narrative_hooks(
         self,
         conflict_data: Dict[str, Any],
         context: Dict[str, Any]
     ) -> List[str]:
-        """Generate compelling narrative hooks"""
+        """Generate compelling narrative hooks with error handling"""
         
         prompt = f"""
         Generate narrative hooks for this conflict:
@@ -772,14 +966,9 @@ class DynamicConflictTemplateSubsystem:
         Unique Elements: {json.dumps(conflict_data.get('unique_elements', []))}
         Signature Moment: {conflict_data.get('signature_content', {}).get('signature_moment', '')}
         
-        Create 3-5 hooks that:
-        - Grab immediate attention
-        - Promise interesting outcomes
-        - Create emotional investment
-        - Feel urgent or important
-        - Connect to player experience
+        Create 3-5 hooks that grab attention and create investment.
         
-        Return JSON:
+        Return ONLY valid JSON:
         {{
             "hooks": [
                 "List of compelling one-sentence hooks"
@@ -787,10 +976,34 @@ class DynamicConflictTemplateSubsystem:
         }}
         """
         
-        response = await Runner.run(self.hook_generator, prompt)
-        response_text = extract_runner_response(response)
-        data = json.loads(response_text)
-        return data['hooks']
+        try:
+            response = await Runner.run(self.hook_generator, prompt)
+            response_text = extract_runner_response(response)
+            
+            # Clean and parse
+            response_text = response_text.strip()
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+            
+            if not response_text:
+                return self._get_default_hooks(conflict_data)
+            
+            data = json.loads(response_text)
+            return data.get('hooks', self._get_default_hooks(conflict_data))
+            
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Error generating hooks: {e}")
+            return self._get_default_hooks(conflict_data)
+    
+    def _get_default_hooks(self, conflict_data: Dict[str, Any]) -> List[str]:
+        """Provide default hooks when generation fails"""
+        return [
+            "A new challenge emerges that tests everyone involved.",
+            "Old tensions resurface in unexpected ways.",
+            "What starts small quickly escalates beyond control."
+        ]
     
     async def _create_conflict_from_generation(
         self,
@@ -806,39 +1019,46 @@ class DynamicConflictTemplateSubsystem:
             template.complexity_range[1]
         )
         
-        # Create conflict through synthesizer
+        # Create conflict through synthesizer if available
         if self.synthesizer:
             synth = self.synthesizer()
             if synth:
-                result = await synth.create_conflict(
-                    template.category.value,
-                    {
-                        'template_id': template.template_id,
-                        'generation_data': generation_data,
-                        'hooks': hooks,
-                        'complexity': complexity
-                    }
-                )
-                return result.get('conflict_id', 0)
+                try:
+                    result = await synth.create_conflict(
+                        template.category.value,
+                        {
+                            'template_id': template.template_id,
+                            'generation_data': generation_data,
+                            'hooks': hooks,
+                            'complexity': complexity
+                        }
+                    )
+                    return result.get('conflict_id', 0)
+                except Exception as e:
+                    logger.error(f"Error creating conflict through synthesizer: {e}")
         
         # Fallback: create directly
-        async with get_db_connection_context() as conn:
-            conflict_id = await conn.fetchval("""
-                INSERT INTO Conflicts
-                (user_id, conversation_id, conflict_type, conflict_name,
-                 description, intensity, phase, is_active, progress,
-                 template_id, generation_data)
-                VALUES ($1, $2, $3, $4, $5, $6, 'emerging', true, 0, $7, $8)
-                RETURNING conflict_id
-            """, self.user_id, self.conversation_id,
-            template.category.value,
-            generation_data.get('seed', 'Generated Conflict'),
-            hooks[0] if hooks else 'A new tension emerges',
-            self._calculate_intensity(complexity),
-            template.template_id,
-            json.dumps(generation_data))
-        
-        return conflict_id
+        try:
+            async with get_db_connection_context() as conn:
+                conflict_id = await conn.fetchval("""
+                    INSERT INTO Conflicts
+                    (user_id, conversation_id, conflict_type, conflict_name,
+                     description, intensity, phase, is_active, progress,
+                     template_id, generation_data)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'emerging', true, 0, $7, $8)
+                    RETURNING conflict_id
+                """, self.user_id, self.conversation_id,
+                template.category.value,
+                generation_data.get('seed', 'Generated Conflict'),
+                hooks[0] if hooks else 'A new tension emerges',
+                self._calculate_intensity(complexity),
+                template.template_id,
+                json.dumps(generation_data))
+            
+            return conflict_id
+        except Exception as e:
+            logger.error(f"Error creating conflict in database: {e}")
+            return 0
     
     def _calculate_intensity(self, complexity: float) -> str:
         """Calculate intensity from complexity"""
@@ -925,12 +1145,13 @@ class DynamicConflictTemplateSubsystem:
                 new_min = max(0.1, template['complexity_min'] - 0.05)
                 new_max = min(1.0, template['complexity_max'] + 0.05)
                 
-                await conn.execute("""
-                    UPDATE conflict_templates
-                    SET complexity_min = $1, complexity_max = $2,
-                        last_evolved = CURRENT_TIMESTAMP
-                    WHERE template_id = $3
-                """, new_min, new_max, template['template_id'])
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        UPDATE conflict_templates
+                        SET complexity_min = $1, complexity_max = $2,
+                            last_evolved = CURRENT_TIMESTAMP
+                        WHERE template_id = $3
+                    """, new_min, new_max, template['template_id'])
                 
                 return True
         except Exception as e:
@@ -954,31 +1175,43 @@ async def generate_templated_conflict(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
 
-    from logic.conflict_system.conflict_synthesizer import get_synthesizer
-    synthesizer = await get_synthesizer(user_id, conversation_id)
+    try:
+        from logic.conflict_system.conflict_synthesizer import get_synthesizer
+        synthesizer = await get_synthesizer(user_id, conversation_id)
 
-    # Flatten: pass a single context dict (no nested "context" field)
-    merged_context: Dict = {
-        'use_template': True,
-        'template_category': category,
-        **dict(context or {})
-    }
+        # Flatten: pass a single context dict (no nested "context" field)
+        merged_context: Dict = {
+            'use_template': True,
+            'template_category': category,
+            **dict(context or {})
+        }
 
-    result = await synthesizer.create_conflict(
-        f"template_{category}",
-        merged_context,
-    )
+        result = await synthesizer.create_conflict(
+            f"template_{category}",
+            merged_context,
+        )
 
-    # Coerce into strict response
-    return {
-        'conflict_id': int(result.get('conflict_id', 0) or 0),
-        'status': str(result.get('status', 'created')),
-        'conflict_type': str(result.get('conflict_type', f"template_{category}")),
-        'template_used': int(result.get('template_used', 0) or 0),
-        'narrative_hooks': [str(h) for h in (result.get('narrative_hooks') or [])],
-        'message': str(result.get('message', "")),
-        'error': "",
-    }
+        # Coerce into strict response
+        return {
+            'conflict_id': int(result.get('conflict_id', 0) or 0),
+            'status': str(result.get('status', 'created')),
+            'conflict_type': str(result.get('conflict_type', f"template_{category}")),
+            'template_used': int(result.get('template_used', 0) or 0),
+            'narrative_hooks': [str(h) for h in (result.get('narrative_hooks') or [])],
+            'message': str(result.get('message', "")),
+            'error': "",
+        }
+    except Exception as e:
+        logger.error(f"Error generating templated conflict: {e}")
+        return {
+            'conflict_id': 0,
+            'status': 'error',
+            'conflict_type': f"template_{category}",
+            'template_used': 0,
+            'narrative_hooks': [],
+            'message': '',
+            'error': str(e)
+        }
 
 
 @function_tool
@@ -992,61 +1225,73 @@ async def create_custom_template(
     user_id = ctx.data.get('user_id')
     conversation_id = ctx.data.get('conversation_id')
 
-    from logic.conflict_system.conflict_synthesizer import (
-        get_synthesizer, SystemEvent, EventType, SubsystemType
-    )
-    synthesizer = await get_synthesizer(user_id, conversation_id)
+    try:
+        from logic.conflict_system.conflict_synthesizer import (
+            get_synthesizer, SystemEvent, EventType, SubsystemType
+        )
+        synthesizer = await get_synthesizer(user_id, conversation_id)
 
-    # Ask TEMPLATE subsystem to create a template (no direct _subsystems access)
-    evt = SystemEvent(
-        event_id=f"create_template_{category}_{datetime.now().timestamp()}",
-        event_type=EventType.TEMPLATE_GENERATED,
-        source_subsystem=SubsystemType.TEMPLATE,
-        payload={'request': 'create_template', 'category': category, 'concept': concept},
-        target_subsystems={SubsystemType.TEMPLATE},
-        requires_response=True,
-        priority=3,
-    )
+        # Ask TEMPLATE subsystem to create a template (no direct _subsystems access)
+        evt = SystemEvent(
+            event_id=f"create_template_{category}_{datetime.now().timestamp()}",
+            event_type=EventType.TEMPLATE_GENERATED,
+            source_subsystem=SubsystemType.TEMPLATE,
+            payload={'request': 'create_template', 'category': category, 'concept': concept},
+            target_subsystems={SubsystemType.TEMPLATE},
+            requires_response=True,
+            priority=3,
+        )
 
-    template_id = 0
-    name = ""
-    cat = category
-    variable_count = 0
-    comp_min = 0.0
-    comp_max = 0.0
-    error = "Template subsystem did not respond"
+        template_id = 0
+        name = ""
+        cat = category
+        variable_count = 0
+        comp_min = 0.0
+        comp_max = 0.0
+        error = "Template subsystem did not respond"
 
-    responses = await synthesizer.emit_event(evt)
-    if responses:
-        for r in responses:
-            if r.subsystem == SubsystemType.TEMPLATE:
-                data = r.data or {}
-                t = data.get('template') or data  # allow either shape
-                template_id = int(t.get('template_id', 0) or 0)
-                name = str(t.get('name', "") or "")
-                cat = str(t.get('category', category) or category)
-                # variable elements could be a list or count
-                ve = t.get('variable_elements')
-                if isinstance(ve, list):
-                    variable_count = len(ve)
-                else:
-                    variable_count = int(t.get('variable_count', 0) or 0)
-                # complexity range could be pair or dict
-                cr = t.get('complexity_range') or {}
-                if isinstance(cr, (list, tuple)) and len(cr) == 2:
-                    comp_min = float(cr[0] or 0.0)
-                    comp_max = float(cr[1] or 0.0)
-                else:
-                    comp_min = float(cr.get('min', 0.0) if isinstance(cr, dict) else 0.0)
-                    comp_max = float(cr.get('max', 0.0) if isinstance(cr, dict) else 0.0)
-                error = ""
+        responses = await synthesizer.emit_event(evt)
+        if responses:
+            for r in responses:
+                if r.subsystem == SubsystemType.TEMPLATE:
+                    data = r.data or {}
+                    t = data.get('template') or data  # allow either shape
+                    template_id = int(t.get('template_id', 0) or 0)
+                    name = str(t.get('name', "") or "")
+                    cat = str(t.get('category', category) or category)
+                    # variable elements could be a list or count
+                    ve = t.get('variable_elements')
+                    if isinstance(ve, list):
+                        variable_count = len(ve)
+                    else:
+                        variable_count = int(t.get('variable_count', 0) or 0)
+                    # complexity range could be pair or dict
+                    cr = t.get('complexity_range') or {}
+                    if isinstance(cr, (list, tuple)) and len(cr) == 2:
+                        comp_min = float(cr[0] or 0.0)
+                        comp_max = float(cr[1] or 0.0)
+                    else:
+                        comp_min = float(cr.get('min', 0.0) if isinstance(cr, dict) else 0.0)
+                        comp_max = float(cr.get('max', 0.0) if isinstance(cr, dict) else 0.0)
+                    error = ""
 
-    return {
-        'template_id': template_id,
-        'name': name,
-        'category': cat,
-        'variable_count': variable_count,
-        'complexity_min': comp_min,
-        'complexity_max': comp_max,
-        'error': error,
-    }
+        return {
+            'template_id': template_id,
+            'name': name,
+            'category': cat,
+            'variable_count': variable_count,
+            'complexity_min': comp_min,
+            'complexity_max': comp_max,
+            'error': error,
+        }
+    except Exception as e:
+        logger.error(f"Error creating custom template: {e}")
+        return {
+            'template_id': 0,
+            'name': '',
+            'category': category,
+            'variable_count': 0,
+            'complexity_min': 0.0,
+            'complexity_max': 0.0,
+            'error': str(e)
+        }
