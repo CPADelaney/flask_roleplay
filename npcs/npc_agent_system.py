@@ -242,19 +242,19 @@ class NPCAgentSystem:
                 try:
                     # Run maintenance every 15 minutes
                     await asyncio.sleep(900)  # 15 minutes in seconds
-
+    
                     # Log maintenance start
                     logger.info("Starting scheduled memory maintenance cycle")
-
-                    # Run maintenance
-                    results = await self.run_memory_maintenance()
-
+    
+                    # Run maintenance using the direct method
+                    results = await self.run_memory_maintenance_direct()
+    
                     # Log completion
                     logger.info(f"Completed memory maintenance: {results}")
-
+    
                 except Exception as e:
                     logger.error(f"Error in scheduled memory maintenance: {e}")
-
+    
         # Start the maintenance task
         asyncio.create_task(run_maintenance_cycle())
 
@@ -1012,26 +1012,22 @@ class NPCAgentSystem:
             logger.error(error_msg)
             raise NPCSystemError(error_msg)
 
-    @function_tool(strict_mode=False)
-    async def run_memory_maintenance(self) -> str:
+    async def run_memory_maintenance_direct(self) -> Dict[str, Any]:
         """
-        Run comprehensive maintenance tasks on all NPCs' memory systems.
-        This includes consolidation, decay, schema formation, and belief updates.
-        Memory operations are allowed as they don't modify core game state.
-
-        Returns:
-            JSON string with maintenance results
+        Direct method for running memory maintenance without agent wrapper.
+        Used by scheduled tasks and direct calls.
         """
-        results = MaintenanceResult()
+        results = {"player_maintenance": None, "npc_maintenance": {}, "nyx_maintenance": None}
+        
         try:
             memory_system = await self._get_memory_system()
-
+    
             # Player memory maintenance
-            results.player_maintenance = await memory_system.maintain(
+            results["player_maintenance"] = await memory_system.maintain(
                 entity_type="player",
                 entity_id=self.user_id
             )
-
+    
             # NPC maintenance
             npc_results = {}
             for npc_id, agent in self.npc_agents.items():
@@ -1041,23 +1037,39 @@ class NPCAgentSystem:
                 except Exception as e:
                     logger.error(f"Error in memory maintenance for NPC {npc_id}: {e}")
                     npc_results[npc_id] = {"error": str(e)}
-            results.npc_maintenance = npc_results
-
+            results["npc_maintenance"] = npc_results
+    
             # DM (Nyx) memory
             try:
-                results.nyx_maintenance = await memory_system.maintain(entity_type="nyx", entity_id=0)
+                results["nyx_maintenance"] = await memory_system.maintain(
+                    entity_type="nyx", 
+                    entity_id=0
+                )
             except Exception as e:
                 logger.error(f"Error in Nyx memory maintenance: {e}")
-                results.nyx_maintenance = {"error": str(e)}
-
+                results["nyx_maintenance"] = {"error": str(e)}
+    
             # Update last maintenance time
             self._last_memory_maintenance = datetime.now()
-
-            return results.model_dump_json()
+    
+            return results
+            
         except Exception as e:
             logger.error(f"Error in system-wide memory maintenance: {e}")
-            results.error = str(e)
-            return results.model_dump_json()
+            results["error"] = str(e)
+            return results
+
+    @function_tool(strict_mode=False)
+    async def run_memory_maintenance(self) -> str:
+        """
+        Run comprehensive maintenance tasks on all NPCs' memory systems.
+        This is the tool version for agent system calls.
+        
+        Returns:
+            JSON string with maintenance results
+        """
+        results = await self.run_memory_maintenance_direct()
+        return MaintenanceResult(**results).model_dump_json()
 
     async def _run_comprehensive_npc_maintenance(self, npc_id: int) -> Dict[str, Any]:
         """
