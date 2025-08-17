@@ -165,6 +165,305 @@ ACTIVITY_EFFECTS = {
     # Add more activities with effects
 }
 
+async def process_world_activity(
+    user_id: int, 
+    conversation_id: int, 
+    activity_name: str,
+    player_name: str = "Chase", 
+    world_context: Dict[str, Any] = None,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Process any activity from the world simulation with full context awareness.
+    This is the main entry point for the world director.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        activity_name: Name of the activity to process
+        player_name: Player name (default "Chase")
+        world_context: Optional world state context for smarter generation
+        **kwargs: Additional parameters:
+            - intensity: Activity intensity multiplier (0.1 to 2.0)
+            - hours: Hours passed during activity
+            - npc_id: NPC involved in the activity
+            - location: Where the activity takes place
+            - is_forced: Whether the activity was forced/commanded
+    
+    Returns:
+        Dict with success status, effects applied, and vitals updates
+    """
+    result = {
+        "success": True,
+        "activity": activity_name,
+        "effects": {},
+        "vitals_updated": {"success": True},
+        "method": "unknown"
+    }
+    
+    try:
+        # Normalize activity name
+        if activity_name:
+            activity_name = str(activity_name).lower().strip().replace('_', ' ')
+        else:
+            activity_name = "idle"
+        
+        logger.info(f"Processing world activity: '{activity_name}' for {player_name}")
+        
+        # Extract parameters
+        intensity = kwargs.get('intensity', 1.0)
+        hours = kwargs.get('hours', 0)
+        npc_id = kwargs.get('npc_id')
+        location = kwargs.get('location')
+        is_forced = kwargs.get('is_forced', False)
+        
+        # Build or enhance world context
+        if not world_context:
+            world_context = {}
+            
+        # Always try to add current stats to context if not present
+        if 'hidden_stats' not in world_context:
+            try:
+                world_context['hidden_stats'] = await get_player_hidden_stats(
+                    user_id, conversation_id, player_name
+                )
+            except Exception as e:
+                logger.debug(f"Could not fetch hidden stats: {e}")
+        
+        if 'visible_stats' not in world_context:
+            try:
+                world_context['visible_stats'] = await get_player_visible_stats(
+                    user_id, conversation_id, player_name
+                )
+            except Exception as e:
+                logger.debug(f"Could not fetch visible stats: {e}")
+        
+        # Add activity context
+        if location:
+            world_context['location'] = location
+        if npc_id:
+            world_context['npc_involved'] = npc_id
+        if is_forced:
+            world_context['forced_activity'] = True
+        
+        # Get effects with context awareness
+        logger.debug(f"Getting effects for '{activity_name}' with context: {bool(world_context)}")
+        base_effects = await get_or_generate_activity_effects(
+            activity_name, 
+            world_context,
+            user_id,
+            conversation_id
+        )
+        
+        # Determine method used
+        if activity_name in ACTIVITY_EFFECTS:
+            result["method"] = "predefined"
+        elif f"effects:{activity_name}" in DYNAMIC_EFFECTS_CACHE:
+            result["method"] = "cached"
+        else:
+            result["method"] = "contextual_generation" if world_context else "basic_generation"
+        
+        # Apply intensity modifier
+        # Forced activities have higher intensity
+        if is_forced:
+            intensity = min(2.0, intensity * 1.5)
+            
+        scaled_effects = {}
+        for stat, change in base_effects.items():
+            scaled_value = int(change * intensity)
+            if scaled_value != 0:  # Only include non-zero effects
+                scaled_effects[stat] = scaled_value
+        
+        # Apply stat changes
+        if scaled_effects:
+            logger.debug(f"Applying stat changes: {scaled_effects}")
+            change_result = await apply_stat_changes(
+                user_id, conversation_id, player_name,
+                scaled_effects,
+                f"Activity: {activity_name} (intensity: {intensity:.1f})"
+            )
+            
+            if change_result["success"]:
+                result["effects"] = change_result.get("changes_applied", {})
+                result["vitals_updated"]["effects"] = result["effects"]
+                result["affected_stats"] = list(result["effects"].keys())
+            else:
+                result["warning"] = f"Could not apply all effects: {change_result.get('errors', [])}"
+                result["partial_effects"] = change_result.get("changes_applied", {})
+        else:
+            result["effects"] = {}
+            result["message"] = f"Activity '{activity_name}' completed with no stat changes"
+        
+        # Handle time-based updates
+        if hours and hours > 0:
+            try:
+                hunger_result = await update_hunger_from_time(
+                    user_id, conversation_id, player_name, hours
+                )
+                result["hunger_update"] = hunger_result
+                result["vitals_updated"]["hunger"] = hunger_result
+                
+                # Check if hunger is critical
+                if hunger_result.get("new_hunger", 100) < 20:
+                    result["critical_state"] = "starving"
+                    # Apply hunger debuffs
+                    hunger_effects = await apply_hunger_effects(
+                        user_id, conversation_id, player_name,
+                        hunger_result.get("new_hunger", 100)
+                    )
+                    if hunger_effects:
+                        result["hunger_debuffs"] = hunger_effects
+                        
+            except Exception as e:
+                logger.error(f"Error updating hunger: {e}")
+                result["hunger_update"] = {"error": str(e)}
+        
+        # Handle addiction-related activities
+        addiction_keywords = ['submission', 'obey', 'serve', 'kneel', 'worship', 'degrade']
+        if any(keyword in activity_name for keyword in addiction_keywords):
+            if npc_id:
+                try:
+                    from logic.addiction_system_sdk import process_addiction_update
+                    
+                    # Determine addiction type
+                    if npc_id:
+                        addiction_type = f"npc_{npc_id}_dependency"
+                    else:
+                        addiction_type = "submission"
+                    
+                    addiction_result = await process_addiction_update(
+                        user_id, conversation_id, player_name,
+                        addiction_type=addiction_type,
+                        intensity_change=0.1 * intensity,
+                        npc_id=npc_id
+                    )
+                    result["addiction_update"] = addiction_result
+                    
+                    # Check if this triggered a craving
+                    if addiction_result.get("craving_triggered"):
+                        result["craving_active"] = True
+                        
+                except Exception as e:
+                    logger.debug(f"Addiction update skipped: {e}")
+        
+        # Check for stat threshold triggers
+        if result.get("effects"):
+            try:
+                # Get updated hidden stats
+                new_hidden_stats = await get_player_hidden_stats(
+                    user_id, conversation_id, player_name
+                )
+                
+                # Check for newly triggered thresholds
+                triggered_thresholds = []
+                for stat_name, value in new_hidden_stats.items():
+                    if stat_name in STAT_THRESHOLDS:
+                        for threshold in STAT_THRESHOLDS[stat_name]:
+                            if value >= threshold["level"]:
+                                # Check if this is newly triggered
+                                old_value = world_context.get("hidden_stats", {}).get(stat_name, 0)
+                                if old_value < threshold["level"]:
+                                    triggered_thresholds.append({
+                                        "stat": stat_name,
+                                        "threshold": threshold["name"],
+                                        "behaviors": threshold["behaviors"]
+                                    })
+                                break
+                
+                if triggered_thresholds:
+                    result["thresholds_triggered"] = triggered_thresholds
+                    logger.info(f"Activity triggered thresholds: {triggered_thresholds}")
+                    
+            except Exception as e:
+                logger.debug(f"Could not check thresholds: {e}")
+        
+        # Check for stat combinations
+        if result.get("effects"):
+            try:
+                combinations = await check_for_combination_triggers(user_id, conversation_id)
+                if combinations:
+                    result["combinations_active"] = [c.get("name") for c in combinations]
+                    
+                    # Special handling for critical combinations
+                    for combo in combinations:
+                        if combo.get("name") == "Breaking Point":
+                            result["critical_state"] = "breaking_point"
+                        elif combo.get("name") == "Stockholm Syndrome":
+                            result["critical_state"] = "stockholm_syndrome"
+                            
+            except Exception as e:
+                logger.debug(f"Could not check combinations: {e}")
+        
+        # Activity-specific post-processing
+        if "sleep" in activity_name or "rest" in activity_name:
+            # Rest activities reduce fatigue
+            try:
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        UPDATE PlayerVitals 
+                        SET fatigue = GREATEST(0, fatigue - $1)
+                        WHERE user_id = $2 AND conversation_id = $3 AND player_name = $4
+                    """, int(20 * intensity), user_id, conversation_id, player_name)
+                    result["fatigue_reduced"] = int(20 * intensity)
+            except Exception as e:
+                logger.debug(f"Could not reduce fatigue: {e}")
+                
+        elif "eat" in activity_name or "meal" in activity_name or "food" in activity_name:
+            # Eating activities restore hunger
+            try:
+                food_value = int(20 * intensity)
+                food_result = await consume_food(
+                    user_id, conversation_id, player_name,
+                    food_value, activity_name
+                )
+                result["food_consumed"] = food_result
+            except Exception as e:
+                logger.debug(f"Could not process food consumption: {e}")
+        
+        # Build comprehensive success message
+        result["vitals_updated"] = {
+            "success": True,
+            "activity": activity_name,
+            "method": result["method"],
+            "effects_applied": result.get("effects", {}),
+            "intensity": intensity,
+            "hours_passed": hours,
+            "context_used": bool(world_context)
+        }
+        
+        # Log summary
+        logger.info(f"Activity '{activity_name}' processed successfully: "
+                   f"{len(result.get('effects', {}))} effects applied, "
+                   f"method: {result['method']}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error processing world activity '{activity_name}': {e}", exc_info=True)
+        
+        # Return a safe failure state that won't break the simulation
+        result["success"] = False
+        result["error"] = str(e)
+        result["vitals_updated"] = {
+            "success": False,
+            "error": f"Activity processing failed: {e}",
+            "activity": activity_name,
+            "fallback": True
+        }
+        
+        # Even on error, try to at least update hunger if time passed
+        if kwargs.get('hours', 0) > 0:
+            try:
+                hunger_result = await update_hunger_from_time(
+                    user_id, conversation_id, player_name, kwargs['hours']
+                )
+                result["hunger_update"] = hunger_result
+                result["vitals_updated"]["hunger_processed"] = True
+            except:
+                pass
+        
+        return result
+
 # ============================
 # DYNAMIC ACTIVITY EFFECTS
 # ============================
@@ -245,9 +544,15 @@ Return ONLY valid JSON, example: {{"confidence": 1, "mental_resilience": -1}}
             return {}  # No effects for waiting
         return {"fatigue": 1}  # Minimal fatigue for any activity
 
-async def get_or_generate_activity_effects(activity_name: str, context: Dict[str, Any] = None) -> Dict[str, int]:
+async def get_or_generate_activity_effects(
+    activity_name: str, 
+    context: Dict[str, Any] = None,
+    user_id: int = None,
+    conversation_id: int = None
+) -> Dict[str, int]:
     """
     Get activity effects, generating them if not predefined.
+    Uses contextual generation when world context is available.
     """
     # Check predefined first
     if activity_name in ACTIVITY_EFFECTS:
@@ -259,9 +564,27 @@ async def get_or_generate_activity_effects(activity_name: str, context: Dict[str
         logger.debug(f"Using cached effects for '{activity_name}'")
         return DYNAMIC_EFFECTS_CACHE[cache_key]
     
-    # Generate new
+    # Generate new effects
     logger.info(f"Generating new effects for unknown activity: '{activity_name}'")
-    effects = await generate_activity_effects_via_llm(activity_name, context)
+    
+    # If we have rich world context, use contextual generation
+    if context and any(k in context for k in ['world_mood', 'hidden_stats', 'active_npcs']):
+        logger.debug("Using contextual generation with world state")
+        effects = await generate_contextual_activity_effects(activity_name, context)
+    else:
+        # Try to fetch minimal context if we have user_id/conversation_id
+        if user_id and conversation_id:
+            try:
+                # Get minimal context
+                hidden_stats = await get_player_hidden_stats(user_id, conversation_id)
+                context = {"hidden_stats": hidden_stats}
+                effects = await generate_contextual_activity_effects(activity_name, context)
+            except Exception as e:
+                logger.debug(f"Could not fetch context, using basic generation: {e}")
+                effects = await generate_activity_effects_via_llm(activity_name, context)
+        else:
+            # Fall back to basic generation
+            effects = await generate_activity_effects_via_llm(activity_name, context)
     
     # Cache the result
     DYNAMIC_EFFECTS_CACHE[cache_key] = effects
