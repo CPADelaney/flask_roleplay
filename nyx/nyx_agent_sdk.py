@@ -3589,16 +3589,67 @@ async def process_user_input(
                 try:
                     logger.info(f"[{trace_id}] Injecting decide_image_generation...")
                     
-                    image_result = await decide_image_generation_standalone(
-                        nyx_context,
-                        narrative[:500]  # Limit length
-                    )
+                    # Create standalone decision
+                    scene_text_lower = narrative[:500].lower()
+                    score = 0.0
+                    
+                    # High impact visual keywords
+                    visual_keywords = ["dramatic", "intense", "beautiful", "transformation", "reveal", "climax", "pivotal"]
+                    for keyword in visual_keywords:
+                        if keyword in scene_text_lower:
+                            score += 0.2
+                    
+                    # Scene transitions
+                    if any(word in scene_text_lower for word in ["enter", "arrive", "transform", "change", "shift"]):
+                        score += 0.15
+                    
+                    # Emotional peaks
+                    if any(word in scene_text_lower for word in ["gasp", "shock", "awe", "breathtaking", "stunning"]):
+                        score += 0.25
+                    
+                    # Environmental descriptions
+                    if any(word in scene_text_lower for word in ["landscape", "environment", "setting", "atmosphere"]):
+                        score += 0.1
+                    
+                    # Cap score at 1.0
+                    score = min(1.0, score)
+                    
+                    # Dynamic threshold
+                    recent_images = nyx_context.current_context.get("recent_image_count", 0)
+                    if recent_images > 3:
+                        threshold = 0.7
+                    elif recent_images > 1:
+                        threshold = 0.6
+                    else:
+                        threshold = 0.5
+                    
+                    should_generate = score > threshold
+                    
+                    image_prompt = None
+                    if should_generate:
+                        visual_elements = []
+                        if "dramatic" in scene_text_lower:
+                            visual_elements.append("dramatic lighting")
+                        if "intense" in scene_text_lower:
+                            visual_elements.append("intense atmosphere")
+                        if "beautiful" in scene_text_lower:
+                            visual_elements.append("beautiful composition")
+                        
+                        image_prompt = f"Scene depicting: {', '.join(visual_elements) if visual_elements else 'atmospheric scene'}"
+                        nyx_context.current_context["recent_image_count"] = recent_images + 1
+                    
+                    image_result = ImageGenerationDecision(
+                        should_generate=should_generate,
+                        score=score,
+                        image_prompt=image_prompt,
+                        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})"
+                    ).model_dump_json()
                     
                     # Add synthetic output
                     resp.append({
                         "type": "function_call_output",
                         "name": "decide_image_generation",
-                        "output": image_result  # Already JSON string
+                        "output": image_result
                     })
                     logger.debug(f"[{trace_id}] ✓ Image decision injected")
                 except Exception as e:
@@ -3619,6 +3670,7 @@ async def process_user_input(
                     logger.error(f"[{trace_id}] Failed to save context state: {e}")
             
             result = {
+                'success': True,  # ✅ ADD SUCCESS FIELD
                 'response': assembled['narrative'],
                 'metadata': {
                     'world': assembled['world'],
@@ -3668,6 +3720,7 @@ async def process_user_input(
                 narrative = "I encountered an issue generating the response."
             
             return {
+                'success': False,  # ✅ ADD SUCCESS FIELD
                 'response': narrative,
                 'metadata': {
                     'error': 'assembly_failed',
@@ -3692,6 +3745,7 @@ async def process_user_input(
             nyx_context.update_performance("total_actions", nyx_context.performance_metrics.get("total_actions", 0) + 1)
         
         return {
+            'success': False,  # ✅ ADD SUCCESS FIELD
             'response': "I encountered an error processing your request. Please try again.",
             'error': str(e),
             'trace_id': trace_id,
