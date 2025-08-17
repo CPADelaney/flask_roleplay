@@ -554,7 +554,12 @@ class BackgroundConflictOrchestrator:
         """
     
         response = await Runner.run(self.world_event_agent, prompt)
-        data = json.loads(extract_runner_response(response))
+        raw = extract_runner_response(response)
+        try:
+            data = json.loads(raw)
+        except Exception as e:
+            logger.error("generate_background_conflict: bad JSON (%s). raw head=%r", e, raw[:200])
+            raise
     
         # Create database entry
         async with get_db_connection_context() as conn:
