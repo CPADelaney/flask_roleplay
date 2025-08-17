@@ -12,6 +12,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
 import weakref
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
@@ -568,7 +569,7 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         )
     
     # ========== Core Stakeholder Management (Modified for Orchestrator) ==========
-    
+
     async def create_stakeholder(
         self,
         npc_id: int,
@@ -601,7 +602,8 @@ class StakeholderAutonomySystem(ConflictSubsystem):
         response = await self.personality_analyzer.run(prompt)
         
         try:
-            result = json.loads(response.content)
+            response_text = extract_runner_response(response)  # ← FIXED: Use helper function
+            result = json.loads(response_text)
             
             # Store stakeholder
             async with get_db_connection_context() as conn:
