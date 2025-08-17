@@ -2380,6 +2380,72 @@ async def detect_conflicts_and_instability(
         requires_intervention=any(c.severity > 0.8 for c in conflicts + instabilities)
     ).model_dump_json()
 
+# Add these near the function tool definitions
+
+async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
+    """Standalone version for post-run enforcement"""
+    scene_text_lower = scene_text.lower()
+    
+    # Calculate score based on scene characteristics
+    score = 0.0
+    
+    # High impact visual keywords
+    visual_keywords = ["dramatic", "intense", "beautiful", "transformation", "reveal", "climax", "pivotal"]
+    for keyword in visual_keywords:
+        if keyword in scene_text_lower:
+            score += 0.2
+    
+    # Scene transitions
+    if any(word in scene_text_lower for word in ["enter", "arrive", "transform", "change", "shift"]):
+        score += 0.15
+    
+    # Emotional peaks
+    if any(word in scene_text_lower for word in ["gasp", "shock", "awe", "breathtaking", "stunning"]):
+        score += 0.25
+    
+    # Environmental descriptions
+    if any(word in scene_text_lower for word in ["landscape", "environment", "setting", "atmosphere"]):
+        score += 0.1
+    
+    # Cap score at 1.0
+    score = min(1.0, score)
+    
+    # Dynamic threshold based on recent image generation
+    recent_images = ctx.current_context.get("recent_image_count", 0)
+    if recent_images > 3:
+        threshold = 0.7
+    elif recent_images > 1:
+        threshold = 0.6
+    else:
+        threshold = 0.5
+    
+    # Determine if we should generate
+    should_generate = score > threshold
+    
+    # Create appropriate prompt if generating
+    image_prompt = None
+    if should_generate:
+        # Extract key visual elements
+        visual_elements = []
+        if "dramatic" in scene_text_lower:
+            visual_elements.append("dramatic lighting")
+        if "intense" in scene_text_lower:
+            visual_elements.append("intense atmosphere")
+        if "beautiful" in scene_text_lower:
+            visual_elements.append("beautiful composition")
+        
+        image_prompt = f"Scene depicting: {', '.join(visual_elements) if visual_elements else 'atmospheric scene'}"
+        
+        # Update recent image count
+        ctx.current_context["recent_image_count"] = recent_images + 1
+    
+    return ImageGenerationDecision(
+        should_generate=should_generate,
+        score=score,
+        image_prompt=image_prompt,
+        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})"
+    ).model_dump_json()
+
 @function_tool
 async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: DecideImageInput) -> str:
     """Decide whether an image should be generated for a scene."""
@@ -2447,24 +2513,30 @@ async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: D
     ).model_dump_json()
 
 async def generate_universal_updates_impl(
-    ctx: RunContextWrapper[NyxContext],
+    ctx: Union[RunContextWrapper[NyxContext], NyxContext],
     narrative: str
 ) -> UniversalUpdateResult:
     """Implementation of generate universal updates from the narrative using the Universal Updater."""
     from logic.universal_updater_agent import process_universal_update
     
+    # Handle both wrapped and unwrapped contexts
+    if isinstance(ctx, NyxContext):
+        app_ctx = ctx
+    else:
+        app_ctx = ctx.context
+    
     try:
         # Process the narrative
         update_result = await process_universal_update(
-            user_id=ctx.context.user_id,
-            conversation_id=ctx.context.conversation_id,
+            user_id=app_ctx.user_id,
+            conversation_id=app_ctx.conversation_id,
             narrative=narrative,
             context={"source": "nyx_agent"}
         )
         
         # Store the updates in context
-        if "universal_updates" not in ctx.context.current_context:
-            ctx.context.current_context["universal_updates"] = {}
+        if "universal_updates" not in app_ctx.current_context:
+            app_ctx.current_context["universal_updates"] = {}
 
         # Merge the updates
         if update_result.get("success") and update_result.get("details"):
@@ -2482,7 +2554,7 @@ async def generate_universal_updates_impl(
                 details_dict = {}
 
             for key, value in details_dict.items():
-                ctx.context.current_context["universal_updates"][key] = value
+                app_ctx.current_context["universal_updates"][key] = value
         
         # Return structured output
         return UniversalUpdateResult(
@@ -3516,10 +3588,10 @@ async def process_user_input(
             if narrative and len(narrative) > 20:
                 try:
                     logger.info(f"[{trace_id}] Injecting decide_image_generation...")
-                    wrapper = RunContextWrapper(context=nyx_context)
-                    image_result = await decide_image_generation(
-                        wrapper,
-                        DecideImageInput(scene_text=narrative[:500])  # Limit length
+                    
+                    image_result = await decide_image_generation_standalone(
+                        nyx_context,
+                        narrative[:500]  # Limit length
                     )
                     
                     # Add synthetic output
