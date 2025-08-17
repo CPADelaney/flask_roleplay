@@ -360,9 +360,7 @@ def _tool_output(resp, name: str):
     except Exception:
         return {}
 
-Here are the complete updated snippets to fix your issues:
-1. Add Helper Functions (place near top of file after imports)
-pythondef _extract_last_assistant_text(resp) -> str:
+def _extract_last_assistant_text(resp) -> str:
     """Extract the last assistant message text from response"""
     msgs = [c for c in resp if c.get("type") == "message" and c.get("role") == "assistant"]
     if not msgs:
@@ -391,8 +389,8 @@ def _tool_output(resp, name: str):
         return json.loads(raw) if isinstance(raw, str) else (raw or {})
     except Exception:
         return {}
-2. Robust Response Assembler
-pythondef assemble_nyx_response(resp: list) -> Dict[str, Any]:
+
+def assemble_nyx_response(resp: list) -> Dict[str, Any]:
     """Assemble final response from agent run with fallbacks"""
     
     # Extract tool outputs
