@@ -246,19 +246,19 @@ class EventSystem:
             self.event_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_MANAGER,
                 agent_id="event_manager",
-                model="gpt-5-nano",
+                model="gpt-4.1-nano",
             )
 
             self.analysis_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_ANALYZER,
                 agent_id="event_analyzer",
-                model="gpt-5-nano",
+                model="gpt-4.1-nano",
             )
 
             self.propagation_agent = await governance.create_agent(
                 agent_type=AgentType.EVENT_PROPAGATOR,
                 agent_id="event_propagator",
-                model="gpt-5-nano",
+                model="gpt-4.1-nano",
             )
 
             self.agent_context = {
@@ -1022,3 +1022,4 @@ async def create_event_system(user_id: int, conversation_id: int, **kwargs):
         yield event_system
     finally:
         await event_system.shutdown(drain=True, timeout=2.0)
+
