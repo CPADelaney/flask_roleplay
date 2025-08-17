@@ -20,6 +20,8 @@ import weakref
 from lore.core.canon import log_canonical_event, ensure_canonical_context
 from lore.core.context import CanonicalContext
 
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 
@@ -714,37 +716,39 @@ class ConflictSynthesizer:
         
         return result
     
-    # The rest of the methods remain the same...
-    
-    def _determine_required_subsystems(
+    async def _determine_required_subsystems(
         self,
         conflict_type: str,
         context: Dict[str, Any]
     ) -> Set[SubsystemType]:
-        """Determine which subsystems should handle a conflict"""
+        """Use orchestrator to determine which subsystems should handle this conflict"""
         
-        subsystems = set()
+        if not self._orchestrator:
+            self._orchestrator = Agent(
+                name="conflict_orchestrator",
+                instructions="Determine which conflict subsystems should handle specific situations",
+                model="gpt-5-nano"
+            )
         
-        # Map conflict types to relevant subsystems
-        if 'social' in conflict_type.lower():
-            subsystems.add(SubsystemType.SOCIAL)
+        prompt = f"""
+        Analyze this conflict and determine which subsystems should be involved:
+        Type: {conflict_type}
+        Context: {json.dumps(context)}
         
-        if 'power' in conflict_type.lower() or 'leverage' in conflict_type.lower():
-            subsystems.add(SubsystemType.LEVERAGE)
+        Available subsystems: {[s.value for s in SubsystemType]}
         
-        # Core subsystems for any conflict
-        subsystems.update({
-            SubsystemType.TENSION,
-            SubsystemType.FLOW,
-            SubsystemType.STAKEHOLDER
-        })
+        Return a JSON array of subsystem names that should handle this.
+        """
         
-        # If multiparty, ensure stakeholder system is extra active
-        if context.get('is_multiparty'):
-            # Stakeholder system will handle faction management
-            pass  # Already added above
-        
-        return subsystems
+        response = await Runner.run(self.orchestrator, prompt)
+        try:
+            response_text = extract_runner_response(response)  # ← FIXED: Use helper function
+            subsystem_names = json.loads(response_text)
+            return {SubsystemType(name) for name in subsystem_names if name in SubsystemType._value2member_map_}
+        except Exception as e:
+            logger.warning(f"Failed to parse orchestrator response: {e}")
+            # Fallback to default set
+            return {SubsystemType.TENSION, SubsystemType.FLOW, SubsystemType.STAKEHOLDER}
     
     def _aggregate_conflict_creation(self, responses: List[SubsystemResponse]) -> Dict[str, Any]:
         """Aggregate subsystem responses into conflict creation result"""
