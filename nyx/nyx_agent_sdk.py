@@ -2793,17 +2793,20 @@ async def simulate_npc_autonomy(
     ctx: RunContextWrapper[NyxContext],
     payload: SimulateAutonomyInput
 ) -> str:
-    """Simulate autonomous NPC actions."""
+    """Simulate autonomous NPC actions with dynamic activity processing."""
     app_ctx = _get_app_ctx(ctx)
     wd = getattr(app_ctx, "world_director", None)
     if not wd:
         return json.dumps({"error": "world_director not available"}, ensure_ascii=False)
-
+    
+    # Import the new activity processor
+    from logic.stats_logic import process_world_activity
+    
     try:
         result = await wd.advance_time(payload.hours)
     except Exception as e:
         return json.dumps({"error": f"advance_time_failed: {e}"}, ensure_ascii=False)
-
+    
     def _jsafe(x):
         if x is None:
             return None
@@ -2814,8 +2817,70 @@ async def simulate_npc_autonomy(
         if isinstance(x, dict):
             return {k: _jsafe(v) for k, v in x.items()}
         return getattr(x, "value", x)
-
+    
     safe_result = _jsafe(result)
+    
+    # Check if vitals update failed
+    if isinstance(safe_result, dict):
+        vitals_result = safe_result.get('vitals_updated', {})
+        
+        # If vitals update failed with "Unknown activity", fix it
+        if not vitals_result.get('success') and 'Unknown activity' in str(vitals_result.get('error', '')):
+            # Extract the activity that failed
+            activity_name = 'unknown'
+            
+            # Try to find the activity in various places
+            if 'time' in safe_result:
+                time_data = safe_result['time']
+                if isinstance(time_data, dict):
+                    activity_name = time_data.get('activity_mood') or time_data.get('activity') or 'unknown'
+            
+            # Look in action log for activities
+            action_log = []
+            candidate = []
+            if isinstance(safe_result, list):
+                candidate = safe_result
+            elif isinstance(safe_result, dict):
+                for key in ("actions", "npc_actions", "events", "log"):
+                    if isinstance(safe_result.get(key), list):
+                        candidate = safe_result[key]
+                        break
+            
+            for entry in candidate or []:
+                if isinstance(entry, dict):
+                    found_activity = entry.get("action") or entry.get("current_activity") or entry.get("activity")
+                    if found_activity and found_activity != 'unknown':
+                        activity_name = found_activity
+                        break
+            
+            # Process the activity through our dynamic system
+            try:
+                activity_result = await process_world_activity(
+                    user_id=app_ctx.user_id,
+                    conversation_id=app_ctx.conversation_id,
+                    activity_name=activity_name,
+                    player_name="Chase",
+                    hours=payload.hours
+                )
+                
+                # Replace the failed vitals_updated with our successful result
+                safe_result['vitals_updated'] = {
+                    'success': True,
+                    'activity': activity_name,
+                    'effects': activity_result.get('effects', {}),
+                    'method': 'dynamic_generation'
+                }
+                
+                # Also update hunger if it was processed
+                if 'hunger' in safe_result and activity_result.get('hunger_update'):
+                    safe_result['hunger'].update(activity_result['hunger_update'])
+                    
+            except Exception as e:
+                logger.warning(f"Dynamic activity processing failed: {e}")
+                # Keep the original error but mark it as handled
+                safe_result['vitals_updated']['handled'] = True
+    
+    # Build action log as before
     action_log = []
     candidate = []
     if isinstance(safe_result, list):
@@ -2823,26 +2888,46 @@ async def simulate_npc_autonomy(
     elif isinstance(safe_result, dict):
         for key in ("actions", "npc_actions", "events", "log"):
             if isinstance(safe_result.get(key), list):
-                candidate = safe_result[key]; break
-
+                candidate = safe_result[key]
+                break
+    
     for entry in candidate or []:
         if isinstance(entry, dict):
-            action_log.append({
+            action_entry = {
                 "npc": entry.get("npc") or entry.get("npc_name") or entry.get("name"),
                 "action": entry.get("action") or entry.get("current_activity") or entry.get("activity"),
                 "time": entry.get("time") or entry.get("timestamp"),
-            })
+            }
+            action_log.append(action_entry)
+            
+            # Also process each NPC action for stat effects if needed
+            if action_entry.get("action") and action_entry["action"] != 'unknown':
+                try:
+                    # Process NPC actions that might affect the player
+                    npc_activity = action_entry["action"]
+                    if any(keyword in npc_activity.lower() for keyword in ['command', 'order', 'require', 'demand']):
+                        # This NPC action might affect player stats
+                        await process_world_activity(
+                            user_id=app_ctx.user_id,
+                            conversation_id=app_ctx.conversation_id,
+                            activity_name=f"responding to {npc_activity}",
+                            player_name="Chase",
+                            intensity=0.5  # Lighter effect for NPC actions
+                        )
+                except Exception as e:
+                    logger.debug(f"NPC action processing skipped: {e}")
         else:
             action_log.append({"entry": str(entry)})
-
+    
+    # Build output
     out = {
         "advanced_time_hours": payload.hours,
         "npc_actions": safe_result,
         "npc_action_log": action_log,
         "nyx_observation": "While you were away, the others kept moving… and watching.",
     }
+    
     return json.dumps(out, ensure_ascii=False)
-
 # ===== Guardrails =====
 
 async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent: Agent, input_data):
