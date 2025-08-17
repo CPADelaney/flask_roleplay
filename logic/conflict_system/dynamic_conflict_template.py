@@ -29,40 +29,145 @@ logger = logging.getLogger(__name__)
 # HELPER FUNCTION FOR RUNNER RESPONSE EXTRACTION
 # ===============================================================================
 
-def extract_runner_response(response) -> str:
+def _clean_and_maybe_extract_json(s: str) -> str:
+    """Strip code fences/debug lines and return a JSON fragment if present."""
+    s = _strip_code_fences(s).strip()
+
+    # If the string is clean JSON already
+    if _looks_like_json(s):
+        return s
+
+    # Try to pull the first balanced JSON object/array from within the text
+    frag = _extract_json_fragment(s)
+    return frag if frag is not None else s
+
+
+def _strip_code_fences(s: str) -> str:
     """
-    Extract the actual response text from a Runner.run() result.
-    Handles different possible RunResult structures with better error handling.
+    If the model wrapped the JSON in triple backticks, pull out the inner block.
+    Prefer the inner block only when it contains { or [.
     """
-    if response is None:
-        logger.warning("Runner response is None")
-        return ""
-    
-    # Try different attributes in order of likelihood
-    if hasattr(response, 'output') and response.output:
-        return str(response.output)
-    elif hasattr(response, 'data') and response.data:
-        return str(response.data)
-    elif hasattr(response, 'result') and response.result:
-        return str(response.result)
-    elif hasattr(response, 'content') and response.content:
-        return str(response.content)
-    elif hasattr(response, 'text') and response.text:
-        return str(response.text)
-    elif hasattr(response, 'messages') and response.messages:
-        # If it's a list of messages, get the last one
-        last_message = response.messages[-1]
-        if hasattr(last_message, 'text'):
-            return str(last_message.text)
-        elif hasattr(last_message, 'content'):
-            return str(last_message.content)
+    if "```" not in s:
+        return s
+
+    # Extract first fenced block
+    start = s.find("```")
+    end = s.find("```", start + 3)
+    if end == -1:
+        return s
+
+    inner = s[start + 3:end]
+    # Drop a potential language label (e.g., ```json)
+    if "\n" in inner:
+        first_line, rest = inner.split("\n", 1)
+        # If first line looks like a language tag, use the rest
+        inner = rest if re.fullmatch(r"[a-zA-Z0-9_-]+", first_line.strip()) else inner
+
+    return inner if ("{" in inner or "[" in inner) else s
+
+
+def _looks_like_json(s: str) -> bool:
+    t = s.lstrip()
+    if not (t.startswith("{") or t.startswith("[")):
+        return False
+    try:
+        json.loads(t)
+        return True
+    except Exception:
+        return False
+
+
+def _extract_json_fragment(s: str) -> Optional[str]:
+    """
+    Find the first balanced JSON object or array inside s.
+    Handles quotes and escapes so braces inside strings don't break scanning.
+    """
+    m = re.search(r"[\{\[]", s)
+    if not m:
+        return None
+
+    start = m.start()
+    open_ch = s[start]
+    close_ch = "}" if open_ch == "{" else "]"
+
+    depth = 0
+    i = start
+    in_str = False
+    esc = False
+
+    while i < len(s):
+        ch = s[i]
+
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
         else:
-            return str(last_message)
-    else:
-        # Fallback to string representation
-        result = str(response)
-        logger.debug(f"Using string fallback for response: {result[:100]}...")
-        return result
+            if ch == '"':
+                in_str = True
+            elif ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    candidate = s[start:i + 1]
+                    if _looks_like_json(candidate):
+                        return candidate
+                    # If it's balanced but still not valid JSON, give up.
+                    return None
+
+        i += 1
+
+    return None
+
+def extract_runner_response(run_result) -> str:
+    """
+    Normalize Runner.run(...) results into a clean payload.
+    - If the model returned JSON, return ONLY the JSON string (object or array).
+    - Otherwise return cleaned plain text.
+    - Never return the RunResult repr.
+    """
+
+    # 1) Try direct string fields first (newer SDKs usually have .output)
+    for attr in ("output", "content", "text"):
+        if hasattr(run_result, attr):
+            val = getattr(run_result, attr)
+            if isinstance(val, (str, bytes)):
+                s = val.decode("utf-8") if isinstance(val, bytes) else val
+                return _clean_and_maybe_extract_json(s)
+
+    # 2) Try message-style structures (content parts)
+    if hasattr(run_result, "messages"):
+        msgs = getattr(run_result, "messages") or []
+        for m in reversed(msgs):  # prefer the last assistant/tool message
+            role = (m.get("role") or "").lower()
+            if role in ("assistant", "tool", "function"):
+                parts = m.get("content")
+                # OpenAI-style list of content parts
+                if isinstance(parts, list):
+                    for p in parts:
+                        t = p.get("text")
+                        if isinstance(t, str):
+                            return _clean_and_maybe_extract_json(t)
+                # Plain string content
+                if isinstance(parts, str):
+                    return _clean_and_maybe_extract_json(parts)
+
+    # 3) Fallback: string repr (may include debug preamble)
+    s = str(run_result)
+    cleaned = _clean_and_maybe_extract_json(s)
+    if _looks_like_json(cleaned):
+        return cleaned
+
+    # Last resort: prevent crashes upstream; log once
+    logger.warning(
+        "extract_runner_response: returning empty JSON fallback; head=%r",
+        cleaned[:120]
+    )
+    return "{}"  # callers doing json.loads(...) won't crash
 
 # ===============================================================================
 # TEMPLATE TYPES
