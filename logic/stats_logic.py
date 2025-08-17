@@ -2,6 +2,7 @@
 
 import logging
 import asyncio
+from cachetools import TTLCache
 import asyncpg
 import json
 import random
@@ -14,6 +15,8 @@ from lore.core import canon
 logger = logging.getLogger(__name__)
 
 stats_bp = Blueprint('stats_bp', __name__)
+
+DYNAMIC_EFFECTS_CACHE = TTLCache(maxsize=1000, ttl=3600)  # 1-hour TTL
 
 # ============================
 # STAT SYSTEM CONFIGURATION
@@ -161,6 +164,109 @@ ACTIVITY_EFFECTS = {
     },
     # Add more activities with effects
 }
+
+# ============================
+# DYNAMIC ACTIVITY EFFECTS
+# ============================
+
+async def generate_activity_effects_via_llm(activity_name: str, context: Dict[str, Any] = None) -> Dict[str, int]:
+    """
+    Use LLM to generate appropriate stat effects for an activity.
+    """
+    from logic.chatgpt_integration import generate_text_completion
+    
+    # Build a smart prompt based on activity type
+    activity_lower = activity_name.lower()
+    
+    # Determine activity category for better prompting
+    if any(word in activity_lower for word in ['shop', 'buy', 'browse', 'purchase']):
+        category = "mundane shopping"
+        suggested_range = "0 to 2"
+    elif any(word in activity_lower for word in ['humiliat', 'degrad', 'punish']):
+        category = "psychological domination"
+        suggested_range = "3 to 8"
+    elif any(word in activity_lower for word in ['walk', 'stand', 'wait', 'idle', 'rest']):
+        category = "passive/waiting"
+        suggested_range = "0 to 1"
+    elif any(word in activity_lower for word in ['train', 'exercise', 'practice']):
+        category = "training/improvement"
+        suggested_range = "2 to 5"
+    else:
+        category = "general activity"
+        suggested_range = "1 to 3"
+    
+    prompt = f"""
+Activity: "{activity_name}"
+Category: {category}
+Suggested effect range: {suggested_range} points
+
+Generate stat effects as a JSON object. Only include stats that would realistically change.
+Possible stats: corruption, confidence, willpower, obedience, dependency, lust, mental_resilience
+
+Rules:
+- Mundane activities have minimal effects (0-2 points)
+- Psychological activities have moderate effects (3-5 points)
+- Intense experiences have strong effects (5-8 points)
+- Use negative values for stats that decrease
+- Empty activities can return empty object {{}}
+
+Return ONLY valid JSON, example: {{"confidence": 1, "mental_resilience": -1}}
+"""
+    
+    try:
+        response = await generate_text_completion(
+            system_prompt="You generate balanced game stat modifications. Return only valid JSON.",
+            user_prompt=prompt,
+            model='gpt-5-nano',
+        )
+        
+        # Clean response (remove markdown if present)
+        response = response.strip()
+        if response.startswith('```'):
+            response = response.split('\n', 1)[1].rsplit('\n', 1)[0]
+        
+        effects = json.loads(response)
+        
+        # Validate and clamp
+        validated = {}
+        for stat, value in effects.items():
+            if stat in HIDDEN_STATS or stat == 'physical_endurance':
+                clamped = max(-10, min(10, int(value)))
+                if clamped != 0:  # Only include non-zero effects
+                    validated[stat] = clamped
+        
+        logger.info(f"Generated effects for '{activity_name}': {validated}")
+        return validated
+        
+    except Exception as e:
+        logger.warning(f"LLM generation failed for '{activity_name}': {e}")
+        # Return minimal safe default
+        if 'wait' in activity_lower or 'idle' in activity_lower:
+            return {}  # No effects for waiting
+        return {"fatigue": 1}  # Minimal fatigue for any activity
+
+async def get_or_generate_activity_effects(activity_name: str, context: Dict[str, Any] = None) -> Dict[str, int]:
+    """
+    Get activity effects, generating them if not predefined.
+    """
+    # Check predefined first
+    if activity_name in ACTIVITY_EFFECTS:
+        return ACTIVITY_EFFECTS[activity_name]
+    
+    # Check cache
+    cache_key = f"effects:{activity_name}"
+    if cache_key in DYNAMIC_EFFECTS_CACHE:
+        logger.debug(f"Using cached effects for '{activity_name}'")
+        return DYNAMIC_EFFECTS_CACHE[cache_key]
+    
+    # Generate new
+    logger.info(f"Generating new effects for unknown activity: '{activity_name}'")
+    effects = await generate_activity_effects_via_llm(activity_name, context)
+    
+    # Cache the result
+    DYNAMIC_EFFECTS_CACHE[cache_key] = effects
+    
+    return effects
 
 # ============================
 # GAME RULES & STAT DEFINITIONS
@@ -937,15 +1043,26 @@ async def check_for_combination_triggers(user_id: int, conversation_id: int) -> 
 async def apply_activity_effects(user_id: int, conversation_id: int, activity_name: str, 
                                intensity: float = 1.0) -> Dict[str, Any]:
     """
-    Apply stat changes based on a specific activity
-    Intensity multiplier can increase or decrease the effect
+    Apply stat changes based on a specific activity.
+    Now supports dynamic generation for unknown activities.
     """
-    if activity_name not in ACTIVITY_EFFECTS:
-        return {"success": False, "error": "Unknown activity"}
-        
-    # Get the base effects and scale by intensity
-    base_effects = ACTIVITY_EFFECTS[activity_name]
+    # Get effects (predefined or dynamically generated)
+    try:
+        base_effects = await get_or_generate_activity_effects(activity_name)
+    except Exception as e:
+        logger.error(f"Failed to get effects for '{activity_name}': {e}")
+        base_effects = {}  # Safe fallback
+    
+    # Scale by intensity
     scaled_effects = {stat: int(change * intensity) for stat, change in base_effects.items()}
+    
+    # Only apply if there are effects
+    if not scaled_effects:
+        return {
+            "success": True, 
+            "message": f"Activity '{activity_name}' completed with no stat changes",
+            "changes_applied": {}
+        }
     
     # Apply the changes
     return await apply_stat_change(
@@ -1522,6 +1639,43 @@ async def migrate_to_new_stat_system(user_id: int, conversation_id: int):
 # ============================
 # API ROUTES
 # ============================
+
+@stats_bp.route('/activity/test', methods=['POST'])
+async def test_activity_effects():
+    """Test endpoint for activity effects generation."""
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+    
+    data = await request.get_json() or {}
+    conversation_id = data.get("conversation_id")
+    activity_name = data.get("activity", "unknown")
+    intensity = data.get("intensity", 1.0)
+    
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id"}), 400
+    
+    # Get the effects that would be applied
+    effects = await get_or_generate_activity_effects(activity_name)
+    
+    # Actually apply them if requested
+    if data.get("apply", False):
+        result = await apply_activity_effects(
+            user_id, int(conversation_id), activity_name, intensity
+        )
+        return jsonify({
+            "activity": activity_name,
+            "base_effects": effects,
+            "scaled_effects": {k: int(v * intensity) for k, v in effects.items()},
+            "applied": result
+        }), 200
+    else:
+        return jsonify({
+            "activity": activity_name,
+            "base_effects": effects,
+            "scaled_effects": {k: int(v * intensity) for k, v in effects.items()},
+            "applied": False
+        }), 200
 
 @stats_bp.route('/player/<player_name>/visible', methods=['GET'])
 async def get_visible_stats_route(player_name):
