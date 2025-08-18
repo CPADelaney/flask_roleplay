@@ -1733,19 +1733,16 @@ async def narrate_daily_routine(
 ) -> str:
     """Narrate daily routine using the sophisticated narrator."""
     import json
+    from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 
-    # Helper for robust extraction from Runner.run(...) results
-    def _extract_text(resp) -> str:
+    def _safe_json_loads(s: str, fallback: dict) -> dict:
         try:
-            from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-            return extract_runner_response(resp)
+            data = json.loads(s)
+            if isinstance(data, dict):
+                return data
         except Exception:
-            # Fallbacks for different Runner/Agent return shapes
-            return (
-                getattr(resp, "output", None)
-                or getattr(resp, "content", None)
-                or ""
-            )
+            pass
+        return fallback
 
     app_ctx = _get_app_ctx(ctx)
 
@@ -1753,7 +1750,7 @@ async def narrate_daily_routine(
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
         app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
             app_ctx.user_id,
-            app_ctx.conversation_id,
+            app_ctx.conversation_id
         )
         await app_ctx.slice_of_life_narrator.initialize()
 
@@ -1761,7 +1758,6 @@ async def narrate_daily_routine(
     world_state = await _ensure_world_state_from_ctx(app_ctx)
     ws = world_state.model_dump() if world_state else {}
 
-    # Ask the routine narrator for STRICT JSON so downstream code can parse
     prompt = (
         "You are the Slice-of-Life Narrator for a subtle, power-dynamic-focused sim.\n"
         "Write a short routine scene and return STRICT JSON only. No prose outside JSON.\n\n"
@@ -1778,30 +1774,26 @@ async def narrate_daily_routine(
         "}\n"
     )
 
-    # ✅ Correct way to invoke the Agent
+    # ✅ Correct invocation
     resp = await Runner.run(narrator.routine_narrator, prompt)
-    raw = _extract_text(resp)
+    raw = extract_runner_response(resp)
 
-    # Try to parse JSON; if not valid, create a sane fallback
-    try:
-        data = json.loads(raw)
-        # Ensure required keys exist with defaults
-        data.setdefault("description", f"You go about {activity}...")
-        data.setdefault("tension_level", 2)
-        data.setdefault("emergent_opportunities", [])
-        data.setdefault("available_activities", [])
-        data.setdefault("nyx_one_liner", "")
-    except Exception:
-        data = {
-            "description": raw.strip() or f"You go about {activity}...",
-            "tension_level": 2,
-            "emergent_opportunities": [],
-            "available_activities": [],
-            "nyx_one_liner": "",
-        }
+    data = _safe_json_loads(raw, {
+        "description": (raw.strip() or f"You go about {activity}..."),
+        "tension_level": 2,
+        "emergent_opportunities": [],
+        "available_activities": [],
+        "nyx_one_liner": "",
+    })
+    # Ensure required keys exist
+    data.setdefault("description", f"You go about {activity}...")
+    data.setdefault("tension_level", 2)
+    data.setdefault("emergent_opportunities", [])
+    data.setdefault("available_activities", [])
+    data.setdefault("nyx_one_liner", "")
 
     return json.dumps(data, ensure_ascii=False)
-
+  
 @function_tool
 async def generate_ambient_narration(
     ctx: RunContextWrapper[NyxContext],
@@ -1809,8 +1801,13 @@ async def generate_ambient_narration(
     intensity: float = 0.5
 ) -> str:
     """Generate ambient world narration using the narrator."""
+    import json
+    from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+
+    intensity = max(0.0, min(1.0, float(intensity)))
+
     app_ctx = _get_app_ctx(ctx)
-    
+
     if not app_ctx.slice_of_life_narrator:
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
         app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
@@ -1818,29 +1815,32 @@ async def generate_ambient_narration(
             app_ctx.conversation_id
         )
         await app_ctx.slice_of_life_narrator.initialize()
-    
+
     narrator = app_ctx.slice_of_life_narrator
     world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
-    # Use the narrator's ambient narration tool
-    from agents import RunContextWrapper as NarratorWrapper
-    result = await narrator.scene_narrator.run(
-        messages=[{"role": "user", "content": f"Generate {focus} ambient narration"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": narrator.generate_ambient_narration,
-            "kwargs": {
-                "focus": focus,
-                "world_state": world_state.model_dump() if world_state else {},
-                "intensity": intensity
-            }
-        }]
+    ws = world_state.model_dump() if world_state else {}
+
+    engine = getattr(narrator, "ambient_narrator", None) or narrator.routine_narrator
+
+    prompt = (
+        "Generate one to two sentences of ambient narration reflecting the current world mood.\n"
+        "Return STRICT JSON only with keys: {\"ambient\":\"...\"}\n\n"
+        f"Focus: {focus}\n"
+        f"Intensity: {intensity}\n"
+        f"World State: {json.dumps(ws, ensure_ascii=False)}\n"
     )
-    
-    if result and hasattr(result, 'data'):
-        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
-    
-    return json.dumps({"description": "The world continues around you..."})
+
+    resp = await Runner.run(engine, prompt)
+    raw = extract_runner_response(resp)
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict) or "ambient" not in data:
+            raise ValueError("bad shape")
+    except Exception:
+        data = {"ambient": raw.strip() or "The air hums with a quiet, watchful tension."}
+
+    return json.dumps(data, ensure_ascii=False)
 
 @function_tool  
 async def detect_narrative_patterns(
