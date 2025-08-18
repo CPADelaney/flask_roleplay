@@ -3266,8 +3266,9 @@ async def narrate_slice_of_life_scene(
     
     # Build the scene event from payload
     from story_agent.world_simulation_models import (
-        SliceOfLifeEvent, ActivityType, NarrateSliceOfLifeInput
+        SliceOfLifeEvent, ActivityType
     )
+    from story_agent.slice_of_life_narrator import NarrateSliceOfLifeInput
     
     # Map scene_type to ActivityType
     activity_type_map = {
