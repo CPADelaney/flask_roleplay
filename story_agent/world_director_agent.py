@@ -214,6 +214,23 @@ from logic.conflict_system.conflict_synthesizer import (
     ConflictSynthesizer
 )
 
+from lore.core.canon import (
+    find_or_create_npc,
+    find_or_create_location,
+    find_or_create_event,
+    find_or_create_faction,
+    find_or_create_historical_event,
+    find_or_create_notable_figure,
+    log_canonical_event,
+    ensure_canonical_context,
+    update_entity_with_governance,
+    get_entity_by_id,
+    find_entity_by_name,
+    create_message,
+    update_current_roleplay
+)
+from lore.core.context import CanonicalContext
+
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
@@ -261,10 +278,13 @@ def get_canonical_context(ctx_obj) -> Any:
 
 @dataclass
 class CompleteWorldDirectorContext:
-    """Complete context with ALL system managers"""
+    """Complete context with ALL system managers INCLUDING canonical system"""
     user_id: int
     conversation_id: int
     player_name: str = "Chase"
+    
+    # ADD: Canonical context
+    canonical_context: Optional[CanonicalContext] = None
     
     # Core system managers
     openai_manager: Optional[Any] = None
@@ -309,10 +329,17 @@ class CompleteWorldDirectorContext:
     cache: Dict[str, Any] = field(default_factory=dict)
     
     async def initialize_everything(self):
-        """Initialize ALL integrated systems - nothing left out"""
+        """Initialize ALL integrated systems including canonical system"""
         logger.info(f"Initializing Complete World Director for user {self.user_id}")
         
         try:
+            # FIRST: Initialize canonical context
+            self.canonical_context = ensure_canonical_context({
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            })
+            logger.info("Initialized canonical context")
+        
             # Lazy load OpenAI manager
             chatgpt_funcs = _get_chatgpt_functions()
             OpenAIClientManager = chatgpt_funcs['OpenAIClientManager']
@@ -367,6 +394,17 @@ class CompleteWorldDirectorContext:
             self.current_world_state = await self._build_complete_world_state()
             
             logger.info("Complete World Director fully initialized with ALL systems")
+            
+            # Log initialization canonically
+            async with get_db_connection_context() as conn:
+                await log_canonical_event(
+                    self.canonical_context, conn,
+                    "Complete World Director initialized with ALL systems",
+                    tags=["initialization", "world_director", "all_systems"],
+                    significance=9
+                )
+            
+            logger.info("Complete World Director fully initialized with ALL systems INCLUDING canonical")
             
         except Exception as e:
             logger.error(f"Error initializing World Director: {e}", exc_info=True)
@@ -588,9 +626,10 @@ class CompleteWorldDirectorContext:
             return self._get_fallback_world_state()
     
     async def _get_complete_npc_data(self) -> List[Dict[str, Any]]:
-        """Get NPCs with ALL their data"""
+        """Get NPCs with ALL their data using canonical system for consistency"""
         try:
             async with get_db_connection_context() as conn:
+                # Get existing NPCs
                 npcs = await conn.fetch("""
                     SELECT npc_id, npc_name, dominance, cruelty, intensity,
                            personality_traits, current_location, monica_level
@@ -601,54 +640,84 @@ class CompleteWorldDirectorContext:
                 """, self.user_id, self.conversation_id)
             
             complete_npcs = []
-            for npc in npcs:
-                npc_dict = dict(npc)
-                
-                try:
-                    # Get mask data
-                    mask_data = await ProgressiveRevealManager.get_npc_mask(
-                        self.user_id, self.conversation_id, npc['npc_id']
-                    )
-                    npc_dict['mask'] = mask_data
-                except Exception as e:
-                    logger.warning(f"Could not get mask for NPC {npc['npc_id']}: {e}")
-                    npc_dict['mask'] = {}
-                
-                try:
-                    # Get narrative stage
-                    stage = await get_npc_narrative_stage(
-                        self.user_id, self.conversation_id, npc['npc_id']
-                    )
-                    npc_dict['narrative_stage'] = stage.name if hasattr(stage, 'name') else str(stage)
-                except Exception as e:
-                    logger.warning(f"Could not get narrative stage for NPC {npc['npc_id']}: {e}")
-                    npc_dict['narrative_stage'] = 'unknown'
-                
-                try:
-                    # Check for revelations
-                    revelation = await check_for_npc_revelation(
-                        self.user_id, self.conversation_id, npc['npc_id']
-                    )
-                    npc_dict['pending_revelation'] = revelation
-                except Exception as e:
-                    logger.warning(f"Could not check revelations for NPC {npc['npc_id']}: {e}")
-                    npc_dict['pending_revelation'] = None
-                
-                try:
-                    # Get relationship state
-                    rel_state = await self.relationship_manager.get_relationship_state(
-                        'npc', npc['npc_id'], 'player', 1
-                    )
-                    npc_dict['relationship'] = {
-                        'dimensions': rel_state.dimensions.__dict__ if hasattr(rel_state.dimensions, '__dict__') else {},
-                        'archetype': rel_state.archetype if hasattr(rel_state, 'archetype') else 'unknown',
-                        'patterns': list(rel_state.history.active_patterns) if hasattr(rel_state, 'history') else []
-                    }
-                except Exception as e:
-                    logger.warning(f"Could not get relationship for NPC {npc['npc_id']}: {e}")
-                    npc_dict['relationship'] = {'dimensions': {}, 'archetype': 'unknown', 'patterns': []}
-                
-                complete_npcs.append(npc_dict)
+            
+            async with get_db_connection_context() as conn:
+                for npc in npcs:
+                    npc_dict = dict(npc)
+                    
+                    try:
+                        # Ensure NPC exists canonically (handles semantic deduplication)
+                        canonical_npc_id = await find_or_create_npc(
+                            self.canonical_context, conn,
+                            npc_name=npc['npc_name'],
+                            role=npc.get('personality_traits', ''),
+                            affiliations=[]
+                        )
+                        
+                        # Log if there was a mismatch (indicates deduplication occurred)
+                        if canonical_npc_id != npc['npc_id']:
+                            await log_canonical_event(
+                                self.canonical_context, conn,
+                                f"NPC {npc['npc_name']} canonically resolved from ID {npc['npc_id']} to {canonical_npc_id}",
+                                tags=["npc", "deduplication", "canonical_resolution"],
+                                significance=6
+                            )
+                            npc_dict['canonical_id'] = canonical_npc_id
+                            npc_dict['was_deduplicated'] = True
+                        else:
+                            npc_dict['canonical_id'] = canonical_npc_id
+                            npc_dict['was_deduplicated'] = False
+                        
+                    except Exception as e:
+                        logger.warning(f"Could not canonically resolve NPC {npc['npc_id']}: {e}")
+                        npc_dict['canonical_id'] = npc['npc_id']
+                        npc_dict['was_deduplicated'] = False
+                    
+                    try:
+                        # Get mask data (existing logic)
+                        mask_data = await ProgressiveRevealManager.get_npc_mask(
+                            self.user_id, self.conversation_id, npc['npc_id']
+                        )
+                        npc_dict['mask'] = mask_data
+                    except Exception as e:
+                        logger.warning(f"Could not get mask for NPC {npc['npc_id']}: {e}")
+                        npc_dict['mask'] = {}
+                    
+                    try:
+                        # Get narrative stage (existing logic)
+                        stage = await get_npc_narrative_stage(
+                            self.user_id, self.conversation_id, npc['npc_id']
+                        )
+                        npc_dict['narrative_stage'] = stage.name if hasattr(stage, 'name') else str(stage)
+                    except Exception as e:
+                        logger.warning(f"Could not get narrative stage for NPC {npc['npc_id']}: {e}")
+                        npc_dict['narrative_stage'] = 'unknown'
+                    
+                    try:
+                        # Check for revelations (existing logic)
+                        revelation = await check_for_npc_revelation(
+                            self.user_id, self.conversation_id, npc['npc_id']
+                        )
+                        npc_dict['pending_revelation'] = revelation
+                    except Exception as e:
+                        logger.warning(f"Could not check revelations for NPC {npc['npc_id']}: {e}")
+                        npc_dict['pending_revelation'] = None
+                    
+                    try:
+                        # Get relationship state (existing logic)
+                        rel_state = await self.relationship_manager.get_relationship_state(
+                            'npc', npc['npc_id'], 'player', 1
+                        )
+                        npc_dict['relationship'] = {
+                            'dimensions': rel_state.dimensions.__dict__ if hasattr(rel_state.dimensions, '__dict__') else {},
+                            'archetype': rel_state.archetype if hasattr(rel_state, 'archetype') else 'unknown',
+                            'patterns': list(rel_state.history.active_patterns) if hasattr(rel_state, 'history') else []
+                        }
+                    except Exception as e:
+                        logger.warning(f"Could not get relationship for NPC {npc['npc_id']}: {e}")
+                        npc_dict['relationship'] = {'dimensions': {}, 'archetype': 'unknown', 'patterns': []}
+                    
+                    complete_npcs.append(npc_dict)
             
             return complete_npcs
             
@@ -985,7 +1054,7 @@ class CompleteWorldDirectorContext:
 async def generate_complete_slice_of_life_event(
     ctx: RunContextWrapper[CompleteWorldDirectorContext]
 ) -> Dict[str, Any]:
-    """Generate event considering ALL systems including conflicts"""
+    """Generate event considering ALL systems with canonical consistency"""
     context = ctx.context
     world_state = context.current_world_state
     
@@ -993,7 +1062,6 @@ async def generate_complete_slice_of_life_event(
     chatgpt_funcs = _get_chatgpt_functions()
     get_chatgpt_response = chatgpt_funcs['get_chatgpt_response']
     create_semantic_abstraction = chatgpt_funcs['create_semantic_abstraction']
-    
     
     try:
         # NEW: Check for conflict-driven events
@@ -1014,22 +1082,64 @@ async def generate_complete_slice_of_life_event(
                 
                 conflict_result = await context.conflict_synthesizer.process_scene(scene_context)
                 
-                # If conflicts manifest, prioritize that
+                # If conflicts manifest, store canonically and prioritize
                 if conflict_result.get('manifestations'):
+                    async with get_db_connection_context() as conn:
+                        # Store conflict manifestation as canonical event
+                        conflict_event_id = await find_or_create_event(
+                            context.canonical_context, conn,
+                            event_name="Tensions Surface",
+                            description=conflict_result['manifestations'][0],
+                            event_type="conflict_manifestation",
+                            location=world_state.location_data.get('current_location', 'unknown'),
+                            year=world_state.current_time.year,
+                            month=world_state.current_time.month,
+                            day=world_state.current_time.day
+                        )
+                        
+                        await log_canonical_event(
+                            context.canonical_context, conn,
+                            f"Conflict manifestation detected: {conflict_result['manifestations'][0][:100]}",
+                            tags=["conflict", "manifestation", "generated_event"],
+                            significance=8
+                        )
+                    
                     return {
                         "event_type": "conflict_manifestation",
                         "title": "Tensions Surface",
-                        "description": conflict_result['manifestations'][0] if conflict_result['manifestations'] else "Underlying tensions become apparent",
+                        "description": conflict_result['manifestations'][0],
                         "conflicts_active": True,
                         "conflict_data": conflict_result,
                         "choices": conflict_result.get('player_choices', []),
-                        "npc_behaviors": conflict_result.get('npc_behaviors', {})
+                        "npc_behaviors": conflict_result.get('npc_behaviors', {}),
+                        "canonical_event_id": conflict_event_id
                     }
         
-        # 1. Check for addiction cravings
+        # 1. Check for addiction cravings (existing logic)
         if world_state.active_cravings:
             craving = world_state.active_cravings[0]
-            return await generate_addiction_craving_event(ctx, craving)
+            craving_event = await generate_addiction_craving_event(ctx, craving)
+            
+            # Store canonically
+            async with get_db_connection_context() as conn:
+                event_id = await find_or_create_event(
+                    context.canonical_context, conn,
+                    event_name=craving_event.get('title', 'Craving Event'),
+                    description=craving_event.get('description', ''),
+                    event_type="addiction_craving",
+                    location=world_state.location_data.get('current_location', 'unknown')
+                )
+                
+                await log_canonical_event(
+                    context.canonical_context, conn,
+                    f"Addiction craving event triggered: {craving['addiction_type']}",
+                    tags=["addiction", "craving", "generated_event"],
+                    significance=7
+                )
+                
+                craving_event['canonical_event_id'] = event_id
+            
+            return craving_event
         
         # 2. Check for pending dreams
         if world_state.world_mood == WorldMood.DREAMLIKE or random.random() < 0.05:
@@ -1037,13 +1147,55 @@ async def generate_complete_slice_of_life_event(
                 context.user_id, context.conversation_id
             )
             if dream_result:
-                return await generate_dream_event(ctx, dream_result)
+                dream_event = await generate_dream_event(ctx, dream_result)
+                
+                # Store canonically
+                async with get_db_connection_context() as conn:
+                    event_id = await find_or_create_event(
+                        context.canonical_context, conn,
+                        event_name=dream_event.get('title', 'Dream Sequence'),
+                        description=dream_event.get('description', ''),
+                        event_type="dream",
+                        location="dream_realm"
+                    )
+                    
+                    await log_canonical_event(
+                        context.canonical_context, conn,
+                        f"Dream sequence generated: {dream_event.get('title', 'Dream')}",
+                        tags=["dream", "subconscious", "generated_event"],
+                        significance=6
+                    )
+                    
+                    dream_event['canonical_event_id'] = event_id
+                
+                return dream_event
         
         # 3. Check for revelations
         if world_state.recent_revelations:
-            return await generate_revelation_event(ctx, world_state.recent_revelations[0])
+            revelation_event = await generate_revelation_event(ctx, world_state.recent_revelations[0])
+            
+            # Store canonically
+            async with get_db_connection_context() as conn:
+                event_id = await find_or_create_event(
+                    context.canonical_context, conn,
+                    event_name=revelation_event.get('title', 'Revelation'),
+                    description=revelation_event.get('description', ''),
+                    event_type="revelation",
+                    location=world_state.location_data.get('current_location', 'unknown')
+                )
+                
+                await log_canonical_event(
+                    context.canonical_context, conn,
+                    f"Personal revelation event: {revelation_event.get('title', 'Revelation')}",
+                    tags=["revelation", "personal", "generated_event"],
+                    significance=8
+                )
+                
+                revelation_event['canonical_event_id'] = event_id
+            
+            return revelation_event
         
-        # Build comprehensive context
+        # Build comprehensive context (existing logic)
         event_context = {
             "time": world_state.current_time.to_dict() if hasattr(world_state.current_time, 'to_dict') else {},
             "calendar": world_state.calendar_names,
@@ -1062,20 +1214,21 @@ async def generate_complete_slice_of_life_event(
                     "dominance": npc.get('dominance', 0),
                     "stage": npc.get('narrative_stage', 'unknown'),
                     "mask_integrity": npc.get('mask', {}).get('integrity', 100),
-                    "relationship": npc.get('relationship', {})
+                    "relationship": npc.get('relationship', {}),
+                    "canonical_id": npc.get('canonical_id', npc.get('npc_id'))  # NEW
                 }
                 for npc in world_state.active_npcs[:3]
             ],
             "addiction_status": world_state.addiction_status,
             "inventory_highlights": [
                 item for item in world_state.player_inventory[:5]
-                if item.get('item_effect')  # Items with effects
+                if item.get('item_effect')
             ],
             "location": world_state.location_data,
             "currency": world_state.currency_system.get('name', 'money')
         }
         
-        # Generate using ChatGPT with reflection
+        # Generate using ChatGPT with reflection (existing logic)
         aggregator_text = f"World Context:\n{json.dumps(event_context, indent=2, default=str)}"
         
         prompt = """Generate a dynamic slice-of-life event that emerges from the current world state.
@@ -1087,6 +1240,7 @@ Create an event that:
 4. Includes subtle power dynamics appropriate to corruption level
 5. Provides meaningful choices with hidden consequences
 6. Uses inventory items or currency if relevant
+7. Maintains narrative consistency with established canon
 
 Output as JSON with complete detail for emergent gameplay."""
 
@@ -1098,12 +1252,11 @@ Output as JSON with complete detail for emergent gameplay."""
             use_nyx_integration=True
         )
         
-        # Parse response
+        # Parse response (existing logic)
         event_data = {}
         if response.get('type') == 'function_call':
             event_data = response.get('function_args', {})
         else:
-            # Parse text response
             try:
                 response_text = response.get('response', '{}')
                 event_data = json.loads(response_text)
@@ -1115,7 +1268,59 @@ Output as JSON with complete detail for emergent gameplay."""
                     "description": response.get('response', 'Time passes quietly.')
                 }
         
-        # Process through universal updater if narrative exists
+        # Store canonically
+        async with get_db_connection_context() as conn:
+            # Ensure location exists canonically
+            if world_state.location_data:
+                location_name = await find_or_create_location(
+                    context.canonical_context, conn,
+                    location_name=world_state.location_data.get('current_location', 'Unknown Location'),
+                    description=world_state.location_data.get('description', 'A place in the world'),
+                    location_type=world_state.location_data.get('type', 'general')
+                )
+            else:
+                location_name = 'Unknown Location'
+            
+            # Store event canonically
+            event_id = await find_or_create_event(
+                context.canonical_context, conn,
+                event_name=event_data.get('title', 'Generated Event'),
+                description=event_data.get('description', ''),
+                event_type=event_data.get('event_type', 'slice_of_life'),
+                location=location_name,
+                year=world_state.current_time.year,
+                month=world_state.current_time.month,
+                day=world_state.current_time.day
+            )
+            
+            # Log canonically
+            await log_canonical_event(
+                context.canonical_context, conn,
+                f"Generated slice-of-life event: {event_data.get('title', 'Event')}",
+                tags=["event", "generated", "slice_of_life", event_data.get('event_type', 'unknown')],
+                significance=7
+            )
+            
+            # Handle any NPCs involved canonically
+            for npc_data in event_data.get('npcs_involved', []):
+                npc_id = await find_or_create_npc(
+                    context.canonical_context, conn,
+                    npc_name=npc_data.get('name', 'Unknown'),
+                    role=npc_data.get('role', 'participant'),
+                    affiliations=npc_data.get('affiliations', [])
+                )
+                
+                await log_canonical_event(
+                    context.canonical_context, conn,
+                    f"NPC {npc_data.get('name', 'Unknown')} involved in event {event_data.get('title', 'Event')}",
+                    tags=["npc", "event_participation"],
+                    significance=5
+                )
+            
+            event_data['canonical_event_id'] = event_id
+            event_data['canonical_location'] = location_name
+        
+        # Process through universal updater if narrative exists (existing logic)
         if event_data.get('narrative'):
             try:
                 update_result = await process_universal_update(
@@ -1126,7 +1331,7 @@ Output as JSON with complete detail for emergent gameplay."""
             except Exception as e:
                 logger.error(f"Error processing universal update: {e}")
         
-        # Store in memory with semantic abstraction
+        # Store in memory with semantic abstraction (existing logic)
         memory_text = f"Event: {event_data.get('title', 'Unnamed event')}"
         
         try:
@@ -1138,7 +1343,7 @@ Output as JSON with complete detail for emergent gameplay."""
                 memory_text=memory_text,
                 memory_type=MemoryType.INTERACTION,
                 significance=MemorySignificance.MEDIUM,
-                tags=["event", event_data.get('event_type', 'unknown')]
+                tags=["event", event_data.get('event_type', 'unknown'), "canonical"]
             )
             
             if world_state.semantic_abstractions is not None:
@@ -1384,6 +1589,7 @@ Output as JSON with introspective narrative."""
         }
 
 @function_tool
+@function_tool
 async def process_complete_player_choice(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
     choice_data: ChoiceData
@@ -1397,16 +1603,94 @@ async def process_complete_player_choice(
     generate_text_completion = chatgpt_funcs['generate_text_completion']
 
     try:
-        # NEW: Check if choice affects conflicts
+        # Import canon functions
+        from lore.core.canon import (
+            ensure_canonical_context,
+            find_or_create_event,
+            log_canonical_event,
+            find_or_create_location,
+            update_current_roleplay,
+            create_journal_entry,
+            find_or_create_npc,
+            find_or_create_social_link
+        )
+        
+        # Ensure canonical context exists
+        if not hasattr(context, 'canonical_context'):
+            context.canonical_context = ensure_canonical_context({
+                'user_id': context.user_id,
+                'conversation_id': context.conversation_id
+            })
+        
+        # Store choice canonically first
+        async with get_db_connection_context() as conn:
+            # Get current location
+            current_location = "unknown"
+            if context.current_world_state and context.current_world_state.location_data:
+                if isinstance(context.current_world_state.location_data, dict):
+                    current_location = context.current_world_state.location_data.get('current_location', 'unknown')
+                elif isinstance(context.current_world_state.location_data, str):
+                    current_location = context.current_world_state.location_data
+            
+            # Ensure location exists canonically
+            canonical_location = await find_or_create_location(
+                context.canonical_context, conn,
+                location_name=current_location,
+                description=f"The location where the choice was made",
+                location_type="decision_point"
+            )
+            
+            # Create canonical event for the choice
+            choice_event_id = await find_or_create_event(
+                context.canonical_context, conn,
+                event_name=f"Player Choice: {choice_data.text[:50]}{'...' if len(choice_data.text) > 50 else ''}",
+                description=f"Player chose: {choice_data.text}",
+                location=canonical_location,
+                year=context.current_world_state.current_time.get('year', 1) if context.current_world_state else 1,
+                month=context.current_world_state.current_time.get('month', 1) if context.current_world_state else 1,
+                day=context.current_world_state.current_time.get('day', 1) if context.current_world_state else 1,
+                time_of_day=str(context.current_world_state.current_time.get('time_of_day', 'Unknown')) if context.current_world_state else 'Unknown'
+            )
+            
+            await log_canonical_event(
+                context.canonical_context, conn,
+                f"Player choice processed: {choice_data.text[:100]}",
+                tags=["choice", "player_action", "processed", f"location_{canonical_location}"],
+                significance=6
+            )
+            
+            # If choice involves an NPC, ensure they exist canonically
+            if choice_data.npc_id:
+                npc_name = f"NPC_{choice_data.npc_id}"
+                for npc in (context.current_world_state.active_npcs if context.current_world_state else []):
+                    if npc.get('npc_id') == choice_data.npc_id:
+                        npc_name = npc.get('npc_name', npc_name)
+                        break
+                
+                canonical_npc_id = await find_or_create_npc(
+                    context.canonical_context, conn,
+                    npc_name=npc_name,
+                    role="interaction_partner"
+                )
+                
+                # Create/update social link
+                await find_or_create_social_link(
+                    context.canonical_context, conn,
+                    entity1_type='player',
+                    entity1_id=context.user_id,
+                    entity2_type='npc',
+                    entity2_id=canonical_npc_id,
+                    link_type='interactive'
+                )
+        
+        # Check if choice affects conflicts
         if context.conflict_synthesizer and choice_data.npc_id:
-            # Check if this NPC is involved in any conflicts
             conflict_state = await context.conflict_synthesizer.get_system_state()
             
             for conflict in conflict_state.get('active_conflicts', []):
                 if isinstance(conflict, dict):
                     participants = conflict.get('participants', [])
                     if choice_data.npc_id in participants:
-                        # This choice might affect the conflict
                         scene_context = {
                             "scene_type": "player_choice",
                             "participants": [choice_data.npc_id],
@@ -1420,7 +1704,17 @@ async def process_complete_player_choice(
                             results.effects.append(kvlist_from_obj({
                                 "conflict_impact": conflict_result['state_changes']
                             }))
-        # 1) Stats
+                            
+                            # Log conflict impact canonically
+                            async with get_db_connection_context() as conn:
+                                await log_canonical_event(
+                                    context.canonical_context, conn,
+                                    f"Choice affected conflict {conflict.get('id', 'unknown')}: {conflict_result.get('summary', 'impact')}",
+                                    tags=["choice", "conflict_impact", "player_action"],
+                                    significance=7
+                                )
+
+        # 1) Stats processing with canonical logging
         if choice_data.stat_impacts:
             try:
                 stat_result = await apply_stat_changes(
@@ -1430,17 +1724,38 @@ async def process_complete_player_choice(
                 )
                 results.stat_changes = kvlist_from_obj(stat_result)
 
+                # Log significant stat changes canonically
+                async with get_db_connection_context() as conn:
+                    for stat_name, change in kvdict(choice_data.stat_impacts).items():
+                        if abs(change) >= 10:  # Significant change
+                            await log_canonical_event(
+                                context.canonical_context, conn,
+                                f"Significant stat change from choice: {stat_name} {change:+d}",
+                                tags=["stats", "significant_change", "choice_impact", stat_name],
+                                significance=7
+                            )
+
                 new_hidden_stats = await get_player_hidden_stats(
                     context.user_id, context.conversation_id, context.player_name
                 )
                 new_thresholds = context._check_stat_thresholds(new_hidden_stats)
                 if new_thresholds != context.current_world_state.stat_thresholds_active:
                     results.new_thresholds = kvlist_from_obj(new_thresholds)
+                    
+                    # Log threshold changes canonically
+                    async with get_db_connection_context() as conn:
+                        await log_canonical_event(
+                            context.canonical_context, conn,
+                            f"New stat thresholds triggered from choice: {list(new_thresholds.keys())}",
+                            tags=["stats", "thresholds", "choice_triggered"],
+                            significance=8
+                        )
+                        
             except Exception as e:
                 logger.error(f"Error applying stat changes: {e}")
                 results.effects.append(kvlist_from_obj({"error": f"Stat change failed: {e}"}))
 
-        # 2) Addiction
+        # 2) Addiction processing with canonical logging
         if choice_data.addiction_impacts:
             for item in choice_data.addiction_impacts:
                 try:
@@ -1450,11 +1765,22 @@ async def process_complete_player_choice(
                         choice_data.npc_id
                     )
                     results.effects.append(kvlist_from_obj(addiction_result))
+                    
+                    # Log addiction changes canonically
+                    if addiction_result.get('level_changed'):
+                        async with get_db_connection_context() as conn:
+                            await log_canonical_event(
+                                context.canonical_context, conn,
+                                f"Addiction level changed: {item.key} to level {addiction_result.get('new_level', 'unknown')}",
+                                tags=["addiction", "level_change", item.key],
+                                significance=8
+                            )
+                    
                 except Exception as e:
                     logger.error(f"Error processing addiction impact: {e}")
                     results.effects.append(kvlist_from_obj({"error": f"Addiction update failed: {e}"}))
 
-        # 3) Relationships
+        # 3) Relationships processing with canonical logging
         if choice_data.relationship_impacts:
             for ri in choice_data.relationship_impacts:
                 try:
@@ -1481,6 +1807,18 @@ async def process_complete_player_choice(
                         results.effects.append(kvlist_from_obj(interaction_result))
 
                         impacts_dict = kvdict(ri.impacts)
+                        
+                        # Log significant relationship changes
+                        if abs(impacts_dict.get('trust', 0)) > 5 or abs(impacts_dict.get('submission', 0)) > 5:
+                            async with get_db_connection_context() as conn:
+                                await log_canonical_event(
+                                    context.canonical_context, conn,
+                                    f"Significant relationship change with {ri.npc_name} from choice",
+                                    tags=["relationship", "significant_change", f"npc_{npc_id}"],
+                                    significance=7
+                                )
+                        
+                        # Check for narrative stage progression
                         if impacts_dict.get('trust', 0) > 5 or impacts_dict.get('submission', 0) > 5:
                             progression = await progress_npc_narrative_stage(
                                 context.user_id, context.conversation_id, npc_id,
@@ -1490,17 +1828,25 @@ async def process_complete_player_choice(
                             )
                             if progression.get('stage_changed'):
                                 results.npc_stage_change = kvlist_from_obj(progression)
+                                
+                                # Log stage change canonically
+                                async with get_db_connection_context() as conn:
+                                    await log_canonical_event(
+                                        context.canonical_context, conn,
+                                        f"NPC {ri.npc_name} progressed to stage: {progression.get('new_stage', 'unknown')}",
+                                        tags=["npc_progression", "stage_change", f"npc_{npc_id}"],
+                                        significance=9
+                                    )
+                                
                 except Exception as e:
                     logger.error(f"Error processing relationship impact: {e}")
                     results.effects.append(kvlist_from_obj({"error": f"Relationship update failed: {e}"}))
 
-        # 4) Activity
+        # 4) Activity processing
         if choice_data.activity_type:
             try:
-                # Import the new processor
                 from logic.stats_logic import process_world_activity
                 
-                # Process activity with dynamic effects
                 activity_result = await process_world_activity(
                     context.user_id,
                     context.conversation_id,
@@ -1512,7 +1858,6 @@ async def process_complete_player_choice(
                 
                 results.activity_result = kvlist_from_obj(activity_result)
                 
-                # Add effects to the results
                 if activity_result.get("effects"):
                     results.effects.append(kvlist_from_obj({
                         "activity_effects": activity_result["effects"]
@@ -1522,23 +1867,33 @@ async def process_complete_player_choice(
                 logger.error(f"Error processing activity: {e}")
                 results.effects.append(kvlist_from_obj({"error": f"Activity processing failed: {e}"}))
 
-        # 5) Rules
+        # 5) Rules processing with canonical logging
         try:
             triggered_rules = await enforce_all_rules_on_player(context.player_name)
             if triggered_rules:
                 results.triggered_rules = [kvlist_from_obj(r) for r in triggered_rules]
-                for rule in triggered_rules:
-                    try:
-                        effect_result = await apply_effect(
-                            rule['effect'], context.player_name, npc_id=choice_data.npc_id
+                
+                # Log triggered rules canonically
+                async with get_db_connection_context() as conn:
+                    for rule in triggered_rules:
+                        await log_canonical_event(
+                            context.canonical_context, conn,
+                            f"Rule triggered from choice: {rule.get('rule_name', 'unknown')}",
+                            tags=["rules", "triggered", rule.get('rule_name', 'unknown')],
+                            significance=6
                         )
-                        results.effects.append(kvlist_from_obj(effect_result))
-                    except Exception as e:
-                        logger.error(f"Error applying rule effect: {e}")
+                        
+                        try:
+                            effect_result = await apply_effect(
+                                rule['effect'], context.player_name, npc_id=choice_data.npc_id
+                            )
+                            results.effects.append(kvlist_from_obj(effect_result))
+                        except Exception as e:
+                            logger.error(f"Error applying rule effect: {e}")
         except Exception as e:
             logger.error(f"Error checking rules: {e}")
 
-        # 6) Inventory
+        # 6) Inventory processing with canonical logging
         for change in choice_data.inventory_changes:
             try:
                 if change.action == 'add':
@@ -1547,17 +1902,36 @@ async def process_complete_player_choice(
                         context.player_name, change.item_name,
                         change.description, change.effect
                     )
+                    
+                    # Log item acquisition canonically
+                    async with get_db_connection_context() as conn:
+                        await log_canonical_event(
+                            context.canonical_context, conn,
+                            f"Item acquired from choice: {change.item_name}",
+                            tags=["inventory", "item_acquired", change.item_name],
+                            significance=5
+                        )
                 else:
                     inv_result = await remove_item(
                         context.user_id, context.conversation_id,
                         context.player_name, change.item_name
                     )
+                    
+                    # Log item removal canonically
+                    async with get_db_connection_context() as conn:
+                        await log_canonical_event(
+                            context.canonical_context, conn,
+                            f"Item removed from choice: {change.item_name}",
+                            tags=["inventory", "item_removed", change.item_name],
+                            significance=5
+                        )
+                        
                 results.effects.append(kvlist_from_obj(inv_result))
             except Exception as e:
                 logger.error(f"Error with inventory change: {e}")
                 results.effects.append(kvlist_from_obj({"error": f"Inventory change failed: {e}"}))
 
-        # 7) Currency
+        # 7) Currency processing
         if choice_data.currency_change is not None:
             try:
                 amount = choice_data.currency_change
@@ -1567,6 +1941,17 @@ async def process_complete_player_choice(
                     "change": formatted,
                     "new_balance": context.current_world_state.player_money
                 })
+                
+                # Log currency change canonically
+                if abs(amount) > 0:
+                    async with get_db_connection_context() as conn:
+                        await log_canonical_event(
+                            context.canonical_context, conn,
+                            f"Currency changed from choice: {'+' if amount > 0 else ''}{formatted}",
+                            tags=["currency", "transaction", "choice_result"],
+                            significance=5
+                        )
+                        
             except Exception as e:
                 logger.error(f"Error processing currency: {e}")
 
@@ -1581,7 +1966,7 @@ async def process_complete_player_choice(
             except Exception as e:
                 logger.error(f"Error updating hunger: {e}")
 
-        # 9) Memory + preference analysis
+        # 9) Memory + preference analysis with canonical storage
         memory_text = f"Choice: {choice_data.text or 'Unknown choice'}"
         try:
             preferences = await analyze_preferences(memory_text)
@@ -1592,13 +1977,27 @@ async def process_complete_player_choice(
                 memory_type=MemoryType.INTERACTION,
                 significance=MemorySignificance.HIGH if results.triggered_rules else MemorySignificance.MEDIUM,
                 emotional_valence=choice_data.emotional_valence or 0.0,
-                tags=["player_choice"] + list(preferences.get('explicit_preferences', []))
+                tags=["player_choice", "canonical"] + list(preferences.get('explicit_preferences', []))
             )
             results.preferences_detected = kvlist_from_obj(preferences)
+            
+            # Store preferences canonically
+            if preferences.get('explicit_preferences'):
+                async with get_db_connection_context() as conn:
+                    await update_current_roleplay(
+                        context.canonical_context, conn,
+                        'PlayerPreferenceHistory',
+                        json.dumps({
+                            'timestamp': datetime.now(timezone.utc).isoformat(),
+                            'preferences': list(preferences['explicit_preferences']),
+                            'from_choice': choice_data.text
+                        })
+                    )
+                    
         except Exception as e:
             logger.error(f"Error storing memory: {e}")
 
-        # 10) Narrative
+        # 10) Generate narrative
         narrative_prompt = f"""Generate a narrative response to the player's choice.
 
 Choice: {choice_data.text}
@@ -1611,24 +2010,93 @@ Create a seamless narrative that:
 4. Incorporates NPC reactions if relevant
 5. Sets up the next moment
 6. Maintains the current mood
+7. Stays consistent with established world canon
 
 Keep it atmospheric with rich subtext."""
+        
         try:
             narrative = await generate_text_completion(
-                system_prompt="You are weaving game mechanics into natural narrative flow.",
+                system_prompt="You are weaving game mechanics into natural narrative flow while maintaining canonical consistency.",
                 user_prompt=narrative_prompt,
-                temperature=0.7,
-                max_tokens=200
+                model='gpt-5-nano',
             )
             results.narrative = narrative
         except Exception as e:
             logger.error(f"Error generating narrative: {e}")
             results.narrative = "Your choice has been made."
 
+        # Create journal entry from player's perspective
+        async with get_db_connection_context() as conn:
+            journal_text = f"I chose: {choice_data.text}"
+            if results.narrative:
+                journal_text += f"\n\n{results.narrative[:300]}"
+            
+            journal_id = await create_journal_entry(
+                context.canonical_context, conn,
+                entry_type="choice",
+                entry_text=journal_text,
+                narrative_moment=bool(results.npc_stage_change or results.triggered_rules),
+                intensity_level=7 if results.triggered_rules else 5,
+                entry_metadata={
+                    "choice": choice_data.text,
+                    "location": canonical_location,
+                    "stat_changes": kvdict(choice_data.stat_impacts) if choice_data.stat_impacts else {},
+                    "rules_triggered": len(results.triggered_rules) if results.triggered_rules else 0,
+                    "preferences": preferences.get('explicit_preferences', []) if 'preferences' in locals() else []
+                },
+                importance=0.8 if results.triggered_rules else 0.6,
+                tags=["player_choice", "decision"] + (["rules_triggered"] if results.triggered_rules else [])
+            )
+
+        # Store final result canonically
+        async with get_db_connection_context() as conn:
+            await update_current_roleplay(
+                context.canonical_context, conn,
+                'LastPlayerChoice', 
+                json.dumps({
+                    'choice': choice_data.text,
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'event_id': choice_event_id,
+                    'journal_id': journal_id if 'journal_id' in locals() else None,
+                    'effects_summary': {
+                        'stats_changed': bool(choice_data.stat_impacts),
+                        'rules_triggered': len(results.triggered_rules) if results.triggered_rules else 0,
+                        'relationships_affected': len(choice_data.relationship_impacts) if choice_data.relationship_impacts else 0,
+                        'inventory_changed': len(choice_data.inventory_changes) > 0
+                    }
+                })
+            )
+
+        results.canonical_event_id = choice_event_id
+        results.journal_id = journal_id if 'journal_id' in locals() else None
+        
         return results
 
     except Exception as e:
         logger.error(f"Error processing player choice: {e}", exc_info=True)
+        
+        # Try to log the error canonically
+        try:
+            from lore.core.canon import ensure_canonical_context, log_canonical_event
+            
+            if not hasattr(context, 'canonical_context'):
+                canonical_ctx = ensure_canonical_context({
+                    'user_id': context.user_id,
+                    'conversation_id': context.conversation_id
+                })
+            else:
+                canonical_ctx = context.canonical_context
+            
+            async with get_db_connection_context() as conn:
+                await log_canonical_event(
+                    canonical_ctx, conn,
+                    f"Error processing player choice: {str(e)[:100]}",
+                    tags=["error", "choice", "processing_failed"],
+                    significance=4
+                )
+        except:
+            pass  # Don't let canonical logging errors cascade
+        
         return ChoiceProcessingResult(
             success=False,
             error=str(e),
@@ -1905,7 +2373,7 @@ class CompleteWorldDirector:
                 raise
     
     async def generate_next_moment(self) -> Dict[str, Any]:
-        """Generate next moment using ALL systems"""
+        """Generate next moment using ALL systems with canonical consistency"""
         try:
             await self.initialize()
             
@@ -1920,15 +2388,37 @@ class CompleteWorldDirector:
                 RunContextWrapper(self.context)
             )
             
+            # Store moment generation canonically
+            async with get_db_connection_context() as conn:
+                await log_canonical_event(
+                    self.context.canonical_context, conn,
+                    "Generating next world moment with full system integration",
+                    tags=["moment", "generation", "world_director"],
+                    significance=5
+                )
+            
             # Let agent orchestrate
             prompt = self._build_moment_prompt(patterns)
             
             result = await Runner.run(self.agent, prompt, context=self.context)
             
+            # Store result canonically
+            moment_content = result.messages[-1].content if result and result.messages else None
+            if moment_content:
+                async with get_db_connection_context() as conn:
+                    moment_event_id = await find_or_create_event(
+                        self.context.canonical_context, conn,
+                        event_name="Generated World Moment",
+                        description=moment_content[:200] + "..." if len(moment_content) > 200 else moment_content,
+                        event_type="world_moment",
+                        location=self.context.current_world_state.location_data.get('current_location', 'unknown')
+                    )
+            
             return {
-                "moment": result.messages[-1].content if result and result.messages else None,
+                "moment": moment_content,
                 "world_state": self.context.current_world_state.model_dump() if self.context.current_world_state else {},
-                "patterns": patterns
+                "patterns": patterns,
+                "canonical_moment_id": moment_event_id if moment_content else None
             }
             
         except Exception as e:
@@ -1957,35 +2447,117 @@ class CompleteWorldDirector:
     """  # <-- this line was missing
         
     async def process_player_action(self, action: str) -> Dict[str, Any]:
-        """Process player action through ALL systems"""
+        """Process player action through ALL systems with canonical tracking"""
         try:
             await self.initialize()
             
             if not self.context:
                 return {"error": "Context not initialized"}
             
+            # Import canon functions
+            from lore.core.canon import (
+                ensure_canonical_context,
+                find_or_create_event,
+                log_canonical_event,
+                create_journal_entry,
+                find_or_create_location,
+                update_current_roleplay
+            )
+            
+            # Ensure canonical context exists
+            if not hasattr(self.context, 'canonical_context'):
+                self.context.canonical_context = ensure_canonical_context({
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id
+                })
+            
+            # Store action canonically first
+            async with get_db_connection_context() as conn:
+                # Get current location
+                current_location = "unknown"
+                if self.context.current_world_state and self.context.current_world_state.location_data:
+                    if isinstance(self.context.current_world_state.location_data, dict):
+                        current_location = self.context.current_world_state.location_data.get('current_location', 'unknown')
+                    elif isinstance(self.context.current_world_state.location_data, str):
+                        current_location = self.context.current_world_state.location_data
+                
+                # Ensure location exists canonically
+                canonical_location = await find_or_create_location(
+                    self.context.canonical_context, conn,
+                    location_name=current_location,
+                    description=f"The location where player action occurred",
+                    location_type="action_site"
+                )
+                
+                # Create canonical event for the action
+                action_event_id = await find_or_create_event(
+                    self.context.canonical_context, conn,
+                    event_name=f"Player Action: {action[:50]}{'...' if len(action) > 50 else ''}",
+                    description=f"Player performed action: {action}",
+                    location=canonical_location,
+                    year=self.context.current_world_state.current_time.get('year', 1) if self.context.current_world_state else 1,
+                    month=self.context.current_world_state.current_time.get('month', 1) if self.context.current_world_state else 1,
+                    day=self.context.current_world_state.current_time.get('day', 1) if self.context.current_world_state else 1,
+                    time_of_day=str(self.context.current_world_state.current_time.get('time_of_day', 'Unknown')) if self.context.current_world_state else 'Unknown'
+                )
+                
+                # Log the initial processing event
+                await log_canonical_event(
+                    self.context.canonical_context, conn,
+                    f"Processing player action: {action[:100]}{'...' if len(action) > 100 else ''}",
+                    tags=["action", "player", "processing", f"location_{canonical_location}"],
+                    significance=6
+                )
+            
             # Lazy load analyze_preferences
             chatgpt_funcs = _get_chatgpt_functions()
             analyze_preferences = chatgpt_funcs['analyze_preferences']
-                   
+            
             # Analyze action
             preferences = await analyze_preferences(action)
             
             # Check for social insight opportunity
             insight = None
-            empathy = self.context.current_world_state.visible_stats.get('empathy', 0)
+            empathy = self.context.current_world_state.visible_stats.get('empathy', 0) if self.context.current_world_state else 0
             if empathy > 10:
                 # Roll for insight
                 success, roll = calculate_social_insight(empathy, difficulty=12)
                 if success:
                     insight = "You sense hidden meanings in the interaction"
+                    
+                    # Log insight canonically
+                    async with get_db_connection_context() as conn:
+                        await log_canonical_event(
+                            self.context.canonical_context, conn,
+                            f"Player gained social insight during action",
+                            tags=["insight", "social", "player_ability"],
+                            significance=5
+                        )
+            
+            # Check for conflict implications
+            conflict_implications = []
+            if self.context.conflict_synthesizer:
+                try:
+                    scene_context = {
+                        "scene_type": "player_action",
+                        "player_action": action,
+                        "location": canonical_location,
+                        "participants": [npc['npc_id'] for npc in (self.context.current_world_state.active_npcs[:3] if self.context.current_world_state else [])]
+                    }
+                    
+                    conflict_result = await self.context.conflict_synthesizer.process_scene(scene_context)
+                    if conflict_result.get('conflicts_detected') or conflict_result.get('state_changes'):
+                        conflict_implications = conflict_result
+                except Exception as e:
+                    logger.warning(f"Could not check conflict implications: {e}")
             
             # Process through agent
-            prompt = f"""Process player action through ALL systems:
+            prompt = f"""Process player action through ALL systems with canonical consistency:
             
             Action: "{action}"
             Preferences Detected: {json.dumps(preferences)}
             Social Insight: {insight or "None"}
+            Conflict Context: {json.dumps(conflict_implications) if conflict_implications else "None"}
             
             Process through:
             1. All stat impacts
@@ -1996,25 +2568,105 @@ class CompleteWorldDirector:
             6. Memory storage with semantic abstraction
             7. NPC reactions based on masks/stages
             8. Emergent pattern detection
+            9. Canonical event storage
+            10. Conflict system integration
             
-            Generate complete response using all systems.
+            Generate complete response using all systems while maintaining narrative consistency.
             """
             
             result = await Runner.run(self.agent, prompt, context=self.context)
             
+            # Extract response content
+            response_content = result.messages[-1].content if result and result.messages else None
+            
+            # Store processing result and journal entry canonically
+            async with get_db_connection_context() as conn:
+                # Log successful processing
+                await log_canonical_event(
+                    self.context.canonical_context, conn,
+                    f"Player action processed successfully: {action[:50]}{'...' if len(action) > 50 else ''}",
+                    tags=["action", "processed", "complete", f"event_{action_event_id}"],
+                    significance=5
+                )
+                
+                # Create journal entry from player's perspective
+                journal_text = f"I {action}"
+                if insight:
+                    journal_text += f"\n\n[Insight: {insight}]"
+                if response_content:
+                    journal_text += f"\n\nResult: {response_content[:200]}..."
+                
+                journal_id = await create_journal_entry(
+                    self.context.canonical_context, conn,
+                    entry_type="action",
+                    entry_text=journal_text,
+                    narrative_moment=bool(conflict_implications),
+                    intensity_level=7 if conflict_implications else 5,
+                    entry_metadata={
+                        "action": action,
+                        "location": canonical_location,
+                        "preferences": preferences,
+                        "had_insight": bool(insight),
+                        "conflicts_triggered": bool(conflict_implications)
+                    },
+                    importance=0.7 if conflict_implications else 0.5,
+                    tags=["player_action", "decision"] + (["conflict_trigger"] if conflict_implications else [])
+                )
+                
+                # Update current roleplay state if significant
+                if preferences and len(preferences.get('explicit_preferences', [])) > 0:
+                    await update_current_roleplay(
+                        self.context.canonical_context, conn,
+                        'LastSignificantAction',
+                        action[:100]
+                    )
+                    
+                    await update_current_roleplay(
+                        self.context.canonical_context, conn,
+                        'PlayerPreferences',
+                        json.dumps(preferences.get('explicit_preferences', []))
+                    )
+            
             return {
-                "response": result.messages[-1].content if result and result.messages else None,
+                "response": response_content,
                 "preferences": preferences,
-                "insight": insight
+                "insight": insight,
+                "canonical_action_id": action_event_id,
+                "journal_id": journal_id if 'journal_id' in locals() else None,
+                "conflict_implications": conflict_implications if conflict_implications else None
             }
             
         except Exception as e:
             logger.error(f"Error processing player action: {e}", exc_info=True)
+            
+            # Try to log the error canonically
+            try:
+                from lore.core.canon import ensure_canonical_context, log_canonical_event
+                
+                if not hasattr(self.context, 'canonical_context'):
+                    canonical_ctx = ensure_canonical_context({
+                        'user_id': self.user_id,
+                        'conversation_id': self.conversation_id
+                    })
+                else:
+                    canonical_ctx = self.context.canonical_context
+                
+                async with get_db_connection_context() as conn:
+                    await log_canonical_event(
+                        canonical_ctx, conn,
+                        f"Error processing player action: {str(e)[:100]}",
+                        tags=["error", "action", "processing_failed"],
+                        significance=4
+                    )
+            except:
+                pass  # Don't let canonical logging errors cascade
+            
             return {
                 "error": str(e),
                 "response": "Your action is acknowledged.",
                 "preferences": {},
-                "insight": None
+                "insight": None,
+                "canonical_action_id": None
             }
     
     async def advance_time(self, hours: int = 1) -> Dict[str, Any]:
@@ -2110,6 +2762,36 @@ class CompleteWorldDirector:
                 "relationship_events": {'events': []},
                 "vitals_updated": {"success": False, "error": str(e)}
             }
+def ensure_canonical_consistency():
+    """Ensure all world director operations maintain canonical consistency"""
+    logger.info("World Director configured with canonical consistency")
+
+async def validate_canonical_integration(context: CompleteWorldDirectorContext):
+    """Validate that canonical integration is working properly"""
+    if not context.canonical_context:
+        raise ValueError("Canonical context not initialized")
+    
+    try:
+        async with get_db_connection_context() as conn:
+            await log_canonical_event(
+                context.canonical_context, conn,
+                "Canonical integration validation successful",
+                tags=["validation", "canonical", "world_director"],
+                significance=3
+            )
+        return True
+    except Exception as e:
+        logger.error(f"Canonical integration validation failed: {e}")
+        return False
+
+def get_canonical_context_from_world_director(director: CompleteWorldDirector) -> Optional[CanonicalContext]:
+    """Extract canonical context from world director"""
+    if director.context and director.context.canonical_context:
+        return director.context.canonical_context
+    return None
+
+# Export canonical integration flag
+CANONICAL_INTEGRATION_ENABLED = True
 
 WorldDirector = CompleteWorldDirector
 WorldDirectorContext = CompleteWorldDirectorContext
