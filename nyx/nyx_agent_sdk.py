@@ -55,7 +55,6 @@ try:
         TimeOfDay,
         ActivityType,
         PowerDynamicType,
-        SliceOfLifeEvent,
         PowerExchange,
         WorldTension,
         RelationshipDynamics,
@@ -80,29 +79,6 @@ except ImportError:
 
 # ===== CRITICAL FIX #1: Monkey patch Pydantic BEFORE any imports =====
 import pydantic.json_schema
-
-_original_model_json_schema = pydantic.json_schema.model_json_schema
-
-def _patched_model_json_schema(*args, **kwargs):
-    """Patched version that removes additionalProperties"""
-    schema = _original_model_json_schema(*args, **kwargs)
-    
-    def strip_additional_properties(obj):
-        if isinstance(obj, dict):
-            obj.pop('additionalProperties', None)
-            obj.pop('unevaluatedProperties', None)
-            for v in obj.values():
-                if isinstance(v, (dict, list)):
-                    strip_additional_properties(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                strip_additional_properties(item)
-        return obj
-    
-    return strip_additional_properties(schema)
-
-# Apply the monkey patch globally
-pydantic.json_schema.model_json_schema = _patched_model_json_schema
 
 # Now import agents and Pydantic
 from agents import (
@@ -170,6 +146,62 @@ class KVList(BaseModel):
 
 KVPair.model_rebuild()
 
+def _unwrap_tool_ctx(ctx_like):
+    """
+    Return the real NyxContext even if we have nested RunContextWrapper(...) layers.
+    We stop unwrapping once we see expected fields.
+    """
+    c = getattr(ctx_like, "context", ctx_like)
+    expected = ("user_id", "conversation_id", "world_director", "slice_of_life_narrator", "current_context")
+    seen = set()
+    while hasattr(c, "context") and not any(hasattr(c, k) for k in expected) and id(c) not in seen:
+        seen.add(id(c))
+        c = getattr(c, "context")
+    return c
+
+async def _ensure_world_state(app_ctx):
+    """
+    Return a world_state object if available; try to initialize WorldDirector if needed.
+    Never 'await' plain attributes.
+    """
+    ws = getattr(app_ctx, "current_world_state", None)
+    if ws is not None:
+        return ws
+
+    wd = getattr(app_ctx, "world_director", None)
+    if wd is None:
+        return None
+
+    # initialize if not already
+    try:
+        if hasattr(wd, "initialize") and asyncio.iscoroutinefunction(wd.initialize):
+            if not getattr(wd, "_initialized", False):
+                await wd.initialize()
+    except Exception:
+        pass
+
+    ctx2 = getattr(wd, "context", None)
+    return getattr(ctx2, "current_world_state", None) if ctx2 else None
+
+def _json_safe(x):
+    """Best-effort JSON conversion for pydantic/enums/nested containers."""
+    if x is None:
+        return None
+    if hasattr(x, "model_dump"):
+        return x.model_dump()
+    if hasattr(x, "to_dict"):
+        try:
+            return x.to_dict()
+        except Exception:
+            pass
+    if isinstance(x, Enum):
+        return x.value
+    if isinstance(x, list):
+        return [_json_safe(i) for i in x]
+    if isinstance(x, dict):
+        return {k: _json_safe(v) for k, v in x.items()}
+    return x
+
 # Helpers for conversion
 def dict_to_kvlist(d: dict) -> KVList:
     return KVList(items=[KVPair(key=k, value=v) for k, v in d.items()])
@@ -235,6 +267,34 @@ def sanitize_agent_tools_in_place(agent):
                         logger.debug("Could not sanitize tool attr %s on %r", attr, t)
     except Exception:
         logger.exception("sanitize_agent_tools_in_place failed")
+
+def _resolve_app_ctx(ctx_like):
+    """
+    Accept either RunContextWrapper[NyxContext] or NyxContext and return the NyxContext.
+    """
+    return getattr(ctx_like, "context", ctx_like)
+
+def _resolve_app_ctx(ctx_like):
+    """
+    Accept either RunContextWrapper[NyxContext] or NyxContext and return the NyxContext.
+    """
+    return getattr(ctx_like, "context", ctx_like)
+
+def _ensure_context_map(app_ctx):
+    """
+    Ensure app_ctx.current_context exists and is a dict.
+    Returns (context_map, writable) where writable=False means we couldn't set it.
+    """
+    context_map = getattr(app_ctx, "current_context", None)
+    if not isinstance(context_map, dict):
+        try:
+            setattr(app_ctx, "current_context", {})
+            context_map = app_ctx.current_context
+            return context_map, True
+        except Exception:
+            # read-only or no attribute; fall back to ephemeral map
+            return {}, False
+    return context_map, True
 
 def get_canonical_context(ctx_obj) -> Any:
     """Convert various context objects to canonical context"""
@@ -3003,185 +3063,147 @@ async def detect_conflicts_and_instability(
         requires_intervention=any(c.severity > 0.8 for c in conflicts + instabilities)
     ).model_dump_json()
 
-# Add these near the function tool definitions
-
-async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
-    """Standalone version for post-run enforcement"""
-    scene_text_lower = scene_text.lower()
-    
-    # Calculate score based on scene characteristics
+def _score_scene_text(scene_text: str) -> float:
+    s = (scene_text or "").lower()
     score = 0.0
-    
-    # High impact visual keywords
-    visual_keywords = ["dramatic", "intense", "beautiful", "transformation", "reveal", "climax", "pivotal"]
-    for keyword in visual_keywords:
-        if keyword in scene_text_lower:
+    for kw in ("dramatic","intense","beautiful","transformation","reveal","climax","pivotal"):
+        if kw in s:
             score += 0.2
-    
-    # Scene transitions
-    if any(word in scene_text_lower for word in ["enter", "arrive", "transform", "change", "shift"]):
+    if any(w in s for w in ("enter","arrive","transform","change","shift")):
         score += 0.15
-    
-    # Emotional peaks
-    if any(word in scene_text_lower for word in ["gasp", "shock", "awe", "breathtaking", "stunning"]):
+    if any(w in s for w in ("gasp","shock","awe","breathtaking","stunning")):
         score += 0.25
-    
-    # Environmental descriptions
-    if any(word in scene_text_lower for word in ["landscape", "environment", "setting", "atmosphere"]):
+    if any(w in s for w in ("landscape","environment","setting","atmosphere")):
         score += 0.1
-    
-    # Cap score at 1.0
-    score = min(1.0, score)
-    
-    # Dynamic threshold based on recent image generation
-    recent_images = ctx.current_context.get("recent_image_count", 0)
-    if recent_images > 3:
-        threshold = 0.7
-    elif recent_images > 1:
-        threshold = 0.6
-    else:
-        threshold = 0.5
-    
-    # Determine if we should generate
+    return min(1.0, score)
+
+def _build_image_prompt(scene_text: str) -> str:
+    s = (scene_text or "").lower()
+    elems = []
+    if "dramatic" in s: elems.append("dramatic lighting")
+    if "intense"  in s: elems.append("intense atmosphere")
+    if "beautiful" in s: elems.append("beautiful composition")
+    return f"Scene depicting: {', '.join(elems) if elems else 'atmospheric scene'}"
+
+# --- standalone version -------------------------------------------------------
+
+async def decide_image_generation_standalone(ctx: "NyxContext", scene_text: str) -> str:
+    app_ctx = _resolve_app_ctx(ctx)                 # works with NyxContext or wrapper
+    context_map, writable = _ensure_context_map(app_ctx)
+
+    score = _score_scene_text(scene_text)
+    recent_images = int(context_map.get("recent_image_count", 0)) if isinstance(context_map, dict) else 0
+    threshold = 0.7 if recent_images > 3 else 0.6 if recent_images > 1 else 0.5
+
     should_generate = score > threshold
-    
-    # Create appropriate prompt if generating
-    image_prompt = None
-    if should_generate:
-        # Extract key visual elements
-        visual_elements = []
-        if "dramatic" in scene_text_lower:
-            visual_elements.append("dramatic lighting")
-        if "intense" in scene_text_lower:
-            visual_elements.append("intense atmosphere")
-        if "beautiful" in scene_text_lower:
-            visual_elements.append("beautiful composition")
-        
-        image_prompt = f"Scene depicting: {', '.join(visual_elements) if visual_elements else 'atmospheric scene'}"
-        
-        # Update recent image count
-        ctx.current_context["recent_image_count"] = recent_images + 1
-    
+    image_prompt = _build_image_prompt(scene_text) if should_generate else None
+
+    if should_generate and writable:
+        context_map["recent_image_count"] = recent_images + 1
+
     return ImageGenerationDecision(
         should_generate=should_generate,
         score=score,
         image_prompt=image_prompt,
-        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})"
+        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})",
     ).model_dump_json()
 
+# --- tool version -------------------------------------------------------------
+
 @function_tool
-async def decide_image_generation(ctx: RunContextWrapper[NyxContext], payload: DecideImageInput) -> str:
-    """Decide whether an image should be generated for a scene."""
-    data = DecideImageInput.model_validate(payload or {})
-    scene_text = data.scene_text.lower()
-    
-    # Calculate score based on scene characteristics
-    score = 0.0
-    
-    # High impact visual keywords
-    visual_keywords = ["dramatic", "intense", "beautiful", "transformation", "reveal", "climax", "pivotal"]
-    for keyword in visual_keywords:
-        if keyword in scene_text:
-            score += 0.2
-    
-    # Scene transitions
-    if any(word in scene_text for word in ["enter", "arrive", "transform", "change", "shift"]):
-        score += 0.15
-    
-    # Emotional peaks
-    if any(word in scene_text for word in ["gasp", "shock", "awe", "breathtaking", "stunning"]):
-        score += 0.25
-    
-    # Environmental descriptions
-    if any(word in scene_text for word in ["landscape", "environment", "setting", "atmosphere"]):
-        score += 0.1
-    
-    # Cap score at 1.0
-    score = min(1.0, score)
-    
-    # Dynamic threshold based on recent image generation
-    recent_images = ctx.context.current_context.get("recent_image_count", 0)
-    if recent_images > 3:
-        threshold = 0.7
-    elif recent_images > 1:
-        threshold = 0.6
-    else:
-        threshold = 0.5
-    
-    # Determine if we should generate
+async def decide_image_generation(ctx: RunContextWrapper["NyxContext"], payload: "DecideImageInput") -> str:
+    # Be permissive about shapes: either DecideImageInput or dict-like
+    try:
+        data = DecideImageInput.model_validate(payload or {})
+        scene_text = data.scene_text or ""
+    except Exception:
+        scene_text = (getattr(payload, "scene_text", None)
+                      or (isinstance(payload, dict) and payload.get("scene_text"))
+                      or "")
+
+    app_ctx = _resolve_app_ctx(ctx)
+    context_map, writable = _ensure_context_map(app_ctx)
+
+    score = _score_scene_text(scene_text)
+    recent_images = int(context_map.get("recent_image_count", 0)) if isinstance(context_map, dict) else 0
+    threshold = 0.7 if recent_images > 3 else 0.6 if recent_images > 1 else 0.5
+
     should_generate = score > threshold
-    
-    # Create appropriate prompt if generating
-    image_prompt = None
-    if should_generate:
-        # Extract key visual elements
-        visual_elements = []
-        if "dramatic" in scene_text:
-            visual_elements.append("dramatic lighting")
-        if "intense" in scene_text:
-            visual_elements.append("intense atmosphere")
-        if "beautiful" in scene_text:
-            visual_elements.append("beautiful composition")
-        
-        image_prompt = f"Scene depicting: {', '.join(visual_elements) if visual_elements else 'atmospheric scene'}"
-        
-        # Update recent image count
-        ctx.context.current_context["recent_image_count"] = recent_images + 1
-    
+    image_prompt = _build_image_prompt(scene_text) if should_generate else None
+
+    if should_generate and writable:
+        context_map["recent_image_count"] = recent_images + 1
+
     return ImageGenerationDecision(
         should_generate=should_generate,
         score=score,
         image_prompt=image_prompt,
-        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})"
+        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})",
     ).model_dump_json()
 
 async def generate_universal_updates_impl(
-    ctx: Union[RunContextWrapper[NyxContext], NyxContext],
+    ctx: Union[RunContextWrapper["NyxContext"], "NyxContext"],
     narrative: str
 ) -> UniversalUpdateResult:
     """Implementation of generate universal updates from the narrative using the Universal Updater."""
     from logic.universal_updater_agent import process_universal_update
-    
-    # Handle both wrapped and unwrapped contexts
-    if isinstance(ctx, NyxContext):
-        app_ctx = ctx
-    else:
-        app_ctx = ctx.context
-    
+
+    app_ctx = _unwrap_tool_ctx(ctx)
+
+    user_id = getattr(app_ctx, "user_id", None)
+    convo_id = getattr(app_ctx, "conversation_id", None)
+    if user_id is None or convo_id is None:
+        return UniversalUpdateResult(
+            success=False,
+            updates_generated=False,
+            error="Invalid context: missing user_id/conversation_id"
+        )
+
     try:
-        # Process the narrative
         update_result = await process_universal_update(
-            user_id=app_ctx.user_id,
-            conversation_id=app_ctx.conversation_id,
+            user_id=user_id,
+            conversation_id=convo_id,
             narrative=narrative,
             context={"source": "nyx_agent"}
         )
-        
-        # Store the updates in context
-        if "universal_updates" not in app_ctx.current_context:
-            app_ctx.current_context["universal_updates"] = {}
 
-        # Merge the updates
-        if update_result.get("success") and update_result.get("details"):
-            details = update_result["details"]
-            # Convert list-based key/value pairs into a dictionary
+        # Normalize updater result to a dict
+        if hasattr(update_result, "model_dump"):
+            update_result = update_result.model_dump()
+        elif not isinstance(update_result, dict):
+            update_result = {"success": bool(update_result), "details": None}
+
+        ctx_map, writable = _ensure_context_map(app_ctx)
+        if writable and "universal_updates" not in ctx_map:
+            ctx_map["universal_updates"] = {}
+
+        # Merge details if present (handle list/dict/pydantic)
+        details = update_result.get("details")
+        if details:
+            if hasattr(details, "model_dump"):
+                details = details.model_dump()
+
             if isinstance(details, list):
+                # try helper, otherwise best-effort kv conversion
                 try:
                     from logic.universal_updater_agent import array_to_dict
                     details_dict = array_to_dict(details)
                 except Exception:
-                    details_dict = {d.get("key"): d.get("value") for d in details}
+                    details_dict = {}
+                    for d in details:
+                        if isinstance(d, dict) and "key" in d:
+                            details_dict[d["key"]] = d.get("value")
             elif isinstance(details, dict):
                 details_dict = details
             else:
                 details_dict = {}
 
-            for key, value in details_dict.items():
-                app_ctx.current_context["universal_updates"][key] = value
-        
-        # Return structured output
+            if writable and isinstance(ctx_map.get("universal_updates"), dict):
+                for k, v in details_dict.items():
+                    ctx_map["universal_updates"][k] = v
+
         return UniversalUpdateResult(
-            success=update_result.get("success", False),
+            success=bool(update_result.get("success", False)),
             updates_generated=bool(update_result.get("details")),
             error=None
         )
@@ -3195,194 +3217,103 @@ async def generate_universal_updates_impl(
 
 @function_tool
 async def generate_universal_updates(
-    ctx: RunContextWrapper[NyxContext],
-    payload: GenerateUniversalUpdatesInput
+    ctx: RunContextWrapper["NyxContext"],
+    payload: "GenerateUniversalUpdatesInput"
 ) -> str:
-    """Generate universal updates from the narrative using the Universal Updater."""
-    data = GenerateUniversalUpdatesInput.model_validate(payload or {})
-    result = await generate_universal_updates_impl(ctx, data.narrative)
+    # Defensive payload handling
+    try:
+        data = GenerateUniversalUpdatesInput.model_validate(payload or {})
+        narrative = data.narrative
+    except Exception:
+        narrative = getattr(payload, "narrative", None) or (payload.get("narrative") if isinstance(payload, dict) else "")
+
+    result = await generate_universal_updates_impl(ctx, narrative or "")
     return result.model_dump_json()
 
 # ===== Open World / Slice-of-life Functions =====
 
-import asyncio
-import json
-from enum import Enum
-from agents import RunContextWrapper
 
-# ---------- helpers ----------
-
-def _unwrap_tool_ctx(ctx):
-    """Return the real app context, even if ctx is nested RunContextWrapper(s)."""
-    c = getattr(ctx, "context", ctx)
-    # Unwrap while the object looks like a wrapper and doesn't have our expected fields
-    expected = ("world_director", "slice_of_life_narrator", "current_world_state", "user_id", "conversation_id")
-    seen_ids = set()  # Use object IDs instead of objects themselves
-    while hasattr(c, "context") and not any(hasattr(c, k) for k in expected) and id(c) not in seen_ids:
-        seen_ids.add(id(c))  # Use id() which returns a hashable integer
-        c = getattr(c, "context")
-    return c
-
-async def _ensure_world_state(app_ctx):
-    """
-    Return a world_state object if available; try to initialize WorldDirector if needed.
-    Never 'await' plain attributes.
-    """
-    ws = getattr(app_ctx, "current_world_state", None)
-    if ws is not None:
-        return ws
-
-    wd = getattr(app_ctx, "world_director", None)
-    if wd is None:
-        return None
-
-    # initialize if not already
-    try:
-        if hasattr(wd, "initialize") and asyncio.iscoroutinefunction(wd.initialize):
-            if not getattr(wd, "_initialized", False):
-                await wd.initialize()
-    except Exception:
-        pass
-
-    ctx2 = getattr(wd, "context", None)
-    return getattr(ctx2, "current_world_state", None) if ctx2 else None
-
-def _json_safe(x):
-    """Best-effort JSON conversion for pydantic/enums/nested containers."""
-    if x is None:
-        return None
-    if hasattr(x, "model_dump"):
-        return x.model_dump()
-    if hasattr(x, "to_dict"):
-        try:
-            return x.to_dict()
-        except Exception:
-            pass
-    if isinstance(x, Enum):
-        return x.value
-    if isinstance(x, list):
-        return [_json_safe(i) for i in x]
-    if isinstance(x, dict):
-        return {k: _json_safe(v) for k, v in x.items()}
-    return x
 
 # ---------- tools ----------
 
 @function_tool
 async def orchestrate_slice_scene(
-    ctx: RunContextWrapper[NyxContext],
+    ctx: RunContextWrapper, 
     scene_type: str = "routine"
 ) -> str:
-    """
-    Wrapper that builds a scene + world_state, then delegates to the Module 2 tool.
-    NOTE: different tool name to avoid collisions with the real tool.
-    """
+    app = _get_app_ctx(ctx)
 
-    app_ctx = _get_app_ctx(ctx)
-
-    # Ensure narrator is ready
-    if not app_ctx.slice_of_life_narrator:
+    if not app.slice_of_life_narrator:
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
-        await app_ctx.slice_of_life_narrator.initialize()
+        app.slice_of_life_narrator = SliceOfLifeNarrator(app.user_id, app.conversation_id)
+        await app.slice_of_life_narrator.initialize()
 
-    narrator = app_ctx.slice_of_life_narrator
+    narrator = app.slice_of_life_narrator
+    world_state = await _ensure_world_state_from_ctx(app)
 
-    # Map scene type
-    activity_type_map = {
-        "routine": ActivityType.ROUTINE,
-        "social": ActivityType.SOCIAL,
-        "work": ActivityType.WORK,
-        "intimate": ActivityType.INTIMATE,
-        "leisure": ActivityType.LEISURE,
-        "special": ActivityType.SPECIAL,
-        "errands": ActivityType.ROUTINE,
-        "chores": ActivityType.ROUTINE,
-    }
-
-    # World state
-    world_state = await _ensure_world_state_from_ctx(app_ctx)
-
-    # Participants (be permissive about shape)
-    participants: List[int] = []
+    # normalize participants
+    participants: list[int] = []
     if world_state and getattr(world_state, "active_npcs", None):
         for npc in (world_state.active_npcs or [])[:3]:
             if isinstance(npc, dict) and "npc_id" in npc:
                 participants.append(int(npc["npc_id"]))
-            elif isinstance(npc, int):
-                participants.append(npc)
             elif hasattr(npc, "npc_id"):
                 try:
-                    participants.append(int(getattr(npc, "npc_id")))
+                    participants.append(int(npc.npc_id))
                 except Exception:
                     pass
+            elif isinstance(npc, int):
+                participants.append(npc)
 
-    # Build AgentSafe scene (from Module 2)
-    scene = SafeSliceOfLifeEvent(
-        event_type=activity_type_map.get(scene_type, ActivityType.ROUTINE),
-        title=f"{scene_type} scene",
-        description=f"A {scene_type} moment in daily life",
+    # normalize scene_type (cover errand/errands/chores)
+    kind = (scene_type or "routine").lower()
+    if kind in {"errand", "errands", "chores"}:
+        kind = "routine"
+
+    scene = SliceOfLifeEvent(
+        event_type=ActivityType.ROUTINE if kind == "routine" else ActivityType.SOCIAL,
+        title=f"{kind} scene",
+        description=f"A {kind} moment in daily life",
         location="current_location",
         participants=participants,
     )
 
-    # Build tool payload (always pass dicts)
-    narrator_input = NarrateSliceOfLifeInput(
-        scene_type=scene_type,
+    payload = NarrateSliceOfLifeInput(
+        scene_type=kind,
         scene=scene,
         world_state=world_state,   # Module 2 will coerce dict->model if needed
         player_action=None,
-    )
+    ).model_dump()                  # always pass a dict to the tool
 
-    # Call the REAL tool (Module 2) via the narrator's Agent
-    run = await Runner.run(
-        narrator.scene_narrator,
-        messages=[{"role": "user", "content": f"Narrate a {scene_type} scene"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": tool_narrate_slice_of_life_scene,         # <- use the function object from Module 2
-            "kwargs": {"payload": narrator_input.model_dump()} # <- pass plain dict, not model instance
-        }]
-    )
+    # ✅ Call the real Module-2 tool directly
+    result_json = await core_narrate_slice(ctx, payload=payload)
 
-    # Normalize output from the tool
-    if not run or not hasattr(run, "data") or run.data is None:
-        # Fallback if tool didn’t return structured data
-        return await _simple_narrate_fallback(app_ctx, scene_type)
+    # parse/shape
+    try:
+        data = json.loads(result_json)
+    except Exception:
+        return await _simple_narrate_fallback(app, scene_type)
 
-    data = run.data
-    # It might be a JSON string, dict, or pydantic object
-    if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except Exception:
-            data = {"scene_description": str(data)}
-    elif hasattr(data, "model_dump"):
-        data = data.model_dump()
-    elif not isinstance(data, dict):
-        data = {"scene_description": str(data)}
-
-    # Optional Nyx layer
     base_text = data.get("scene_description") or ""
-    nyx_enhanced = await _add_nyx_hosting_personality(base_text, data)
+    nyx_text = await _add_nyx_hosting_personality(base_text, data)
 
-    # Build final response (defensive access)
-    world_mood = "neutral"
-    if world_state is not None:
-        wm = getattr(world_state, "world_mood", None)
-        world_mood = getattr(wm, "value", str(wm) if wm is not None else "neutral")
+    # world_mood and time_of_day tolerant extraction
+    wm = getattr(getattr(world_state, "world_mood", None), "value", None)
+    world_mood = wm or (world_state.get("world_mood") if isinstance(world_state, dict) else "neutral") or "neutral"
 
-    time_of_day = "afternoon"
-    if world_state is not None:
+    # your world_state sometimes has top-level "time_of_day"
+    tod = None
+    if hasattr(world_state, "time_of_day"):
+        tod = getattr(world_state, "time_of_day")
+    elif isinstance(world_state, dict):
+        tod = world_state.get("time_of_day")
+    if tod is None:
         ct = getattr(world_state, "current_time", None)
         tod = getattr(ct, "time_of_day", None)
-        time_of_day = str(tod) if tod is not None else time_of_day
+    time_of_day = str(tod) if tod is not None else "afternoon"
 
-    result = {
-        "narrative": nyx_enhanced,
+    out = {
+        "narrative": nyx_text,
         "atmosphere": data.get("atmosphere", ""),
         "tension_level": data.get("tension_level", 3),
         "generate_image": data.get("generate_image", False),
@@ -3393,11 +3324,12 @@ async def orchestrate_slice_scene(
         "power_undertones": data.get("power_dynamic_hints", []),
         "available_activities": data.get("available_activities", ["observe", "interact", "wait"]),
         "nyx_commentary": data.get("nyx_commentary"),
-        "scene_type": scene_type,
+        "scene_type": kind,
         "context_aware": data.get("context_aware", True),
         "governance_approved": data.get("governance_approved", True),
     }
-    return json.dumps(result, ensure_ascii=False)
+    return json.dumps(out, ensure_ascii=False)
+  
 async def _add_nyx_hosting_personality(base_narrative: str, narration_data: Any) -> str:
     """Add Nyx's game show host personality layer to the narration"""
     from logic.chatgpt_integration import generate_text_completion
