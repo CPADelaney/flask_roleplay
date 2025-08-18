@@ -554,101 +554,8 @@ class BackgroundConflictOrchestrator:
     
     # ========== Dynamic Generation Methods ==========
     
-    async def generate_background_conflict(
-        self, conflict_type: Optional[GrandConflictType] = None
-    ) -> BackgroundConflict:
-        """Generate a new background conflict with LLM"""
-        if not conflict_type:
-            conflict_type = random.choice(list(GrandConflictType))
-    
-        prompt = f"""
-        Generate a {conflict_type.value} conflict for background worldbuilding.
-    
-        Context: This happens in the wider world, shaping atmosphere.
-        Return JSON:
-        {{
-            "name": "Compelling headline-style name",
-            "description": "2-3 sentence dramatic overview",
-            "factions": ["3-5 named factions with clear stakes"],  # <-- Keep as strings OR
-            "initial_state": "Current tense situation",
-            "potential_developments": ["5 possible future events"],
-            "daily_life_impacts": ["3 subtle effects on everyday life"],
-            "conversation_hooks": ["3 ways NPCs might mention this"],
-            "faction_dynamics": {{
-                "alliances": ["current alliances"],
-                "tensions": ["current tensions"],
-                "wild_cards": ["unpredictable elements"]
-            }}
-        }}
-        """
-    
-        response = await Runner.run(self.world_event_agent, prompt)
-        raw = extract_runner_response(response)
-        data = json.loads(raw)
-    
-        # Extract faction names if they're objects
-        raw_factions = data.get("factions", [])
-        faction_names = []
-        for faction in raw_factions:
-            if isinstance(faction, dict):
-                # If it's an object, extract the name
-                faction_names.append(faction.get("name", str(faction)))
-            else:
-                # If it's already a string, use it directly
-                faction_names.append(str(faction))
-    
-        # Store with numeric intensity; default to "distant_rumor"
-        init_enum = BackgroundIntensity.DISTANT_RUMOR
-        init_intensity = INTENSITY_TO_FLOAT[init_enum]
-    
-        async with get_db_connection_context() as conn:
-            conflict_id = await conn.fetchval(
-                """
-                INSERT INTO BackgroundConflicts
-                    (user_id, conversation_id, conflict_type, name, description,
-                     intensity, progress, is_active, current_state, factions)
-                VALUES ($1, $2, $3, $4, $5, $6, 0.0, true, $7, $8)
-                RETURNING id
-                """,
-                self.user_id,
-                self.conversation_id,
-                conflict_type.value,
-                data["name"],
-                data.get("description", ""),
-                init_intensity,
-                data.get("initial_state", ""),
-                json.dumps(faction_names),  # <-- Use extracted names
-            )
-    
-            # Store factions in the separate table
-            for faction_name in faction_names:
-                await conn.execute(
-                    """
-                    INSERT INTO BackgroundConflictFactions
-                        (conflict_id, faction_name, power_level, stance)
-                    VALUES ($1, $2, $3, 'neutral')
-                    """,
-                    conflict_id,
-                    faction_name,
-                    random.uniform(0.3, 0.7),
-                )
-    
-        return BackgroundConflict(
-            conflict_id=conflict_id,
-            conflict_type=conflict_type,
-            name=data["name"],
-            description=data.get("description", ""),
-            intensity=init_enum,
-            progress=0.0,
-            factions=faction_names,  # <-- Use extracted names
-            current_state=data.get("initial_state", ""),
-            recent_developments=[],
-            impact_on_daily_life=list(data.get("daily_life_impacts") or []),
-            player_awareness_level=0.1,
-        )
-    
     async def advance_background_conflict(self, conflict: BackgroundConflict) -> WorldEvent:
-        """Advance conflict with dynamic development"""
+        """Advance conflict with dynamic development (robust parsing)."""
         prompt = f"""
         Advance this background conflict naturally:
     
@@ -672,41 +579,47 @@ class BackgroundConflictOrchestrator:
         """
     
         response = await Runner.run(self.development_agent, prompt)
-        
-        # Fix: Better extraction logic
+    
+        # Robust extraction & parse
         try:
-            # Try to extract the response content directly
-            if hasattr(response, 'messages') and response.messages:
-                raw = response.messages[-1].content
-            elif hasattr(response, 'output'):
-                raw = response.output
-            else:
-                raw = str(response)
-            
-            # Parse the JSON
+            raw = extract_runner_response(response)
             data = json.loads(raw)
-        except (json.JSONDecodeError, AttributeError) as e:
-            logger.warning(f"Failed to parse response, using fallback: {e}")
-            # Provide a proper fallback with all required fields
+            if not isinstance(data, dict):
+                raise ValueError("development JSON is not an object")
+        except Exception as e:
+            logger.warning(f"Failed to parse development response, using fallback: {e}")
             data = {
                 "event_type": "continuation",
                 "description": f"The {conflict.name} continues to develop.",
                 "faction_impacts": {},
-                "new_state": conflict.current_state,  # Keep current state
+                "new_state": conflict.current_state,
                 "progress_change": 0,
                 "intensity_change": "maintain",
-                "creates_opportunity": False
+                "creates_opportunity": False,
             }
-        
-        # Validate required fields and provide defaults
-        if 'new_state' not in data:
-            data['new_state'] = conflict.current_state
-            logger.warning("Missing 'new_state' in response, using current state")
-        
-        # compute new numeric intensity
-        current_val = INTENSITY_TO_FLOAT[conflict.intensity]
-        new_intensity = adjust_intensity_value(current_val, data.get("intensity_change", "maintain"))
     
+        # Normalize & defaults
+        event_type = str(data.get("event_type") or "continuation")
+        description = str(data.get("description") or f"The {conflict.name} continues to develop.")
+        new_state = str(data.get("new_state") or conflict.current_state)
+        creates_opportunity = bool(data.get("creates_opportunity"))
+    
+        # Safe numeric conversion
+        try:
+            progress_change = float(data.get("progress_change", 0.0))
+        except Exception:
+            progress_change = 0.0
+    
+        intensity_change = str(data.get("intensity_change") or "maintain").lower()
+        faction_impacts = data.get("faction_impacts") or {}
+        if not isinstance(faction_impacts, dict):
+            faction_impacts = {}
+    
+        # Compute new numeric intensity
+        current_val = INTENSITY_TO_FLOAT[conflict.intensity]
+        new_intensity_val = adjust_intensity_value(current_val, intensity_change)
+    
+        # Persist
         async with get_db_connection_context() as conn:
             await conn.execute(
                 """
@@ -717,20 +630,21 @@ class BackgroundConflictOrchestrator:
                        updated_at    = CURRENT_TIMESTAMP
                  WHERE id = $4
                 """,
-                data["new_state"],
-                float(data.get("progress_change", 0.0)),
-                new_intensity,
+                new_state,
+                progress_change,
+                new_intensity_val,
                 conflict.conflict_id,
             )
     
         return WorldEvent(
             conflict_id=conflict.conflict_id,
-            event_type=str(data.get("event_type", "")),
-            description=str(data.get("description", "")),
-            faction_impacts=dict(data.get("faction_impacts") or {}),
-            creates_opportunity=bool(data.get("creates_opportunity")),
-            opportunity_window=7 if data.get("creates_opportunity") else None,
+            event_type=event_type,
+            description=description,
+            faction_impacts=dict(faction_impacts),
+            creates_opportunity=creates_opportunity,
+            opportunity_window=7 if creates_opportunity else None,
         )
+
         
     def _calculate_new_intensity(self, current: BackgroundIntensity, change: str) -> str:
         """Calculate new intensity level"""
@@ -897,32 +811,32 @@ class BackgroundConflictRipples:
         self,
         active_conflicts: List[BackgroundConflict]
     ) -> Dict[str, Any]:
-        """Generate today's ripple effects"""
-        
+        """Generate today's ripple effects (robust parsing & normalization)."""
+    
         if not active_conflicts:
             return {"ripples": {}}
-        
+    
         conflicts_summary = [
             {
                 "name": c.name,
                 "intensity": c.intensity.value,
-                "current_state": c.current_state
+                "current_state": c.current_state,
             }
             for c in active_conflicts
         ]
-        
+    
         prompt = f"""
         Generate daily ripple effects from these background conflicts:
-        
+    
         Conflicts: {json.dumps(conflicts_summary)}
-        
+    
         Create subtle effects that:
         - Change daily atmosphere
         - Affect NPC moods
         - Create overheard snippets
         - Alter minor details
         - Build tension
-        
+    
         Return JSON:
         {{
             "ambient_mood": "overall atmosphere today",
@@ -934,9 +848,56 @@ class BackgroundConflictRipples:
             "ambient_sounds": ["3 background sounds suggesting tension"]
         }}
         """
-        
+    
         response = await Runner.run(self.ripple_generator, prompt)
-        return {"ripples": json.loads(response.output)}
+    
+        try:
+            raw = extract_runner_response(response)
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("ripple JSON is not an object")
+    
+            # Normalize shapes
+            out = {
+                "ambient_mood": str(data.get("ambient_mood") or ""),
+                "npc_mood_modifier": str(data.get("npc_mood_modifier") or ""),
+                "overheard_snippets": [],
+                "visual_cues": [],
+                "price_changes": {},
+                "crowd_behaviors": [],
+                "ambient_sounds": [],
+            }
+    
+            def _as_list(x):
+                if isinstance(x, list):
+                    return [str(i) for i in x]
+                if x is None or x == "":
+                    return []
+                return [str(x)]
+    
+            out["overheard_snippets"] = _as_list(data.get("overheard_snippets"))
+            out["visual_cues"] = _as_list(data.get("visual_cues"))
+            out["crowd_behaviors"] = _as_list(data.get("crowd_behaviors"))
+            out["ambient_sounds"] = _as_list(data.get("ambient_sounds"))
+    
+            pc = data.get("price_changes")
+            if isinstance(pc, dict):
+                norm_pc = {}
+                for k, v in pc.items():
+                    try:
+                        norm_pc[str(k)] = float(v)
+                    except Exception:
+                        # skip non-numeric values
+                        continue
+                out["price_changes"] = norm_pc
+    
+            return {"ripples": out}
+    
+        except Exception as e:
+            logger.warning(
+                f"Ripple parse failed; returning empty ripples. err={e}"
+            )
+            return {"ripples": {}}
     
     async def check_for_opportunities(
         self,
@@ -961,23 +922,23 @@ class BackgroundConflictRipples:
         conflict: BackgroundConflict,
         player_skills: Dict[str, float]
     ) -> Optional[Dict[str, Any]]:
-        """Generate a specific opportunity"""
-        
+        """Generate a specific opportunity (robust parsing)."""
+    
         prompt = f"""
         Generate an optional opportunity from this conflict:
-        
+    
         Conflict: {conflict.name}
         Type: {conflict.conflict_type.value}
         Current State: {conflict.current_state}
         Player Skills: {json.dumps(player_skills)}
-        
+    
         Create an opportunity that:
         - Is completely optional
         - Relates to the conflict tangentially
         - Offers interesting rewards
         - Has multiple approaches
         - Creates a memorable moment
-        
+    
         Return JSON:
         {{
             "title": "Intriguing opportunity name",
@@ -996,9 +957,32 @@ class BackgroundConflictRipples:
             "consequences": "potential long-term effects"
         }}
         """
-        
+    
         response = await Runner.run(self.opportunity_creator, prompt)
-        return json.loads(response.output)
+    
+        try:
+            raw = extract_runner_response(response)
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("opportunity JSON is not an object")
+    
+            # Minimal normalization
+            data.setdefault("title", "Opportunity")
+            data.setdefault("description", "")
+            data.setdefault("hook", "")
+            if not isinstance(data.get("approaches"), list):
+                data["approaches"] = []
+            data.setdefault("window", "3")
+            data.setdefault("connection", "")
+            data.setdefault("consequences", "")
+    
+            return data
+    
+        except Exception as e:
+            logger.warning(
+                f"Opportunity parse failed; returning None. err={e}"
+            )
+            return None
 
 
 # ===============================================================================
