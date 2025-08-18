@@ -3384,29 +3384,26 @@ async def orchestrate_slice_scene(
         "player_action": None,
     }
 
-    # Prepare a tight instruction that forces a single tool call with the exact payload.
-    # We rely on the model to emit the function call; Runner handles the tool execution.
+    payload = _json_safe(narrator_input_payload)
+    
     instruction = (
         "Call tool_narrate_slice_of_life_scene with exactly this JSON:\n\n"
         "```json\n"
-        f"{{\"payload\": {json.dumps(narrator_input_payload, ensure_ascii=False)} }}\n"
+        f"{{\"payload\": {json.dumps(payload, ensure_ascii=False, default=_default_json_encoder)} }}\n"
         "```\n\n"
         "Return only the tool result JSON."
     )
-
+    
+    # 2) Run the agent correctly (no positional-after-keyword nonsense)
     try:
         resp = await run_compat(
-            agent, 
-            instruction=prompt_str, 
-            context=ctx,
             narrator.scene_narrator,
-            instruction,
+            instruction=instruction,
             context=narrator.context,
             tools=[tool_narrate_slice_of_life_scene],
-            tool_choice=tool_narrate_slice_of_life_scene,  # <- no `tool_calls=` anymore
+            tool_choice=tool_narrate_slice_of_life_scene,
         )
     except TypeError as e:
-        # Make the common failure crystal clear to upstream logs
         if "tool_calls" in str(e):
             return json.dumps({
                 "error": "invalid_runner_argument",
@@ -3434,7 +3431,7 @@ async def orchestrate_slice_scene(
     if world_state_obj is not None:
         ct = getattr(world_state_obj, "current_time", None)
         tod = getattr(ct, "time_of_day", None)
-        time_of_day = str(tod) if tod is not None else time_of_day
+        time_of_day = getattr(tod, "value", str(tod)) if tod is not None else time_of_day
 
     result = {
         "narrative": nyx_enhanced,
