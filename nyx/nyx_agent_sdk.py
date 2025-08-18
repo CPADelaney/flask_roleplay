@@ -3277,7 +3277,9 @@ async def narrate_slice_of_life_scene(
         "work": ActivityType.WORK,
         "intimate": ActivityType.INTIMATE,
         "leisure": ActivityType.LEISURE,
-        "special": ActivityType.SPECIAL
+        "special": ActivityType.SPECIAL,
+        "errands": ActivityType.ROUTINE,  # Add mapping for errands
+        "chores": ActivityType.ROUTINE,    # Add mapping for chores
     }
     
     scene = SliceOfLifeEvent(
@@ -3307,13 +3309,14 @@ async def narrate_slice_of_life_scene(
     )
     
     # Call the narrator's sophisticated narration tool
+    # FIX: Use model_dump() to serialize the input properly
     from agents import RunContextWrapper as NarratorWrapper
     narrator_result = await narrator.scene_narrator.run(
         messages=[{"role": "user", "content": f"Narrate a {payload.scene_type} scene"}],
         context=narrator.context,
         tool_calls=[{
             "tool": narrator.narrate_slice_of_life_scene,
-            "kwargs": {"payload": narrator_input}
+            "kwargs": {"payload": narrator_input.model_dump()}  # Convert to dict for serialization
         }]
     )
     
@@ -3331,7 +3334,7 @@ async def narrate_slice_of_life_scene(
     )
     
     # Format the complete response
-    return json.dumps({
+    result = {
         "narrative": nyx_enhanced,
         "atmosphere": narration_data.atmosphere if hasattr(narration_data, 'atmosphere') else "",
         "tension_level": narration_data.tension_level if hasattr(narration_data, 'tension_level') else 3,
@@ -3346,7 +3349,9 @@ async def narrate_slice_of_life_scene(
         "scene_type": payload.scene_type,
         "context_aware": narration_data.context_aware if hasattr(narration_data, 'context_aware') else True,
         "governance_approved": narration_data.governance_approved if hasattr(narration_data, 'governance_approved') else True,
-    }, ensure_ascii=False)
+    }
+    
+    return json.dumps(result, ensure_ascii=False)
 
 async def _add_nyx_hosting_personality(base_narrative: str, narration_data: Any) -> str:
     """Add Nyx's game show host personality layer to the narration"""
