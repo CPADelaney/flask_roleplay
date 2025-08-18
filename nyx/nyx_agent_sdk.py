@@ -1665,6 +1665,167 @@ async def run_agent_with_error_handling(
 # ===== Function Tools =====
 
 @function_tool
+async def narrate_power_exchange(
+    ctx: RunContextWrapper[NyxContext],
+    npc_id: int,
+    exchange_type: str = "subtle_control",
+    intensity: float = 0.5
+) -> str:
+    """Narrate a power exchange using the sophisticated narrator."""
+    app_ctx = _get_app_ctx(ctx)
+    
+    # Ensure narrator is initialized
+    if not app_ctx.slice_of_life_narrator:
+        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
+            app_ctx.user_id,
+            app_ctx.conversation_id
+        )
+        await app_ctx.slice_of_life_narrator.initialize()
+    
+    narrator = app_ctx.slice_of_life_narrator
+    world_state = await _ensure_world_state_from_ctx(app_ctx)
+    
+    from story_agent.world_simulation_models import PowerExchange, PowerDynamicType
+    
+    # Map exchange type to enum
+    type_map = {
+        "subtle_control": PowerDynamicType.SUBTLE_CONTROL,
+        "gentle_guidance": PowerDynamicType.GENTLE_GUIDANCE,
+        "firm_direction": PowerDynamicType.FIRM_DIRECTION,
+        "casual_dominance": PowerDynamicType.CASUAL_DOMINANCE,
+        "protective_control": PowerDynamicType.PROTECTIVE_CONTROL,
+    }
+    
+    exchange = PowerExchange(
+        initiator_npc_id=npc_id,
+        initiator_id=npc_id,
+        initiator_type="npc",
+        recipient_type="player",
+        recipient_id=1,
+        exchange_type=type_map.get(exchange_type, PowerDynamicType.SUBTLE_CONTROL),
+        intensity=intensity
+    )
+    
+    # Use narrator's power narration
+    result = await narrator.power_narrator.run(
+        messages=[{"role": "user", "content": "Narrate power exchange"}],
+        context=narrator.context,
+        tool_calls=[{
+            "tool": narrator.narrate_power_exchange,
+            "kwargs": {
+                "exchange": exchange.model_dump(),
+                "world_state": world_state.model_dump() if world_state else {}
+            }
+        }]
+    )
+    
+    if result and hasattr(result, 'data'):
+        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
+    
+    return json.dumps({"narrative": "A moment of subtle control passes..."})
+
+@function_tool
+async def narrate_daily_routine(
+    ctx: RunContextWrapper[NyxContext],
+    activity: str,
+    involved_npcs: List[int] = None
+) -> str:
+    """Narrate daily routine using the sophisticated narrator."""
+    app_ctx = _get_app_ctx(ctx)
+    
+    if not app_ctx.slice_of_life_narrator:
+        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
+            app_ctx.user_id,
+            app_ctx.conversation_id
+        )
+        await app_ctx.slice_of_life_narrator.initialize()
+    
+    narrator = app_ctx.slice_of_life_narrator
+    world_state = await _ensure_world_state_from_ctx(app_ctx)
+    
+    result = await narrator.routine_narrator.run(
+        messages=[{"role": "user", "content": f"Narrate {activity} routine"}],
+        context=narrator.context,
+        tool_calls=[{
+            "tool": narrator.narrate_daily_routine,
+            "kwargs": {
+                "activity": activity,
+                "world_state": world_state.model_dump() if world_state else {},
+                "involved_npcs": involved_npcs or []
+            }
+        }]
+    )
+    
+    if result and hasattr(result, 'data'):
+        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
+    
+    return json.dumps({"description": f"You go about {activity}..."})
+
+@function_tool
+async def generate_ambient_narration(
+    ctx: RunContextWrapper[NyxContext],
+    focus: str = "atmosphere",
+    intensity: float = 0.5
+) -> str:
+    """Generate ambient world narration using the narrator."""
+    app_ctx = _get_app_ctx(ctx)
+    
+    if not app_ctx.slice_of_life_narrator:
+        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
+            app_ctx.user_id,
+            app_ctx.conversation_id
+        )
+        await app_ctx.slice_of_life_narrator.initialize()
+    
+    narrator = app_ctx.slice_of_life_narrator
+    world_state = await _ensure_world_state_from_ctx(app_ctx)
+    
+    # Use the narrator's ambient narration tool
+    from agents import RunContextWrapper as NarratorWrapper
+    result = await narrator.scene_narrator.run(
+        messages=[{"role": "user", "content": f"Generate {focus} ambient narration"}],
+        context=narrator.context,
+        tool_calls=[{
+            "tool": narrator.generate_ambient_narration,
+            "kwargs": {
+                "focus": focus,
+                "world_state": world_state.model_dump() if world_state else {},
+                "intensity": intensity
+            }
+        }]
+    )
+    
+    if result and hasattr(result, 'data'):
+        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
+    
+    return json.dumps({"description": "The world continues around you..."})
+
+@function_tool  
+async def detect_narrative_patterns(
+    ctx: RunContextWrapper[NyxContext]
+) -> str:
+    """Detect emergent narrative patterns using the narrator."""
+    app_ctx = _get_app_ctx(ctx)
+    
+    if not app_ctx.slice_of_life_narrator:
+        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
+            app_ctx.user_id,
+            app_ctx.conversation_id
+        )
+        await app_ctx.slice_of_life_narrator.initialize()
+    
+    narrator = app_ctx.slice_of_life_narrator
+    
+    # Use narrator's emergent narrative detection
+    patterns = await narrator.generate_emergent_narrative()
+    
+    return json.dumps(patterns)
+
+@function_tool
 async def generate_npc_dialogue(
     ctx: RunContextWrapper[NyxContext],
     npc_id: int,
@@ -3798,166 +3959,7 @@ Your job is to make it entertaining while maintaining the sophisticated simulati
     model_settings=DEFAULT_MODEL_SETTINGS,
 )
 
-@function_tool
-async def narrate_power_exchange(
-    ctx: RunContextWrapper[NyxContext],
-    npc_id: int,
-    exchange_type: str = "subtle_control",
-    intensity: float = 0.5
-) -> str:
-    """Narrate a power exchange using the sophisticated narrator."""
-    app_ctx = _get_app_ctx(ctx)
-    
-    # Ensure narrator is initialized
-    if not app_ctx.slice_of_life_narrator:
-        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
-        await app_ctx.slice_of_life_narrator.initialize()
-    
-    narrator = app_ctx.slice_of_life_narrator
-    world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
-    from story_agent.world_simulation_models import PowerExchange, PowerDynamicType
-    
-    # Map exchange type to enum
-    type_map = {
-        "subtle_control": PowerDynamicType.SUBTLE_CONTROL,
-        "gentle_guidance": PowerDynamicType.GENTLE_GUIDANCE,
-        "firm_direction": PowerDynamicType.FIRM_DIRECTION,
-        "casual_dominance": PowerDynamicType.CASUAL_DOMINANCE,
-        "protective_control": PowerDynamicType.PROTECTIVE_CONTROL,
-    }
-    
-    exchange = PowerExchange(
-        initiator_npc_id=npc_id,
-        initiator_id=npc_id,
-        initiator_type="npc",
-        recipient_type="player",
-        recipient_id=1,
-        exchange_type=type_map.get(exchange_type, PowerDynamicType.SUBTLE_CONTROL),
-        intensity=intensity
-    )
-    
-    # Use narrator's power narration
-    result = await narrator.power_narrator.run(
-        messages=[{"role": "user", "content": "Narrate power exchange"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": narrator.narrate_power_exchange,
-            "kwargs": {
-                "exchange": exchange.model_dump(),
-                "world_state": world_state.model_dump() if world_state else {}
-            }
-        }]
-    )
-    
-    if result and hasattr(result, 'data'):
-        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
-    
-    return json.dumps({"narrative": "A moment of subtle control passes..."})
 
-@function_tool
-async def narrate_daily_routine(
-    ctx: RunContextWrapper[NyxContext],
-    activity: str,
-    involved_npcs: List[int] = None
-) -> str:
-    """Narrate daily routine using the sophisticated narrator."""
-    app_ctx = _get_app_ctx(ctx)
-    
-    if not app_ctx.slice_of_life_narrator:
-        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
-        await app_ctx.slice_of_life_narrator.initialize()
-    
-    narrator = app_ctx.slice_of_life_narrator
-    world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
-    result = await narrator.routine_narrator.run(
-        messages=[{"role": "user", "content": f"Narrate {activity} routine"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": narrator.narrate_daily_routine,
-            "kwargs": {
-                "activity": activity,
-                "world_state": world_state.model_dump() if world_state else {},
-                "involved_npcs": involved_npcs or []
-            }
-        }]
-    )
-    
-    if result and hasattr(result, 'data'):
-        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
-    
-    return json.dumps({"description": f"You go about {activity}..."})
-
-@function_tool
-async def generate_ambient_narration(
-    ctx: RunContextWrapper[NyxContext],
-    focus: str = "atmosphere",
-    intensity: float = 0.5
-) -> str:
-    """Generate ambient world narration using the narrator."""
-    app_ctx = _get_app_ctx(ctx)
-    
-    if not app_ctx.slice_of_life_narrator:
-        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
-        await app_ctx.slice_of_life_narrator.initialize()
-    
-    narrator = app_ctx.slice_of_life_narrator
-    world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
-    # Use the narrator's ambient narration tool
-    from agents import RunContextWrapper as NarratorWrapper
-    result = await narrator.scene_narrator.run(
-        messages=[{"role": "user", "content": f"Generate {focus} ambient narration"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": narrator.generate_ambient_narration,
-            "kwargs": {
-                "focus": focus,
-                "world_state": world_state.model_dump() if world_state else {},
-                "intensity": intensity
-            }
-        }]
-    )
-    
-    if result and hasattr(result, 'data'):
-        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
-    
-    return json.dumps({"description": "The world continues around you..."})
-
-@function_tool  
-async def detect_narrative_patterns(
-    ctx: RunContextWrapper[NyxContext]
-) -> str:
-    """Detect emergent narrative patterns using the narrator."""
-    app_ctx = _get_app_ctx(ctx)
-    
-    if not app_ctx.slice_of_life_narrator:
-        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
-        await app_ctx.slice_of_life_narrator.initialize()
-    
-    narrator = app_ctx.slice_of_life_narrator
-    
-    # Use narrator's emergent narrative detection
-    patterns = await narrator.generate_emergent_narrative()
-    
-    return json.dumps(patterns)
 
 # ===== Log strict schema info for debugging =====
 log_strict_hits(nyx_main_agent)
