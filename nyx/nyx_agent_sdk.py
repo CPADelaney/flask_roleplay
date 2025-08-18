@@ -1707,15 +1707,18 @@ async def narrate_power_exchange(
         intensity=intensity
     )
     
-    # Use narrator's power narration
-    result = await narrator.power_narrator.run(
+    # CRITICAL FIX: Use Runner.run() and pass dicts
+    from agents import Runner
+    
+    result = await Runner.run(
+        narrator.power_narrator,
         messages=[{"role": "user", "content": "Narrate power exchange"}],
         context=narrator.context,
         tool_calls=[{
             "tool": narrator.narrate_power_exchange,
             "kwargs": {
-                "exchange": exchange.model_dump(),
-                "world_state": world_state.model_dump() if world_state else {}
+                "exchange": exchange.model_dump(),  # Pass dict!
+                "world_state": world_state.model_dump() if world_state else {}  # Pass dict!
             }
         }]
     )
@@ -1725,6 +1728,7 @@ async def narrate_power_exchange(
     
     return json.dumps({"narrative": "A moment of subtle control passes..."})
 
+
 @function_tool
 async def narrate_daily_routine(
     ctx: RunContextWrapper[NyxContext],
@@ -1732,20 +1736,8 @@ async def narrate_daily_routine(
     involved_npcs: List[int] = None
 ) -> str:
     """Narrate daily routine using the sophisticated narrator."""
-    import json
-    from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-
-    def _safe_json_loads(s: str, fallback: dict) -> dict:
-        try:
-            data = json.loads(s)
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
-        return fallback
-
     app_ctx = _get_app_ctx(ctx)
-
+    
     if not app_ctx.slice_of_life_narrator:
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
         app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
@@ -1753,46 +1745,31 @@ async def narrate_daily_routine(
             app_ctx.conversation_id
         )
         await app_ctx.slice_of_life_narrator.initialize()
-
+    
     narrator = app_ctx.slice_of_life_narrator
     world_state = await _ensure_world_state_from_ctx(app_ctx)
-    ws = world_state.model_dump() if world_state else {}
-
-    prompt = (
-        "You are the Slice-of-Life Narrator for a subtle, power-dynamic-focused sim.\n"
-        "Write a short routine scene and return STRICT JSON only. No prose outside JSON.\n\n"
-        f"Activity: {activity}\n"
-        f"Involved NPC IDs: {json.dumps(involved_npcs or [])}\n"
-        f"World State: {json.dumps(ws, ensure_ascii=False)}\n\n"
-        "Return JSON with exactly these keys:\n"
-        "{\n"
-        '  "description": "2–3 short paragraphs of atmospheric narration",\n'
-        '  "tension_level": 0,\n'
-        '  "emergent_opportunities": ["..."],\n'
-        '  "available_activities": ["..."],\n'
-        '  "nyx_one_liner": "a teasing meta one-liner"\n'
-        "}\n"
+    
+    # CRITICAL FIX: Use Runner.run() and pass dicts
+    from agents import Runner
+    
+    result = await Runner.run(
+        narrator.routine_narrator,
+        messages=[{"role": "user", "content": f"Narrate daily routine: {activity}"}],
+        context=narrator.context,
+        tool_calls=[{
+            "tool": narrator.narrate_daily_routine,
+            "kwargs": {
+                "activity": activity,
+                "world_state": world_state.model_dump() if world_state else {},  # Pass dict!
+                "involved_npcs": involved_npcs or []
+            }
+        }]
     )
-
-    # ✅ Correct invocation
-    resp = await Runner.run(narrator.routine_narrator, prompt)
-    raw = extract_runner_response(resp)
-
-    data = _safe_json_loads(raw, {
-        "description": (raw.strip() or f"You go about {activity}..."),
-        "tension_level": 2,
-        "emergent_opportunities": [],
-        "available_activities": [],
-        "nyx_one_liner": "",
-    })
-    # Ensure required keys exist
-    data.setdefault("description", f"You go about {activity}...")
-    data.setdefault("tension_level", 2)
-    data.setdefault("emergent_opportunities", [])
-    data.setdefault("available_activities", [])
-    data.setdefault("nyx_one_liner", "")
-
-    return json.dumps(data, ensure_ascii=False)
+    
+    if result and hasattr(result, 'data'):
+        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
+    
+    return json.dumps({"activity": activity, "description": f"You go about {activity}..."})
   
 @function_tool
 async def generate_ambient_narration(
@@ -1926,8 +1903,11 @@ async def generate_npc_dialogue(
             significance=5
         )
     
-    # Use the narrator's dialogue generation
-    dialogue_result = await narrator.dialogue_writer.run(
+    # CRITICAL FIX: Use Runner.run() and pass dicts
+    from agents import Runner
+    
+    dialogue_result = await Runner.run(
+        narrator.dialogue_writer,
         messages=[{"role": "user", "content": f"Generate dialogue for situation: {situation}"}],
         context=narrator.context,
         tool_calls=[{
@@ -1935,7 +1915,7 @@ async def generate_npc_dialogue(
             "kwargs": {
                 "npc_id": npc_id,
                 "situation": situation,
-                "world_state": world_state.model_dump() if world_state else {},
+                "world_state": world_state.model_dump() if world_state else {},  # Pass dict!
                 "player_input": app_ctx.current_context.get("user_input")
             }
         }]
@@ -3286,7 +3266,7 @@ def _json_safe(x):
 @function_tool
 async def narrate_slice_of_life_scene(
     ctx: RunContextWrapper[NyxContext],
-    payload: NarrateSliceInput
+    scene_type: str = "routine"
 ) -> str:
     """Generate Nyx's narration for a slice-of-life scene using the sophisticated narrator."""
     
@@ -3303,7 +3283,7 @@ async def narrate_slice_of_life_scene(
     
     narrator = app_ctx.slice_of_life_narrator
     
-    # Build the scene event from payload
+    # Build the scene event from scene_type
     from story_agent.world_simulation_models import (
         SliceOfLifeEvent, ActivityType
     )
@@ -3317,14 +3297,14 @@ async def narrate_slice_of_life_scene(
         "intimate": ActivityType.INTIMATE,
         "leisure": ActivityType.LEISURE,
         "special": ActivityType.SPECIAL,
-        "errands": ActivityType.ROUTINE,  # Add mapping for errands
-        "chores": ActivityType.ROUTINE,    # Add mapping for chores
+        "errands": ActivityType.ROUTINE,
+        "chores": ActivityType.ROUTINE,
     }
     
     scene = SliceOfLifeEvent(
-        event_type=activity_type_map.get(payload.scene_type, ActivityType.ROUTINE),
-        title=f"{payload.scene_type} scene",
-        description=f"A {payload.scene_type} moment in daily life",
+        event_type=activity_type_map.get(scene_type, ActivityType.ROUTINE),
+        title=f"{scene_type} scene",
+        description=f"A {scene_type} moment in daily life",
         location="current_location",
         participants=[]  # Will be filled from world state
     )
@@ -3341,21 +3321,23 @@ async def narrate_slice_of_life_scene(
     
     # Create proper input for the narrator's tool
     narrator_input = NarrateSliceOfLifeInput(
-        scene_type=payload.scene_type,
+        scene_type=scene_type,
         scene=scene,
         world_state=world_state,
         player_action=None  # Could be added from context if available
     )
     
-    # Call the narrator's sophisticated narration tool
-    # FIX: Use model_dump() to serialize the input properly
-    from agents import RunContextWrapper as NarratorWrapper
-    narrator_result = await narrator.scene_narrator.run(
-        messages=[{"role": "user", "content": f"Narrate a {payload.scene_type} scene"}],
+    # CRITICAL FIX: Use Runner.run() instead of narrator.scene_narrator.run()
+    # AND pass model_dump() instead of the model instance
+    from agents import Runner
+    
+    narrator_result = await Runner.run(
+        narrator.scene_narrator,
+        messages=[{"role": "user", "content": f"Narrate a {scene_type} scene"}],
         context=narrator.context,
         tool_calls=[{
             "tool": narrator.narrate_slice_of_life_scene,
-            "kwargs": {"payload": narrator_input.model_dump()}  # Convert to dict for serialization
+            "kwargs": {"payload": narrator_input.model_dump()}  # Pass dict, not model!
         }]
     )
     
@@ -3364,7 +3346,7 @@ async def narrate_slice_of_life_scene(
         narration_data = narrator_result.data
     else:
         # Fallback to the original simple version
-        return await _simple_narrate_fallback(app_ctx, payload)
+        return await _simple_narrate_fallback(app_ctx, scene_type)
     
     # Now add Nyx's personality layer on top
     nyx_enhanced = await _add_nyx_hosting_personality(
@@ -3385,7 +3367,7 @@ async def narrate_slice_of_life_scene(
         "power_undertones": narration_data.power_dynamic_hints if hasattr(narration_data, 'power_dynamic_hints') else [],
         "available_activities": narration_data.available_activities if hasattr(narration_data, 'available_activities') else ["observe", "interact", "wait"],
         "nyx_commentary": narration_data.nyx_commentary if hasattr(narration_data, 'nyx_commentary') else None,
-        "scene_type": payload.scene_type,
+        "scene_type": scene_type,
         "context_aware": narration_data.context_aware if hasattr(narration_data, 'context_aware') else True,
         "governance_approved": narration_data.governance_approved if hasattr(narration_data, 'governance_approved') else True,
     }
