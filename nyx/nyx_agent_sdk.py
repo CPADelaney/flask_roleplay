@@ -106,6 +106,16 @@ from agents import (
     RunContextWrapper, RunConfig
 )
 
+from lore.core.canon import (
+    find_or_create_npc,
+    find_or_create_location, 
+    find_or_create_event,
+    log_canonical_event,
+    create_message,
+    update_entity_with_governance,
+    ensure_canonical_context
+)
+
 from pydantic import BaseModel as _PydanticBaseModel, Field, ValidationError, ConfigDict
 import inspect
 
@@ -1736,39 +1746,38 @@ async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: Retriev
 
 @function_tool
 async def add_memory(ctx: RunContextWrapper[NyxContext], payload: AddMemoryInput) -> str:
-    """Add a new memory for Nyx."""
+    """Add a new memory for Nyx using canonical system."""
     data = AddMemoryInput.model_validate(payload or {})
     memory_text = data.memory_text
     memory_type = data.memory_type
     significance = data.significance
     
+    # Use canonical context
+    canonical_ctx = ensure_canonical_context(ctx.context)
+    
+    # Store memory canonically
+    async with get_db_connection_context() as conn:
+        # This should use the canonical memory system
+        await log_canonical_event(
+            canonical_ctx, conn,
+            f"Memory stored: {memory_text[:100]}...",
+            tags=["memory", memory_type, "nyx_generated"],
+            significance=significance
+        )
+    
+    # Also use the existing memory system
     memory_system = ctx.context.memory_system
-    
-    # Convert significance to importance string
-    if significance >= 8:
-        importance = "critical"
-    elif significance >= 6:
-        importance = "high"
-    elif significance >= 4:
-        importance = "medium"
-    elif significance >= 2:
-        importance = "low"
-    else:
-        importance = "trivial"
-    
     result = await memory_system.remember(
         entity_type="integrated",
         entity_id=0,
         memory_text=memory_text,
-        importance=importance,
+        importance="high" if significance >= 8 else "medium",
         emotional=True,
         tags=["agent_generated", memory_type]
     )
     
-    memory_id = result.get("memory_id", "unknown")
-    
     return MemoryStorageResult(
-        memory_id=str(memory_id),
+        memory_id=str(result.get("memory_id", "unknown")),
         success=True
     ).model_dump_json()
 
@@ -2027,7 +2036,7 @@ async def update_relationship_state(
     ctx: RunContextWrapper[NyxContext],
     payload: UpdateRelationshipStateInput
 ) -> str:
-    """Update relationship state with an entity."""
+    """Update relationship state canonically with full governance integration."""
     data = UpdateRelationshipStateInput.model_validate(payload or {})
     entity_id = data.entity_id
     trust_change = data.trust_change
@@ -2036,6 +2045,13 @@ async def update_relationship_state(
     
     relationships = ctx.context.relationship_states
     
+    # Create canonical context
+    canonical_ctx = ensure_canonical_context({
+        'user_id': ctx.context.user_id,
+        'conversation_id': ctx.context.conversation_id
+    })
+    
+    # Initialize relationship if it doesn't exist
     if entity_id not in relationships:
         relationships[entity_id] = {
             "trust": 0.5,
@@ -2047,13 +2063,20 @@ async def update_relationship_state(
         }
     
     rel = relationships[entity_id]
+    old_state = {
+        "trust": rel["trust"],
+        "power_dynamic": rel["power_dynamic"],
+        "emotional_bond": rel["emotional_bond"]
+    }
+    
+    # Apply changes with bounds checking
     rel["trust"] = max(0, min(1, rel["trust"] + trust_change))
     rel["power_dynamic"] = max(0, min(1, rel["power_dynamic"] + power_change))
     rel["emotional_bond"] = max(0, min(1, rel["emotional_bond"] + bond_change))
     rel["interaction_count"] += 1
     rel["last_interaction"] = time.time()
     
-    # Determine relationship type
+    # Determine relationship type based on new values
     if rel["trust"] > Config.INTIMATE_TRUST_THRESHOLD and rel["emotional_bond"] > Config.INTIMATE_BOND_THRESHOLD:
         rel["type"] = "intimate"
     elif rel["trust"] > Config.FRIENDLY_TRUST_THRESHOLD:
@@ -2067,60 +2090,209 @@ async def update_relationship_state(
     else:
         rel["type"] = "neutral"
     
-    # Save to database with its own connection
-    async with get_db_connection_context() as conn:
-        # First get existing evolution history
-        existing = await conn.fetchrow("""
-            SELECT evolution_history 
-            FROM RelationshipEvolution 
-            WHERE user_id = $1 AND conversation_id = $2 
-                AND npc1_id = $3 AND entity2_type = $4 AND entity2_id = $5
-        """, ctx.context.user_id, ctx.context.conversation_id, 0, "entity", entity_id)
-        
-        # Build evolution history
-        evolution_history = []
-        if existing and existing["evolution_history"]:
-            evolution_history = json.loads(existing["evolution_history"])
-        
-        # Add new entry (keep last 50 entries)
-        evolution_history.append({
-            "timestamp": time.time(),
-            "trust": rel["trust"],
-            "power": rel["power_dynamic"],
-            "bond": rel["emotional_bond"]
-        })
-        evolution_history = evolution_history[-50:]
-        
-        await conn.execute("""
-            INSERT INTO RelationshipEvolution 
-            (user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
-             relationship_type, current_stage, progress_to_next, evolution_history)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (user_id, conversation_id, npc1_id, entity2_type, entity2_id)
-            DO UPDATE SET 
-                relationship_type = $6,
-                current_stage = $7,
-                progress_to_next = $8,
-                evolution_history = $9
-        """, ctx.context.user_id, ctx.context.conversation_id, 0, "entity", entity_id,
-             rel["type"], rel["type"], 0, json.dumps(evolution_history))
+    # Calculate significance of changes for canonical logging
+    total_change = abs(trust_change) + abs(power_change) + abs(bond_change)
+    significance = 5  # base
+    if total_change > 0.3:
+        significance = 7  # major change
+    if total_change > 0.5:
+        significance = 8  # dramatic change
+    if rel["type"] != "neutral":
+        significance += 1  # relationship has clear type
     
-    return RelationshipUpdateResult(
+    # Save to database with canonical integration
+    async with get_db_connection_context() as conn:
+        try:
+            # First, ensure the entity exists canonically (if it's an NPC)
+            if entity_id.isdigit():  # Assume numeric entity_id means NPC
+                npc_id = int(entity_id)
+                
+                # Get NPC details for canonical creation
+                npc_data = await conn.fetchrow("""
+                    SELECT npc_name, role, affiliations 
+                    FROM NPCStats 
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, npc_id, ctx.context.user_id, ctx.context.conversation_id)
+                
+                if npc_data:
+                    # Ensure NPC exists in canonical system
+                    canonical_npc_id = await find_or_create_npc(
+                        canonical_ctx, conn,
+                        npc_name=npc_data['npc_name'],
+                        role=npc_data.get('role', 'individual'),
+                        affiliations=npc_data.get('affiliations', [])
+                    )
+            
+            # Get existing evolution history
+            existing = await conn.fetchrow("""
+                SELECT evolution_history 
+                FROM RelationshipEvolution 
+                WHERE user_id = $1 AND conversation_id = $2 
+                    AND npc1_id = $3 AND entity2_type = $4 AND entity2_id = $5
+            """, ctx.context.user_id, ctx.context.conversation_id, 0, "entity", entity_id)
+            
+            # Build evolution history
+            evolution_history = []
+            if existing and existing["evolution_history"]:
+                try:
+                    evolution_history = json.loads(existing["evolution_history"])
+                except (json.JSONDecodeError, TypeError):
+                    evolution_history = []
+            
+            # Add new entry (keep last 50 entries)
+            evolution_entry = {
+                "timestamp": time.time(),
+                "trust": rel["trust"],
+                "power": rel["power_dynamic"],
+                "bond": rel["emotional_bond"],
+                "changes": {
+                    "trust": trust_change,
+                    "power": power_change,
+                    "bond": bond_change
+                },
+                "interaction_count": rel["interaction_count"],
+                "old_type": old_state.get("type", "neutral"),
+                "new_type": rel["type"]
+            }
+            evolution_history.append(evolution_entry)
+            evolution_history = evolution_history[-50:]  # Keep last 50
+            
+            # Use canonical update system
+            update_result = await update_entity_with_governance(
+                canonical_ctx, conn,
+                entity_type="RelationshipEvolution",
+                entity_id=0,  # Will be handled by upsert logic
+                updates={
+                    "relationship_type": rel["type"],
+                    "current_stage": rel["type"], 
+                    "progress_to_next": min(1.0, total_change * 2),  # Scale change to progress
+                    "evolution_history": json.dumps(evolution_history),
+                    "trust_level": rel["trust"],
+                    "power_dynamic": rel["power_dynamic"],
+                    "emotional_bond": rel["emotional_bond"],
+                    "last_interaction": rel["last_interaction"]
+                },
+                reason=f"Relationship evolution: trust{trust_change:+.3f}, power{power_change:+.3f}, bond{bond_change:+.3f}",
+                significance=significance
+            )
+            
+            # If canonical update failed, fall back to direct update
+            if not update_result.get("success"):
+                await conn.execute("""
+                    INSERT INTO RelationshipEvolution 
+                    (user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
+                     relationship_type, current_stage, progress_to_next, evolution_history)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (user_id, conversation_id, npc1_id, entity2_type, entity2_id)
+                    DO UPDATE SET 
+                        relationship_type = $6,
+                        current_stage = $7,
+                        progress_to_next = $8,
+                        evolution_history = $9
+                """, ctx.context.user_id, ctx.context.conversation_id, 0, "entity", entity_id,
+                     rel["type"], rel["type"], min(1.0, total_change * 2), json.dumps(evolution_history))
+            
+            # Log the relationship change canonically
+            change_description = []
+            if abs(trust_change) > 0.01:
+                change_description.append(f"trust {trust_change:+.3f}")
+            if abs(power_change) > 0.01:
+                change_description.append(f"power {power_change:+.3f}")
+            if abs(bond_change) > 0.01:
+                change_description.append(f"bond {bond_change:+.3f}")
+            
+            if change_description:
+                await log_canonical_event(
+                    canonical_ctx, conn,
+                    f"Relationship with {entity_id} evolved: {', '.join(change_description)} → {rel['type']} relationship",
+                    tags=["relationship", "evolution", rel["type"], "nyx_update"],
+                    significance=significance
+                )
+            
+            # Log relationship type changes
+            if old_state.get("type", "neutral") != rel["type"]:
+                await log_canonical_event(
+                    canonical_ctx, conn,
+                    f"Relationship type shifted: {old_state.get('type', 'neutral')} → {rel['type']} with {entity_id}",
+                    tags=["relationship", "type_change", rel["type"], "milestone"],
+                    significance=significance + 1
+                )
+            
+            # Check for significant thresholds crossed
+            threshold_events = []
+            
+            # Trust thresholds
+            if old_state["trust"] < Config.INTIMATE_TRUST_THRESHOLD <= rel["trust"]:
+                threshold_events.append("intimate_trust_achieved")
+            elif old_state["trust"] >= Config.HOSTILE_TRUST_THRESHOLD > rel["trust"]:
+                threshold_events.append("trust_broken")
+            
+            # Power thresholds  
+            if old_state["power_dynamic"] < Config.DOMINANT_POWER_THRESHOLD <= rel["power_dynamic"]:
+                threshold_events.append("dominance_established")
+            elif old_state["power_dynamic"] >= Config.SUBMISSIVE_POWER_THRESHOLD > rel["power_dynamic"]:
+                threshold_events.append("submission_deepened")
+            
+            # Bond thresholds
+            if old_state["emotional_bond"] < Config.INTIMATE_BOND_THRESHOLD <= rel["emotional_bond"]:
+                threshold_events.append("deep_bond_formed")
+            
+            # Log threshold crossings
+            for event in threshold_events:
+                await log_canonical_event(
+                    canonical_ctx, conn,
+                    f"Relationship milestone: {event.replace('_', ' ')} with {entity_id}",
+                    tags=["relationship", "milestone", event, entity_id],
+                    significance=9  # Milestones are highly significant
+                )
+            
+        except Exception as e:
+            logger.error(f"Error in canonical relationship update: {e}", exc_info=True)
+            # Continue with function to avoid breaking the flow
+    
+    # Create relationship changes for response
+    changes = RelationshipChanges(
+        trust=trust_change,
+        power=power_change,
+        bond=bond_change
+    )
+    
+    # Create relationship state output
+    relationship_state_out = RelationshipStateOut(
+        trust=rel["trust"],
+        power_dynamic=rel["power_dynamic"],
+        emotional_bond=rel["emotional_bond"],
+        interaction_count=rel["interaction_count"],
+        last_interaction=rel["last_interaction"],
+        type=rel["type"]
+    )
+    
+    # Build result
+    result = RelationshipUpdateResult(
         entity_id=entity_id,
-        relationship=RelationshipStateOut(
-            trust=rel["trust"],
-            power_dynamic=rel["power_dynamic"],
-            emotional_bond=rel["emotional_bond"],
-            interaction_count=rel["interaction_count"],
-            last_interaction=rel["last_interaction"],
-            type=rel["type"]
-        ),
-        changes=RelationshipChanges(
-            trust=trust_change,
-            power=power_change,
-            bond=bond_change
-        )
-    ).model_dump_json()
+        relationship=relationship_state_out,
+        changes=changes
+    )
+    
+    # Store evolution pattern for learning
+    pattern_data = {
+        "entity_id": entity_id,
+        "change_magnitude": total_change,
+        "relationship_type": rel["type"],
+        "direction": "positive" if total_change > 0 else "negative" if total_change < 0 else "neutral",
+        "trust_direction": "up" if trust_change > 0 else "down" if trust_change < 0 else "stable",
+        "power_direction": "up" if power_change > 0 else "down" if power_change < 0 else "stable",
+        "bond_direction": "up" if bond_change > 0 else "down" if bond_change < 0 else "stable"
+    }
+    
+    # Learn from this relationship interaction
+    await ctx.context.learn_from_interaction(
+        action=f"relationship_update_{rel['type']}",
+        outcome=f"total_change_{total_change:.2f}",
+        success=total_change > 0.1  # Consider it successful if meaningful change occurred
+    )
+    
+    return result.model_dump_json()
 
 @function_tool
 async def check_performance_metrics(ctx: RunContextWrapper[NyxContext], payload: EmptyInput) -> str:
