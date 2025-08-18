@@ -1732,36 +1732,75 @@ async def narrate_daily_routine(
     involved_npcs: List[int] = None
 ) -> str:
     """Narrate daily routine using the sophisticated narrator."""
+    import json
+
+    # Helper for robust extraction from Runner.run(...) results
+    def _extract_text(resp) -> str:
+        try:
+            from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+            return extract_runner_response(resp)
+        except Exception:
+            # Fallbacks for different Runner/Agent return shapes
+            return (
+                getattr(resp, "output", None)
+                or getattr(resp, "content", None)
+                or ""
+            )
+
     app_ctx = _get_app_ctx(ctx)
-    
+
     if not app_ctx.slice_of_life_narrator:
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
         app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
             app_ctx.user_id,
-            app_ctx.conversation_id
+            app_ctx.conversation_id,
         )
         await app_ctx.slice_of_life_narrator.initialize()
-    
+
     narrator = app_ctx.slice_of_life_narrator
     world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
-    result = await narrator.routine_narrator.run(
-        messages=[{"role": "user", "content": f"Narrate {activity} routine"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": narrator.narrate_daily_routine,
-            "kwargs": {
-                "activity": activity,
-                "world_state": world_state.model_dump() if world_state else {},
-                "involved_npcs": involved_npcs or []
-            }
-        }]
+    ws = world_state.model_dump() if world_state else {}
+
+    # Ask the routine narrator for STRICT JSON so downstream code can parse
+    prompt = (
+        "You are the Slice-of-Life Narrator for a subtle, power-dynamic-focused sim.\n"
+        "Write a short routine scene and return STRICT JSON only. No prose outside JSON.\n\n"
+        f"Activity: {activity}\n"
+        f"Involved NPC IDs: {json.dumps(involved_npcs or [])}\n"
+        f"World State: {json.dumps(ws, ensure_ascii=False)}\n\n"
+        "Return JSON with exactly these keys:\n"
+        "{\n"
+        '  "description": "2–3 short paragraphs of atmospheric narration",\n'
+        '  "tension_level": 0,\n'
+        '  "emergent_opportunities": ["..."],\n'
+        '  "available_activities": ["..."],\n'
+        '  "nyx_one_liner": "a teasing meta one-liner"\n'
+        "}\n"
     )
-    
-    if result and hasattr(result, 'data'):
-        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
-    
-    return json.dumps({"description": f"You go about {activity}..."})
+
+    # ✅ Correct way to invoke the Agent
+    resp = await Runner.run(narrator.routine_narrator, prompt)
+    raw = _extract_text(resp)
+
+    # Try to parse JSON; if not valid, create a sane fallback
+    try:
+        data = json.loads(raw)
+        # Ensure required keys exist with defaults
+        data.setdefault("description", f"You go about {activity}...")
+        data.setdefault("tension_level", 2)
+        data.setdefault("emergent_opportunities", [])
+        data.setdefault("available_activities", [])
+        data.setdefault("nyx_one_liner", "")
+    except Exception:
+        data = {
+            "description": raw.strip() or f"You go about {activity}...",
+            "tension_level": 2,
+            "emergent_opportunities": [],
+            "available_activities": [],
+            "nyx_one_liner": "",
+        }
+
+    return json.dumps(data, ensure_ascii=False)
 
 @function_tool
 async def generate_ambient_narration(
