@@ -749,8 +749,7 @@ class NarratorContext:
 # Core Narration Functions with Governance & Context
 # ===============================================================================
 
-Here's the full updated narrate_slice_of_life_scene function for slice_of_life_narrator.py with proper handling for both dict and model inputs:
-python@function_tool
+@function_tool
 async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> str:
     """Generate narration for a slice-of-life scene with full canonical tracking."""
     context = ctx.context
