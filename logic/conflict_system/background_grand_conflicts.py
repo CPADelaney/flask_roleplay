@@ -84,7 +84,34 @@ class DailyBackgroundFlavorResponse(TypedDict):
     optional_hook: str                  # empty string if none
 
 
+INTENSITY_TO_FLOAT = {
+    BackgroundIntensity.DISTANT_RUMOR: 0.10,
+    BackgroundIntensity.OCCASIONAL_NEWS: 0.25,
+    BackgroundIntensity.REGULAR_TOPIC:   0.50,
+    BackgroundIntensity.AMBIENT_TENSION: 0.75,
+    BackgroundIntensity.VISIBLE_EFFECTS: 0.90,
+}
 
+def float_to_intensity(x: float) -> BackgroundIntensity:
+    # snap to nearest band
+    bands = [
+        (0.10, BackgroundIntensity.DISTANT_RUMOR),
+        (0.25, BackgroundIntensity.OCCASIONAL_NEWS),
+        (0.50, BackgroundIntensity.REGULAR_TOPIC),
+        (0.75, BackgroundIntensity.AMBIENT_TENSION),
+        (0.90, BackgroundIntensity.VISIBLE_EFFECTS),
+    ]
+    # pick the closest by absolute diff
+    best = min(bands, key=lambda b: abs(x - b[0]))
+    return best[1]
+
+def adjust_intensity_value(current: float, change: str) -> float:
+    step = 0.15  # tune if you like
+    if str(change).lower() == "increase":
+        return min(1.0, current + step)
+    if str(change).lower() == "decrease":
+        return max(0.0, current - step)
+    return current
 
 # ===============================================================================
 # BACKGROUND CONFLICT SUBSYSTEM (Integrated with Synthesizer)
@@ -392,14 +419,13 @@ class BackgroundConflictSubsystem:
             conflict_data = random.choice(conflicts)
             return self._db_to_background_conflict(conflict_data)
         return None
-    
+        
     def _db_to_background_conflict(self, db_row) -> BackgroundConflict:
         """Convert database row to BackgroundConflict object safely"""
         row = dict(db_row)  # asyncpg.Record -> dict
     
-        # factions may be absent or stored elsewhere; normalize to list
+        # factions may be in jsonb col 'factions' or absent
         raw_factions = row.get("factions")
-        factions: List[str]
         if isinstance(raw_factions, list):
             factions = raw_factions
         elif isinstance(raw_factions, (str, bytes)):
@@ -411,12 +437,16 @@ class BackgroundConflictSubsystem:
         else:
             factions = []
     
+        # intensity is stored as float in DB; map to enum
+        intensity_val = float(row.get("intensity", 0.5))
+        intensity_enum = float_to_intensity(intensity_val)
+    
         return BackgroundConflict(
-            conflict_id=row["conflict_id"],
+            conflict_id=row["id"],  # <-- PK is 'id'
             conflict_type=GrandConflictType(row["conflict_type"]),
             name=row["name"],
-            description=row["description"],
-            intensity=BackgroundIntensity(row["intensity"]),
+            description=row.get("description") or "",
+            intensity=intensity_enum,
             progress=float(row.get("progress", 0.0)),
             factions=factions,
             current_state=row.get("current_state", ""),
@@ -534,9 +564,7 @@ class BackgroundConflictOrchestrator:
         prompt = f"""
         Generate a {conflict_type.value} conflict for background worldbuilding.
     
-        Context: This is happening in the wider world, not directly affecting
-        the player's daily life but creating atmosphere and context.
-    
+        Context: This happens in the wider world, shaping atmosphere.
         Return JSON:
         {{
             "name": "Compelling headline-style name",
@@ -556,37 +584,37 @@ class BackgroundConflictOrchestrator:
     
         response = await Runner.run(self.world_event_agent, prompt)
         raw = extract_runner_response(response)
-        try:
-            data = json.loads(raw)
-        except Exception as e:
-            logger.error("generate_background_conflict: bad JSON (%s). raw head=%r", e, raw[:200])
-            raise
+        data = json.loads(raw)
     
-        # Create database entry
+        # Store with numeric intensity; default to "distant_rumor"
+        init_enum = BackgroundIntensity.DISTANT_RUMOR
+        init_intensity = INTENSITY_TO_FLOAT[init_enum]
+    
         async with get_db_connection_context() as conn:
             conflict_id = await conn.fetchval(
                 """
                 INSERT INTO BackgroundConflicts
-                (user_id, conversation_id, conflict_type, name, description,
-                 intensity, progress, is_active, current_state)
-                VALUES ($1, $2, $3, $4, $5, $6, 0, true, $7)
-                RETURNING conflict_id
+                    (user_id, conversation_id, conflict_type, name, description,
+                     intensity, progress, is_active, current_state, factions)
+                VALUES ($1, $2, $3, $4, $5, $6, 0.0, true, $7, $8)
+                RETURNING id
                 """,
                 self.user_id,
                 self.conversation_id,
                 conflict_type.value,
                 data["name"],
-                data["description"],
-                BackgroundIntensity.DISTANT_RUMOR.value,
-                data["initial_state"],
+                data.get("description", ""),
+                init_intensity,
+                data.get("initial_state", ""),
+                json.dumps(list(data.get("factions") or [])),
             )
     
-            # Store factions (if present)
+            # Optional: keep the separate factions table if you have it
             for faction in (data.get("factions") or []):
                 await conn.execute(
                     """
                     INSERT INTO BackgroundConflictFactions
-                    (conflict_id, faction_name, power_level, stance)
+                        (conflict_id, faction_name, power_level, stance)
                     VALUES ($1, $2, $3, 'neutral')
                     """,
                     conflict_id,
@@ -598,11 +626,11 @@ class BackgroundConflictOrchestrator:
             conflict_id=conflict_id,
             conflict_type=conflict_type,
             name=data["name"],
-            description=data["description"],
-            intensity=BackgroundIntensity.DISTANT_RUMOR,
+            description=data.get("description", ""),
+            intensity=init_enum,
             progress=0.0,
             factions=list(data.get("factions") or []),
-            current_state=data["initial_state"],
+            current_state=data.get("initial_state", ""),
             recent_developments=[],
             impact_on_daily_life=list(data.get("daily_life_impacts") or []),
             player_awareness_level=0.1,
@@ -620,12 +648,6 @@ class BackgroundConflictOrchestrator:
         Factions: {json.dumps(conflict.factions)}
         Recent: {json.dumps(conflict.recent_developments[-3:] if conflict.recent_developments else [])}
     
-        Generate the next development that:
-        - Builds on current state
-        - Feels consequential
-        - Could affect daily life subtly
-        - Introduces complexity
-    
         Return JSON:
         {{
             "event_type": "battle/negotiation/revelation/escalation/twist",
@@ -634,41 +656,42 @@ class BackgroundConflictOrchestrator:
             "new_state": "Updated conflict state",
             "progress_change": -10 to +20,
             "intensity_change": "increase/decrease/maintain",
-            "creates_opportunity": true/false,
-            "opportunity_description": "Optional player involvement",
-            "ripple_effects": ["3 subtle effects on the world"],
-            "npc_reactions": ["3 ways NPCs might react"]
+            "creates_opportunity": true/false
         }}
         """
     
         response = await Runner.run(self.development_agent, prompt)
         data = json.loads(extract_runner_response(response))
     
-        # Update DB
+        # compute new numeric intensity
+        current_val = INTENSITY_TO_FLOAT[conflict.intensity]
+        new_intensity = adjust_intensity_value(current_val, data.get("intensity_change", "maintain"))
+    
         async with get_db_connection_context() as conn:
             await conn.execute(
                 """
                 UPDATE BackgroundConflicts
-                SET current_state = $1,
-                    progress = progress + $2,
-                    intensity = $3
-                WHERE conflict_id = $4
+                   SET current_state = $1,
+                       progress      = LEAST(100.0, GREATEST(0.0, progress + $2)),
+                       intensity     = $3,
+                       updated_at    = CURRENT_TIMESTAMP
+                 WHERE id = $4
                 """,
                 data["new_state"],
-                data["progress_change"],
-                self._calculate_new_intensity(conflict.intensity, data["intensity_change"]),
-                conflict.conflict_id,
+                float(data.get("progress_change", 0.0)),
+                new_intensity,
+                conflict.conflict_id,  # <-- PK is 'id' in the table
             )
     
         return WorldEvent(
             conflict_id=conflict.conflict_id,
-            event_type=data["event_type"],
-            description=data["description"],
-            faction_impacts=data.get("faction_impacts", {}),
+            event_type=str(data.get("event_type", "")),
+            description=str(data.get("description", "")),
+            faction_impacts=dict(data.get("faction_impacts") or {}),
             creates_opportunity=bool(data.get("creates_opportunity")),
             opportunity_window=7 if data.get("creates_opportunity") else None,
         )
-    
+        
     def _calculate_new_intensity(self, current: BackgroundIntensity, change: str) -> str:
         """Calculate new intensity level"""
         intensities = list(BackgroundIntensity)
