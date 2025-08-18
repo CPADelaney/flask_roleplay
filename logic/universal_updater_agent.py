@@ -1229,6 +1229,7 @@ async def content_safety_guardrail(ctx, agent, input_data):
             Allow adult themes within the context of a hardcore femdom relationship.
             """,
             output_type=ContentSafety,
+            model='gpt-5-nano'
         )
         
         result = await Runner.run(content_moderator, input_data, context=ctx.context)
