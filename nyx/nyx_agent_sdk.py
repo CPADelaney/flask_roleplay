@@ -25,6 +25,7 @@ For continuous monitoring (scenario updates, resource usage, etc.), implement an
 This keeps the main request path fast and non-blocking.
 """
 
+from enum import Enum
 import logging
 import json
 import asyncio
@@ -184,23 +185,33 @@ async def _ensure_world_state(app_ctx):
     return getattr(ctx2, "current_world_state", None) if ctx2 else None
 
 def _json_safe(x):
-    """Best-effort JSON conversion for pydantic/enums/nested containers."""
+    """Best-effort JSON conversion for pydantic/enums/datetimes/nested containers."""
     if x is None:
         return None
+    # Pydantic v2 objects: force JSON mode, then recurse
     if hasattr(x, "model_dump"):
-        return x.model_dump()
+        try:
+            return _json_safe(x.model_dump(mode="json"))
+        except TypeError:
+            return _json_safe(x.model_dump())
+    # Objects that expose to_dict
     if hasattr(x, "to_dict"):
         try:
-            return x.to_dict()
+            return _json_safe(x.to_dict())
         except Exception:
             pass
+    # Primitive fixes
     if isinstance(x, Enum):
         return x.value
-    if isinstance(x, list):
-        return [_json_safe(i) for i in x]
-    if isinstance(x, dict):
+    if isinstance(x, (datetime, date)):
+        return x.isoformat()
+    # Containers (dicts, lists, tuples, sets)
+    if isinstance(x, Mapping):
         return {k: _json_safe(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple, set)):
+        return [_json_safe(v) for v in x]
     return x
+  
 
 # Helpers for conversion
 def dict_to_kvlist(d: dict) -> KVList:
@@ -267,6 +278,23 @@ def sanitize_agent_tools_in_place(agent):
                         logger.debug("Could not sanitize tool attr %s on %r", attr, t)
     except Exception:
         logger.exception("sanitize_agent_tools_in_place failed")
+
+
+def _jsonable(x):
+    """Convert any object to JSON-serializable format"""
+    if x is None:
+        return None
+    if isinstance(x, Enum):
+        return x.value
+    if isinstance(x, BaseModel):
+        return x.model_dump(mode="json")
+    if hasattr(x, "model_dump"):
+        return x.model_dump(mode="json")
+    if isinstance(x, dict):
+        return {k: _jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple, set)):
+        return [_jsonable(v) for v in x]
+    return x
 
 def _resolve_app_ctx(ctx_like):
     """
@@ -476,6 +504,16 @@ def _tool_output(resp, name: str):
         return json.loads(raw) if isinstance(raw, str) else (raw or {})
     except Exception:
         return {}
+
+def _default_json_encoder(obj):
+    if isinstance(obj, Enum):
+        return obj.value
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    # sets, etc.
+    if isinstance(obj, set):
+        return list(obj)
+    raise TypeError(f"{type(obj).__name__} is not JSON serializable")
 
 def assemble_nyx_response(resp: list) -> Dict[str, Any]:
     """Assemble final response from agent run with full narrator integration"""
@@ -3298,7 +3336,7 @@ async def orchestrate_slice_scene(
                 location="current_location",
                 participants=participants,
             )
-            scene_payload = scene_obj.model_dump()
+            scene_payload = _json_safe(scene_obj) 
         except Exception:
             scene_payload = {
                 "event_type": event_type_value,
