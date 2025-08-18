@@ -30,19 +30,6 @@ logger = logging.getLogger(__name__)
 # HELPER FUNCTION FOR RUNNER RESPONSE EXTRACTION
 # ===============================================================================
 
-def _clean_and_maybe_extract_json(s: str) -> str:
-    """Strip code fences/debug lines and return a JSON fragment if present."""
-    s = _strip_code_fences(s).strip()
-
-    # If the string is clean JSON already
-    if _looks_like_json(s):
-        return s
-
-    # Try to pull the first balanced JSON object/array from within the text
-    frag = _extract_json_fragment(s)
-    return frag if frag is not None else s
-
-
 def _strip_code_fences(s: str) -> str:
     """
     If the model wrapped the JSON in triple backticks, pull out the inner block.
@@ -65,17 +52,6 @@ def _strip_code_fences(s: str) -> str:
         inner = rest if re.fullmatch(r"[a-zA-Z0-9_-]+", first_line.strip()) else inner
 
     return inner if ("{" in inner or "[" in inner) else s
-
-
-def _looks_like_json(s: str) -> bool:
-    t = s.lstrip()
-    if not (t.startswith("{") or t.startswith("[")):
-        return False
-    try:
-        json.loads(t)
-        return True
-    except Exception:
-        return False
 
 
 def _extract_json_fragment(s: str) -> Optional[str]:
