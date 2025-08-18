@@ -231,6 +231,18 @@ def sanitize_agent_tools_in_place(agent):
     except Exception:
         logger.exception("sanitize_agent_tools_in_place failed")
 
+def get_canonical_context(ctx_obj) -> Any:
+    """Convert various context objects to canonical context"""
+    if hasattr(ctx_obj, 'user_id') and hasattr(ctx_obj, 'conversation_id'):
+        return ensure_canonical_context({
+            'user_id': ctx_obj.user_id,
+            'conversation_id': ctx_obj.conversation_id
+        })
+    elif hasattr(ctx_obj, 'context'):
+        return get_canonical_context(ctx_obj.context)
+    else:
+        raise ValueError("Cannot extract canonical context from object")
+
 def strict_output(model_cls):
     """Return the Pydantic model class as-is."""
     if not inspect.isclass(model_cls):
