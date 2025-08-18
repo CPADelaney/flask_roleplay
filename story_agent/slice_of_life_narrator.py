@@ -3,6 +3,7 @@
 Enhanced Slice-of-Life Narrator with Context-Aware Agents
 REFACTORED: Fixed Pydantic v2 additionalProperties issue for OpenAI Agents SDK
 """
+from __future__ import annotations
 
 import logging
 import random
