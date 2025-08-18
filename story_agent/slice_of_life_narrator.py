@@ -753,12 +753,97 @@ class NarratorContext:
 async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> str:
     """Generate narration for a slice-of-life scene with full canonical tracking."""
     context = ctx.context
-    
-    # FIX: Ensure payload is a model instance (handle both dict and model inputs)
+
+    # ---------- helpers (local, no imports needed) ----------
+    import dataclasses as _dc
+
+    def _to_serializable(obj):
+        if obj is None:
+            return None
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump()
+        if _dc.is_dataclass(obj):
+            return _dc.asdict(obj)
+        if isinstance(obj, (dict, list, str, int, float, bool)):
+            return obj
+        if hasattr(obj, "__dict__"):
+            # shallow; avoid unserializable callables
+            return {k: v for k, v in vars(obj).items() if not callable(v)}
+        return str(obj)
+
+    def _coerce_model(obj, cls):
+        if obj is None:
+            return None
+        if isinstance(obj, cls):
+            return obj
+        if hasattr(obj, "model_dump"):
+            try:
+                return cls(**obj.model_dump())
+            except Exception:
+                return None
+        if isinstance(obj, dict):
+            try:
+                return cls(**obj)
+            except Exception:
+                return None
+        return None
+
+    # ---------- robust payload normalization ----------
     if isinstance(payload, dict):
-        payload = NarrateSliceOfLifeInput(**payload)
-    
-    # Import canon functions
+        # First pass – may raise due to nested foreign models
+        try:
+            payload = NarrateSliceOfLifeInput(**payload)
+        except Exception:
+            # Coerce nested objects that provide model_dump()
+            scene_obj = payload.get("scene")
+            if scene_obj is not None and hasattr(scene_obj, "model_dump"):
+                payload["scene"] = scene_obj.model_dump()
+            ws_obj = payload.get("world_state")
+            if ws_obj is not None and hasattr(ws_obj, "model_dump"):
+                payload["world_state"] = ws_obj.model_dump()
+            payload = NarrateSliceOfLifeInput(**payload)
+
+    # Coerce nested objects into our AgentSafe models
+    scene = _coerce_model(payload.scene, SliceOfLifeEvent)
+    world_state = payload.world_state or context.current_world_state
+    if isinstance(world_state, dict):
+        # WorldState is pydantic in this module
+        try:
+            world_state = WorldState(**world_state)
+        except Exception:
+            world_state = None
+    if world_state is None:
+        world_state = await context.world_director.get_world_state()
+
+    # Synthesize a scene if needed
+    if scene is None:
+        scene = SliceOfLifeEvent(
+            event_type=ActivityType.ROUTINE if payload.scene_type == "routine" else ActivityType.SOCIAL,
+            title=f"{payload.scene_type} scene",
+            description=f"A {payload.scene_type} moment",
+            location="current_location",
+            participants=[],
+        )
+
+    # Normalize participants -> List[int]
+    norm_parts = []
+    for p in (scene.participants or []):
+        try:
+            if isinstance(p, int):
+                norm_parts.append(p)
+            elif isinstance(p, dict) and "npc_id" in p:
+                norm_parts.append(int(p["npc_id"]))
+            elif hasattr(p, "npc_id"):
+                norm_parts.append(int(getattr(p, "npc_id")))
+            else:
+                # best-effort int cast
+                norm_parts.append(int(p))
+        except Exception:
+            # drop silently if unusable
+            pass
+    scene.participants = norm_parts
+
+    # ---------- canon + context refresh ----------
     from lore.core.canon import (
         ensure_canonical_context,
         log_canonical_event,
@@ -766,30 +851,14 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
         find_or_create_event,
         create_journal_entry
     )
-    
-    # Create canonical context
+
     canonical_ctx = ensure_canonical_context({
         'user_id': context.user_id,
         'conversation_id': context.conversation_id
     })
 
-    # Refresh context with whatever hint we have
     await context.refresh_context(payload.player_action or payload.scene_type)
 
-    # Use provided world_state if present, otherwise from context
-    world_state = payload.world_state or context.current_world_state
-    if not world_state:
-        world_state = await context.world_director.get_world_state()
-
-    # Use provided scene if present, otherwise synthesize a minimal one
-    scene = payload.scene or SliceOfLifeEvent(
-        event_type=ActivityType.ROUTINE if payload.scene_type == "routine" else ActivityType.SOCIAL,
-        title=f"{payload.scene_type} scene",
-        description=f"A {payload.scene_type} moment",
-        location="current_location",
-        participants=[]
-    )
-    
     # Ensure location exists canonically
     async with get_db_connection_context() as conn:
         canonical_location = await find_or_create_location(
@@ -799,27 +868,22 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
             location_type="scene",
             notable_features=[f"{payload.scene_type}_area"]
         )
-        
-        # Update scene location with canonical name
         scene.location = canonical_location
-    
-    # Check if conflicts should influence the scene
+
+    # ---------- conflict influences ----------
     conflict_influences = []
     if context.active_conflicts:
-        for conflict in context.active_conflicts[:2]:  # Check top 2 conflicts
+        for conflict in context.active_conflicts[:2]:
             if isinstance(conflict, dict):
-                # Check if scene participants are in conflict
                 conflict_participants = conflict.get('participants', [])
-                scene_participants = scene.participants
-                
-                if any(p in conflict_participants for p in scene_participants):
+                if any(p in conflict_participants for p in scene.participants):
                     conflict_influences.append({
                         'type': conflict.get('type', 'unknown'),
                         'intensity': conflict.get('intensity', 0.5),
                         'description': conflict.get('description', '')
                     })
 
-    # Governance (safe to no-op if nyx_governance is None)
+    # ---------- governance ----------
     governance_approved = True
     governance_notes = None
     if context.governance_active:
@@ -828,7 +892,7 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
                 agent_type="narrator",
                 action_type="narrate_scene",
                 context={
-                    "scene": scene.model_dump() if hasattr(scene, 'model_dump') else dict(scene), 
+                    "scene": _to_serializable(scene),
                     "scene_type": payload.scene_type,
                     "has_conflicts": len(conflict_influences) > 0
                 }
@@ -838,43 +902,44 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
         except Exception as e:
             logger.warning(f"Governance check failed: {e}")
 
-    # Relationship contexts for participants (if any)
+    # ---------- relationship contexts ----------
     relationship_contexts = {}
     for npc_id in scene.participants:
-        rel_state = await context.relationship_manager.get_relationship_state(
-            'npc', npc_id, 'player', context.user_id
-        )
-        relationship_contexts[npc_id] = rel_state
+        try:
+            rel_state = await context.relationship_manager.get_relationship_state(
+                'npc', npc_id, 'player', context.user_id
+            )
+            relationship_contexts[npc_id] = rel_state
+        except Exception as e:
+            logger.warning(f"Rel state fetch failed for npc {npc_id}: {e}")
 
-    # Build narration pieces
+    # ---------- narration building ----------
     scene_desc = await _generate_scene_description(context, scene, world_state, relationship_contexts)
-    
-    # Add conflict manifestations to description if present
+
     if context.conflict_manifestations:
         scene_desc += f" {context.conflict_manifestations[0]}"
-    
+
     atmosphere = await _generate_atmosphere(context, scene, world_state)
     tone = _select_narrative_tone(scene, world_state, relationship_contexts)
     focus = _select_scene_focus(scene, payload.player_action)
-    
-    # Generate conflict-aware power hints
+
     power_hints = await _generate_power_hints(context, scene, relationship_contexts)
     if conflict_influences:
         power_hints.append("Unresolved tensions simmer beneath the surface")
-    
+
     sensory = await _generate_sensory_details(context, scene, world_state)
 
     npc_obs = []
     for npc_id in scene.participants:
         obs = await _generate_npc_observation(context, npc_id, scene, relationship_contexts.get(npc_id))
-        if obs: npc_obs.append(obs)
+        if obs:
+            npc_obs.append(obs)
 
     internal = None
-    if hasattr(world_state, 'world_tension'):
-        tension = world_state.world_tension
-        # Consider conflict tension too
-        if (getattr(tension, 'power_tension', 0) > 0.6 or 
-            getattr(tension, 'unresolved_conflicts', 0) > 0) and hasattr(world_state, 'relationship_dynamics'):
+    tension = getattr(world_state, 'world_tension', None)
+    if tension is not None:
+        if (getattr(tension, 'power_tension', 0) > 0.6 or getattr(tension, 'unresolved_conflicts', 0) > 0) and \
+           hasattr(world_state, 'relationship_dynamics'):
             internal = await _generate_internal_monologue(context, scene, world_state.relationship_dynamics, relationship_contexts)
 
     emergent_elements = await _identify_emergent_elements(context, scene, relationship_contexts)
@@ -904,105 +969,117 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
         relevant_memories=relevant_memories,
     )
 
-    # Store scene canonically in multiple ways
-    async with get_db_connection_context() as conn:
-        # Determine significance based on scene characteristics
-        significance = 5  # Base significance
-        if conflict_influences:
-            significance += 2
-        if len(scene.participants) > 3:
-            significance += 1
-        if scene.event_type in [ActivityType.SPECIAL, ActivityType.INTIMATE]:
-            significance += 2
-        if power_hints:
-            significance += 1
-        significance = min(significance, 10)  # Cap at 10
-        
-        # Log the main canonical event
-        await log_canonical_event(
-            canonical_ctx, conn,
-            f"Scene: {scene.title} - {scene_desc[:150]}...",
-            tags=[
-                "scene",
-                scene.event_type.value,
-                f"location_{canonical_location}",
-                tone.value,
-                focus.value
-            ] + (["conflict_present"] if conflict_influences else []),
-            significance=significance
-        )
-        
-        # Create a scene event record if significant
-        if significance >= 7:
-            event_id = await find_or_create_event(
-                canonical_ctx, conn,
-                event_name=scene.title,
-                description=scene_desc,
-                location=canonical_location,
-                year=1,  # Would need actual calendar integration
-                month=1,
-                day=1,
-                time_of_day=world_state.time_of_day.value if hasattr(world_state, 'time_of_day') else "Unknown"
-            )
-        
-        # Create journal entry for player's perspective
-        journal_entry_text = scene_desc
-        if internal:
-            journal_entry_text += f"\n\n[Internal thought: {internal}]"
-        
-        await create_journal_entry(
-            canonical_ctx, conn,
-            entry_type="scene",
-            entry_text=journal_entry_text,
-            revelation_types="power_dynamic" if power_hints else None,
-            narrative_moment=True if significance >= 8 else False,
-            intensity_level=int(significance),
-            entry_metadata={
-                "scene_type": scene.event_type.value,
-                "location": canonical_location,
-                "participants": scene.participants,
-                "conflicts_active": len(conflict_influences) > 0,
-                "tone": tone.value,
-                "focus": focus.value
-            },
-            importance=significance / 10.0,
-            tags=["scene", scene.event_type.value] + (["conflict"] if conflict_influences else [])
-        )
-        
-        # Track NPC involvement canonically
-        if scene.participants:
-            for npc_id in scene.participants:
-                await log_canonical_event(
-                    canonical_ctx, conn,
-                    f"NPC {npc_id} participated in scene at {canonical_location}",
-                    tags=[f"npc_{npc_id}", "scene_participation", canonical_location],
-                    significance=3
-                )
+    # ---------- persistence (canonical + memory) ----------
+    # Compute significance
+    significance = 5
+    if conflict_influences:
+        significance += 2
+    if len(scene.participants) > 3:
+        significance += 1
+    if scene.event_type in [ActivityType.SPECIAL, ActivityType.INTIMATE]:
+        significance += 2
+    if power_hints:
+        significance += 1
+    significance = min(significance, 10)
 
-    # Also persist in memory system for quick retrieval
-    if context.memory_manager:
-        await context.memory_manager.add_memory(
-            MemoryAddRequest(
-                user_id=context.user_id,
-                conversation_id=context.conversation_id,
-                content=scene_desc,
-                memory_type="scene",
-                importance=significance / 10.0,  # Normalize to 0-1
-                tags=["scene", scene.event_type.value] + (["conflict_present"] if conflict_influences else []),
-                metadata={
+    # Safe time_of_day
+    tod = getattr(world_state, 'time_of_day', None)
+    tod_val = getattr(tod, 'value', str(tod) if tod is not None else "Unknown")
+
+    async with get_db_connection_context() as conn:
+        try:
+            await log_canonical_event(
+                canonical_ctx, conn,
+                f"Scene: {scene.title} - {scene_desc[:150]}...",
+                tags=[
+                    "scene",
+                    scene.event_type.value,
+                    f"location_{canonical_location}",
+                    tone.value,
+                    focus.value
+                ] + (["conflict_present"] if conflict_influences else []),
+                significance=significance
+            )
+        except Exception as e:
+            logger.warning(f"log_canonical_event failed: {e}")
+
+        if significance >= 7:
+            try:
+                _ = await find_or_create_event(
+                    canonical_ctx, conn,
+                    event_name=scene.title,
+                    description=scene_desc,
+                    location=canonical_location,
+                    year=1,
+                    month=1,
+                    day=1,
+                    time_of_day=tod_val
+                )
+            except Exception as e:
+                logger.warning(f"find_or_create_event failed: {e}")
+
+        journal_entry_text = scene_desc + (f"\n\n[Internal thought: {internal}]" if internal else "")
+        try:
+            await create_journal_entry(
+                canonical_ctx, conn,
+                entry_type="scene",
+                entry_text=journal_entry_text,
+                revelation_types="power_dynamic" if power_hints else None,
+                narrative_moment=True if significance >= 8 else False,
+                intensity_level=int(significance),
+                entry_metadata={
                     "scene_type": scene.event_type.value,
                     "location": canonical_location,
                     "participants": scene.participants,
                     "conflicts_active": len(conflict_influences) > 0,
                     "tone": tone.value,
-                    "focus": focus.value,
-                    "power_hints": power_hints,
-                    "canonical_significance": significance
-                }
+                    "focus": focus.value
+                },
+                importance=significance / 10.0,
+                tags=["scene", scene.event_type.value] + (["conflict"] if conflict_influences else [])
             )
-        )
+        except Exception as e:
+            logger.warning(f"create_journal_entry failed: {e}")
+
+        if scene.participants:
+            for npc_id in scene.participants:
+                try:
+                    await log_canonical_event(
+                        canonical_ctx, conn,
+                        f"NPC {npc_id} participated in scene at {canonical_location}",
+                        tags=[f"npc_{npc_id}", "scene_participation", canonical_location],
+                        significance=3
+                    )
+                except Exception as e:
+                    logger.warning(f"log_canonical_event (npc {npc_id}) failed: {e}")
+
+    if context.memory_manager:
+        try:
+            await context.memory_manager.add_memory(
+                MemoryAddRequest(
+                    user_id=context.user_id,
+                    conversation_id=context.conversation_id,
+                    content=scene_desc,
+                    memory_type="scene",
+                    importance=significance / 10.0,
+                    tags=["scene", scene.event_type.value] + (["conflict_present"] if conflict_influences else []),
+                    metadata={
+                        "scene_type": scene.event_type.value,
+                        "location": canonical_location,
+                        "participants": scene.participants,
+                        "conflicts_active": len(conflict_influences) > 0,
+                        "tone": tone.value,
+                        "focus": focus.value,
+                        "power_hints": power_hints,
+                        "canonical_significance": significance
+                    }
+                )
+            )
+        except Exception as e:
+            logger.warning(f"memory_manager.add_memory failed: {e}")
 
     return narration.model_dump_json()
+
     
 @function_tool
 async def generate_npc_dialogue(
