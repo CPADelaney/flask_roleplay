@@ -672,8 +672,37 @@ class BackgroundConflictOrchestrator:
         """
     
         response = await Runner.run(self.development_agent, prompt)
-        data = json.loads(extract_runner_response(response))
-    
+        
+        # Fix: Better extraction logic
+        try:
+            # Try to extract the response content directly
+            if hasattr(response, 'messages') and response.messages:
+                raw = response.messages[-1].content
+            elif hasattr(response, 'output'):
+                raw = response.output
+            else:
+                raw = str(response)
+            
+            # Parse the JSON
+            data = json.loads(raw)
+        except (json.JSONDecodeError, AttributeError) as e:
+            logger.warning(f"Failed to parse response, using fallback: {e}")
+            # Provide a proper fallback with all required fields
+            data = {
+                "event_type": "continuation",
+                "description": f"The {conflict.name} continues to develop.",
+                "faction_impacts": {},
+                "new_state": conflict.current_state,  # Keep current state
+                "progress_change": 0,
+                "intensity_change": "maintain",
+                "creates_opportunity": False
+            }
+        
+        # Validate required fields and provide defaults
+        if 'new_state' not in data:
+            data['new_state'] = conflict.current_state
+            logger.warning("Missing 'new_state' in response, using current state")
+        
         # compute new numeric intensity
         current_val = INTENSITY_TO_FLOAT[conflict.intensity]
         new_intensity = adjust_intensity_value(current_val, data.get("intensity_change", "maintain"))
@@ -691,7 +720,7 @@ class BackgroundConflictOrchestrator:
                 data["new_state"],
                 float(data.get("progress_change", 0.0)),
                 new_intensity,
-                conflict.conflict_id,  # <-- PK is 'id' in the table
+                conflict.conflict_id,
             )
     
         return WorldEvent(
