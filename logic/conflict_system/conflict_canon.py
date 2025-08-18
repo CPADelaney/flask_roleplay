@@ -10,6 +10,8 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict, NotRequired
 from enum import Enum
 from dataclasses import dataclass
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
@@ -501,7 +503,7 @@ class ConflictCanonSubsystem:
         """
         
         response = await Runner.run(self.lore_integrator, prompt)
-        data = json.loads(response.output)
+        data = json.loads(extract_runner_response(response))
         
         if not data['should_be_canonical']:
             return None
@@ -553,7 +555,7 @@ class ConflictCanonSubsystem:
         """
         
         response = await Runner.run(self.cultural_interpreter, prompt)
-        data = json.loads(response.output)
+        data = json.loads(extract_runner_response(response))
         
         # Generate legacy
         legacy = await self._generate_legacy(conflict, resolution_data, data)
@@ -776,7 +778,7 @@ class ConflictCanonSubsystem:
         """
         
         response = await Runner.run(self.reference_generator, prompt)
-        data = json.loads(response.output)
+        data = json.loads(extract_runner_response(response))
         
         return [ref['text'] for ref in data['references']]
     
