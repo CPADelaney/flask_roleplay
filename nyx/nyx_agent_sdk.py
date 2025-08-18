@@ -3916,7 +3916,7 @@ You now work with a sophisticated SliceOfLifeNarrator that handles:
 - Governance-approved content
 
 When generating narrative:
-1. Use narrate_slice_of_life_scene for full scenes - this now uses the sophisticated narrator
+1. Use orchestrate_slice_scene for full scenes - this now uses the sophisticated narrator
 2. Use generate_npc_dialogue for character interactions - pulls from relationship context
 3. The narrator handles the heavy lifting; you add personality on top
 4. Always check world_state first to understand the current situation
