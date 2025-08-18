@@ -32,6 +32,65 @@ from lore.core.canon import (
     ensure_canonical_context
 )
 
+def _ws_brief(ws: Optional[WorldState]) -> Dict[str, Any]:
+    """Small, safe summary of world_state for logs."""
+    try:
+        if ws is None:
+            return {"has_ws": False}
+        mood = getattr(ws, "world_mood", None)
+        tod  = getattr(ws, "time_of_day", None)
+        tens = getattr(ws, "world_tension", None)
+        return {
+            "has_ws": True,
+            "mood": getattr(mood, "value", str(mood) if mood is not None else None),
+            "time_of_day": getattr(tod, "value", str(tod) if tod is not None else None),
+            "power_tension": getattr(tens, "power_tension", None) if tens is not None else None,
+            "social_tension": getattr(tens, "social_tension", None) if tens is not None else None,
+            "sexual_tension": getattr(tens, "sexual_tension", None) if tens is not None else None,
+            "active_npcs_len": len(getattr(ws, "active_npcs", []) or []),
+        }
+    except Exception as e:
+        return {"has_ws": ws is not None, "summary_error": str(e)}
+
+def _apply_world_state_influence(
+    tone: str,
+    requires_response: bool,
+    world_state: Optional[WorldState],
+) -> Tuple[str, bool, Dict[str, Any]]:
+    """
+    Apply small, auditable adjustments based on world_state.
+    Returns (tone, requires_response, effects_dict) so we can log exactly what changed.
+    """
+    effects: Dict[str, Any] = {}
+    if world_state is None:
+        return tone, requires_response, effects
+
+    try:
+        mood = getattr(world_state, "world_mood", None)
+        mood_val = getattr(mood, "value", None)
+        tension = getattr(world_state, "world_tension", None)
+        power_t = getattr(tension, "power_tension", 0.0) if tension is not None else 0.0
+
+        # Example, visible adjustments:
+        # - High power tension nudges the NPC to demand a response.
+        if isinstance(power_t, (int, float)) and power_t >= 0.7 and not requires_response:
+            requires_response = True
+            effects["requires_response"] = "set_true_by_high_power_tension"
+
+        # - Mood can soften or harden tone a notch
+        if isinstance(mood_val, str):
+            m = mood_val.lower()
+            if m == "playful" and tone in {"confident", "commanding"}:
+                effects["tone_adjustment"] = f"{tone}->friendly (playful mood)"
+                tone = "friendly"
+            elif m == "oppressive" and tone in {"friendly"}:
+                effects["tone_adjustment"] = f"{tone}->confident (oppressive mood)"
+                tone = "confident"
+    except Exception as e:
+        effects["ws_influence_error"] = str(e)
+
+    return tone, requires_response, effects
+
 # ===============================================================================
 # CRITICAL FIX: Agent-Safe Base Model
 # ===============================================================================
@@ -1086,142 +1145,176 @@ async def generate_npc_dialogue(
     ctx,
     npc_id: int,
     situation: str,
-    world_state: WorldState,
+    world_state: Optional[WorldState] = None,   # optional
     player_input: Optional[str] = None
 ) -> str:
     """Generate contextual NPC dialogue with power dynamics awareness."""
     context = ctx.context
-    
+    call_id = uuid.uuid4().hex[:8]
+
+    logger.info(
+        "NPC_DIALOGUE[%s]: enter npc_id=%s situation=%r ws_provided=%s ws=%s",
+        call_id, npc_id, situation, world_state is not None, _ws_brief(world_state)
+    )
+
+    # If callers don't pass world_state, fetch it.
+    if world_state is None:
+        try:
+            world_state = await context.world_director.get_world_state()
+            logger.info("NPC_DIALOGUE[%s]: fetched world_state via fallback ws=%s",
+                        call_id, _ws_brief(world_state))
+        except Exception as e:
+            logger.warning("NPC_DIALOGUE[%s]: failed to fetch world_state: %s", call_id, e)
+            world_state = None
+
     # Refresh context if player input provided
     if player_input:
-        await context.refresh_context(player_input)
-    
-    # Get NPC details and relationship state
+        try:
+            await context.refresh_context(player_input)
+        except Exception as e:
+            logger.warning("NPC_DIALOGUE[%s]: refresh_context failed: %s", call_id, e)
+
+    # Get NPC details
     async with get_db_connection_context() as conn:
-        npc = await conn.fetchrow("""
+        npc = await conn.fetchrow(
+            """
             SELECT npc_id, npc_name, dominance, personality_traits
             FROM NPCStats
             WHERE npc_id = $1
-        """, npc_id)
-    
+            """,
+            npc_id,
+        )
+
     if not npc:
-        return NPCDialogue(
+        logger.warning("NPC_DIALOGUE[%s]: npc_id=%s not found; returning fallback", call_id, npc_id)
+        out = NPCDialogue(
             npc_id=npc_id,
             npc_name="Unknown",
             dialogue="...",
             tone="neutral",
             subtext="",
             body_language="still"
-        ).model_dump_json()  # Return JSON even for fallback
-    
-    # Get narrative stage
+        ).model_dump_json()
+        logger.info("NPC_DIALOGUE[%s]: exit (fallback)", call_id)
+        return out
+
+    # Narrative stage + relationship
     stage = await get_npc_narrative_stage(context.user_id, context.conversation_id, npc_id)
-    
-    # Get relationship context
     relationship_context = await context.relationship_manager.get_relationship_state(
-        'npc', npc_id, 'player', context.user_id
+        "npc", npc_id, "player", context.user_id
     )
-    
-    # Get NPC's relevant memories
+
+    # Memory search (best-effort)
     npc_memories = []
     if context.memory_manager:
         try:
             memory_search_result = await context.memory_manager.search_memories(
                 MemorySearchRequest(
-                    query_text=f"npc_{npc_id} {situation}",  # Search for memories about this NPC and situation
+                    query_text=f"npc_{npc_id} {situation}",
                     memory_types=["dialogue", "interaction", "npc"],
                     limit=5,
                     user_id=context.user_id,
-                    conversation_id=context.conversation_id
+                    conversation_id=context.conversation_id,
                 )
             )
-            npc_memories = memory_search_result.memories if hasattr(memory_search_result, 'memories') else []
+            npc_memories = getattr(memory_search_result, "memories", []) or []
         except Exception as e:
-            logger.warning(f"Could not retrieve NPC memories: {e}")
-            npc_memories = []
-    
-    npc_context_data = None
-    if context.current_context and 'npcs' in context.current_context:
-        for npc_data in context.current_context['npcs']:
-            if npc_data.get('npc_id') == npc_id:
-                npc_context_data = npc_data
-                break
-    
-    # Check governance approval
+            logger.warning("NPC_DIALOGUE[%s]: memory search failed: %s", call_id, e)
+
+    # Governance
     governance_approved = True
     if context.governance_active:
         try:
             approval = await context.nyx_governance.check_permission(
                 agent_type="narrator",
                 action_type="npc_dialogue",
-                context={"npc_id": npc_id, "stage": stage.name}
+                context={"npc_id": npc_id, "stage": stage.name},
             )
             governance_approved = approval.get("approved", True)
-        except:
-            pass
-    
-    # Generate dialogue components
+            logger.debug("NPC_DIALOGUE[%s]: governance_approved=%s", call_id, governance_approved)
+        except Exception as e:
+            logger.warning("NPC_DIALOGUE[%s]: governance check failed: %s", call_id, e)
+
+    # Dialogue building
     dialogue = await _generate_dialogue_content(
         context, npc, situation, stage, player_input, relationship_context
     )
-    
-    tone = await _generate_dialogue_tone(
-        context, npc['dominance'], stage.name, situation
-    )
-    
+    tone = await _generate_dialogue_tone(context, npc["dominance"], stage.name, situation)
     subtext = await _generate_dialogue_subtext(
-        context, dialogue, npc['dominance'], stage.name, context.active_addictions
+        context, dialogue, npc["dominance"], stage.name, context.active_addictions
     )
-    
-    body_language = await _generate_body_language(
-        context, npc['dominance'], tone, stage.name
-    )
-    
-    # Determine if power dynamic is present
+    body_language = await _generate_body_language(context, npc["dominance"], tone, stage.name)
+
+    # World-state influence (visible + logged)
+    requires_response = (random.random() > 0.5)
+    tone_before = tone
+    requires_before = requires_response
+    tone, requires_response, ws_effects = _apply_world_state_influence(tone, requires_response, world_state)
+
+    if ws_effects:
+        logger.info(
+            "NPC_DIALOGUE[%s]: ws_influence applied tone:%s->%s requires:%s->%s effects=%s ws=%s",
+            call_id, tone_before, tone, requires_before, requires_response, ws_effects, _ws_brief(world_state)
+        )
+    else:
+        logger.debug("NPC_DIALOGUE[%s]: no ws_influence applied", call_id)
+
+    # Power dynamic & triggers
     power_dynamic = None
-    if npc['dominance'] > 60 and stage.name != "Innocent Beginning":
-        power_dynamic = _select_dialogue_power_dynamic(situation, npc['dominance'])
-    
-    # Identify hidden triggers
+    if npc["dominance"] > 60 and stage.name != "Innocent Beginning":
+        power_dynamic = _select_dialogue_power_dynamic(situation, npc["dominance"])
+
     hidden_triggers = await _identify_dialogue_triggers(
         context, dialogue, npc_id, relationship_context
     )
-    
-    # Determine memory influence
-    memory_influence = None
-    if npc_memories and len(npc_memories) > 0:
-        memory_influence = f"Influenced by {len(npc_memories)} past interactions"
-    
+    memory_influence = (
+        f"Influenced by {len(npc_memories)} past interactions" if npc_memories else None
+    )
+
+    logger.debug(
+        "NPC_DIALOGUE[%s]: tone=%s subtext=%s body=%s power_dynamic=%s triggers=%d mem_influence=%s",
+        call_id, tone, subtext, body_language,
+        getattr(power_dynamic, "value", power_dynamic),
+        len(hidden_triggers),
+        memory_influence or "none",
+    )
+
     dialogue_obj = NPCDialogue(
         npc_id=npc_id,
-        npc_name=npc['npc_name'],
+        npc_name=npc["npc_name"],
         dialogue=dialogue,
         tone=tone,
         subtext=subtext,
         body_language=body_language,
         power_dynamic=power_dynamic,
-        requires_response=random.random() > 0.5,
+        requires_response=requires_response,
         hidden_triggers=hidden_triggers,
         memory_influence=memory_influence,
         governance_approved=governance_approved,
-        context_informed=bool(npc_context_data)
+        context_informed=bool(context.current_context and "npcs" in context.current_context),
     )
-    
-    # Store dialogue in memory
+
+    # Memory (best-effort)
     if context.memory_manager:
-        await context.memory_manager.add_memory(
-            MemoryAddRequest(
-                user_id=context.user_id,
-                conversation_id=context.conversation_id,
-                content=f"{npc['npc_name']}: {dialogue}",
-                memory_type="dialogue",
-                importance=0.6,
-                tags=["dialogue", f"npc_{npc_id}", stage.name],
-                metadata={"npc_id": str(npc_id), "tone": tone, "stage": stage.name}
+        try:
+            await context.memory_manager.add_memory(
+                MemoryAddRequest(
+                    user_id=context.user_id,
+                    conversation_id=context.conversation_id,
+                    content=f"{npc['npc_name']}: {dialogue}",
+                    memory_type="dialogue",
+                    importance=0.6,
+                    tags=["dialogue", f"npc_{npc_id}", stage.name],
+                    metadata={"npc_id": str(npc_id), "tone": tone, "stage": stage.name},
+                )
             )
-        )
-    
-    # Return JSON string
+        except Exception as e:
+            logger.warning("NPC_DIALOGUE[%s]: add_memory failed: %s", call_id, e)
+
+    logger.info(
+        "NPC_DIALOGUE[%s]: exit npc_id=%s requires_response=%s governance_approved=%s",
+        call_id, npc_id, dialogue_obj.requires_response, governance_approved
+    )
     return dialogue_obj.model_dump_json()
 
 @function_tool
@@ -2147,6 +2240,44 @@ class SliceOfLifeNarrator:
             self.performance_monitor = PerformanceMonitor.get_instance(
                 self.user_id, self.conversation_id
             )
+
+    async def generate_npc_dialogue(
+        self,
+        npc_id: int,
+        situation: str,
+        world_state: Optional[WorldState] = None,
+        player_input: Optional[str] = None,
+    ):
+        call_id = uuid.uuid4().hex[:8]
+        logger.info(
+            "NPC_DIALOGUE_ADAPTER[%s]: enter npc_id=%s ws_provided=%s ws=%s",
+            call_id, npc_id, world_state is not None, _ws_brief(world_state)
+        )
+
+        if world_state is None:
+            try:
+                world_state = await self.context.world_director.get_world_state()
+                logger.info("NPC_DIALOGUE_ADAPTER[%s]: fetched ws=%s", call_id, _ws_brief(world_state))
+            except Exception as e:
+                logger.warning("NPC_DIALOGUE_ADAPTER[%s]: failed to fetch ws: %s", call_id, e)
+                world_state = None
+
+        result = await self.dialogue_writer.run(
+            messages=[{"role": "user", "content": situation}],
+            context=self.context,
+            tool_calls=[{
+                "tool": generate_npc_dialogue,
+                "kwargs": {
+                    "npc_id": npc_id,
+                    "situation": situation,
+                    "world_state": world_state.model_dump() if hasattr(world_state, "model_dump") else world_state,
+                    "player_input": player_input,
+                },
+            }],
+        )
+
+        logger.info("NPC_DIALOGUE_ADAPTER[%s]: exit", call_id)
+        return getattr(result, "data", result)
     
     async def narrate_world_state(self) -> str:
         """Generate narration for current world state"""
