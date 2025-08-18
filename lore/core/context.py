@@ -20,7 +20,13 @@ class CanonicalContext:
         """Create context from dictionary."""
         user_id = data.get('user_id', 0)
         conversation_id = data.get('conversation_id', 0)
-        return cls(user_id, conversation_id, **data)
+        
+        # FIX: Create a copy and remove the keys that are passed as positional args
+        remaining_data = data.copy()
+        remaining_data.pop('user_id', None)
+        remaining_data.pop('conversation_id', None)
+        
+        return cls(user_id, conversation_id, **remaining_data)
     
     @classmethod
     def from_object(cls, obj: Any) -> 'CanonicalContext':
