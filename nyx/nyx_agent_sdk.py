@@ -239,6 +239,18 @@ def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     
     return strip_ap(s)
 
+def run_compat(agent, *, instruction=None, messages=None, context=None, tools=None, tool_choice=None):
+    if instruction is None and messages:
+        # collapse legacy messages into a single prompt
+        parts = []
+        for m in messages:
+            if isinstance(m, dict) and m.get("role") in (None, "user", "system"):
+                parts.append(m.get("content", ""))
+        instruction = "\n".join(p for p in parts if p)
+    if instruction is None:
+        instruction = ""
+    return Runner.run(agent, instruction, context=context, tools=tools, tool_choice=tool_choice)
+
 def sanitize_agent_tools_in_place(agent):
     """
     If any tools were created before our patches (import order), sanitize
@@ -1834,45 +1846,55 @@ async def narrate_power_exchange(
 
 @function_tool
 async def narrate_daily_routine(
-    ctx: RunContextWrapper[NyxContext],
-    activity: str,
-    involved_npcs: List[int] = None
-) -> str:
-    """Narrate daily routine using the sophisticated narrator."""
-    app_ctx = _get_app_ctx(ctx)
-    
-    if not app_ctx.slice_of_life_narrator:
+    ctx: RunContextWrapper,
+    activity: str | None = None,
+    involved_npcs: list[int] | None = None
+) -> dict:
+    app_ctx = _unwrap_tool_ctx(ctx)
+    # ensure narrator
+    if not getattr(app_ctx, "slice_of_life_narrator", None):
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(app_ctx.user_id, app_ctx.conversation_id)
         await app_ctx.slice_of_life_narrator.initialize()
-    
     narrator = app_ctx.slice_of_life_narrator
-    world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
-    # CRITICAL FIX: Use Runner.run() and pass dicts
-    from agents import Runner
-    
-    result = await Runner.run(
-        narrator.routine_narrator,
-        messages=[{"role": "user", "content": f"Narrate daily routine: {activity}"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": narrator.narrate_daily_routine,
-            "kwargs": {
-                "activity": activity,
-                "world_state": world_state.model_dump() if world_state else {},  # Pass dict!
-                "involved_npcs": involved_npcs or []
-            }
-        }]
+
+    world_state = await _ensure_world_state(app_ctx)
+    participants = (involved_npcs or [])[:3]
+
+    scene_payload = {
+        "event_type": "routine",
+        "title": "daily routine",
+        "description": activity or "A quiet, habitual moment.",
+        "location": "current_location",
+        "participants": participants,
+    }
+    payload = {
+        "scene_type": "routine",
+        "scene": _json_safe(scene_payload),
+        "world_state": _json_safe(world_state),
+        "player_action": None,
+    }
+
+    instruction = (
+        "Call tool_narrate_slice_of_life_scene with exactly this JSON:\n\n"
+        "```json\n"
+        f"{{\"payload\": {json.dumps(_json_safe(payload), ensure_ascii=False, default=_default_json_encoder)} }}\n"
+        "```\n\n"
+        "Return only the tool result JSON."
     )
-    
-    if result and hasattr(result, 'data'):
-        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
-    
-    return json.dumps({"activity": activity, "description": f"You go about {activity}..."})
+
+    resp = await Runner.run(
+        narrator.scene_narrator,
+        instruction,
+        context=narrator.context,
+        tools=[tool_narrate_slice_of_life_scene],
+        tool_choice=tool_narrate_slice_of_life_scene,
+    )
+    raw = extract_runner_response(resp)
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        return {"scene_description": str(raw)}
   
 @function_tool
 async def generate_ambient_narration(
@@ -3373,7 +3395,10 @@ async def orchestrate_slice_scene(
     )
 
     try:
-        resp = await Runner.run(
+        resp = await run_compat(
+            agent, 
+            instruction=prompt_str, 
+            context=ctx,
             narrator.scene_narrator,
             instruction,
             context=narrator.context,
