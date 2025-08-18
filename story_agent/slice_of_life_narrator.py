@@ -749,11 +749,15 @@ class NarratorContext:
 # Core Narration Functions with Governance & Context
 # ===============================================================================
 
-@function_tool
-@function_tool
+Here's the full updated narrate_slice_of_life_scene function for slice_of_life_narrator.py with proper handling for both dict and model inputs:
+python@function_tool
 async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> str:
     """Generate narration for a slice-of-life scene with full canonical tracking."""
     context = ctx.context
+    
+    # FIX: Ensure payload is a model instance (handle both dict and model inputs)
+    if isinstance(payload, dict):
+        payload = NarrateSliceOfLifeInput(**payload)
     
     # Import canon functions
     from lore.core.canon import (
@@ -825,7 +829,7 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
                 agent_type="narrator",
                 action_type="narrate_scene",
                 context={
-                    "scene": scene.model_dump(), 
+                    "scene": scene.model_dump() if hasattr(scene, 'model_dump') else dict(scene), 
                     "scene_type": payload.scene_type,
                     "has_conflicts": len(conflict_influences) > 0
                 }
