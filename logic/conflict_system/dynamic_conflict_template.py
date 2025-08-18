@@ -100,49 +100,147 @@ def _extract_json_fragment(s: str) -> Optional[str]:
 
     return None
 
+def _clean_and_maybe_extract_json(s: str) -> str:
+    """Strip wrappers, try to extract/repair a valid JSON object/array; else return trimmed text."""
+    if not s:
+        return "{}"
+    s1 = _strip_runresult_wrappers(s)
+
+    # 1) Whole string as JSON (or repaired JSON)
+    fixed = _try_json_with_repairs(s1)
+    if fixed is not None:
+        return fixed
+
+    # 2) Fenced code blocks
+    fenced = _extract_from_code_fence(s1)
+    if fenced:
+        fixed = _try_json_with_repairs(fenced)
+        if fixed is not None:
+            return fixed
+
+    # 3) First balanced JSON-ish snippet
+    snippet = _extract_balanced_json_snippet(s1)
+    if snippet:
+        fixed = _try_json_with_repairs(snippet)
+        if fixed is not None:
+            return fixed
+
+    # 4) Not JSON: return cleaned text (no preambles)
+    return s1.strip()
+
+# --- add these new helpers below the existing helpers ---
+def _try_json_with_repairs(s: str) -> str | None:
+    """Return a valid JSON string if s is JSON or can be repaired; else None."""
+    if _looks_like_json(s):
+        return s.strip()
+
+    # 1) Best-effort textual repairs
+    repaired = _repair_jsonish(s)
+    if repaired and _looks_like_json(repaired):
+        return repaired.strip()
+
+    # 2) Python-literal fallback (handles single quotes, trailing commas, etc.)
+    try:
+        obj = ast.literal_eval(s.strip())
+        if isinstance(obj, (dict, list, tuple)):
+            return json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        pass
+
+    return None
+
+def _repair_jsonish(s: str) -> str:
+    """
+    Best-effort fixes for common LLM 'JSON-like' output:
+      - Normalize Unicode minus U+2212 to ASCII '-'
+      - Remove unary '+' before numbers (e.g., : +2 -> : 2, [, +1, -> [, 1,)
+      - Remove trailing commas before } or ] (quote-aware)
+    """
+    if not s:
+        return s
+
+    # Normalize Unicode minus to ASCII hyphen
+    s2 = s.replace("−", "-")  # U+2212
+
+    # Remove unary plus in object values and arrays (after ':', ',' or '[')
+    s2 = re.sub(r'([:\[,]\s*)\+(\d+(?:\.\d+)?)', r'\1\2', s2)
+
+    # Remove trailing commas safely (don’t touch commas inside strings)
+    s2 = _remove_trailing_commas_safe(s2)
+    return s2
+
+def _remove_trailing_commas_safe(s: str) -> str:
+    """Strip commas that directly precede } or ] while respecting quoted strings."""
+    out = []
+    in_str = False
+    esc = False
+    i = 0
+    n = len(s)
+
+    while i < n:
+        ch = s[i]
+
+        if in_str:
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == '\\':
+                esc = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+            continue
+
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == ',':
+            j = i + 1
+            # skip whitespace
+            while j < n and s[j] in ' \t\r\n':
+                j += 1
+            if j < n and s[j] in ']}':
+                # skip this comma
+                i += 1
+                continue
+
+        out.append(ch)
+        i += 1
+
+    return ''.join(out)
+
 def extract_runner_response(run_result: Any) -> str:
     """
     Normalize Runner.run(...) results into a clean payload.
-
-    Priority:
-      1) If there is structured data (.data, dict/list, pydantic model, dataclass), return JSON.
-      2) If there is plain text (.output/.content/.text, message parts), try to extract JSON from it;
-         if none, return cleaned text.
-      3) As a last resort, parse str(run_result) for JSON; if none, return "{}" to avoid json.loads crashes upstream.
-
-    Never return the raw RunResult repr.
     """
-
-    # --- 0) Null-ish guard
     if run_result is None:
         return "{}"
 
-    # --- 1) Obvious strings / bytes on top-level
     if isinstance(run_result, (str, bytes)):
         s = run_result.decode("utf-8", errors="ignore") if isinstance(run_result, bytes) else run_result
         return _clean_and_maybe_extract_json(s)
 
-    # --- 2) Structured "data" from tool outputs or Agents SDK
-    # e.g. result.data is often the tool's return (pydantic or dict)
-    for attr in ("data", "result", "output"):  # common places SDKs stash structured payloads
+    # Prefer structured payloads if present
+    for attr in ("data", "result", "output", "final_output"):  # <-- added 'final_output'
         if hasattr(run_result, attr):
             val = getattr(run_result, attr)
             js = _to_json_str_or_none(val)
             if js is not None:
                 return js
-            # Could be string-ish content—normalize it
             if isinstance(val, (str, bytes)):
-                return _clean_and_maybe_extract_json(
-                    val.decode("utf-8", errors="ignore") if isinstance(val, bytes) else val
-                )
+                s = val.decode("utf-8", errors="ignore") if isinstance(val, bytes) else val
+                return _clean_and_maybe_extract_json(s)
 
-    # --- 3) Top-level mapping/sequence
+    # Top-level mapping/sequence
     if isinstance(run_result, (dict, list, tuple)):
         js = _to_json_str_or_none(run_result)
         if js is not None:
             return js
 
-    # --- 4) Text-ish attributes commonly found on result objects
+    # Text-ish attributes commonly found on result objects
     for attr in ("output", "content", "text", "message"):
         if hasattr(run_result, attr):
             val = getattr(run_result, attr)
@@ -150,46 +248,37 @@ def extract_runner_response(run_result: Any) -> str:
                 s = val.decode("utf-8", errors="ignore") if isinstance(val, bytes) else val
                 return _clean_and_maybe_extract_json(s)
 
-    # --- 5) Message-style structures (OpenAI/Agents-like)
-    # result.messages -> [{role, content}, ...] ; content may be str or list of parts with {"type":"text","text":...}
+    # Message-style structures
     if hasattr(run_result, "messages"):
         msgs = getattr(run_result, "messages") or []
         text_candidates: list[str] = []
-        for m in reversed(_iter_as_dicts(msgs)):  # prefer last assistant/tool messages
+        for m in reversed(_iter_as_dicts(msgs)):
             role = (m.get("role") or "").lower()
             if role in ("assistant", "tool", "function", "system"):
                 parts = m.get("content")
-                # content can be str
                 if isinstance(parts, str):
                     text_candidates.append(parts)
-                # or list of parts (OpenAI style)
                 elif isinstance(parts, list):
                     for p in parts:
                         if isinstance(p, dict):
-                            t = p.get("text")
-                            if isinstance(t, str):
-                                text_candidates.append(t)
-                            # sometimes "output" part exists
-                            o = p.get("output")
-                            if isinstance(o, str):
-                                text_candidates.append(o)
+                            # Handle { "type": "output_text", "text": "..." } and friends
+                            if isinstance(p.get("text"), str):
+                                text_candidates.append(p["text"])
+                            if isinstance(p.get("output"), str):
+                                text_candidates.append(p["output"])
         for s in text_candidates:
             out = _clean_and_maybe_extract_json(s)
             if out:
                 return out
 
-    # --- 6) Absolute last resort: scan str(repr) for JSON
-    s = str(run_result)  # this is often "RunResult: ... Final output (str): {...}"
+    # Last resort: parse str(...)
+    s = str(run_result)
     s = _strip_runresult_wrappers(s)
     out = _clean_and_maybe_extract_json(s)
     if _looks_like_json(out):
         return out
 
-    # --- 7) Give up safely
-    logger.warning(
-        "extract_runner_response: returning empty JSON fallback; head=%r",
-        (s or "")[:200]
-    )
+    logger.warning("extract_runner_response: returning empty JSON fallback; head=%r", (s or "")[:200])
     return "{}"
 
 
@@ -227,27 +316,6 @@ def _to_json_str_or_none(val: Any) -> str | None:
         except Exception:
             pass
     return None
-
-
-def _clean_and_maybe_extract_json(s: str) -> str:
-    """Strip wrappers, try to extract a valid JSON object/array; else return trimmed text."""
-    if not s:
-        return "{}"
-    s1 = _strip_runresult_wrappers(s)
-    # Try: whole string is JSON
-    if _looks_like_json(s1):
-        return s1.strip()
-    # Try: fenced code blocks
-    fenced = _extract_from_code_fence(s1)
-    if fenced and _looks_like_json(fenced):
-        return fenced.strip()
-    # Try: find first balanced JSON object/array
-    snippet = _extract_balanced_json_snippet(s1)
-    if snippet and _looks_like_json(snippet):
-        return snippet.strip()
-    # Not JSON: return cleaned text (no preambles)
-    return s1.strip()
-
 
 def _looks_like_json(s: str) -> bool:
     s = (s or "").strip()
