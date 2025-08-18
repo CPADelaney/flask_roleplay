@@ -11,6 +11,8 @@ from typing import Dict, List, Any, Optional, Set, TypedDict
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
@@ -748,7 +750,7 @@ class ConflictEdgeCaseSubsystem:
         """
         
         response = await Runner.run(self.recovery_strategist, prompt)
-        data = json.loads(response.output)
+        data = json.loads(extract_runner_response(response))
         return data['options']
     
     async def _generate_loop_recovery(
@@ -782,7 +784,7 @@ class ConflictEdgeCaseSubsystem:
         """
         
         response = await Runner.run(self.recovery_strategist, prompt)
-        data = json.loads(response.output)
+        data = json.loads(extract_runner_response(response))
         return data['options']
     
     async def _generate_stale_recovery(
@@ -818,7 +820,7 @@ class ConflictEdgeCaseSubsystem:
         """
         
         response = await Runner.run(self.recovery_strategist, prompt)
-        data = json.loads(response.output)
+        data = json.loads(extract_runner_response(response))
         return data['options']
     
     async def _generate_overload_recovery(
@@ -853,7 +855,7 @@ class ConflictEdgeCaseSubsystem:
         """
         
         response = await Runner.run(self.graceful_degrader, prompt)
-        data = json.loads(response.output)
+        data = json.loads(extract_runner_response(response))
         return data['options']
     
     async def _generate_contradiction_recovery(
@@ -892,7 +894,7 @@ class ConflictEdgeCaseSubsystem:
         """
         
         response = await Runner.run(self.narrative_healer, prompt)
-        data = json.loads(response.output)
+        data = json.loads(extract_runner_response(response))
         return data['options']
     
     # ========== Recovery Execution Methods ==========
