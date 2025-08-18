@@ -3238,7 +3238,7 @@ async def generate_universal_updates(
 
 @function_tool
 async def orchestrate_slice_scene(
-    ctx: RunContextWrapper[NyxContext],
+    ctx: RunContextWrapper,  # RunContextWrapper[NyxContext] if you have the generic available
     scene_type: str = "routine"
 ) -> str:
     """
@@ -3282,8 +3282,8 @@ async def orchestrate_slice_scene(
     TypedEvent = None
     TypedActivity = None
     try:
-        from story_agent.slice_of_life_narrator import SliceOfLifeEvent as TypedEvent  # the *same* class used by the tool
-        from story_agent.world_director_agent import ActivityType as TypedActivity      # the *same* enum that model expects
+        from story_agent.slice_of_life_narrator import SliceOfLifeEvent as TypedEvent
+        from story_agent.world_director_agent import ActivityType as TypedActivity
     except Exception:
         pass  # fall back to dicts
 
@@ -3324,28 +3324,40 @@ async def orchestrate_slice_scene(
         "player_action": None,
     }
 
-    run = await Runner.run(
-        narrator.scene_narrator,
-        context=narrator.context,
-        tool_calls=[{
-            "tool": tool_narrate_slice_of_life_scene,
-            "kwargs": {"payload": narrator_input_payload}
-        }]
+    # Prepare a tight instruction that forces a single tool call with the exact payload.
+    # We rely on the model to emit the function call; Runner handles the tool execution.
+    instruction = (
+        "Call tool_narrate_slice_of_life_scene with exactly this JSON:\n\n"
+        "```json\n"
+        f"{{\"payload\": {json.dumps(narrator_input_payload, ensure_ascii=False)} }}\n"
+        "```\n\n"
+        "Return only the tool result JSON."
     )
 
-    data = getattr(run, "data", None)
-    if data is None:
-        return await _simple_narrate_fallback(app_ctx, scene_type)
+    try:
+        resp = await Runner.run(
+            narrator.scene_narrator,
+            instruction,
+            context=narrator.context,
+            tools=[tool_narrate_slice_of_life_scene],
+            tool_choice=tool_narrate_slice_of_life_scene,  # <- no `tool_calls=` anymore
+        )
+    except TypeError as e:
+        # Make the common failure crystal clear to upstream logs
+        if "tool_calls" in str(e):
+            return json.dumps({
+                "error": "invalid_runner_argument",
+                "detail": "Use 'tools' and 'tool_choice' (no 'tool_calls').",
+                "where": "orchestrate_slice_scene"
+            }, ensure_ascii=False)
+        raise
 
-    if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except Exception:
-            data = {"scene_description": str(data)}
-    elif hasattr(data, "model_dump"):
-        data = data.model_dump()
-    elif not isinstance(data, dict):
-        data = {"scene_description": str(data)}
+    # Normalize whatever the model+tool returned
+    raw = extract_runner_response(resp)
+    try:
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        data = {"scene_description": str(raw)}
 
     base_text = data.get("scene_description") or ""
     nyx_enhanced = await _add_nyx_hosting_personality(base_text, data)
