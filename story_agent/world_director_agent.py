@@ -484,7 +484,14 @@ class CompleteWorldDirectorContext:
             conflict_manifestations = []
             if self.conflict_synthesizer:
                 try:
+                    # Get the system state (should return a dict directly)
                     conflict_system_state = await self.conflict_synthesizer.get_system_state()
+                    
+                    # The get_system_state() method returns a dict directly, 
+                    # so no need to extract from RunResult
+                    if not isinstance(conflict_system_state, dict):
+                        logger.warning(f"Unexpected conflict state type: {type(conflict_system_state)}")
+                        conflict_system_state = {}
                     
                     # Extract active conflicts
                     active_conflicts = conflict_system_state.get('active_conflicts', [])
@@ -511,8 +518,14 @@ class CompleteWorldDirectorContext:
                         if scene_result.get('manifestations'):
                             conflict_manifestations = scene_result['manifestations']
                             
+                except AttributeError as e:
+                    logger.warning(f"Could not get conflict state - attribute error: {e}")
+                    conflict_state = {}
+                    active_conflicts = []
                 except Exception as e:
                     logger.warning(f"Could not get conflict state: {e}")
+                    conflict_state = {}
+                    active_conflicts = []
             
             # Calculate world mood (updated to consider conflicts)
             world_mood = self._calculate_complete_world_mood(
