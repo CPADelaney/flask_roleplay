@@ -10,6 +10,7 @@ import asyncio
 import random
 from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from datetime import datetime, timedelta
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
 
 from agents import Agent, ModelSettings, function_tool, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
@@ -366,7 +367,7 @@ class EnhancedIntegrationSubsystem:
         response = await Runner.run(self.tension_analyzer, prompt)
         
         try:
-            return json.loads(response.output)
+            return json.loads(extract_runner_response(response))
         except json.JSONDecodeError:
             return {
                 'tensions': [],
@@ -406,7 +407,7 @@ class EnhancedIntegrationSubsystem:
         response = await Runner.run(self.conflict_generator, prompt)
         
         try:
-            return json.loads(response.output)
+            return json.loads(extract_runner_response(response))
         except json.JSONDecodeError:
             return {
                 'name': "Emerging Tension",
