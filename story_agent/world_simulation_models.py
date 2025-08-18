@@ -62,7 +62,7 @@ class CurrentTimeData(BaseModel):
     day: int = 1
     hour: int = Field(12, ge=0, le=23)
     minute: int = Field(0, ge=0, le=59)
-    time_of_day: str = "Morning"  # Changed from TimeOfDay enum to string
+    time_of_day: Union[TimeOfDay, str] = "morning"
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -72,7 +72,7 @@ class CurrentTimeData(BaseModel):
             "day": self.day,
             "hour": self.hour,
             "minute": self.minute,
-            "time_of_day": self.time_of_day.value
+            "time_of_day": getattr(self.time_of_day, "value", self.time_of_day)
         }
 
 class VitalsData(BaseModel):
