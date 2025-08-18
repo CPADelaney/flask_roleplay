@@ -33,7 +33,12 @@ import time
 import copy
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
-from story_agent.slice_of_life_narrator import narrate_slice_of_life_scene as narrator_narrate_scene
+from story_agent.slice_of_life_narrator import (
+    SliceOfLifeNarrator,
+    NarrateSliceOfLifeInput,
+    SliceOfLifeEvent as SafeSliceOfLifeEvent,
+    narrate_slice_of_life_scene as tool_narrate_slice_of_life_scene,  # Import the real tool
+)
 from dataclasses import dataclass, field
 from contextlib import suppress, asynccontextmanager
 import statistics
@@ -416,7 +421,7 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
     """Assemble final response from agent run with full narrator integration"""
     
     # Extract tool outputs
-    scene = _tool_output(resp, "narrate_slice_of_life_scene")
+    scene = _tool_output(resp, "orchestrate_slice_scene")
     dialogue = _tool_output(resp, "generate_npc_dialogue")
     world = _tool_output(resp, "check_world_state")
     npc = _tool_output(resp, "simulate_npc_autonomy")
@@ -3264,32 +3269,29 @@ def _json_safe(x):
 # ---------- tools ----------
 
 @function_tool
-async def narrate_slice_of_life_scene(
+async def orchestrate_slice_scene(
     ctx: RunContextWrapper[NyxContext],
     scene_type: str = "routine"
 ) -> str:
-    """Generate Nyx's narration for a slice-of-life scene using the sophisticated narrator."""
-    
+    """
+    Wrapper that builds a scene + world_state, then delegates to the Module 2 tool.
+    NOTE: different tool name to avoid collisions with the real tool.
+    """
+
     app_ctx = _get_app_ctx(ctx)
-    
-    # Ensure narrator is initialized
+
+    # Ensure narrator is ready
     if not app_ctx.slice_of_life_narrator:
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
         app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id, 
+            app_ctx.user_id,
             app_ctx.conversation_id
         )
         await app_ctx.slice_of_life_narrator.initialize()
-    
+
     narrator = app_ctx.slice_of_life_narrator
-    
-    # Build the scene event from scene_type
-    from story_agent.world_simulation_models import (
-        SliceOfLifeEvent, ActivityType
-    )
-    from story_agent.slice_of_life_narrator import NarrateSliceOfLifeInput
-    
-    # Map scene_type to ActivityType
+
+    # Map scene type
     activity_type_map = {
         "routine": ActivityType.ROUTINE,
         "social": ActivityType.SOCIAL,
@@ -3300,80 +3302,102 @@ async def narrate_slice_of_life_scene(
         "errands": ActivityType.ROUTINE,
         "chores": ActivityType.ROUTINE,
     }
-    
-    scene = SliceOfLifeEvent(
+
+    # World state
+    world_state = await _ensure_world_state_from_ctx(app_ctx)
+
+    # Participants (be permissive about shape)
+    participants: List[int] = []
+    if world_state and getattr(world_state, "active_npcs", None):
+        for npc in (world_state.active_npcs or [])[:3]:
+            if isinstance(npc, dict) and "npc_id" in npc:
+                participants.append(int(npc["npc_id"]))
+            elif isinstance(npc, int):
+                participants.append(npc)
+            elif hasattr(npc, "npc_id"):
+                try:
+                    participants.append(int(getattr(npc, "npc_id")))
+                except Exception:
+                    pass
+
+    # Build AgentSafe scene (from Module 2)
+    scene = SafeSliceOfLifeEvent(
         event_type=activity_type_map.get(scene_type, ActivityType.ROUTINE),
         title=f"{scene_type} scene",
         description=f"A {scene_type} moment in daily life",
         location="current_location",
-        participants=[]  # Will be filled from world state
+        participants=participants,
     )
-    
-    # Get world state
-    world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
-    # Add active NPCs as participants
-    if world_state and hasattr(world_state, 'active_npcs'):
-        scene.participants = [
-            npc.get('npc_id') for npc in world_state.active_npcs[:3]
-            if isinstance(npc, dict) and 'npc_id' in npc
-        ]
-    
-    # Create proper input for the narrator's tool
+
+    # Build tool payload (always pass dicts)
     narrator_input = NarrateSliceOfLifeInput(
         scene_type=scene_type,
         scene=scene,
-        world_state=world_state,
-        player_action=None  # Could be added from context if available
+        world_state=world_state,   # Module 2 will coerce dict->model if needed
+        player_action=None,
     )
-    
-    # CRITICAL FIX: Use Runner.run() instead of narrator.scene_narrator.run()
-    # AND pass model_dump() instead of the model instance
-    from agents import Runner
-    
-    narrator_result = await Runner.run(
+
+    # Call the REAL tool (Module 2) via the narrator's Agent
+    run = await Runner.run(
         narrator.scene_narrator,
         messages=[{"role": "user", "content": f"Narrate a {scene_type} scene"}],
         context=narrator.context,
         tool_calls=[{
-            "tool": narrator.narrate_slice_of_life_scene,
-            "kwargs": {"payload": narrator_input.model_dump()}  # Pass dict, not model!
+            "tool": tool_narrate_slice_of_life_scene,         # <- use the function object from Module 2
+            "kwargs": {"payload": narrator_input.model_dump()} # <- pass plain dict, not model instance
         }]
     )
-    
-    # Extract the narration from result
-    if narrator_result and hasattr(narrator_result, 'data'):
-        narration_data = narrator_result.data
-    else:
-        # Fallback to the original simple version
+
+    # Normalize output from the tool
+    if not run or not hasattr(run, "data") or run.data is None:
+        # Fallback if tool didn’t return structured data
         return await _simple_narrate_fallback(app_ctx, scene_type)
-    
-    # Now add Nyx's personality layer on top
-    nyx_enhanced = await _add_nyx_hosting_personality(
-        narration_data.scene_description if hasattr(narration_data, 'scene_description') else str(narration_data),
-        narration_data
-    )
-    
-    # Format the complete response
+
+    data = run.data
+    # It might be a JSON string, dict, or pydantic object
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            data = {"scene_description": str(data)}
+    elif hasattr(data, "model_dump"):
+        data = data.model_dump()
+    elif not isinstance(data, dict):
+        data = {"scene_description": str(data)}
+
+    # Optional Nyx layer
+    base_text = data.get("scene_description") or ""
+    nyx_enhanced = await _add_nyx_hosting_personality(base_text, data)
+
+    # Build final response (defensive access)
+    world_mood = "neutral"
+    if world_state is not None:
+        wm = getattr(world_state, "world_mood", None)
+        world_mood = getattr(wm, "value", str(wm) if wm is not None else "neutral")
+
+    time_of_day = "afternoon"
+    if world_state is not None:
+        ct = getattr(world_state, "current_time", None)
+        tod = getattr(ct, "time_of_day", None)
+        time_of_day = str(tod) if tod is not None else time_of_day
+
     result = {
         "narrative": nyx_enhanced,
-        "atmosphere": narration_data.atmosphere if hasattr(narration_data, 'atmosphere') else "",
-        "tension_level": narration_data.tension_level if hasattr(narration_data, 'tension_level') else 3,
-        "generate_image": narration_data.generate_image if hasattr(narration_data, 'generate_image') else False,
-        "image_prompt": narration_data.image_prompt if hasattr(narration_data, 'image_prompt') else None,
-        "world_mood": str(world_state.world_mood.value) if world_state and hasattr(world_state.world_mood, 'value') else "neutral",
-        "time_of_day": str(world_state.current_time.time_of_day) if world_state else "afternoon",
-        "emergent_opportunities": narration_data.emergent_opportunities if hasattr(narration_data, 'emergent_opportunities') else [],
-        "power_undertones": narration_data.power_dynamic_hints if hasattr(narration_data, 'power_dynamic_hints') else [],
-        "available_activities": narration_data.available_activities if hasattr(narration_data, 'available_activities') else ["observe", "interact", "wait"],
-        "nyx_commentary": narration_data.nyx_commentary if hasattr(narration_data, 'nyx_commentary') else None,
+        "atmosphere": data.get("atmosphere", ""),
+        "tension_level": data.get("tension_level", 3),
+        "generate_image": data.get("generate_image", False),
+        "image_prompt": data.get("image_prompt"),
+        "world_mood": world_mood,
+        "time_of_day": time_of_day,
+        "emergent_opportunities": data.get("emergent_opportunities", []),
+        "power_undertones": data.get("power_dynamic_hints", []),
+        "available_activities": data.get("available_activities", ["observe", "interact", "wait"]),
+        "nyx_commentary": data.get("nyx_commentary"),
         "scene_type": scene_type,
-        "context_aware": narration_data.context_aware if hasattr(narration_data, 'context_aware') else True,
-        "governance_approved": narration_data.governance_approved if hasattr(narration_data, 'governance_approved') else True,
+        "context_aware": data.get("context_aware", True),
+        "governance_approved": data.get("governance_approved", True),
     }
-    
     return json.dumps(result, ensure_ascii=False)
-
 async def _add_nyx_hosting_personality(base_narrative: str, narration_data: Any) -> str:
     """Add Nyx's game show host personality layer to the narration"""
     from logic.chatgpt_integration import generate_text_completion
@@ -3961,7 +3985,7 @@ Your job is to make it entertaining while maintaining the sophisticated simulati
     
     tools=[
         # Core narrative tools (now integrated with SliceOfLifeNarrator)
-        narrate_slice_of_life_scene,  # UPDATED: Uses sophisticated narrator
+        orchestrate_slice_scene,  # UPDATED: Uses sophisticated narrator
         generate_npc_dialogue,  # NEW: Integrated dialogue generation
         
         # World state and events
@@ -4823,7 +4847,7 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
             score_decision_options,
             detect_conflicts_and_instability,
             generate_universal_updates,
-            narrate_slice_of_life_scene,
+            orchestrate_slice_scene,
             check_world_state,
             generate_emergent_event,
             simulate_npc_autonomy,
@@ -5377,7 +5401,7 @@ __all__ = [
     'score_decision_options',
     'detect_conflicts_and_instability',
     'generate_universal_updates',
-    'narrate_slice_of_life_scene',
+    'orchestrate_slice_scene',
     'check_world_state',
     'generate_emergent_event',
     'simulate_npc_autonomy',
