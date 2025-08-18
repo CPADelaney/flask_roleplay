@@ -1132,9 +1132,12 @@ class ConflictSynthesizer:
         
         response = await Runner.run(self.orchestrator, prompt)
         try:
-            subsystem_names = json.loads(response.output)
+            # FIX: Use extract_runner_response instead of response.output
+            response_text = extract_runner_response(response)
+            subsystem_names = json.loads(response_text)
             return {SubsystemType(name) for name in subsystem_names if name in SubsystemType._value2member_map_}
-        except:
+        except Exception as e:
+            logger.warning(f"Failed to parse LLM response: {e}")
             # Fallback to default set
             return {SubsystemType.TENSION, SubsystemType.FLOW, SubsystemType.STAKEHOLDER}
     
