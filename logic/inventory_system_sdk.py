@@ -1018,24 +1018,28 @@ async def register_with_governance(user_id: int, conversation_id: int):
     # Get governor
     governor = await get_central_governance(user_id, conversation_id)
     
-    # Register main agent
-    await governor.register_agent(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_instance=inventory_system_agent,
-        agent_id="inventory_system"
-    )
-    
-    # Issue directive for inventory management
-    await governor.issue_directive(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="inventory_system",
-        directive_type=DirectiveType.ACTION,
-        directive_data={
-            "instruction": "Manage player inventory with proper validation and tracking",
-            "scope": "game"
-        },
-        priority=DirectivePriority.MEDIUM,
-        duration_minutes=24*60  # 24 hours
-    )
-    
-    logging.info("Inventory system registered with Nyx governance")
+    # Check if already registered before registering
+    if not governor.is_agent_registered("inventory_system", AgentType.UNIVERSAL_UPDATER):
+        # Register main agent
+        await governor.register_agent(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_instance=inventory_system_agent,
+            agent_id="inventory_system"
+        )
+        
+        # Issue directive for inventory management
+        await governor.issue_directive(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": "Manage player inventory with proper validation and tracking",
+                "scope": "game"
+            },
+            priority=DirectivePriority.MEDIUM,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info("Inventory system registered with Nyx governance")
+    else:
+        logging.info("Inventory system already registered with Nyx governance, skipping")
