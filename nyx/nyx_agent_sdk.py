@@ -1338,55 +1338,6 @@ class NyxContext:
             return False
             
         return True
-
-  @function_tool
-  async def generate_npc_dialogue(
-      ctx: RunContextWrapper[NyxContext],
-      npc_id: int,
-      situation: str
-  ) -> str:
-      """Generate NPC dialogue using the sophisticated narrator"""
-      
-      app_ctx = _get_app_ctx(ctx)
-      
-      # Ensure narrator is initialized
-      if not app_ctx.slice_of_life_narrator:
-          from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-          app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-              app_ctx.user_id,
-              app_ctx.conversation_id
-          )
-          await app_ctx.slice_of_life_narrator.initialize()
-      
-      narrator = app_ctx.slice_of_life_narrator
-      world_state = await _ensure_world_state_from_ctx(app_ctx)
-      
-      # Use the narrator's dialogue generation
-      dialogue_result = await narrator.dialogue_writer.run(
-          messages=[{"role": "user", "content": f"Generate dialogue for situation: {situation}"}],
-          context=narrator.context,
-          tool_calls=[{
-              "tool": narrator.generate_npc_dialogue,
-              "kwargs": {
-                  "npc_id": npc_id,
-                  "situation": situation,
-                  "world_state": world_state.model_dump() if world_state else {},
-                  "player_input": app_ctx.current_context.get("user_input")
-              }
-          }]
-      )
-      
-      if dialogue_result and hasattr(dialogue_result, 'data'):
-          dialogue_data = dialogue_result.data
-          return json.dumps({
-              "npc_id": npc_id,
-              "dialogue": dialogue_data.dialogue if hasattr(dialogue_data, 'dialogue') else str(dialogue_data),
-              "tone": dialogue_data.tone if hasattr(dialogue_data, 'tone') else 'neutral',
-              "subtext": dialogue_data.subtext if hasattr(dialogue_data, 'subtext') else '',
-              "requires_response": dialogue_data.requires_response if hasattr(dialogue_data, 'requires_response') else False
-          })
-      
-      return json.dumps({"dialogue": "...", "npc_id": npc_id})
     
     def should_recommend_activities(self) -> bool:
         """Determine if we should recommend activities"""
@@ -1712,6 +1663,55 @@ async def run_agent_with_error_handling(
         raise
 
 # ===== Function Tools =====
+
+  @function_tool
+  async def generate_npc_dialogue(
+      ctx: RunContextWrapper[NyxContext],
+      npc_id: int,
+      situation: str
+  ) -> str:
+      """Generate NPC dialogue using the sophisticated narrator"""
+      
+      app_ctx = _get_app_ctx(ctx)
+      
+      # Ensure narrator is initialized
+      if not app_ctx.slice_of_life_narrator:
+          from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+          app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
+              app_ctx.user_id,
+              app_ctx.conversation_id
+          )
+          await app_ctx.slice_of_life_narrator.initialize()
+      
+      narrator = app_ctx.slice_of_life_narrator
+      world_state = await _ensure_world_state_from_ctx(app_ctx)
+      
+      # Use the narrator's dialogue generation
+      dialogue_result = await narrator.dialogue_writer.run(
+          messages=[{"role": "user", "content": f"Generate dialogue for situation: {situation}"}],
+          context=narrator.context,
+          tool_calls=[{
+              "tool": narrator.generate_npc_dialogue,
+              "kwargs": {
+                  "npc_id": npc_id,
+                  "situation": situation,
+                  "world_state": world_state.model_dump() if world_state else {},
+                  "player_input": app_ctx.current_context.get("user_input")
+              }
+          }]
+      )
+      
+      if dialogue_result and hasattr(dialogue_result, 'data'):
+          dialogue_data = dialogue_result.data
+          return json.dumps({
+              "npc_id": npc_id,
+              "dialogue": dialogue_data.dialogue if hasattr(dialogue_data, 'dialogue') else str(dialogue_data),
+              "tone": dialogue_data.tone if hasattr(dialogue_data, 'tone') else 'neutral',
+              "subtext": dialogue_data.subtext if hasattr(dialogue_data, 'subtext') else '',
+              "requires_response": dialogue_data.requires_response if hasattr(dialogue_data, 'requires_response') else False
+          })
+      
+      return json.dumps({"dialogue": "...", "npc_id": npc_id})
 
 @function_tool
 async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: RetrieveMemoriesInput) -> str:
