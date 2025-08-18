@@ -23,21 +23,18 @@ from logic.conflict_system.conflict_synthesizer import get_synthesizer, Conflict
 # Database
 from db.connection import get_db_connection_context
 
+from lore.core.canon import (
+    find_or_create_npc,
+    find_or_create_location,
+    find_or_create_event,
+    log_canonical_event,
+    find_or_create_notable_figure,
+    ensure_canonical_context
+)
+
 # ===============================================================================
 # CRITICAL FIX: Agent-Safe Base Model
 # ===============================================================================
-
-def get_canonical_context(ctx_obj) -> Any:
-    """Convert various context objects to canonical context"""
-    if hasattr(ctx_obj, 'user_id') and hasattr(ctx_obj, 'conversation_id'):
-        return ensure_canonical_context({
-            'user_id': ctx_obj.user_id,
-            'conversation_id': ctx_obj.conversation_id
-        })
-    elif hasattr(ctx_obj, 'context'):
-        return get_canonical_context(ctx_obj.context)
-    else:
-        raise ValueError("Cannot extract canonical context from object")
 
 class AgentSafeModel(BaseModel):
     """
@@ -433,58 +430,278 @@ class NarratorContext:
         if self._conflict_synthesizer is None:
             self._conflict_synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
     
-    
-    async def refresh_context(self, input_text: str = ""):
-        """Refresh all context data"""
-        try:
-            # Get comprehensive context
-            self.current_context = await get_comprehensive_context(
-                self.user_id, self.conversation_id, input_text
+        
+    @function_tool
+    async def narrate_power_exchange(
+        ctx,
+        exchange: PowerExchange,
+        world_state: WorldState
+    ) -> str:
+        """Generate narration for a power exchange moment with Nyx tracking, memory, and canonical consistency."""
+        context = ctx.context
+        
+        # Import canon functions
+        from lore.core.canon import (
+            ensure_canonical_context,
+            log_canonical_event,
+            find_or_create_npc,
+            find_or_create_location,
+            find_or_create_historical_event,
+            update_current_roleplay,
+            create_journal_entry,
+            find_or_create_social_link
+        )
+        
+        # Create canonical context
+        canonical_ctx = ensure_canonical_context({
+            'user_id': context.user_id,
+            'conversation_id': context.conversation_id
+        })
+        
+        # Refresh context for power exchange
+        await context.refresh_context(input_text=f"Power exchange: {exchange.exchange_type.value}")
+        
+        # Get NPC details and ensure canonical existence
+        async with get_db_connection_context() as conn:
+            # First ensure NPC exists canonically
+            npc = await conn.fetchrow("""
+                SELECT npc_id, npc_name, dominance, personality_traits, current_location
+                FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, exchange.initiator_npc_id, context.user_id, context.conversation_id)
+            
+            if not npc:
+                # Create NPC canonically if doesn't exist
+                canonical_npc_id = await find_or_create_npc(
+                    canonical_ctx, conn,
+                    npc_name=f"Dominant_{exchange.initiator_npc_id}",
+                    role="dominant",
+                    dominance=80,  # High dominance for power exchange initiator
+                    personality_traits=["commanding", "confident", "observant"]
+                )
+                
+                # Re-fetch the created NPC
+                npc = await conn.fetchrow("""
+                    SELECT npc_id, npc_name, dominance, personality_traits, current_location
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, canonical_npc_id, context.user_id, context.conversation_id)
+            
+            # Ensure location exists
+            location = world_state.current_location if hasattr(world_state, 'current_location') else "private_space"
+            canonical_location = await find_or_create_location(
+                canonical_ctx, conn,
+                location_name=location,
+                description=f"The space where power dynamics shift",
+                location_type="intimate" if not exchange.is_public else "public",
+                cultural_significance="high" if exchange.intensity > 0.7 else "moderate"
             )
             
-            # Update cached data
-            self.player_stats = await get_all_player_stats(self.user_id, self.conversation_id)
-            self.active_addictions = await get_addiction_status(self.user_id, self.conversation_id)
-            self.current_vitals = await get_current_vitals(self.user_id, self.conversation_id)
-            
-            # Get active memories
-            if self.memory_manager:
-                search_result = await self.memory_manager.search_memories(
-                    MemorySearchRequest(
-                        query=input_text or "recent interactions",
-                        limit=10,
-                        user_id=self.user_id,
-                        conversation_id=self.conversation_id
-                    )
+            # Ensure social link exists and is updated
+            link_id = await find_or_create_social_link(
+                canonical_ctx, conn,
+                entity1_type='npc',
+                entity1_id=exchange.initiator_npc_id,
+                entity2_type='player',
+                entity2_id=context.user_id,
+                link_type='power_dynamic',
+                link_level=int(exchange.intensity * 100)
+            )
+        
+        # Track with Nyx governance if active
+        governance_tracking = []
+        if context.governance_active and context.nyx_governance:
+            try:
+                tracking_data = await context.nyx_governance.track_power_exchange(
+                    npc_id=exchange.initiator_npc_id,
+                    exchange_type=exchange.exchange_type.value,
+                    intensity=exchange.intensity,
+                    timestamp=datetime.now(timezone.utc)
                 )
-                self.active_memories = search_result.memories if hasattr(search_result, 'memories') else []
+                governance_tracking = [
+                    KeyValue(key=k, value=str(v)) for k, v in tracking_data.items()
+                ] if tracking_data else []
+            except Exception as e:
+                logger.warning(f"Could not track power exchange with governance: {e}")
+        
+        # Get relationship state
+        rel_state = await context.relationship_manager.get_relationship_state(
+            'npc', exchange.initiator_npc_id, 'player', context.user_id
+        )
+        
+        # Generate narration components
+        setup = await _generate_power_moment_setup(context, exchange, npc, world_state)
+        moment = await _generate_power_moment_description(context, exchange, npc)
+        aftermath = await _generate_power_moment_aftermath(context, exchange, world_state.relationship_dynamics)
+        player_feelings = await _generate_player_feelings(context, exchange, world_state.relationship_dynamics)
+        
+        # Generate response options
+        options = await _generate_power_response_options(
+            context, exchange, npc['dominance'], rel_state
+        )
+        
+        # Calculate potential consequences
+        consequences = await _calculate_power_consequences(context, exchange, world_state)
+        
+        narration = PowerMomentNarration(
+            setup=setup,
+            moment=moment,
+            aftermath=aftermath,
+            player_feelings=player_feelings,
+            options_presentation=options,
+            potential_consequences=consequences,
+            governance_tracking=governance_tracking
+        )
+        
+        # Store power exchange canonically with full context
+        async with get_db_connection_context() as conn:
+            # Calculate significance based on multiple factors
+            base_significance = 7  # Power exchanges are always significant
+            if exchange.intensity > 0.8:
+                base_significance += 2
+            elif exchange.intensity > 0.6:
+                base_significance += 1
             
-            # Update world state
-            self.current_world_state = await self.world_director.get_world_state()
+            if exchange.exchange_type in [PowerDynamicType.INTIMATE_COMMAND, PowerDynamicType.PUBLIC_DISPLAY]:
+                base_significance += 1
             
-            # NEW: Get conflict state
-            if self.conflict_synthesizer:
-                try:
-                    conflict_state = await self.conflict_synthesizer.get_system_state()
-                    self.active_conflicts = conflict_state.get('active_conflicts', [])
-                    
-                    # Check for manifestations in current context
-                    if self.active_conflicts:
-                        scene_context = {
-                            "scene_type": "narrative_check",
-                            "input_text": input_text,
-                            "location": self.current_context.get('location', 'unknown')
-                        }
-                        scene_result = await self.conflict_synthesizer.process_scene(scene_context)
-                        self.conflict_manifestations = scene_result.get('manifestations', [])
-                except Exception as e:
-                    logger.warning(f"Could not get conflict state: {e}")
+            significance = min(base_significance, 10)
             
-            # Detect system intersections
-            await self._detect_system_intersections()
+            # Log the main power exchange event
+            await log_canonical_event(
+                canonical_ctx, conn,
+                f"Power exchange: {npc['npc_name']} exercised {exchange.exchange_type.value} over player (intensity: {exchange.intensity:.2f})",
+                tags=[
+                    "power_exchange",
+                    "dynamics",
+                    f"npc_{exchange.initiator_npc_id}",
+                    exchange.exchange_type.value.replace("_", "-").lower(),
+                    f"location_{canonical_location}",
+                    "public" if exchange.is_public else "private"
+                ] + ([f"witness_{w}" for w in exchange.witnesses] if exchange.witnesses else []),
+                significance=significance
+            )
             
-        except Exception as e:
-            logger.error(f"Error refreshing context: {e}")
+            # Update CurrentRoleplay to track power dynamics state
+            current_submission = world_state.relationship_dynamics.player_submission_level if hasattr(world_state, 'relationship_dynamics') else 0.5
+            new_submission = min(1.0, current_submission + (exchange.intensity * 0.1))
+            
+            await update_current_roleplay(
+                canonical_ctx, conn,
+                'PlayerSubmissionLevel',
+                str(new_submission)
+            )
+            
+            await update_current_roleplay(
+                canonical_ctx, conn,
+                'LastPowerExchange',
+                f"{npc['npc_name']}:{exchange.exchange_type.value}:{exchange.intensity}"
+            )
+            
+            # Create historical event for major power exchanges
+            if significance >= 8:
+                event_id = await find_or_create_historical_event(
+                    canonical_ctx, conn,
+                    event_name=f"Significant power exchange with {npc['npc_name']}",
+                    description=f"{setup} {moment} {aftermath}",
+                    date_description="Present moment",
+                    event_type="power_dynamic",
+                    significance=significance,
+                    involved_entities=[f"npc_{exchange.initiator_npc_id}", "player"],
+                    location=canonical_location,
+                    consequences=[f"submission_increased:{(exchange.intensity * 0.1):.2f}"],
+                    disputed_facts=["The exact nature of control"] if exchange.resistance_possible else []
+                )
+            
+            # Create journal entry from player's perspective
+            journal_text = f"{moment}\n\nFeeling: {player_feelings}"
+            if options:
+                journal_text += f"\n\nOptions considered: {', '.join(options[:2])}"
+            
+            await create_journal_entry(
+                canonical_ctx, conn,
+                entry_type="power_exchange",
+                entry_text=journal_text,
+                revelation_types="power_dynamic",
+                narrative_moment=True,
+                fantasy_flag=exchange.exchange_type == PowerDynamicType.INTIMATE_COMMAND,
+                intensity_level=int(exchange.intensity * 10),
+                entry_metadata={
+                    "npc_id": exchange.initiator_npc_id,
+                    "npc_name": npc['npc_name'],
+                    "exchange_type": exchange.exchange_type.value,
+                    "location": canonical_location,
+                    "public": exchange.is_public,
+                    "witnesses": exchange.witnesses,
+                    "resistance_possible": exchange.resistance_possible,
+                    "player_submission": new_submission
+                },
+                importance=exchange.intensity,
+                tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value]
+            )
+            
+            # Log witnesses if present
+            if exchange.is_public and exchange.witnesses:
+                for witness_id in exchange.witnesses:
+                    await log_canonical_event(
+                        canonical_ctx, conn,
+                        f"NPC {witness_id} witnessed power exchange between {npc['npc_name']} and player",
+                        tags=[f"npc_{witness_id}", "witness", "power_exchange", f"location_{canonical_location}"],
+                        significance=5
+                    )
+            
+            # Track cumulative power dynamics
+            power_history = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'PowerExchangeCount'
+            """, context.user_id, context.conversation_id)
+            
+            exchange_count = int(power_history) if power_history else 0
+            exchange_count += 1
+            
+            await update_current_roleplay(
+                canonical_ctx, conn,
+                'PowerExchangeCount',
+                str(exchange_count)
+            )
+            
+            # Track power exchange patterns if multiple with same NPC
+            npc_exchanges = await conn.fetchval("""
+                SELECT COUNT(*) FROM CanonicalEvents
+                WHERE user_id = $1 AND conversation_id = $2
+                AND $3 = ANY(tags) AND 'power_exchange' = ANY(tags)
+            """, context.user_id, context.conversation_id, f"npc_{exchange.initiator_npc_id}")
+            
+            if npc_exchanges >= 3:
+                await log_canonical_event(
+                    canonical_ctx, conn,
+                    f"Power dynamic pattern established with {npc['npc_name']} ({npc_exchanges} exchanges)",
+                    tags=["pattern", "power_dynamic", f"npc_{exchange.initiator_npc_id}", "relationship_progression"],
+                    significance=8
+                )
+        
+        # Store in memory as significant event
+        if context.memory_manager:
+            await context.memory_manager.add_memory(
+                MemoryAddRequest(
+                    user_id=context.user_id,
+                    conversation_id=context.conversation_id,
+                    content=f"Power exchange with {npc['npc_name']}: {moment}",
+                    memory_type="power_exchange",
+                    importance=min(1.0, 0.7 + exchange.intensity * 0.3),
+                    tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value],
+                    metadata={
+                        "npc_id": str(exchange.initiator_npc_id),
+                        "type": exchange.exchange_type.value,
+                        "intensity": exchange.intensity,
+                        "public": exchange.is_public,
+                        "canonical_significance": significance
+                    }
+                )
+            )
+        
+        # Return JSON string
+        return narration.model_dump_json()
     
     async def _detect_system_intersections(self):
         """Detect interesting system intersections"""
@@ -533,8 +750,25 @@ class NarratorContext:
 # ===============================================================================
 
 @function_tool
+@function_tool
 async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> str:
+    """Generate narration for a slice-of-life scene with full canonical tracking."""
     context = ctx.context
+    
+    # Import canon functions
+    from lore.core.canon import (
+        ensure_canonical_context,
+        log_canonical_event,
+        find_or_create_location,
+        find_or_create_event,
+        create_journal_entry
+    )
+    
+    # Create canonical context
+    canonical_ctx = ensure_canonical_context({
+        'user_id': context.user_id,
+        'conversation_id': context.conversation_id
+    })
 
     # Refresh context with whatever hint we have
     await context.refresh_context(payload.player_action or payload.scene_type)
@@ -553,7 +787,20 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
         participants=[]
     )
     
-    # NEW: Check if conflicts should influence the scene
+    # Ensure location exists canonically
+    async with get_db_connection_context() as conn:
+        canonical_location = await find_or_create_location(
+            canonical_ctx, conn,
+            location_name=scene.location,
+            description=f"The location where {scene.description} takes place",
+            location_type="scene",
+            notable_features=[f"{payload.scene_type}_area"]
+        )
+        
+        # Update scene location with canonical name
+        scene.location = canonical_location
+    
+    # Check if conflicts should influence the scene
     conflict_influences = []
     if context.active_conflicts:
         for conflict in context.active_conflicts[:2]:  # Check top 2 conflicts
@@ -580,7 +827,7 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
                 context={
                     "scene": scene.model_dump(), 
                     "scene_type": payload.scene_type,
-                    "has_conflicts": len(conflict_influences) > 0  # NEW
+                    "has_conflicts": len(conflict_influences) > 0
                 }
             )
             governance_approved = approval.get("approved", True)
@@ -599,7 +846,7 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
     # Build narration pieces
     scene_desc = await _generate_scene_description(context, scene, world_state, relationship_contexts)
     
-    # NEW: Add conflict manifestations to description if present
+    # Add conflict manifestations to description if present
     if context.conflict_manifestations:
         scene_desc += f" {context.conflict_manifestations[0]}"
     
@@ -607,7 +854,7 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
     tone = _select_narrative_tone(scene, world_state, relationship_contexts)
     focus = _select_scene_focus(scene, payload.player_action)
     
-    # NEW: Generate conflict-aware power hints
+    # Generate conflict-aware power hints
     power_hints = await _generate_power_hints(context, scene, relationship_contexts)
     if conflict_influences:
         power_hints.append("Unresolved tensions simmer beneath the surface")
@@ -622,7 +869,7 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
     internal = None
     if hasattr(world_state, 'world_tension'):
         tension = world_state.world_tension
-        # NEW: Consider conflict tension too
+        # Consider conflict tension too
         if (getattr(tension, 'power_tension', 0) > 0.6 or 
             getattr(tension, 'unresolved_conflicts', 0) > 0) and hasattr(world_state, 'relationship_dynamics'):
             internal = await _generate_internal_monologue(context, scene, world_state.relationship_dynamics, relationship_contexts)
@@ -654,7 +901,82 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
         relevant_memories=relevant_memories,
     )
 
-    # Persist memory
+    # Store scene canonically in multiple ways
+    async with get_db_connection_context() as conn:
+        # Determine significance based on scene characteristics
+        significance = 5  # Base significance
+        if conflict_influences:
+            significance += 2
+        if len(scene.participants) > 3:
+            significance += 1
+        if scene.event_type in [ActivityType.SPECIAL, ActivityType.INTIMATE]:
+            significance += 2
+        if power_hints:
+            significance += 1
+        significance = min(significance, 10)  # Cap at 10
+        
+        # Log the main canonical event
+        await log_canonical_event(
+            canonical_ctx, conn,
+            f"Scene: {scene.title} - {scene_desc[:150]}...",
+            tags=[
+                "scene",
+                scene.event_type.value,
+                f"location_{canonical_location}",
+                tone.value,
+                focus.value
+            ] + (["conflict_present"] if conflict_influences else []),
+            significance=significance
+        )
+        
+        # Create a scene event record if significant
+        if significance >= 7:
+            event_id = await find_or_create_event(
+                canonical_ctx, conn,
+                event_name=scene.title,
+                description=scene_desc,
+                location=canonical_location,
+                year=1,  # Would need actual calendar integration
+                month=1,
+                day=1,
+                time_of_day=world_state.time_of_day.value if hasattr(world_state, 'time_of_day') else "Unknown"
+            )
+        
+        # Create journal entry for player's perspective
+        journal_entry_text = scene_desc
+        if internal:
+            journal_entry_text += f"\n\n[Internal thought: {internal}]"
+        
+        await create_journal_entry(
+            canonical_ctx, conn,
+            entry_type="scene",
+            entry_text=journal_entry_text,
+            revelation_types="power_dynamic" if power_hints else None,
+            narrative_moment=True if significance >= 8 else False,
+            intensity_level=int(significance),
+            entry_metadata={
+                "scene_type": scene.event_type.value,
+                "location": canonical_location,
+                "participants": scene.participants,
+                "conflicts_active": len(conflict_influences) > 0,
+                "tone": tone.value,
+                "focus": focus.value
+            },
+            importance=significance / 10.0,
+            tags=["scene", scene.event_type.value] + (["conflict"] if conflict_influences else [])
+        )
+        
+        # Track NPC involvement canonically
+        if scene.participants:
+            for npc_id in scene.participants:
+                await log_canonical_event(
+                    canonical_ctx, conn,
+                    f"NPC {npc_id} participated in scene at {canonical_location}",
+                    tags=[f"npc_{npc_id}", "scene_participation", canonical_location],
+                    significance=3
+                )
+
+    # Also persist in memory system for quick retrieval
     if context.memory_manager:
         await context.memory_manager.add_memory(
             MemoryAddRequest(
@@ -662,13 +984,17 @@ async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> 
                 conversation_id=context.conversation_id,
                 content=scene_desc,
                 memory_type="scene",
-                importance=0.7 if not conflict_influences else 0.8,  # Higher importance if conflicts
+                importance=significance / 10.0,  # Normalize to 0-1
                 tags=["scene", scene.event_type.value] + (["conflict_present"] if conflict_influences else []),
                 metadata={
                     "scene_type": scene.event_type.value,
-                    "location": scene.location,
+                    "location": canonical_location,
                     "participants": scene.participants,
-                    "conflicts_active": len(conflict_influences) > 0
+                    "conflicts_active": len(conflict_influences) > 0,
+                    "tone": tone.value,
+                    "focus": focus.value,
+                    "power_hints": power_hints,
+                    "canonical_significance": significance
                 }
             )
         )
