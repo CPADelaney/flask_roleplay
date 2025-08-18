@@ -3238,82 +3238,131 @@ async def generate_universal_updates(
 
 @function_tool
 async def orchestrate_slice_scene(
-    ctx: RunContextWrapper, 
+    ctx: RunContextWrapper[NyxContext],
     scene_type: str = "routine"
 ) -> str:
-    app = _get_app_ctx(ctx)
+    """
+    Try to construct Module 2's SliceOfLifeEvent (and matching ActivityType) lazily.
+    If anything smells like a cycle or enum mismatch, fall back to plain dicts.
+    """
+    app_ctx = _unwrap_tool_ctx(ctx)
 
-    if not app.slice_of_life_narrator:
+    # Ensure narrator
+    if not getattr(app_ctx, "slice_of_life_narrator", None):
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app.slice_of_life_narrator = SliceOfLifeNarrator(app.user_id, app.conversation_id)
-        await app.slice_of_life_narrator.initialize()
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(app_ctx.user_id, app_ctx.conversation_id)
+        await app_ctx.slice_of_life_narrator.initialize()
+    narrator = app_ctx.slice_of_life_narrator
 
-    narrator = app.slice_of_life_narrator
-    world_state = await _ensure_world_state_from_ctx(app)
+    # World state (as object and dict)
+    world_state_obj = await _ensure_world_state(app_ctx)
+    world_state_payload = _json_safe(world_state_obj)
 
-    # normalize participants
-    participants: list[int] = []
-    if world_state and getattr(world_state, "active_npcs", None):
-        for npc in (world_state.active_npcs or [])[:3]:
+    # Participants -> ints
+    participants: List[int] = []
+    if world_state_obj and getattr(world_state_obj, "active_npcs", None):
+        for npc in (world_state_obj.active_npcs or [])[:3]:
             if isinstance(npc, dict) and "npc_id" in npc:
                 participants.append(int(npc["npc_id"]))
-            elif hasattr(npc, "npc_id"):
-                try:
-                    participants.append(int(npc.npc_id))
-                except Exception:
-                    pass
             elif isinstance(npc, int):
                 participants.append(npc)
+            elif hasattr(npc, "npc_id"):
+                with suppress(Exception):
+                    participants.append(int(getattr(npc, "npc_id")))
 
-    # normalize scene_type (cover errand/errands/chores)
-    kind = (scene_type or "routine").lower()
-    if kind in {"errand", "errands", "chores"}:
-        kind = "routine"
+    # Map to value (string) for fallback
+    activity_value_map = {
+        "routine": "routine", "social": "social", "work": "work",
+        "intimate": "intimate", "leisure": "leisure", "special": "special",
+        "errands": "routine", "chores": "routine",
+    }
+    event_type_value = activity_value_map.get(scene_type, "routine")
 
-    scene = SliceOfLifeEvent(
-        event_type=ActivityType.ROUTINE if kind == "routine" else ActivityType.SOCIAL,
-        title=f"{kind} scene",
-        description=f"A {kind} moment in daily life",
-        location="current_location",
-        participants=participants,
+    # --- Try typed path (lazy import to avoid early resolution) ---
+    TypedEvent = None
+    TypedActivity = None
+    try:
+        from story_agent.slice_of_life_narrator import SliceOfLifeEvent as TypedEvent  # the *same* class used by the tool
+        from story_agent.world_director_agent import ActivityType as TypedActivity      # the *same* enum that model expects
+    except Exception:
+        pass  # fall back to dicts
+
+    if TypedEvent and TypedActivity:
+        # Build typed event safely; if conversion fails, we’ll fall back
+        try:
+            event_type = getattr(TypedActivity, event_type_value.upper(), TypedActivity.ROUTINE)
+            scene_obj = TypedEvent(
+                event_type=event_type,
+                title=f"{scene_type} scene",
+                description=f"A {scene_type} moment in daily life",
+                location="current_location",
+                participants=participants,
+            )
+            scene_payload = scene_obj.model_dump()
+        except Exception:
+            scene_payload = {
+                "event_type": event_type_value,
+                "title": f"{scene_type} scene",
+                "description": f"A {scene_type} moment in daily life",
+                "location": "current_location",
+                "participants": participants,
+            }
+    else:
+        # Pure JSON fallback
+        scene_payload = {
+            "event_type": event_type_value,
+            "title": f"{scene_type} scene",
+            "description": f"A {scene_type} moment in daily life",
+            "location": "current_location",
+            "participants": participants,
+        }
+
+    narrator_input_payload = {
+        "scene_type": scene_type,
+        "scene": scene_payload,
+        "world_state": world_state_payload,
+        "player_action": None,
+    }
+
+    run = await Runner.run(
+        narrator.scene_narrator,
+        context=narrator.context,
+        tool_calls=[{
+            "tool": tool_narrate_slice_of_life_scene,
+            "kwargs": {"payload": narrator_input_payload}
+        }]
     )
 
-    payload = NarrateSliceOfLifeInput(
-        scene_type=kind,
-        scene=scene,
-        world_state=world_state,   # Module 2 will coerce dict->model if needed
-        player_action=None,
-    ).model_dump()                  # always pass a dict to the tool
+    data = getattr(run, "data", None)
+    if data is None:
+        return await _simple_narrate_fallback(app_ctx, scene_type)
 
-    # ✅ Call the real Module-2 tool directly
-    result_json = await core_narrate_slice(ctx, payload=payload)
-
-    # parse/shape
-    try:
-        data = json.loads(result_json)
-    except Exception:
-        return await _simple_narrate_fallback(app, scene_type)
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            data = {"scene_description": str(data)}
+    elif hasattr(data, "model_dump"):
+        data = data.model_dump()
+    elif not isinstance(data, dict):
+        data = {"scene_description": str(data)}
 
     base_text = data.get("scene_description") or ""
-    nyx_text = await _add_nyx_hosting_personality(base_text, data)
+    nyx_enhanced = await _add_nyx_hosting_personality(base_text, data)
 
-    # world_mood and time_of_day tolerant extraction
-    wm = getattr(getattr(world_state, "world_mood", None), "value", None)
-    world_mood = wm or (world_state.get("world_mood") if isinstance(world_state, dict) else "neutral") or "neutral"
+    world_mood = "neutral"
+    if world_state_obj is not None:
+        wm = getattr(world_state_obj, "world_mood", None)
+        world_mood = getattr(wm, "value", str(wm) if wm is not None else "neutral")
 
-    # your world_state sometimes has top-level "time_of_day"
-    tod = None
-    if hasattr(world_state, "time_of_day"):
-        tod = getattr(world_state, "time_of_day")
-    elif isinstance(world_state, dict):
-        tod = world_state.get("time_of_day")
-    if tod is None:
-        ct = getattr(world_state, "current_time", None)
+    time_of_day = "afternoon"
+    if world_state_obj is not None:
+        ct = getattr(world_state_obj, "current_time", None)
         tod = getattr(ct, "time_of_day", None)
-    time_of_day = str(tod) if tod is not None else "afternoon"
+        time_of_day = str(tod) if tod is not None else time_of_day
 
-    out = {
-        "narrative": nyx_text,
+    result = {
+        "narrative": nyx_enhanced,
         "atmosphere": data.get("atmosphere", ""),
         "tension_level": data.get("tension_level", 3),
         "generate_image": data.get("generate_image", False),
@@ -3324,11 +3373,11 @@ async def orchestrate_slice_scene(
         "power_undertones": data.get("power_dynamic_hints", []),
         "available_activities": data.get("available_activities", ["observe", "interact", "wait"]),
         "nyx_commentary": data.get("nyx_commentary"),
-        "scene_type": kind,
+        "scene_type": scene_type,
         "context_aware": data.get("context_aware", True),
         "governance_approved": data.get("governance_approved", True),
     }
-    return json.dumps(out, ensure_ascii=False)
+    return json.dumps(result, ensure_ascii=False)
   
 async def _add_nyx_hosting_personality(base_narrative: str, narration_data: Any) -> str:
     """Add Nyx's game show host personality layer to the narration"""
