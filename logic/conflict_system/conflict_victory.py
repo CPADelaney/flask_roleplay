@@ -11,6 +11,8 @@ from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
+from logic.conflict_system.dynamic_conflict_template import extract_runner_response
+
 
 from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
@@ -523,7 +525,7 @@ class ConflictVictorySubsystem:
             """
             
             response = await Runner.run(self.victory_generator, prompt)
-            data = json.loads(response.output)
+            data = json.loads(extract_runner_response(response))
             
             # Store conditions in database
             async with get_db_connection_context() as conn:
