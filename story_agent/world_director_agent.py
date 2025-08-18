@@ -2811,5 +2811,10 @@ __all__ = [
     'PowerExchange',
     'WorldTension',
     'RelationshipDynamics',
-    'NPCRoutine'
+    'NPCRoutine',
+    # NEW: Canonical integration utilities
+    'ensure_canonical_consistency',
+    'validate_canonical_integration',
+    'get_canonical_context_from_world_director',
+    'CANONICAL_INTEGRATION_ENABLED'
 ]
