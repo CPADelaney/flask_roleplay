@@ -569,7 +569,7 @@ class BackgroundConflictOrchestrator:
         {{
             "name": "Compelling headline-style name",
             "description": "2-3 sentence dramatic overview",
-            "factions": ["3-5 named factions with clear stakes"],
+            "factions": ["3-5 named factions with clear stakes"],  # <-- Keep as strings OR
             "initial_state": "Current tense situation",
             "potential_developments": ["5 possible future events"],
             "daily_life_impacts": ["3 subtle effects on everyday life"],
@@ -585,6 +585,17 @@ class BackgroundConflictOrchestrator:
         response = await Runner.run(self.world_event_agent, prompt)
         raw = extract_runner_response(response)
         data = json.loads(raw)
+    
+        # Extract faction names if they're objects
+        raw_factions = data.get("factions", [])
+        faction_names = []
+        for faction in raw_factions:
+            if isinstance(faction, dict):
+                # If it's an object, extract the name
+                faction_names.append(faction.get("name", str(faction)))
+            else:
+                # If it's already a string, use it directly
+                faction_names.append(str(faction))
     
         # Store with numeric intensity; default to "distant_rumor"
         init_enum = BackgroundIntensity.DISTANT_RUMOR
@@ -606,11 +617,11 @@ class BackgroundConflictOrchestrator:
                 data.get("description", ""),
                 init_intensity,
                 data.get("initial_state", ""),
-                json.dumps(list(data.get("factions") or [])),
+                json.dumps(faction_names),  # <-- Use extracted names
             )
     
-            # Optional: keep the separate factions table if you have it
-            for faction in (data.get("factions") or []):
+            # Store factions in the separate table
+            for faction_name in faction_names:
                 await conn.execute(
                     """
                     INSERT INTO BackgroundConflictFactions
@@ -618,7 +629,7 @@ class BackgroundConflictOrchestrator:
                     VALUES ($1, $2, $3, 'neutral')
                     """,
                     conflict_id,
-                    faction,
+                    faction_name,
                     random.uniform(0.3, 0.7),
                 )
     
@@ -629,7 +640,7 @@ class BackgroundConflictOrchestrator:
             description=data.get("description", ""),
             intensity=init_enum,
             progress=0.0,
-            factions=list(data.get("factions") or []),
+            factions=faction_names,  # <-- Use extracted names
             current_state=data.get("initial_state", ""),
             recent_developments=[],
             impact_on_daily_life=list(data.get("daily_life_impacts") or []),
