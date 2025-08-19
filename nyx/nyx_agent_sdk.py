@@ -227,6 +227,72 @@ def assert_no_required_leaks(tool, log=logger):
         _set_tool_schema_dict(tool, attr, schema)
         log.info("[schema:%s] clamped required to %s", name, sorted(props))
 
+def _tool_payload(tool):
+    # Build the exact structure OpenAI expects so we can inspect it.
+    name = getattr(tool, "name", getattr(tool, "__name__", "unnamed_tool"))
+    desc = (getattr(tool, "__doc__", "") or "")[:1000]
+
+    params = None
+    # Try common attrs first
+    for attr in ("parameters", "_parameters", "openai_schema", "schema", "_schema"):
+        v = getattr(tool, attr, None)
+        if isinstance(v, dict):
+            params = v
+            break
+        try:
+            from pydantic import BaseModel as _BM
+            if isinstance(v, type) and issubclass(v, _BM):
+                params = v.model_json_schema()
+                break
+        except Exception:
+            pass
+
+    # Fallback
+    if not isinstance(params, dict):
+        params = {"type": "object", "properties": {}}
+
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": desc,
+            "parameters": params,
+        },
+    }
+
+def _log_tool(tool, log):
+    payload = _tool_payload(tool)
+    fn = payload["function"]
+    params = fn.get("parameters") or {}
+    props = list((params.get("properties") or {}).keys())
+    req = list((params.get("required") or []))
+
+    extra = sorted(set(req) - set(props))
+    missing = sorted(set(props) - set(req))
+
+    log.debug("[tool:%s] root.properties=%s", fn["name"], props)
+    log.debug("[tool:%s] root.required=%s", fn["name"], req)
+    if extra:
+        log.error("[tool:%s] ✗ EXTRA keys in required (not in properties): %s", fn["name"], extra)
+    if missing:
+        log.error("[tool:%s] ✗ MISSING keys in required (present in properties): %s", fn["name"], missing)
+
+def assert_no_required_leaks(tool, log=None):
+    payload = _tool_payload(tool)
+    fn = payload["function"]
+    params = fn.get("parameters") or {}
+    props = list((params.get("properties") or {}).keys())
+    req = list((params.get("required") or []))
+
+    extra = sorted(set(req) - set(props))
+    missing = sorted(set(props) - set(req))
+
+    if extra or missing:
+        msg = (f"Tool '{fn['name']}' has invalid root schema: "
+               f"extra_in_required={extra} missing_in_required={missing}")
+        if log:
+            log.error(msg)
+        raise ValueError(msg)
 
 class KVPair(BaseModel):
     key: str
@@ -4259,20 +4325,24 @@ async def process_user_input(
 
         # ===== STEP 7: Final tool sanitization =====
         logger.debug(f"[{trace_id}] Step 7: Final tool sanitization...")
+        for t in getattr(nyx_main_agent, "tools", []) or []:
+            _log_tool(t, logger)
+        
         try:
-            # ⚠️ If you still call this, comment it out while debugging. It’s the usual culprit.
+            # ⚠️ Leave this commented while debugging; it often mutates schemas.
             # force_fix_tool_parameters(nyx_main_agent)
         
-            # Sanitize permissive flags if you like (safe)
+            # This is generally benign (removes disallowed fields etc.)
             sanitize_agent_tools_in_place(nyx_main_agent)
         
-            # Detect *and* clamp leaks for every tool (root cause visibility)
+            # Assert AFTER any sanitization, so we catch what will actually ship.
             for t in getattr(nyx_main_agent, "tools", []) or []:
                 assert_no_required_leaks(t, log=logger)
         
-            logger.debug(f"[{trace_id}] ✓ Tools inspected and clamped (if needed)")
+            logger.debug(f"[{trace_id}] ✓ Tools inspected (and would fail-fast if invalid)")
         except Exception as e:
-            logger.error(f"[{trace_id}] ✗ Sanitization failed: {e}")
+            logger.error(f"[{trace_id}] ✗ Sanitization/validation failed: {e}")
+            raise
 
         # ===== STEP 8: Prepare Runner configuration =====
         logger.debug(f"[{trace_id}] Step 8: Preparing Runner configuration...")
