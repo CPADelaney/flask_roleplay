@@ -166,6 +166,68 @@ def extract_runner_response(result: Any) -> str:
     except Exception:
         return str(result)
 
+def _get_tool_schema_dict(tool):
+    for attr in ("parameters", "_parameters", "schema", "_schema", "openai_schema"):
+        val = getattr(tool, attr, None)
+        if isinstance(val, dict):
+            return attr, val
+        try:
+            from pydantic import BaseModel as _BM
+            if isinstance(val, type) and issubclass(val, _BM):
+                return attr, val.model_json_schema()
+        except Exception:
+            pass
+    return None, None
+
+def _set_tool_schema_dict(tool, attr_name, schema):
+    try:
+        if hasattr(tool, "parameters_model"):
+            try: delattr(tool, "parameters_model")
+            except Exception: setattr(tool, "parameters_model", None)
+        setattr(tool, attr_name or "parameters", schema)
+    except Exception:
+        try: tool.parameters = schema
+        except Exception: pass
+
+def _find_paths_for_property(schema_dict, target_key):
+    """Find where a key appears as a nested property for debugging."""
+    paths = []
+    def walk(node, path=""):
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict) and target_key in props:
+                paths.append(path + (".properties" if path else "properties"))
+            for k, v in node.items():
+                walk(v, path + ("." if path else "") + k)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+    walk(schema_dict)
+    return paths
+
+def assert_no_required_leaks(tool, log=logger):
+    """Detect and fix 'required' keys not present in root 'properties'."""
+    attr, schema = _get_tool_schema_dict(tool)
+    if not schema: 
+        return
+    props = set((schema.get("properties") or {}).keys())
+    req   = set(schema.get("required") or [])
+    extra = req - props
+    missing = props - req
+    name = getattr(tool, "name", getattr(tool, "__name__", "<unknown>"))
+
+    if extra or missing:
+        log.error("[schema:%s] required mismatch -> extra=%s missing=%s", name, sorted(extra), sorted(missing))
+        if "calendar_names" in extra:
+            # Show where it *actually* lives
+            paths = _find_paths_for_property(schema, "calendar_names")
+            log.error("[schema:%s] 'calendar_names' exists under: %s", name, paths or "<none>")
+        # Clamp required to exactly root properties (the OpenAI 0.2 rule)
+        schema["required"] = list(props)
+        _set_tool_schema_dict(tool, attr, schema)
+        log.info("[schema:%s] clamped required to %s", name, sorted(props))
+
+
 class KVPair(BaseModel):
     key: str
     value: JsonValue
@@ -4195,20 +4257,20 @@ async def process_user_input(
         )
         logger.debug(f"[{trace_id}] ✓ Using safe model settings")
 
-        # ===== STEP 7: Final sanitization =====
+        # ===== STEP 7: Final tool sanitization =====
         logger.debug(f"[{trace_id}] Step 7: Final tool sanitization...")
         try:
+            # ⚠️ If you still call this, comment it out while debugging. It’s the usual culprit.
+            # force_fix_tool_parameters(nyx_main_agent)
+        
+            # Sanitize permissive flags if you like (safe)
             sanitize_agent_tools_in_place(nyx_main_agent)
-            force_fix_tool_parameters(nyx_main_agent) 
-            logger.debug(f"[{trace_id}] ✓ Main agent tools sanitized")
-            
-            # Extra paranoid check
-            if hasattr(nyx_main_agent, '__dict__'):
-                for key, value in nyx_main_agent.__dict__.items():
-                    if 'schema' in key.lower() and isinstance(value, dict):
-                        if 'additionalProperties' in str(value):
-                            logger.error(f"[{trace_id}] ✗ Found additionalProperties in {key}!")
-                            nyx_main_agent.__dict__[key] = sanitize_json_schema(value)
+        
+            # Detect *and* clamp leaks for every tool (root cause visibility)
+            for t in getattr(nyx_main_agent, "tools", []) or []:
+                assert_no_required_leaks(t, log=logger)
+        
+            logger.debug(f"[{trace_id}] ✓ Tools inspected and clamped (if needed)")
         except Exception as e:
             logger.error(f"[{trace_id}] ✗ Sanitization failed: {e}")
 
