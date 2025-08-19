@@ -289,23 +289,31 @@ def kvlist_to_dict(kv: KVList) -> dict:
     return {pair.key: pair.value for pair in kv.items}
 
 # ===== Global sanitization functions =====
-def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Sanitize JSON schema by removing additionalProperties with detailed logging."""
+def sanitize_json_schema(schema: dict) -> dict:
+    import copy
     s = copy.deepcopy(schema)
-    
-    def strip_ap(obj):
-        if isinstance(obj, dict):
-            obj.pop('additionalProperties', None)
-            obj.pop('unevaluatedProperties', None)
-            for v in obj.values():
-                if isinstance(v, (dict, list)):
-                    strip_ap(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                strip_ap(item)
-        return obj
-    
-    return strip_ap(s)
+
+    def walk(x):
+        if isinstance(x, dict):
+            # remove noisy props
+            x.pop("additionalProperties", None)
+            x.pop("unevaluatedProperties", None)
+
+            # prune invalid required keys against properties at THIS level
+            props = x.get("properties")
+            req = x.get("required")
+            if isinstance(props, dict) and isinstance(req, list):
+                x["required"] = [k for k in req if k in props]
+
+            # recurse
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(s)
+    return s
 
 def run_compat(agent, *, instruction=None, messages=None, context=None):
     if instruction is None and messages:
