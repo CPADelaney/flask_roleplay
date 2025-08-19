@@ -290,36 +290,26 @@ def kvlist_to_dict(kv: KVList) -> dict:
 
 # ===== Global sanitization functions =====
 def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Deeply sanitize a JSON Schema dict for OpenAI tool validation:
-
-    - Remove "additionalProperties" / "unevaluatedProperties" everywhere
-    - Normalize 'required' so it ONLY contains keys that exist in the SAME level's 'properties'
-      (drops stray names like 'calendar_names' when not present at that level)
-    - Ensure deterministic ordering
-    """
+    """Remove additionalProperties / unevaluatedProperties and normalize 'required'."""
     import copy
     s = copy.deepcopy(schema)
 
     def walk(node):
         if isinstance(node, dict):
-            # 1) Strip permissive flags that can cause strict-tool issues
             node.pop("additionalProperties", None)
             node.pop("unevaluatedProperties", None)
 
-            # 2) Fix 'required' against 'properties' at this same level
             props = node.get("properties")
-            req = node.get("required")
             if isinstance(props, dict):
+                req = node.get("required")
                 if isinstance(req, list):
-                    # Keep only names that are actual properties here
-                    fixed = [k for k in req if k in props]
-                    # Optional: keep order stable
-                    node["required"] = fixed
-                # If 'required' is missing or not a list, leave it absent;
-                # Pydantic will already mark truly-required fields.
+                    # keep only keys that exist here
+                    node["required"] = [k for k in req if k in props]
+                elif req is not None:
+                    # if it's junky, drop it
+                    node.pop("required", None)
 
-            # 3) Recurse
+            # recurse
             for v in node.values():
                 walk(v)
 
@@ -329,6 +319,54 @@ def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
 
     walk(s)
     return s
+
+def force_fix_tool_parameters(agent, *, tool_name="narrate_slice_of_life_scene"):
+    """
+    0.2.x-safe hardening for a single tool:
+    - Ensure root 'required' exists and equals all root property keys
+    - Drop any stray 'required' names that aren't root properties (e.g., 'calendar_names')
+    - Optionally collapse known-heavy nested refs to free-form 'object'
+    """
+    try:
+        tools = getattr(agent, "tools", []) or []
+        for t in tools:
+            if getattr(t, "name", "") != tool_name:
+                continue
+
+            # Try all likely attribute names for the parameter schema
+            for attr in ("parameters", "_parameters", "_schema", "schema", "openai_schema"):
+                params = getattr(t, attr, None)
+                if not isinstance(params, dict):
+                    continue
+
+                # Root: make sure we have properties
+                props = params.get("properties")
+                if not isinstance(props, dict):
+                    continue
+
+                # ---- STRIP permissive flags
+                params.pop("additionalProperties", None)
+                params.pop("unevaluatedProperties", None)
+
+                # ---- COLLAPSE heavy nested refs to simple 'object'
+                # This avoids nested required bubbling/leaking from $defs
+                for k in ("scene", "world_state"):
+                    pv = props.get(k)
+                    if isinstance(pv, dict):
+                        desc = pv.get("description") or f"{k} payload"
+                        props[k] = {"type": "object", "description": desc}
+
+                # ---- FORCE root 'required' to exactly the root property keys
+                root_keys = list(props.keys())
+                params["required"] = root_keys
+
+                # Write back the attribute we modified
+                try:
+                    setattr(t, attr, params)
+                except Exception:
+                    pass
+    except Exception:
+        logger.exception("force_fix_tool_parameters failed")
 
 
 def run_compat(agent, *, instruction=None, messages=None, context=None):
@@ -4161,6 +4199,7 @@ async def process_user_input(
         logger.debug(f"[{trace_id}] Step 7: Final tool sanitization...")
         try:
             sanitize_agent_tools_in_place(nyx_main_agent)
+            force_fix_tool_parameters(nyx_main_agent) 
             logger.debug(f"[{trace_id}] ✓ Main agent tools sanitized")
             
             # Extra paranoid check
