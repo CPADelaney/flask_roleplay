@@ -17,8 +17,18 @@ from datetime import datetime, timezone
 
 def _strip_ap(obj):
     if isinstance(obj, dict):
+        # Remove problematic fields
         obj.pop('additionalProperties', None)
         obj.pop('unevaluatedProperties', None)
+        
+        # Fix 'required' to only include actual properties at this level
+        props = obj.get("properties")
+        req = obj.get("required")
+        if isinstance(props, dict) and isinstance(req, list):
+            # Keep only keys that exist in properties
+            obj["required"] = [k for k in req if k in props]
+        
+        # Recurse
         for v in obj.values():
             _strip_ap(v)
     elif isinstance(obj, list):
