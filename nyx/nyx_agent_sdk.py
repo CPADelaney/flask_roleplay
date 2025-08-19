@@ -289,31 +289,47 @@ def kvlist_to_dict(kv: KVList) -> dict:
     return {pair.key: pair.value for pair in kv.items}
 
 # ===== Global sanitization functions =====
-def sanitize_json_schema(schema: dict) -> dict:
+def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deeply sanitize a JSON Schema dict for OpenAI tool validation:
+
+    - Remove "additionalProperties" / "unevaluatedProperties" everywhere
+    - Normalize 'required' so it ONLY contains keys that exist in the SAME level's 'properties'
+      (drops stray names like 'calendar_names' when not present at that level)
+    - Ensure deterministic ordering
+    """
     import copy
     s = copy.deepcopy(schema)
 
-    def walk(x):
-        if isinstance(x, dict):
-            # remove noisy props
-            x.pop("additionalProperties", None)
-            x.pop("unevaluatedProperties", None)
+    def walk(node):
+        if isinstance(node, dict):
+            # 1) Strip permissive flags that can cause strict-tool issues
+            node.pop("additionalProperties", None)
+            node.pop("unevaluatedProperties", None)
 
-            # prune invalid required keys against properties at THIS level
-            props = x.get("properties")
-            req = x.get("required")
-            if isinstance(props, dict) and isinstance(req, list):
-                x["required"] = [k for k in req if k in props]
+            # 2) Fix 'required' against 'properties' at this same level
+            props = node.get("properties")
+            req = node.get("required")
+            if isinstance(props, dict):
+                if isinstance(req, list):
+                    # Keep only names that are actual properties here
+                    fixed = [k for k in req if k in props]
+                    # Optional: keep order stable
+                    node["required"] = fixed
+                # If 'required' is missing or not a list, leave it absent;
+                # Pydantic will already mark truly-required fields.
 
-            # recurse
-            for v in x.values():
+            # 3) Recurse
+            for v in node.values():
                 walk(v)
-        elif isinstance(x, list):
-            for v in x:
+
+        elif isinstance(node, list):
+            for v in node:
                 walk(v)
 
     walk(s)
     return s
+
 
 def run_compat(agent, *, instruction=None, messages=None, context=None):
     if instruction is None and messages:
