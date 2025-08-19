@@ -101,7 +101,7 @@ class AgentSafeModel(BaseModel):
     Pydantic v2 base model that emits a schema with no additionalProperties anywhere.
     This is required for compatibility with OpenAI Agents SDK's strict mode.
     """
-    model_config = ConfigDict()  # Do NOT set extra=... here
+    model_config = ConfigDict() 
     
     @classmethod
     def model_json_schema(cls, **kwargs):
@@ -113,6 +113,14 @@ class AgentSafeModel(BaseModel):
                 # Remove the problematic keys
                 obj.pop('additionalProperties', None)
                 obj.pop('unevaluatedProperties', None)
+                
+                # Fix 'required' field to match properties
+                props = obj.get("properties")
+                req = obj.get("required")
+                if isinstance(props, dict) and isinstance(req, list):
+                    # Only keep required fields that actually exist in properties
+                    obj["required"] = [k for k in req if k in props]
+                
                 # Recursively process all values
                 for v in obj.values():
                     strip_additional_properties(v)
