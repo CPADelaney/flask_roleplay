@@ -32,7 +32,8 @@ import asyncio
 import os
 import time
 import copy
-from datetime import datetime, timezone
+from collections.abc import Mapping
+from datetime import datetime, timezone, date
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 from story_agent.slice_of_life_narrator import (
     SliceOfLifeNarrator,
@@ -126,7 +127,7 @@ class BaseModel(_PydanticBaseModel):
             # Log if additionalProperties exists
             if 'additionalProperties' in str(schema):
                 logger.warning(f"Model {cls.__name__} has additionalProperties in schema")
-            return clean_schema(schema)
+            return sanitize_json_schema(schema)  # <-- Fixed: was clean_schema(...)
         except Exception as e:
             logger.error(f"Schema generation failed for {cls.__name__}: {e}")
             raise
@@ -137,6 +138,33 @@ StrictBaseModel = BaseModel
 # ===== Utility Types for Strict Schema =====
 JsonScalar = Union[str, int, float, bool, None]
 JsonValue = Union[JsonScalar, List[JsonScalar]]
+
+def extract_runner_response(result: Any) -> str:
+    """Best-effort extraction of model output from Runner.run result."""
+    try:
+        for attr in ("final_output", "output_text", "text"):
+            v = getattr(result, attr, None)
+            if isinstance(v, str) and v.strip():
+                return v
+        # Some SDK builds expose .data or .messages
+        data = getattr(result, "data", None)
+        if data is not None:
+            try:
+                return json.dumps(_json_safe(data), ensure_ascii=False)
+            except Exception:
+                return str(data)
+        msgs = getattr(result, "messages", None)
+        if isinstance(msgs, list):
+            # fall back to last assistant output_text
+            for m in reversed(msgs):
+                if isinstance(m, dict) and m.get("role") == "assistant":
+                    parts = m.get("content") or []
+                    for part in reversed(parts):
+                        if isinstance(part, dict) and part.get("type") == "output_text" and part.get("text"):
+                            return part["text"]
+        return str(result)
+    except Exception:
+        return str(result)
 
 class KVPair(BaseModel):
     key: str
@@ -184,33 +212,73 @@ async def _ensure_world_state(app_ctx):
     ctx2 = getattr(wd, "context", None)
     return getattr(ctx2, "current_world_state", None) if ctx2 else None
 
-def _json_safe(x):
-    """Best-effort JSON conversion for pydantic/enums/datetimes/nested containers."""
-    if x is None:
-        return None
-    # Pydantic v2 objects: force JSON mode, then recurse
-    if hasattr(x, "model_dump"):
-        try:
-            return _json_safe(x.model_dump(mode="json"))
-        except TypeError:
-            return _json_safe(x.model_dump())
-    # Objects that expose to_dict
-    if hasattr(x, "to_dict"):
-        try:
-            return _json_safe(x.to_dict())
-        except Exception:
-            pass
-    # Primitive fixes
-    if isinstance(x, Enum):
-        return x.value
-    if isinstance(x, (datetime, date)):
-        return x.isoformat()
-    # Containers (dicts, lists, tuples, sets)
-    if isinstance(x, Mapping):
-        return {k: _json_safe(v) for k, v in x.items()}
-    if isinstance(x, (list, tuple, set)):
-        return [_json_safe(v) for v in x]
-    return x
+def _json_safe(value, *, _depth=0, _max_depth=4):
+    """Best-effort conversion of arbitrary Python objects to JSON-safe primitives."""
+    if _depth > _max_depth:
+        return str(value)
+
+    # Primitives
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+
+    # datetime/date -> ISO string
+    try:
+        from datetime import datetime, date
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+    except Exception:
+        pass
+
+    # Enum -> its value
+    try:
+        from enum import Enum
+        if isinstance(value, Enum):
+            return _json_safe(getattr(value, "value", str(value)), _depth=_depth+1, _max_depth=_max_depth)
+    except Exception:
+        pass
+
+    # List/Tuple/Set
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for v in value]
+
+    # Dict-like
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for k, v in value.items()}
+
+    # Dataclass
+    try:
+        import dataclasses
+        if dataclasses.is_dataclass(value):
+            return _json_safe(dataclasses.asdict(value), _depth=_depth+1, _max_depth=_max_depth)
+    except Exception:
+        pass
+
+    # Pydantic v1/v2 models
+    for attr in ("model_dump", "dict"):
+        fn = getattr(value, attr, None)
+        if callable(fn):
+            try:
+                return _json_safe(fn(), _depth=_depth+1, _max_depth=_max_depth)
+            except Exception:
+                break
+
+    # Fallback: attempt __dict__, else str()
+    data = getattr(value, "__dict__", None)
+    if isinstance(data, dict):
+        return _json_safe(data, _depth=_depth+1, _max_depth=_max_depth)
+    return str(value)
+
+def _preview(text: Optional[str], n: int = 240) -> str:
+    if not text:
+        return ""
+    cleaned = " ".join(str(text).split())
+    return cleaned[:n] + ("…" if len(cleaned) > n else "")
+
+def _js(obj: Any) -> str:
+    try:
+        return json.dumps(obj, ensure_ascii=False, default=str)
+    except Exception:
+        return f"<unserializable:{type(obj).__name__}>"
   
 
 # Helpers for conversion
@@ -239,9 +307,8 @@ def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     
     return strip_ap(s)
 
-def run_compat(agent, *, instruction=None, messages=None, context=None, tools=None, tool_choice=None):
+def run_compat(agent, *, instruction=None, messages=None, context=None):
     if instruction is None and messages:
-        # collapse legacy messages into a single prompt
         parts = []
         for m in messages:
             if isinstance(m, dict) and m.get("role") in (None, "user", "system"):
@@ -249,7 +316,7 @@ def run_compat(agent, *, instruction=None, messages=None, context=None, tools=No
         instruction = "\n".join(p for p in parts if p)
     if instruction is None:
         instruction = ""
-    return Runner.run(agent, instruction, context=context, tools=tools, tool_choice=tool_choice)
+    return Runner.run(agent, instruction, context=context)
 
 def sanitize_agent_tools_in_place(agent):
     """
@@ -307,12 +374,6 @@ def _jsonable(x):
     if isinstance(x, (list, tuple, set)):
         return [_jsonable(v) for v in x]
     return x
-
-def _resolve_app_ctx(ctx_like):
-    """
-    Accept either RunContextWrapper[NyxContext] or NyxContext and return the NyxContext.
-    """
-    return getattr(ctx_like, "context", ctx_like)
 
 def _resolve_app_ctx(ctx_like):
     """
@@ -487,36 +548,6 @@ def _tool_output(resp, name: str):
     except Exception:
         return {}
 
-def _extract_last_assistant_text(resp) -> str:
-    """Extract the last assistant message text from response"""
-    msgs = [c for c in resp if c.get("type") == "message" and c.get("role") == "assistant"]
-    if not msgs:
-        return ""
-    parts = msgs[-1].get("content") or []
-    for part in reversed(parts):
-        if part.get("type") == "output_text" and part.get("text"):
-            return part["text"]
-    return ""
-
-def _did_call_tool(resp, tool_name: str) -> bool:
-    """Check if a specific tool was called in the response"""
-    for c in resp:
-        if c.get("type") in ("function_call", "function_call_output") and c.get("name") == tool_name:
-            return True
-    return False
-
-def _tool_output(resp, name: str):
-    """Extract tool output data from response, return {} if not found"""
-    outs = [c for c in resp if c.get("type") == "function_call_output" and c.get("name") == name]
-    if not outs:
-        return {}
-    try:
-        raw = outs[-1].get("output")
-        # Agents SDK often stores JSON string in .output
-        return json.loads(raw) if isinstance(raw, str) else (raw or {})
-    except Exception:
-        return {}
-
 def _default_json_encoder(obj):
     if isinstance(obj, Enum):
         return obj.value
@@ -528,10 +559,17 @@ def _default_json_encoder(obj):
     raise TypeError(f"{type(obj).__name__} is not JSON serializable")
 
 def assemble_nyx_response(resp: list) -> Dict[str, Any]:
-    """Assemble final response from agent run with full narrator integration"""
-    
-    # Extract tool outputs
-    scene = _tool_output(resp, "orchestrate_slice_scene")
+    """Assemble final response from agent run with full narrator integration.
+
+    Prefers the concrete narrator output (tool_narrate_slice_of_life_scene) if available.
+    Falls back to orchestrate_slice_scene packaging or other tools/dialogue.
+    """
+    # --- Pull tool outputs ----------------------------------------------------
+    # Primary scene sources
+    narrator_scene = _tool_output(resp, "tool_narrate_slice_of_life_scene")
+    packaged_scene = _tool_output(resp, "orchestrate_slice_scene")
+
+    # Other contributors
     dialogue = _tool_output(resp, "generate_npc_dialogue")
     world = _tool_output(resp, "check_world_state")
     npc = _tool_output(resp, "simulate_npc_autonomy")
@@ -540,158 +578,171 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
     emergent = _tool_output(resp, "generate_emergent_event")
     power = _tool_output(resp, "narrate_power_exchange")
     routine = _tool_output(resp, "narrate_daily_routine")
-    
-    # 1) Primary narrative - prioritize sophisticated narrator output
+    ambient = _tool_output(resp, "generate_ambient_narration")
+
+    # Prefer the actual narrator-produced scene
+    scene = None
+    if isinstance(narrator_scene, dict) and not narrator_scene.get("narrator_request"):
+        scene = narrator_scene
+    elif isinstance(packaged_scene, dict):
+        scene = packaged_scene
+
+    # --- 1) Narrative text ----------------------------------------------------
     narrative = ""
     atmosphere = ""
     nyx_commentary = None
     governance_approved = True
     context_aware = False
-    
-    # Check if we got sophisticated narration from SliceOfLifeNarrator
+
     if scene and isinstance(scene, dict):
-        # Extract narrative - could be nested in different ways
         narrative = scene.get("narrative") or scene.get("scene_description") or ""
-        atmosphere = scene.get("atmosphere", "")
+        atmosphere = scene.get("atmosphere", "") or ""
         nyx_commentary = scene.get("nyx_commentary")
         governance_approved = scene.get("governance_approved", True)
         context_aware = scene.get("context_aware", False)
-        
-        # If no narrative yet, check for structured narration data
-        if not narrative and "scene" in scene:
-            inner_scene = scene["scene"]
-            if isinstance(inner_scene, dict):
-                narrative = inner_scene.get("description", "")
-    
-    # If still no narrative, check dialogue
-    if not narrative and dialogue:
-        if isinstance(dialogue, dict):
-            npc_dialogue = dialogue.get("dialogue", "")
-            npc_name = dialogue.get("npc_name", "Someone")
-            if npc_dialogue:
-                narrative = f'{npc_name}: "{npc_dialogue}"'
-                if dialogue.get("subtext"):
-                    narrative += f"\n*{dialogue['subtext']}*"
-    
-    # If still no narrative, check power exchange
-    if not narrative and power:
-        if isinstance(power, dict):
-            narrative = power.get("narrative") or power.get("moment", "")
-    
-    # If still no narrative, check routine
-    if not narrative and routine:
-        if isinstance(routine, dict):
-            narrative = routine.get("description") or routine.get("routine_with_dynamics", "")
-    
-    # Final fallback - extract from assistant messages
+
+        # If still nothing, try inner scene structure
+        if not narrative and "scene" in scene and isinstance(scene["scene"], dict):
+            narrative = scene["scene"].get("description", "") or narrative
+
+    # Dialogue fallback
+    if (not narrative or not narrative.strip()) and isinstance(dialogue, dict):
+        npc_dialogue = dialogue.get("dialogue", "")
+        npc_name = dialogue.get("npc_name", "Someone")
+        if npc_dialogue:
+            narrative = f'{npc_name}: "{npc_dialogue}"'
+            if dialogue.get("subtext"):
+                narrative += f"\n*{dialogue['subtext']}*"
+
+    # Power exchange fallback
+    if (not narrative or not narrative.strip()) and isinstance(power, dict):
+        narrative = power.get("narrative") or power.get("moment", "") or narrative
+
+    # Routine fallback
+    if (not narrative or not narrative.strip()) and isinstance(routine, dict):
+        narrative = routine.get("description") or routine.get("routine_with_dynamics", "") or narrative
+
+    # Final assistant-text fallback
     if not narrative or not narrative.strip():
-        narrative = _extract_last_assistant_text(resp)
-    
-    # Ultimate fallback
-    if not narrative:
-        narrative = "The moment unfolds in the simulation."
-    
-    # 2) Extract world state metadata
+        narrative = _extract_last_assistant_text(resp) or "The moment unfolds in the simulation."
+
+    # --- 2) World metadata ----------------------------------------------------
     world_mood = "neutral"
     time_of_day = "Unknown"
     tension_level = 3
-    
-    # From scene data (sophisticated narrator)
+
     if scene and isinstance(scene, dict):
         world_mood = scene.get("world_mood") or world_mood
         time_of_day = scene.get("time_of_day") or time_of_day
         tension_level = scene.get("tension_level", tension_level)
-    
-    # From world state check
-    if world and isinstance(world, dict):
+
+    if isinstance(world, dict):
         world_mood = world.get("world_mood") or world_mood
         time_of_day = world.get("time_of_day") or time_of_day
-        if "tensions" in world:
-            tensions = world["tensions"]
-            if isinstance(tensions, dict):
-                avg_tension = sum(tensions.values()) / len(tensions) if tensions else 0.5
-                tension_level = int(avg_tension * 10)
-    
-    # 3) Extract available activities/choices
-    available = []
-    
-    # From sophisticated narrator
+        tensions = world.get("tensions")
+        if isinstance(tensions, dict) and tensions:
+            try:
+                avg_tension = sum(float(v) for v in tensions.values()) / max(1, len(tensions))
+                tension_level = int(round(avg_tension * 10))
+            except Exception:
+                pass
+
+    # --- 3) Choices / available activities -----------------------------------
+    available: list[str] = []
+
     if scene and isinstance(scene, dict):
-        available = scene.get("available_activities", [])
+        available = list(scene.get("available_activities") or [])
         if not available:
-            available = scene.get("choices", [])
-    
-    # From power exchange
-    if not available and power and isinstance(power, dict):
-        available = power.get("player_response_options", [])
-    
-    # Default activities
+            # some narrators return 'choices'
+            ch = scene.get("choices") or []
+            if isinstance(ch, list):
+                # Normalize choice texts if they are dicts
+                normalized = []
+                for c in ch:
+                    if isinstance(c, dict):
+                        txt = c.get("text")
+                        if isinstance(txt, str) and txt.strip():
+                            normalized.append(txt)
+                    elif isinstance(c, str):
+                        normalized.append(c)
+                available = normalized
+
+    if not available and isinstance(power, dict):
+        opts = power.get("player_response_options")
+        if isinstance(opts, list):
+            available = [str(x) for x in opts if isinstance(x, (str, int))]
+
     if not available:
         available = ["observe", "browse", "leave", "interact"]
-    
-    # 4) Extract emergent opportunities
-    emergent_opportunities = []
-    
+
+    # --- 4) Emergent opportunities -------------------------------------------
+    emergent_opportunities: list[str] = []
     if scene and isinstance(scene, dict):
-        emergent_opportunities = scene.get("emergent_opportunities", [])
-    
-    if emergent and isinstance(emergent, dict):
-        if "event" in emergent:
-            emergent_opportunities.append(emergent["event"].get("title", "Emergent event"))
-    
-    # 5) Extract power dynamics
-    power_undertones = []
-    
+        eo = scene.get("emergent_opportunities") or []
+        if isinstance(eo, list):
+            emergent_opportunities = [str(x) for x in eo]
+
+    if isinstance(emergent, dict):
+        evt = emergent.get("event")
+        if isinstance(evt, dict):
+            emergent_opportunities.append(evt.get("title", "Emergent event"))
+
+    # --- 5) Power undertones --------------------------------------------------
+    power_undertones: list[str] = []
     if scene and isinstance(scene, dict):
-        power_undertones = scene.get("power_undertones") or scene.get("power_dynamic_hints", [])
-    
-    if power and isinstance(power, dict):
-        if power.get("exchange_type"):
-            power_undertones.append(f"Active {power['exchange_type']}")
-    
+        power_undertones = scene.get("power_undertones") or scene.get("power_dynamic_hints") or []
+
+    if isinstance(power, dict) and power.get("exchange_type"):
+        power_undertones.append(f"Active {power['exchange_type']}")
+
     if not power_undertones:
         power_undertones = ["subtle control dynamics"]
-    
-    # 6) Handle tension level safely
+
+    # --- 6) Tension type safety ----------------------------------------------
     if not isinstance(tension_level, (int, float)):
         try:
             tension_level = int(tension_level)
-        except:
-            tension_level = 3  # default medium tension
-    
-    # 7) Image generation decision
+        except Exception:
+            tension_level = 3
+
+    # --- 7) Image decision ----------------------------------------------------
     should_image = False
     image_prompt = None
-    
-    # Check multiple sources for image decision
-    if img and isinstance(img, dict):
+
+    if isinstance(img, dict):
         should_image = bool(img.get("should_generate") or img.get("generate_image", False))
         image_prompt = img.get("image_prompt")
-    
+
     if not should_image and scene and isinstance(scene, dict):
         should_image = bool(scene.get("generate_image", False))
         if not image_prompt:
             image_prompt = scene.get("image_prompt") or scene.get("image_description")
-    
-    # 8) Extract NPC-specific data
-    npc_data = {}
-    
-    if dialogue and isinstance(dialogue, dict):
+
+    # --- 8) NPC-specific data -------------------------------------------------
+    npc_data: Dict[str, Any] = {}
+
+    if isinstance(dialogue, dict):
         npc_data["last_dialogue"] = {
             "npc_id": dialogue.get("npc_id"),
             "text": dialogue.get("dialogue"),
             "tone": dialogue.get("tone"),
-            "requires_response": dialogue.get("requires_response", False)
+            "requires_response": dialogue.get("requires_response", False),
         }
-    
-    if npc and isinstance(npc, dict):
+
+    if isinstance(npc, dict):
         npc_data["autonomy"] = {
             "actions": npc.get("npc_actions", []),
-            "observation": npc.get("nyx_observation", "")
+            "observation": npc.get("nyx_observation", ""),
         }
-    
-    # 9) Build final response structure
-    response = {
+
+    # --- 9) Ambient narration merge (optional) --------------------------------
+    if isinstance(ambient, dict):
+        amb_text = ambient.get("atmosphere") or ambient.get("ambient") or ambient.get("description")
+        if amb_text and isinstance(amb_text, str):
+            atmosphere = (atmosphere + "\n" + amb_text).strip() if atmosphere else amb_text
+
+    # --- 10) Build final response --------------------------------------------
+    response: Dict[str, Any] = {
         "narrative": narrative,
         "world": {
             "mood": world_mood,
@@ -704,50 +755,47 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
         "undertones": power_undertones,
         "image": {
             "should_generate": should_image,
-            "prompt": image_prompt
+            "prompt": image_prompt,
         },
-        "universal_updates": updates.get("updates_generated", False) if updates else False,
+        "universal_updates": bool(updates.get("updates_generated")) if isinstance(updates, dict) else False,
         "nyx_commentary": nyx_commentary,
         "governance": {
-            "approved": governance_approved,
-            "context_aware": context_aware
+            "approved": bool(governance_approved),
+            "context_aware": bool(context_aware),
         },
         "npc": npc_data if npc_data else None,
         "telemetry": {
             "tools_called": sorted({
-                c.get("name") for c in resp 
+                c.get("name") for c in resp
                 if isinstance(c, dict) and c.get("type") == "function_call"
             }),
             "tools_with_output": sorted({
-                c.get("name") for c in resp 
+                c.get("name") for c in resp
                 if isinstance(c, dict) and c.get("type") == "function_call_output"
             }),
-            "narrator_used": bool(scene and context_aware),  # Track if sophisticated narrator was used
-        }
+            "narrator_used": bool(scene and context_aware),
+        },
     }
-    
-    # 10) Add any conflict manifestations if present
+
+    # --- 11) Conflicts / intersections / memory context ----------------------
     if scene and isinstance(scene, dict):
         conflict_manifestations = scene.get("conflict_manifestations", [])
         if conflict_manifestations:
             response["conflicts"] = {
                 "active": True,
-                "manifestations": conflict_manifestations
+                "manifestations": conflict_manifestations,
             }
-    
-    # 11) Add any system intersections
-    if scene and isinstance(scene, dict):
+
         system_triggers = scene.get("system_triggers", [])
         if system_triggers:
             response["system_intersections"] = system_triggers
-    
-    # 12) Add relevant memories if narrator provided them
-    if scene and isinstance(scene, dict):
+
         relevant_memories = scene.get("relevant_memories", [])
         if relevant_memories:
-            response["memory_context"] = relevant_memories[:3]  # Limit to top 3
-    
+            response["memory_context"] = relevant_memories[:3]
+
     return response
+
 
 # ===== Constants and Configuration =====
 class Config:
@@ -1634,73 +1682,7 @@ def _calculate_variance(values: List[float]) -> float:
         mean = sum(values) / len(values)
         return sum((x - mean) ** 2 for x in values) / len(values)
 
-def _json_safe(value, *, _depth=0, _max_depth=4):
-    """Best-effort conversion of arbitrary Python objects to JSON-safe primitives."""
-    if _depth > _max_depth:
-        return str(value)
 
-    # Primitives
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-
-    # datetime/date -> ISO string
-    try:
-        from datetime import datetime, date
-        if isinstance(value, (datetime, date)):
-            return value.isoformat()
-    except Exception:
-        pass
-
-    # Enum -> its value
-    try:
-        from enum import Enum
-        if isinstance(value, Enum):
-            return _json_safe(getattr(value, "value", str(value)), _depth=_depth+1, _max_depth=_max_depth)
-    except Exception:
-        pass
-
-    # List/Tuple/Set
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for v in value]
-
-    # Dict-like
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v, _depth=_depth+1, _max_depth=_max_depth) for k, v in value.items()}
-
-    # Dataclass
-    try:
-        import dataclasses
-        if dataclasses.is_dataclass(value):
-            return _json_safe(dataclasses.asdict(value), _depth=_depth+1, _max_depth=_max_depth)
-    except Exception:
-        pass
-
-    # Pydantic v1/v2 models
-    for attr in ("model_dump", "dict"):
-        fn = getattr(value, attr, None)
-        if callable(fn):
-            try:
-                return _json_safe(fn(), _depth=_depth+1, _max_depth=_max_depth)
-            except Exception:
-                break
-
-    # Fallback: attempt __dict__, else str()
-    data = getattr(value, "__dict__", None)
-    if isinstance(data, dict):
-        return _json_safe(data, _depth=_depth+1, _max_depth=_max_depth)
-    return str(value)
-
-def _preview(text: Optional[str], n: int = 240) -> str:
-    if not text:
-        return ""
-    cleaned = " ".join(str(text).split())
-    return cleaned[:n] + ("…" if len(cleaned) > n else "")
-
-def _js(obj: Any) -> str:
-    try:
-        return json.dumps(obj, ensure_ascii=False, default=str)
-    except Exception:
-        return f"<unserializable:{type(obj).__name__}>"
 
 # ===== Error Handling Functions =====
 
@@ -1786,24 +1768,15 @@ async def narrate_power_exchange(
     exchange_type: str = "subtle_control",
     intensity: float = 0.5
 ) -> str:
-    """Narrate a power exchange using the sophisticated narrator."""
     app_ctx = _get_app_ctx(ctx)
-    
-    # Ensure narrator is initialized
     if not app_ctx.slice_of_life_narrator:
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(app_ctx.user_id, app_ctx.conversation_id)
         await app_ctx.slice_of_life_narrator.initialize()
-    
-    narrator = app_ctx.slice_of_life_narrator
+
     world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
+
     from story_agent.world_simulation_models import PowerExchange, PowerDynamicType
-    
-    # Map exchange type to enum
     type_map = {
         "subtle_control": PowerDynamicType.SUBTLE_CONTROL,
         "gentle_guidance": PowerDynamicType.GENTLE_GUIDANCE,
@@ -1811,7 +1784,7 @@ async def narrate_power_exchange(
         "casual_dominance": PowerDynamicType.CASUAL_DOMINANCE,
         "protective_control": PowerDynamicType.PROTECTIVE_CONTROL,
     }
-    
+
     exchange = PowerExchange(
         initiator_npc_id=npc_id,
         initiator_id=npc_id,
@@ -1819,29 +1792,28 @@ async def narrate_power_exchange(
         recipient_type="player",
         recipient_id=1,
         exchange_type=type_map.get(exchange_type, PowerDynamicType.SUBTLE_CONTROL),
-        intensity=intensity
+        intensity=float(intensity)
     )
-    
-    # CRITICAL FIX: Use Runner.run() and pass dicts
-    from agents import Runner
-    
-    result = await Runner.run(
-        narrator.power_narrator,
-        messages=[{"role": "user", "content": "Narrate power exchange"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": narrator.narrate_power_exchange,
-            "kwargs": {
-                "exchange": exchange.model_dump(),  # Pass dict!
-                "world_state": world_state.model_dump() if world_state else {}  # Pass dict!
-            }
-        }]
-    )
-    
-    if result and hasattr(result, 'data'):
-        return json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
-    
-    return json.dumps({"narrative": "A moment of subtle control passes..."})
+
+    payload = {
+        "scene_type": "social",
+        "scene": {
+            "event_type": "social",
+            "title": "power exchange",
+            "description": "A brief exchange of subtle control.",
+            "location": "current_location",
+            "participants": [npc_id],
+            "power_exchange": _json_safe(exchange),
+        },
+        "world_state": _json_safe(world_state),
+        "player_action": None,
+    }
+
+    return json.dumps({
+        "narrator_request": True,
+        "payload": payload,
+        "hint": "power_exchange"
+    }, ensure_ascii=False)
 
 
 @function_tool
@@ -1851,12 +1823,10 @@ async def narrate_daily_routine(
     involved_npcs: list[int] | None = None
 ) -> dict:
     app_ctx = _unwrap_tool_ctx(ctx)
-    # ensure narrator
     if not getattr(app_ctx, "slice_of_life_narrator", None):
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
         app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(app_ctx.user_id, app_ctx.conversation_id)
         await app_ctx.slice_of_life_narrator.initialize()
-    narrator = app_ctx.slice_of_life_narrator
 
     world_state = await _ensure_world_state(app_ctx)
     participants = (involved_npcs or [])[:3]
@@ -1868,6 +1838,7 @@ async def narrate_daily_routine(
         "location": "current_location",
         "participants": participants,
     }
+
     payload = {
         "scene_type": "routine",
         "scene": _json_safe(scene_payload),
@@ -1875,26 +1846,11 @@ async def narrate_daily_routine(
         "player_action": None,
     }
 
-    instruction = (
-        "Call tool_narrate_slice_of_life_scene with exactly this JSON:\n\n"
-        "```json\n"
-        f"{{\"payload\": {json.dumps(_json_safe(payload), ensure_ascii=False, default=_default_json_encoder)} }}\n"
-        "```\n\n"
-        "Return only the tool result JSON."
-    )
-
-    resp = await Runner.run(
-        narrator.scene_narrator,
-        instruction,
-        context=narrator.context,
-        tools=[tool_narrate_slice_of_life_scene],
-        tool_choice=tool_narrate_slice_of_life_scene,
-    )
-    raw = extract_runner_response(resp)
-    try:
-        return json.loads(raw) if isinstance(raw, str) else (raw or {})
-    except Exception:
-        return {"scene_description": str(raw)}
+    # Do NOT call a tool here. Hand the request back to the LLM.
+    return {
+        "narrator_request": True,
+        "payload": payload
+    }
   
 @function_tool
 async def generate_ambient_narration(
@@ -1902,37 +1858,27 @@ async def generate_ambient_narration(
     focus: str = "atmosphere",
     intensity: float = 0.5
 ) -> str:
-    """Generate ambient world narration using the narrator."""
-    import json
-    from logic.conflict_system.dynamic_conflict_template import extract_runner_response
-
     intensity = max(0.0, min(1.0, float(intensity)))
-
     app_ctx = _get_app_ctx(ctx)
 
     if not app_ctx.slice_of_life_narrator:
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(app_ctx.user_id, app_ctx.conversation_id)
         await app_ctx.slice_of_life_narrator.initialize()
 
     narrator = app_ctx.slice_of_life_narrator
     world_state = await _ensure_world_state_from_ctx(app_ctx)
-    ws = world_state.model_dump() if world_state else {}
-
-    engine = getattr(narrator, "ambient_narrator", None) or narrator.routine_narrator
+    ws = _json_safe(world_state)
 
     prompt = (
-        "Generate one to two sentences of ambient narration reflecting the current world mood.\n"
+        "Write one or two concise sentences of ambient narration reflecting the current world mood.\n"
         "Return STRICT JSON only with keys: {\"ambient\":\"...\"}\n\n"
         f"Focus: {focus}\n"
         f"Intensity: {intensity}\n"
         f"World State: {json.dumps(ws, ensure_ascii=False)}\n"
     )
 
-    resp = await Runner.run(engine, prompt)
+    resp = await Runner.run(narrator.ambient_narrator, prompt, context=narrator.context)
     raw = extract_runner_response(resp)
 
     try:
@@ -1972,101 +1918,39 @@ async def generate_npc_dialogue(
     npc_id: int,
     situation: str
 ) -> str:
-    """Generate NPC dialogue using the sophisticated narrator with canonical tracking"""
-    
     app_ctx = _get_app_ctx(ctx)
-    
-    # Import canon functions
-    from lore.core.canon import (
-        ensure_canonical_context,
-        log_canonical_event,
-        find_or_create_npc
-    )
-    
-    # Ensure canonical context
+
+    # Canonical/context (unchanged)
     canonical_ctx = ensure_canonical_context({
         'user_id': app_ctx.user_id,
         'conversation_id': app_ctx.conversation_id
     })
-    
-    # Ensure narrator is initialized
-    if not app_ctx.slice_of_life_narrator:
-        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(
-            app_ctx.user_id,
-            app_ctx.conversation_id
-        )
-        await app_ctx.slice_of_life_narrator.initialize()
-    
-    narrator = app_ctx.slice_of_life_narrator
+
     world_state = await _ensure_world_state_from_ctx(app_ctx)
-    
-    # Ensure NPC exists canonically
-    async with get_db_connection_context() as conn:
-        # Get NPC name if available
-        npc_name = f"NPC_{npc_id}"
-        npc_data = await conn.fetchrow("""
-            SELECT npc_name FROM NPCStats 
-            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-        """, npc_id, app_ctx.user_id, app_ctx.conversation_id)
-        
-        if npc_data:
-            npc_name = npc_data['npc_name']
-        
-        # Ensure NPC exists canonically
-        canonical_npc_id = await find_or_create_npc(
-            canonical_ctx, conn,
-            npc_name=npc_name,
-            role="dialogue_participant"
-        )
-        
-        # Log dialogue generation event
-        await log_canonical_event(
-            canonical_ctx, conn,
-            f"Generating dialogue for {npc_name} in situation: {situation[:50]}",
-            tags=["dialogue", "generation", f"npc_{npc_id}"],
-            significance=5
-        )
-    
-    # CRITICAL FIX: Use Runner.run() and pass dicts
-    from agents import Runner
-    
-    dialogue_result = await Runner.run(
-        narrator.dialogue_writer,
-        messages=[{"role": "user", "content": f"Generate dialogue for situation: {situation}"}],
-        context=narrator.context,
-        tool_calls=[{
-            "tool": narrator.generate_npc_dialogue,
-            "kwargs": {
+
+    # Build a dialogue request for the narrator tool
+    payload = {
+        "scene_type": "social",
+        "scene": {
+            "event_type": "social",
+            "title": "npc dialogue",
+            "description": f"NPC {npc_id} responds: {situation}",
+            "location": "current_location",
+            "participants": [npc_id],
+            "dialogue_request": {
                 "npc_id": npc_id,
-                "situation": situation,
-                "world_state": world_state.model_dump() if world_state else {},  # Pass dict!
-                "player_input": app_ctx.current_context.get("user_input")
+                "situation": situation
             }
-        }]
-    )
-    
-    if dialogue_result and hasattr(dialogue_result, 'data'):
-        dialogue_data = dialogue_result.data
-        
-        # Log generated dialogue canonically
-        async with get_db_connection_context() as conn:
-            await log_canonical_event(
-                canonical_ctx, conn,
-                f"{npc_name} spoke: {dialogue_data.dialogue[:100] if hasattr(dialogue_data, 'dialogue') else 'dialogue generated'}",
-                tags=["dialogue", "npc_speech", f"npc_{npc_id}"],
-                significance=6
-            )
-        
-        return json.dumps({
-            "npc_id": npc_id,
-            "dialogue": dialogue_data.dialogue if hasattr(dialogue_data, 'dialogue') else str(dialogue_data),
-            "tone": dialogue_data.tone if hasattr(dialogue_data, 'tone') else 'neutral',
-            "subtext": dialogue_data.subtext if hasattr(dialogue_data, 'subtext') else '',
-            "requires_response": dialogue_data.requires_response if hasattr(dialogue_data, 'requires_response') else False
-        })
-    
-    return json.dumps({"dialogue": "...", "npc_id": npc_id})
+        },
+        "world_state": _json_safe(world_state),
+        "player_action": None,
+    }
+
+    return json.dumps({
+        "narrator_request": True,
+        "payload": payload,
+        "hint": "dialogue"
+    }, ensure_ascii=False)
   
 @function_tool
 async def retrieve_memories(ctx: RunContextWrapper[NyxContext], payload: RetrieveMemoriesInput) -> str:
@@ -3298,28 +3182,25 @@ async def generate_universal_updates(
 
 @function_tool
 async def orchestrate_slice_scene(
-    ctx: RunContextWrapper,  # RunContextWrapper[NyxContext] if you have the generic available
-    scene_type: str = "routine"
-) -> str:
+    ctx: RunContextWrapper,
+    scene_type: str = "routine",
+) -> dict:
     """
-    Try to construct Module 2's SliceOfLifeEvent (and matching ActivityType) lazily.
-    If anything smells like a cycle or enum mismatch, fall back to plain dicts.
+    Prepare narrator payload for a slice-of-life scene. No nested tool calls.
     """
     app_ctx = _unwrap_tool_ctx(ctx)
 
-    # Ensure narrator
+    # Ensure narrator exists (we won't call it here, but we may need IDs/context)
     if not getattr(app_ctx, "slice_of_life_narrator", None):
         from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
         app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(app_ctx.user_id, app_ctx.conversation_id)
         await app_ctx.slice_of_life_narrator.initialize()
-    narrator = app_ctx.slice_of_life_narrator
 
-    # World state (as object and dict)
     world_state_obj = await _ensure_world_state(app_ctx)
     world_state_payload = _json_safe(world_state_obj)
 
     # Participants -> ints
-    participants: List[int] = []
+    participants: list[int] = []
     if world_state_obj and getattr(world_state_obj, "active_npcs", None):
         for npc in (world_state_obj.active_npcs or [])[:3]:
             if isinstance(npc, dict) and "npc_id" in npc:
@@ -3330,7 +3211,6 @@ async def orchestrate_slice_scene(
                 with suppress(Exception):
                     participants.append(int(getattr(npc, "npc_id")))
 
-    # Map to value (string) for fallback
     activity_value_map = {
         "routine": "routine", "social": "social", "work": "work",
         "intimate": "intimate", "leisure": "leisure", "special": "special",
@@ -3338,37 +3218,20 @@ async def orchestrate_slice_scene(
     }
     event_type_value = activity_value_map.get(scene_type, "routine")
 
-    # --- Try typed path (lazy import to avoid early resolution) ---
-    TypedEvent = None
-    TypedActivity = None
+    # Try typed, fall back to dict
     try:
         from story_agent.slice_of_life_narrator import SliceOfLifeEvent as TypedEvent
         from story_agent.world_director_agent import ActivityType as TypedActivity
+        event_type = getattr(TypedActivity, event_type_value.upper(), TypedActivity.ROUTINE)
+        scene_obj = TypedEvent(
+            event_type=event_type,
+            title=f"{scene_type} scene",
+            description=f"A {scene_type} moment in daily life",
+            location="current_location",
+            participants=participants,
+        )
+        scene_payload = _json_safe(scene_obj)
     except Exception:
-        pass  # fall back to dicts
-
-    if TypedEvent and TypedActivity:
-        # Build typed event safely; if conversion fails, we’ll fall back
-        try:
-            event_type = getattr(TypedActivity, event_type_value.upper(), TypedActivity.ROUTINE)
-            scene_obj = TypedEvent(
-                event_type=event_type,
-                title=f"{scene_type} scene",
-                description=f"A {scene_type} moment in daily life",
-                location="current_location",
-                participants=participants,
-            )
-            scene_payload = _json_safe(scene_obj) 
-        except Exception:
-            scene_payload = {
-                "event_type": event_type_value,
-                "title": f"{scene_type} scene",
-                "description": f"A {scene_type} moment in daily life",
-                "location": "current_location",
-                "participants": participants,
-            }
-    else:
-        # Pure JSON fallback
         scene_payload = {
             "event_type": event_type_value,
             "title": f"{scene_type} scene",
@@ -3384,72 +3247,64 @@ async def orchestrate_slice_scene(
         "player_action": None,
     }
 
-    payload = _json_safe(narrator_input_payload)
-    
-    instruction = (
-        "Call tool_narrate_slice_of_life_scene with exactly this JSON:\n\n"
-        "```json\n"
-        f"{{\"payload\": {json.dumps(payload, ensure_ascii=False, default=_default_json_encoder)} }}\n"
-        "```\n\n"
-        "Return only the tool result JSON."
-    )
-    
-    # 2) Run the agent correctly (no positional-after-keyword nonsense)
-    try:
-        resp = await run_compat(
-            narrator.scene_narrator,
-            instruction=instruction,
-            context=narrator.context,
-            tools=[tool_narrate_slice_of_life_scene],
-            tool_choice=tool_narrate_slice_of_life_scene,
-        )
-    except TypeError as e:
-        if "tool_calls" in str(e):
-            return json.dumps({
-                "error": "invalid_runner_argument",
-                "detail": "Use 'tools' and 'tool_choice' (no 'tool_calls').",
-                "where": "orchestrate_slice_scene"
-            }, ensure_ascii=False)
-        raise
-
-    # Normalize whatever the model+tool returned
-    raw = extract_runner_response(resp)
-    try:
-        data = json.loads(raw) if raw else {}
-    except Exception:
-        data = {"scene_description": str(raw)}
-
-    base_text = data.get("scene_description") or ""
-    nyx_enhanced = await _add_nyx_hosting_personality(base_text, data)
-
-    world_mood = "neutral"
-    if world_state_obj is not None:
-        wm = getattr(world_state_obj, "world_mood", None)
-        world_mood = getattr(wm, "value", str(wm) if wm is not None else "neutral")
-
-    time_of_day = "afternoon"
-    if world_state_obj is not None:
-        ct = getattr(world_state_obj, "current_time", None)
-        tod = getattr(ct, "time_of_day", None)
-        time_of_day = getattr(tod, "value", str(tod)) if tod is not None else time_of_day
-
-    result = {
-        "narrative": nyx_enhanced,
-        "atmosphere": data.get("atmosphere", ""),
-        "tension_level": data.get("tension_level", 3),
-        "generate_image": data.get("generate_image", False),
-        "image_prompt": data.get("image_prompt"),
-        "world_mood": world_mood,
-        "time_of_day": time_of_day,
-        "emergent_opportunities": data.get("emergent_opportunities", []),
-        "power_undertones": data.get("power_dynamic_hints", []),
-        "available_activities": data.get("available_activities", ["observe", "interact", "wait"]),
-        "nyx_commentary": data.get("nyx_commentary"),
-        "scene_type": scene_type,
-        "context_aware": data.get("context_aware", True),
-        "governance_approved": data.get("governance_approved", True),
+    # Return a *request* for the host to fulfill
+    return {
+        "narrator_request": {
+            "tool": "tool_narrate_slice_of_life_scene",
+            "payload": _json_safe(narrator_input_payload),
+        }
     }
-    return json.dumps(result, ensure_ascii=False)
+
+async def resolve_scene_requests(resp: list, app_ctx) -> list:
+    """
+    Look for orchestrate_slice_scene outputs that contain a narrator_request,
+    call the narrator tool directly (no LLM), and append the result into resp.
+    """
+    try:
+        scene_out = _tool_output(resp, "orchestrate_slice_scene")
+    except Exception:
+        scene_out = None
+
+    if not (scene_out and isinstance(scene_out, dict)):
+        return resp
+
+    req = scene_out.get("narrator_request")
+    if not (req and isinstance(req, dict) and req.get("tool") == "tool_narrate_slice_of_life_scene"):
+        return resp
+
+    payload = req.get("payload") or {}
+    # Ensure narrator exists
+    narrator = getattr(app_ctx, "slice_of_life_narrator", None)
+    if not narrator:
+        from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+        app_ctx.slice_of_life_narrator = SliceOfLifeNarrator(app_ctx.user_id, app_ctx.conversation_id)
+        await app_ctx.slice_of_life_narrator.initialize()
+        narrator = app_ctx.slice_of_life_narrator
+
+    # Call the tool function *directly* (no Runner.run here)
+    try:
+        tool_raw = await tool_narrate_slice_of_life_scene(
+            narrator.context,
+            payload=_json_safe(payload),
+        )
+        tool_output = tool_raw if isinstance(tool_raw, str) else json.dumps(
+            tool_raw, ensure_ascii=False, default=_default_json_encoder
+        )
+        resp = list(resp)  # avoid mutating caller's list in place
+        resp.append({
+            "type": "function_call_output",
+            "name": "tool_narrate_slice_of_life_scene",
+            "output": tool_output,
+        })
+        return resp
+    except Exception as e:
+        resp = list(resp)
+        resp.append({
+            "type": "function_call_output",
+            "name": "tool_narrate_slice_of_life_scene",
+            "output": json.dumps({"error": "narration_failed", "detail": str(e)}, ensure_ascii=False),
+        })
+        return resp
   
 async def _add_nyx_hosting_personality(base_narrative: str, narration_data: Any) -> str:
     """Add Nyx's game show host personality layer to the narration"""
@@ -4020,6 +3875,9 @@ RESPONSE PATTERN:
 4. Extract universal updates from what happened
 5. Decide if an image would enhance this moment
 
+After calling orchestrate_slice_scene, narrate_daily_routine, narrate_power_exchange, or generate_npc_dialogue:
+If the tool returns {"narrator_request": true, "payload": {...}}, immediately call tool_narrate_slice_of_life_scene with that payload, then proceed.
+
 Remember: You're the HOST, not the story. The story emerges from systems interacting.
 Your job is to make it entertaining while maintaining the sophisticated simulation.""",
     
@@ -4037,6 +3895,7 @@ Your job is to make it entertaining while maintaining the sophisticated simulati
     ],
     
     tools=[
+        tool_narrate_slice_of_life_scene,
         # Core narrative tools (now integrated with SliceOfLifeNarrator)
         orchestrate_slice_scene,  # UPDATED: Uses sophisticated narrator
         generate_npc_dialogue,  # NEW: Integrated dialogue generation
