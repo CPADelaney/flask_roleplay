@@ -20,19 +20,19 @@ from typing import Dict, List, Any, Optional
 from contextlib import asynccontextmanager
 
 # Import all modularized components
-from .agent_sdk import *
-from .agent_sdk.config import Config
-from .agent_sdk.context import NyxContext
-from .agent_sdk.models import *
-from .agent_sdk.tools import *
-from .agent_sdk.agents import nyx_main_agent, DEFAULT_MODEL_SETTINGS
-from .agent_sdk.assembly import assemble_nyx_response, resolve_scene_requests
-from .agent_sdk.utils import (
+from .nyx_agent import *
+from .nyx_agent.config import Config
+from .nyx_agent.context import NyxContext
+from .nyx_agent.models import *
+from .nyx_agent.tools import *
+from .nyx_agent.agents import nyx_main_agent, DEFAULT_MODEL_SETTINGS
+from .nyx_agent.assembly import assemble_nyx_response, resolve_scene_requests
+from .nyx_agent.utils import (
     _did_call_tool, _extract_last_assistant_text, _js,
     sanitize_agent_tools_in_place, log_strict_hits,
     extract_runner_response
 )
-from .agent_sdk.compatibility import (
+from .nyx_agent.compatibility import (
     AgentContext,
     enhance_context_with_strategies,
     determine_image_generation,
@@ -300,7 +300,7 @@ async def process_user_input(
                 narrative = _extract_last_assistant_text(resp)
                 if narrative and len(narrative) > 20:
                     try:
-                        from .agent_sdk.models import ImageGenerationDecision
+                        from .nyx_agent.models import ImageGenerationDecision
                         image_result = await decide_image_generation_standalone(nyx_context, narrative)
                         resp.append({
                             "type": "function_call_output",
@@ -442,7 +442,7 @@ async def generate_reflection(
 ) -> Dict[str, Any]:
     """Generate a reflection from Nyx on a specific topic"""
     try:
-        from .agent_sdk.agents import reflection_agent
+        from .nyx_agent.agents import reflection_agent
         
         nyx_context = NyxContext(user_id, conversation_id)
         await nyx_context.initialize()
@@ -655,9 +655,9 @@ Remember: You are Nyx, an AI Dominant managing femdom roleplay scenarios. Be con
 """
 
     # Import tools from modularized files
-    from .agent_sdk.agents import memory_agent, analysis_agent, emotional_agent, visual_agent
-    from .agent_sdk.agents import activity_agent, performance_agent, scenario_agent
-    from .agent_sdk.agents import belief_agent, decision_agent, reflection_agent
+    from .nyx_agent.agents import memory_agent, analysis_agent, emotional_agent, visual_agent
+    from .nyx_agent.agents import activity_agent, performance_agent, scenario_agent
+    from .nyx_agent.agents import belief_agent, decision_agent, reflection_agent
     from agents import handoff
 
     ag = Agent[NyxContext](
@@ -736,8 +736,8 @@ async def create_preset_aware_nyx_agent(
 
 async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
     """Standalone image generation decision without tool context"""
-    from .agent_sdk.models import ImageGenerationDecision
-    from .agent_sdk.utils import _score_scene_text, _build_image_prompt
+    from .nyx_agent.models import ImageGenerationDecision
+    from .nyx_agent.utils import _score_scene_text, _build_image_prompt
     
     score = _score_scene_text(scene_text)
     recent_images = ctx.current_context.get("recent_image_count", 0)
