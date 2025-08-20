@@ -47,6 +47,115 @@ async def _log_step(name: str, trace_id: str, **meta):
         logger.exception(f"[{trace_id}] ✖ FAIL  {name} after {dt:.3f}s meta={_js(meta)}")
         raise
 
+@asynccontextmanager
+async def _log_step(name: str, trace_id: str, **meta):
+    """Async context manager for logging step execution"""
+    t0 = time.time()
+    logger.debug(f"[{trace_id}] ▶ START {name} meta={_js(meta)}")
+    try:
+        yield
+        dt = time.time() - t0
+        logger.info(f"[{trace_id}] ✔ DONE  {name} in {dt:.3f}s")
+    except Exception:
+        dt = time.time() - t0
+        logger.exception(f"[{trace_id}] ✖ FAIL  {name} after {dt:.3f}s meta={_js(meta)}")
+        raise
+
+async def run_agent_safely(
+    agent: Agent,
+    input_data: Any,
+    context: Any,
+    run_config: Optional[RunConfig] = None,
+    fallback_response: Any = None
+) -> Any:
+    """Run agent with automatic fallback on strict schema errors"""
+    try:
+        # First attempt with the agent as-is
+        result = await Runner.run(
+            agent,
+            input_data,
+            context=context,
+            run_config=run_config
+        )
+        return result
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "additionalproperties" in error_msg or "strict schema" in error_msg:
+            logger.warning(f"Strict schema error, attempting without structured output: {e}")
+            
+            # Create a simple text-only agent
+            fallback_agent = Agent[type(context)](
+                name=f"{agent.name} (Fallback)",
+                instructions=agent.instructions,
+                model=agent.model,
+                model_settings=DEFAULT_MODEL_SETTINGS,
+                # No tools, no structured output
+            )
+            
+            try:
+                result = await Runner.run(
+                    fallback_agent,
+                    input_data,
+                    context=context,
+                    run_config=run_config
+                )
+                return result
+            except Exception as e2:
+                logger.error(f"Fallback agent also failed: {e2}")
+                if fallback_response is not None:
+                    return fallback_response
+                raise
+        else:
+            # Not a schema error, re-raise
+            raise
+
+async def run_agent_with_error_handling(
+    agent: Agent,
+    input_data: Any,
+    context: NyxContext,
+    output_type: Optional[type] = None,
+    fallback_value: Any = None
+) -> Any:
+    """Legacy compatibility wrapper for running agents with error handling"""
+    try:
+        result = await run_agent_safely(
+            agent,
+            input_data,
+            context,
+            run_config=RunConfig(workflow_name=f"Nyx {getattr(agent, 'name', 'Agent')}"),
+            fallback_response=fallback_value
+        )
+        if output_type:
+            return result.final_output_as(output_type)
+        return getattr(result, "final_output", None) or getattr(result, "output_text", None)
+    except Exception as e:
+        logger.error(f"Error running agent {getattr(agent, 'name', 'unknown')}: {e}")
+        if fallback_value is not None:
+            return fallback_value
+        raise
+
+async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
+    """Standalone image generation decision without tool context"""
+    from .models import ImageGenerationDecision
+    from .utils import _score_scene_text, _build_image_prompt
+    
+    score = _score_scene_text(scene_text)
+    recent_images = ctx.current_context.get("recent_image_count", 0)
+    threshold = 0.7 if recent_images > 3 else 0.6 if recent_images > 1 else 0.5
+
+    should_generate = score > threshold
+    image_prompt = _build_image_prompt(scene_text) if should_generate else None
+
+    if should_generate:
+        ctx.current_context["recent_image_count"] = recent_images + 1
+
+    return ImageGenerationDecision(
+        should_generate=should_generate,
+        score=score,
+        image_prompt=image_prompt,
+        reasoning=f"Scene has visual impact score of {score:.2f} (threshold: {threshold:.2f})",
+    ).model_dump_json()
+
 # ===== Error Handling =====
 async def run_agent_safely(
     agent: Agent,
