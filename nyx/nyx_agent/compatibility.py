@@ -12,7 +12,7 @@ from agents import RunContextWrapper
 from .context import NyxContext
 from .config import Config
 from .models import *
-from .tools_part3 import *
+from .tools import *
 from .utils import _calculate_variance
 
 logger = logging.getLogger(__name__)
