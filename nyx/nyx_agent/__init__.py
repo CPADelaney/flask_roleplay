@@ -56,9 +56,6 @@ from .models import (
 # Context
 from .context import NyxContext
 
-# Tools (once they're complete, import from appropriate module)
-# For now, assuming they're split into tools_part1.py, tools_part2.py, tools_part3.py
-# Once you complete the tools modules, update these imports
 try:
     from .tools import (
         # Memory Tools
@@ -86,7 +83,7 @@ try:
         detect_conflicts_and_instability,
         
         # Image and Updates Tools
-        decide_image_generation_standalone,
+        decide_image_generation,  # <-- Changed from decide_image_generation_standalone
         generate_image_from_scene,
         generate_universal_updates,
         generate_universal_updates_impl,
@@ -176,6 +173,7 @@ from .orchestrator import (
     store_messages,
     run_agent_safely,
     run_agent_with_error_handling,
+    decide_image_generation_standalone,  # <-- Import this from orchestrator
 )
 
 # Agent Factory - Agent creation utilities
@@ -271,6 +269,7 @@ __all__ = [
     'detect_user_revelations',
     'generate_image_from_scene',
     'decide_image_generation',
+    'decide_image_generation_standalone', 
     'calculate_emotional_impact',
     'calculate_and_update_emotional_state',
     'update_relationship_state',
