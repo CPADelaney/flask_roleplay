@@ -413,6 +413,10 @@ class CompleteWorldDirectorContext:
     async def _build_complete_world_state(self) -> CompleteWorldState:
         """Build complete world state from ALL systems"""
         try:
+            # Import KVItem at the beginning so it's available for safe_kvlist
+            from story_agent.world_simulation_models import KVItem
+            import json
+            
             # Time and Calendar
             current_time = await get_current_time_model(self.user_id, self.conversation_id)
             calendar_events = await self._safe_get_calendar_events()
@@ -594,10 +598,8 @@ class CompleteWorldDirectorContext:
                     for k, v in data.items():
                         # Always serialize dicts and lists (even empty ones) to JSON strings
                         if isinstance(v, dict):
-                            import json
                             result.append(KVItem(key=str(k), value=json.dumps(v, default=str)))
                         elif isinstance(v, list):
-                            import json
                             result.append(KVItem(key=str(k), value=json.dumps(v, default=str)))
                         elif v is None:
                             result.append(KVItem(key=str(k), value=None))
@@ -612,10 +614,8 @@ class CompleteWorldDirectorContext:
                     for i, v in enumerate(data):
                         # Always serialize dicts and lists to JSON strings
                         if isinstance(v, dict):
-                            import json
                             result.append(KVItem(key=str(i), value=json.dumps(v, default=str)))
                         elif isinstance(v, list):
-                            import json
                             result.append(KVItem(key=str(i), value=json.dumps(v, default=str)))
                         elif v is None:
                             result.append(KVItem(key=str(i), value=None))
@@ -631,9 +631,6 @@ class CompleteWorldDirectorContext:
                         return [KVItem(key="value", value=data)]
                     else:
                         return [KVItem(key="value", value=str(data))]
-            
-            # Import KVItem from the models
-            from story_agent.world_simulation_models import KVItem
             
             # FIXED: Convert all data to List[KeyValue] format with safe serialization
             return CompleteWorldState(
