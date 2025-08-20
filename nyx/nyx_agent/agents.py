@@ -1,4 +1,4 @@
-# nyx/nyx_agent/agent.py
+# nyx/nyx_agent/agents.py
 """Agent definitions for Nyx Agent SDK"""
 
 import logging
