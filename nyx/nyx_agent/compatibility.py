@@ -382,3 +382,25 @@ async def process_user_input_standalone(
     """Process user input standalone"""
     from ..nyx_agent_sdk import process_user_input
     return await process_user_input(user_id, conversation_id, user_input, context_data)
+
+async def get_emotional_state(ctx) -> str:
+    """Get current emotional state"""
+    if hasattr(ctx, 'emotional_state'):
+        return json.dumps(ctx.emotional_state, ensure_ascii=False)
+    elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
+        return json.dumps(ctx.context.emotional_state, ensure_ascii=False)
+    else:
+        # Default state
+        return json.dumps({
+            "valence": 0.0,
+            "arousal": 0.5,
+            "dominance": 0.7
+        }, ensure_ascii=False)
+
+async def update_emotional_state(ctx, emotional_state: Dict[str, Any]) -> str:
+    """Update emotional state"""
+    if hasattr(ctx, 'emotional_state'):
+        ctx.emotional_state.update(emotional_state)
+    elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
+        ctx.context.emotional_state.update(emotional_state)
+    return "Emotional state updated"
