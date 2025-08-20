@@ -15,25 +15,43 @@ from datetime import datetime, timezone
 # SANITIZED BASE MODEL - Prevents additionalProperties in JSON schemas
 # ===============================================================================
 
-def _strip_ap(obj):
+def _strip_ap(obj, path=""):
+    """Recursively strip additionalProperties and fix required arrays"""
     if isinstance(obj, dict):
         # Remove problematic fields
         obj.pop('additionalProperties', None)
         obj.pop('unevaluatedProperties', None)
         
-        # Fix 'required' to only include actual properties at this level
-        props = obj.get("properties")
-        req = obj.get("required")
-        if isinstance(props, dict) and isinstance(req, list):
-            # Keep only keys that exist in properties
-            obj["required"] = [k for k in req if k in props]
+        # Fix 'required' to only include actual properties at THIS level
+        props = obj.get("properties", {})
+        req = obj.get("required", [])
         
-        # Recurse
-        for v in obj.values():
-            _strip_ap(v)
+        if isinstance(req, list) and isinstance(props, dict):
+            # Filter out any required fields that don't exist in properties
+            valid_required = []
+            for k in req:
+                if k in props:
+                    valid_required.append(k)
+                else:
+                    # Log when we remove invalid required fields
+                    if path:
+                        logger.debug(f"Removing invalid required field '{k}' from {path}")
+            obj["required"] = valid_required
+        
+        # Recurse into nested structures
+        if isinstance(props, dict):
+            for prop_name, prop_value in props.items():
+                _strip_ap(prop_value, f"{path}.properties.{prop_name}")
+        
+        # Also check other schema keywords that might contain schemas
+        for key in ['items', 'allOf', 'anyOf', 'oneOf']:
+            if key in obj:
+                _strip_ap(obj[key], f"{path}.{key}")
+                
     elif isinstance(obj, list):
-        for item in obj:
-            _strip_ap(item)
+        for i, item in enumerate(obj):
+            _strip_ap(item, f"{path}[{i}]")
+    
     return obj
 
 class BaseModel(_PydanticBaseModel):
