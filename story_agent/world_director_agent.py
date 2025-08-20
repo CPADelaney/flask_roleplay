@@ -12,7 +12,7 @@ import json
 import time
 import random
 from typing import Dict, List, Any, Optional, Union, Tuple, TYPE_CHECKING
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass, asdict
 from datetime import datetime, timezone, timedelta
 
 from story_agent.world_simulation_models import (
@@ -27,11 +27,6 @@ from story_agent.world_simulation_models import (
     AddictionCravingData,
     DreamData,
     RevelationData,
-
-    # Helper key/value types
-    KVItem,
-    kvdict,
-    kvlist_from_obj,
 
     # Relationship/inventory helpers
     RelationshipImpact,
@@ -272,6 +267,56 @@ def get_canonical_context(ctx_obj) -> Any:
     else:
         raise ValueError("Cannot extract canonical context from object")
 
+def _to_model_dict(x):
+    """Return a plain dict for any Pydantic model / dataclass; otherwise return as-is."""
+    if x is None:
+        return None
+    # Pydantic v2 preferred
+    if hasattr(x, "model_dump") and callable(x.model_dump):
+        return x.model_dump(mode="python")
+    # Pydantic v1 fallback
+    if hasattr(x, "dict") and callable(x.dict):
+        return x.dict()
+    # Dataclass
+    if is_dataclass(x):
+        return asdict(x)
+    return x  # already a plain type
+
+def _kvlist(data):
+    """
+    Return a List[dict] with {"key": str, "value": <json-safe>} – NOT KVPair/KVItem objects.
+    Always JSON-serialize dicts/lists so Pydantic sees scalars/strings.
+    """
+    import json
+    out = []
+    if data is None:
+        return out
+
+    def _val(v):
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, default=str)
+        if v is None or isinstance(v, (str, int, float, bool)):
+            return v
+        # Pydantic/enum/dataclass/etc. -> make string
+        try:
+            return json.dumps(_to_model_dict(v), default=str)
+        except Exception:
+            return str(v)
+
+    if isinstance(data, dict):
+        for k, v in data.items():
+            out.append({"key": str(k), "value": _val(v)})
+        return out
+
+    if isinstance(data, list):
+        for i, v in enumerate(data):
+            out.append({"key": str(i), "value": _val(v)})
+        return out
+
+    # scalar
+    return [{"key": "value", "value": _val(data)}]
+
+
 # ===============================================================================
 # Complete World Director Context with ALL Systems
 # ===============================================================================
@@ -413,14 +458,13 @@ class CompleteWorldDirectorContext:
     async def _build_complete_world_state(self) -> CompleteWorldState:
         """Build complete world state from ALL systems"""
         try:
-            # Import KVItem at the beginning so it's available for safe_kvlist
-            from story_agent.world_simulation_models import KVItem
-            import json
-            
             # Time and Calendar
             current_time = await get_current_time_model(self.user_id, self.conversation_id)
+            # Normalize time_of_day if it's a string like "Morning"/"Afternoon"
+            if hasattr(current_time, "time_of_day") and isinstance(current_time.time_of_day, str):
+                current_time.time_of_day = current_time.time_of_day.lower()
             calendar_events = await self._safe_get_calendar_events()
-            
+    
             # Vitals and Stats
             vitals = await get_current_vitals(self.user_id, self.conversation_id)
             visible_stats = await get_player_visible_stats(
@@ -429,99 +473,90 @@ class CompleteWorldDirectorContext:
             hidden_stats = await get_player_hidden_stats(
                 self.user_id, self.conversation_id, self.player_name
             )
-            
+    
             # Check stat combinations and thresholds
             stat_combinations = await check_for_combination_triggers(
                 self.user_id, self.conversation_id
             )
-            stat_thresholds = self._check_stat_thresholds(hidden_stats)  # Now synchronous
-            
+            stat_thresholds = self._check_stat_thresholds(hidden_stats)
+    
             # Memory and Context
             recent_memories = await self._safe_retrieve_memories()
-            
+    
             # Check for flashbacks
             flashback = None
             if recent_memories and random.random() < 0.1:  # 10% chance
                 flashback = await self._safe_generate_flashback()
-            
+    
             # Check for NPC reveals
             pending_reveals = await ProgressiveRevealManager.check_for_automated_reveals(
                 self.user_id, self.conversation_id
             )
-            
+    
             # Dreams and Revelations
             revelation = await self._safe_check_revelations()
             narrative_moments = await self._safe_check_narrative_moments()
-            
+    
             # Rules
             triggered_rules = await enforce_all_rules_on_player(self.player_name)
-            
+    
             # Inventory
             inventory_result = await self._safe_get_inventory()
-            
+    
             # NPCs with complete data
             npcs = await self._get_complete_npc_data()
-            
+    
             # Relationships
             rel_overview = await self._safe_get_relationship_overview()
-            
+    
             # Drain relationship events
             rel_events = await self._safe_drain_relationship_events()
-            
-            # Addictions - COMPLETE CHECK
+    
+            # Addictions
             addiction_status = await self._safe_get_addiction_status()
-            
+    
             # Check for active cravings
             active_cravings = await self._check_active_cravings(addiction_status)
-            
+    
             # Currency
             currency_system = await self._safe_get_currency_system()
-            
+    
             # Location data
             location_data = await fetch_formatted_locations(
                 self.user_id, self.conversation_id
             )
-            
-            # NEW: Get conflict state
-            conflict_state = {}
-            active_conflicts = []
-            conflict_manifestations = []
+    
+            # Conflict system state
+            conflict_state: Dict[str, Any] = {}
+            active_conflicts: List[Dict[str, Any]] = []
+            conflict_manifestations: List[Any] = []
             if self.conflict_synthesizer:
                 try:
-                    # Get the system state (should return a dict directly)
                     conflict_system_state = await self.conflict_synthesizer.get_system_state()
-                    
-                    # The get_system_state() method returns a dict directly, 
-                    # so no need to extract from RunResult
                     if not isinstance(conflict_system_state, dict):
                         logger.warning(f"Unexpected conflict state type: {type(conflict_system_state)}")
                         conflict_system_state = {}
-                    
-                    # Extract active conflicts
-                    active_conflicts = conflict_system_state.get('active_conflicts', [])
-                    
-                    # Build detailed conflict state
+    
+                    active_conflicts = conflict_system_state.get("active_conflicts", [])
                     conflict_state = {
-                        'active_conflicts': active_conflicts,
-                        'complexity_score': conflict_system_state.get('metrics', {}).get('complexity_score', 0),
-                        'total_conflicts': conflict_system_state.get('metrics', {}).get('total_conflicts', 0),
-                        'resolved_conflicts': conflict_system_state.get('metrics', {}).get('resolved_conflicts', 0),
-                        'subsystem_states': conflict_system_state.get('subsystem_states', {})
+                        "active_conflicts": active_conflicts,
+                        "complexity_score": conflict_system_state.get("metrics", {}).get("complexity_score", 0),
+                        "total_conflicts": conflict_system_state.get("metrics", {}).get("total_conflicts", 0),
+                        "resolved_conflicts": conflict_system_state.get("metrics", {}).get("resolved_conflicts", 0),
+                        "subsystem_states": conflict_system_state.get("subsystem_states", {}),
                     }
-                    
-                    # Check if any conflicts should manifest in current scene
+    
                     if active_conflicts:
                         scene_context = {
                             "scene_type": "world_state_check",
                             "location": location_data,
-                            "participants": [npc['npc_id'] for npc in npcs[:3]],
-                            "time_of_day": current_time.time_of_day if hasattr(current_time, 'time_of_day') else "afternoon"
+                            "participants": [npc["npc_id"] for npc in npcs[:3] if "npc_id" in npc],
+                            "time_of_day": getattr(current_time, "time_of_day", "afternoon"),
                         }
-                        
                         scene_result = await self.conflict_synthesizer.process_scene(scene_context)
-                        if scene_result.get('manifestations'):
-                            conflict_manifestations = scene_result['manifestations']
-                            
+                        if scene_result.get("manifestations"):
+                            conflict_manifestations = scene_result["manifestations"]
+    
                 except AttributeError as e:
                     logger.warning(f"Could not get conflict state - attribute error: {e}")
                     conflict_state = {}
@@ -530,162 +565,146 @@ class CompleteWorldDirectorContext:
                     logger.warning(f"Could not get conflict state: {e}")
                     conflict_state = {}
                     active_conflicts = []
-            
-            # Calculate world mood (updated to consider conflicts)
+    
+            # World mood & tensions
             world_mood = self._calculate_complete_world_mood(
-                hidden_stats, vitals, stat_combinations,
-                addiction_status, active_cravings,
+                hidden_stats,
+                vitals,
+                stat_combinations,
+                addiction_status,
+                active_cravings,
                 revelation is not None,
-                len(active_conflicts) > 0  # Consider active conflicts
+                len(active_conflicts) > 0,
             )
-            
-            # Calculate tensions (updated to include conflict state)
+    
             tensions = self._calculate_all_tensions(
-                hidden_stats, vitals, stat_combinations,
-                addiction_status, rel_overview,
-                conflict_state  # Pass conflict state
+                hidden_stats,
+                vitals,
+                stat_combinations,
+                addiction_status,
+                rel_overview,
+                conflict_state,
             )
-            
-            # Build world tension object
+    
             world_tension = WorldTension(
                 overall_tension=sum(tensions.values()) / len(tensions) if tensions else 0,
-                social_tension=tensions.get('relationship', 0),
-                power_tension=tensions.get('obedience', 0),
-                sexual_tension=tensions.get('lust', 0),
-                emotional_tension=tensions.get('dependency', 0),
-                addiction_tension=tensions.get('addiction', 0),
-                vital_tension=tensions.get('vital', 0),
+                social_tension=tensions.get("relationship", 0),
+                power_tension=tensions.get("obedience", 0),
+                sexual_tension=tensions.get("lust", 0),
+                emotional_tension=tensions.get("dependency", 0),
+                addiction_tension=tensions.get("addiction", 0),
+                vital_tension=tensions.get("vital", 0),
                 unresolved_conflicts=len(active_conflicts),
-                tension_sources=list(tensions.keys())
+                tension_sources=list(tensions.keys()),
             )
-            
-            # Build relationship dynamics
+    
+            # Relationship dynamics
             relationship_dynamics = RelationshipDynamics(
-                player_submission_level=hidden_stats.get('obedience', 0),
-                player_resistance_level=hidden_stats.get('willpower', 50),
-                player_corruption_level=hidden_stats.get('corruption', 0),
-                acceptance_level=100 - hidden_stats.get('mental_resilience', 100),
-                dominant_npc_ids=[npc['npc_id'] for npc in npcs if npc.get('dominance', 0) > 60],
+                player_submission_level=hidden_stats.get("obedience", 0),
+                player_resistance_level=hidden_stats.get("willpower", 50),
+                player_corruption_level=hidden_stats.get("corruption", 0),
+                acceptance_level=100 - hidden_stats.get("mental_resilience", 100),
+                dominant_npc_ids=[npc["npc_id"] for npc in npcs if npc.get("dominance", 0) > 60 and "npc_id" in npc],
                 supportive_npc_ids=[],
                 adversarial_npc_ids=[],
-                intimate_npc_ids=[npc['npc_id'] for npc in npcs if npc.get('relationship', {}).get('dimensions', {}).get('intimacy', 0) > 60]
+                intimate_npc_ids=[
+                    npc["npc_id"]
+                    for npc in npcs
+                    if npc.get("relationship", {}).get("dimensions", {}).get("intimacy", 0) > 60 and "npc_id" in npc
+                ],
             )
-            
-            # Determine available activities based on state
-            available_activities = []
-            if vitals.fatigue < 80:
+    
+            # Available activities
+            available_activities: List[Dict[str, Any]] = []
+            if getattr(vitals, "fatigue", 0) < 80:
                 available_activities.append({"type": "work", "available": True})
-            if vitals.hunger < 30:
+            if getattr(vitals, "hunger", 100) < 30:
                 available_activities.append({"type": "eat", "priority": "high"})
-            
-            # Add conflict-related activities if conflicts are active
             if active_conflicts:
-                for conflict in active_conflicts[:3]:  # Limit to 3 most relevant
+                for conflict in active_conflicts[:3]:
                     if isinstance(conflict, dict):
                         available_activities.append({
                             "type": "conflict_interaction",
-                            "conflict_id": conflict.get('id'),
-                            "description": f"Deal with {conflict.get('type', 'ongoing')} conflict"
+                            "conflict_id": conflict.get("id"),
+                            "description": f"Deal with {conflict.get('type', 'ongoing')} conflict",
                         })
-            
-            # Helper function to safely serialize complex data
-            def safe_kvlist(data):
-                """Convert data to kvlist, serializing complex nested structures to JSON strings"""
-                if data is None:
-                    return []
-                if isinstance(data, dict):
-                    result = []
-                    for k, v in data.items():
-                        # Always serialize dicts and lists (even empty ones) to JSON strings
-                        if isinstance(v, dict):
-                            result.append(KVItem(key=str(k), value=json.dumps(v, default=str)))
-                        elif isinstance(v, list):
-                            result.append(KVItem(key=str(k), value=json.dumps(v, default=str)))
-                        elif v is None:
-                            result.append(KVItem(key=str(k), value=None))
-                        elif isinstance(v, (str, int, float, bool)):
-                            result.append(KVItem(key=str(k), value=v))
-                        else:
-                            # For any other type, convert to string
-                            result.append(KVItem(key=str(k), value=str(v)))
-                    return result
-                elif isinstance(data, list):
-                    result = []
-                    for i, v in enumerate(data):
-                        # Always serialize dicts and lists to JSON strings
-                        if isinstance(v, dict):
-                            result.append(KVItem(key=str(i), value=json.dumps(v, default=str)))
-                        elif isinstance(v, list):
-                            result.append(KVItem(key=str(i), value=json.dumps(v, default=str)))
-                        elif v is None:
-                            result.append(KVItem(key=str(i), value=None))
-                        elif isinstance(v, (str, int, float, bool)):
-                            result.append(KVItem(key=str(i), value=v))
-                        else:
-                            # For any other type, convert to string
-                            result.append(KVItem(key=str(i), value=str(v)))
-                    return result
-                else:
-                    # For scalar values, return as is
-                    if isinstance(data, (str, int, float, bool)):
-                        return [KVItem(key="value", value=data)]
-                    else:
-                        return [KVItem(key="value", value=str(data))]
-            
-            # FIXED: Convert all data to List[KeyValue] format with safe serialization
+    
+            # Build and return the world state (using helpers to keep Pydantic happy)
             return CompleteWorldState(
-                current_time=current_time,  # This is already a CurrentTimeData model
-                calendar_names=safe_kvlist(self.calendar_names or {}),
-                calendar_events=safe_kvlist(calendar_events),
-                player_vitals=vitals,  # This is already a VitalsData model
-                visible_stats=safe_kvlist(visible_stats),
-                hidden_stats=safe_kvlist(hidden_stats),
-                active_stat_combinations=safe_kvlist(stat_combinations),
-                stat_thresholds_active=safe_kvlist(stat_thresholds),
-                recent_memories=safe_kvlist([m.to_dict() if hasattr(m, 'to_dict') else m for m in recent_memories]),
+                # models -> dicts
+                current_time=_to_model_dict(current_time),
+                player_vitals=_to_model_dict(vitals),
+    
+                # dicts/lists -> KV [{"key","value"}]
+                calendar_names=_kvlist(self.calendar_names or {}),
+                calendar_events=_kvlist(calendar_events),
+    
+                visible_stats=_kvlist(visible_stats),
+                hidden_stats=_kvlist(hidden_stats),
+                active_stat_combinations=_kvlist(stat_combinations),
+                stat_thresholds_active=_kvlist(stat_thresholds),
+    
+                recent_memories=_kvlist([m.to_dict() if hasattr(m, "to_dict") else _to_model_dict(m) for m in recent_memories]),
                 semantic_abstractions=[],
-                active_flashbacks=safe_kvlist([flashback] if flashback else []),
-                pending_reveals=safe_kvlist(pending_reveals),
+                active_flashbacks=_kvlist([flashback] if flashback else []),
+                pending_reveals=_kvlist(pending_reveals),
                 pending_dreams=[],
-                recent_revelations=safe_kvlist([revelation] if revelation else []),
+                recent_revelations=_kvlist([revelation] if revelation else []),
                 inner_monologues=[],
-                active_rules=safe_kvlist(triggered_rules),
+    
+                active_rules=_kvlist(triggered_rules),
                 triggered_effects=[],
                 pending_effects=[],
-                player_inventory=safe_kvlist(inventory_result.get('items', [])),
+    
+                player_inventory=_kvlist(inventory_result.get("items", [])),
                 recent_item_changes=[],
-                active_npcs=safe_kvlist(npcs),
-                npc_masks=safe_kvlist({npc['npc_id']: npc.get('mask', {}) for npc in npcs if 'npc_id' in npc}),
-                npc_narrative_stages=safe_kvlist({npc['npc_id']: npc.get('narrative_stage', '') for npc in npcs if 'npc_id' in npc}),
+    
+                active_npcs=_kvlist(npcs),
+                npc_masks=_kvlist({npc["npc_id"]: npc.get("mask", {}) for npc in npcs if "npc_id" in npc}),
+                npc_narrative_stages=_kvlist({npc["npc_id"]: npc.get("narrative_stage", "") for npc in npcs if "npc_id" in npc}),
+    
                 relationship_states=[],
-                relationship_dynamics=relationship_dynamics,  # This is already a RelationshipDynamics model
-                relationship_overview=safe_kvlist(rel_overview) if rel_overview else None,
-                pending_relationship_events=safe_kvlist(rel_events.get('events', [])),
-                addiction_status=safe_kvlist(addiction_status),
-                active_cravings=safe_kvlist(active_cravings),
+                relationship_dynamics=_to_model_dict(relationship_dynamics),
+                relationship_overview=_kvlist(rel_overview) if rel_overview else None,
+                pending_relationship_events=_kvlist(rel_events.get("events", [])),
+    
+                addiction_status=_kvlist(addiction_status),
+                active_cravings=_kvlist(active_cravings),
                 addiction_contexts=[],
+    
                 player_money=100,
-                currency_system=safe_kvlist(currency_system),
+                currency_system=_kvlist(currency_system),
                 recent_transactions=[],
-                world_mood=world_mood,  # This is already a WorldMood enum
-                world_tension=world_tension,  # This is already a WorldTension model
-                tension_factors=safe_kvlist(tensions),
-                environmental_factors=safe_kvlist({
+    
+                # enums -> string value
+                world_mood=(world_mood.value if hasattr(world_mood, "value") else world_mood),
+    
+                # model -> dict
+                world_tension=_to_model_dict(world_tension),
+    
+                tension_factors=_kvlist(tensions),
+                environmental_factors=_kvlist({
                     "conflict_manifestations": conflict_manifestations,
-                    "conflict_complexity": conflict_state.get('complexity_score', 0)
+                    "conflict_complexity": conflict_state.get("complexity_score", 0),
                 }),
-                location_data=str(location_data) if location_data else "",  # Convert to string as expected
-                ongoing_events=safe_kvlist(active_conflicts),  # Active conflicts are ongoing events
-                available_activities=safe_kvlist(available_activities),
+    
+                # schema expects a string here in your tool JSON
+                location_data=str(location_data) if location_data else "",
+    
+                # use KV for flex fields
+                ongoing_events=_kvlist(active_conflicts),
+                available_activities=_kvlist(available_activities),
+    
                 event_history=[],
-                nyx_directives=[]
+                nyx_directives=[],
             )
-            
+    
         except Exception as e:
             logger.error(f"Error building world state: {e}", exc_info=True)
             # Return minimal valid state
             return self._get_fallback_world_state()
-    
+
+            
     async def _get_complete_npc_data(self) -> List[Dict[str, Any]]:
         """Get NPCs with ALL their data using canonical system for consistency"""
         try:
