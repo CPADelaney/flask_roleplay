@@ -5,7 +5,7 @@ import logging
 from agents import Agent, handoff, ModelSettings
 
 from .context import NyxContext
-from .tools_part3 import *  # Import all tools
+from .tools import *  # Import all tools
 
 logger = logging.getLogger(__name__)
 
