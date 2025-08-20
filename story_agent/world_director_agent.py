@@ -584,52 +584,83 @@ class CompleteWorldDirectorContext:
                             "description": f"Deal with {conflict.get('type', 'ongoing')} conflict"
                         })
             
-            # FIXED: Convert all data to List[KeyValue] format as expected by the model
-            # Using kvlist_from_obj to convert dictionaries and lists properly
+            # Helper function to safely serialize complex data
+            def safe_kvlist(data):
+                """Convert data to kvlist, serializing complex nested structures to JSON strings"""
+                if data is None:
+                    return []
+                if isinstance(data, dict):
+                    result = []
+                    for k, v in data.items():
+                        if isinstance(v, (dict, list)) and v and not isinstance(v, (str, int, float, bool, type(None))):
+                            # Serialize complex nested structures to JSON string
+                            import json
+                            result.append(KVItem(key=str(k), value=json.dumps(v, default=str)))
+                        else:
+                            result.append(KVItem(key=str(k), value=v))
+                    return result
+                elif isinstance(data, list):
+                    result = []
+                    for i, v in enumerate(data):
+                        if isinstance(v, dict):
+                            # Serialize dict items to JSON string
+                            import json
+                            result.append(KVItem(key=str(i), value=json.dumps(v, default=str)))
+                        elif isinstance(v, list):
+                            # Serialize nested lists to JSON string
+                            import json
+                            result.append(KVItem(key=str(i), value=json.dumps(v, default=str)))
+                        else:
+                            result.append(KVItem(key=str(i), value=v))
+                    return result
+                else:
+                    return [KVItem(key="value", value=data)]
+            
+            # FIXED: Convert all data to List[KeyValue] format with safe serialization
             return CompleteWorldState(
                 current_time=current_time,  # This is already a CurrentTimeData model
-                calendar_names=kvlist_from_obj(self.calendar_names or {}),
-                calendar_events=kvlist_from_obj(calendar_events),
+                calendar_names=safe_kvlist(self.calendar_names or {}),
+                calendar_events=safe_kvlist(calendar_events),
                 player_vitals=vitals,  # This is already a VitalsData model
-                visible_stats=kvlist_from_obj(visible_stats),
-                hidden_stats=kvlist_from_obj(hidden_stats),
-                active_stat_combinations=kvlist_from_obj(stat_combinations),
-                stat_thresholds_active=kvlist_from_obj(stat_thresholds),
-                recent_memories=kvlist_from_obj([m.to_dict() if hasattr(m, 'to_dict') else m for m in recent_memories]),
+                visible_stats=safe_kvlist(visible_stats),
+                hidden_stats=safe_kvlist(hidden_stats),
+                active_stat_combinations=safe_kvlist(stat_combinations),
+                stat_thresholds_active=safe_kvlist(stat_thresholds),
+                recent_memories=safe_kvlist([m.to_dict() if hasattr(m, 'to_dict') else m for m in recent_memories]),
                 semantic_abstractions=[],
-                active_flashbacks=kvlist_from_obj([flashback] if flashback else []),
-                pending_reveals=kvlist_from_obj(pending_reveals),
+                active_flashbacks=safe_kvlist([flashback] if flashback else []),
+                pending_reveals=safe_kvlist(pending_reveals),
                 pending_dreams=[],
-                recent_revelations=kvlist_from_obj([revelation] if revelation else []),
+                recent_revelations=safe_kvlist([revelation] if revelation else []),
                 inner_monologues=[],
-                active_rules=kvlist_from_obj(triggered_rules),
+                active_rules=safe_kvlist(triggered_rules),
                 triggered_effects=[],
                 pending_effects=[],
-                player_inventory=kvlist_from_obj(inventory_result.get('items', [])),
+                player_inventory=safe_kvlist(inventory_result.get('items', [])),
                 recent_item_changes=[],
-                active_npcs=kvlist_from_obj(npcs),
-                npc_masks=kvlist_from_obj({npc['npc_id']: npc.get('mask', {}) for npc in npcs if 'npc_id' in npc}),
-                npc_narrative_stages=kvlist_from_obj({npc['npc_id']: npc.get('narrative_stage', '') for npc in npcs if 'npc_id' in npc}),
+                active_npcs=safe_kvlist(npcs),
+                npc_masks=safe_kvlist({npc['npc_id']: npc.get('mask', {}) for npc in npcs if 'npc_id' in npc}),
+                npc_narrative_stages=safe_kvlist({npc['npc_id']: npc.get('narrative_stage', '') for npc in npcs if 'npc_id' in npc}),
                 relationship_states=[],
                 relationship_dynamics=relationship_dynamics,  # This is already a RelationshipDynamics model
-                relationship_overview=kvlist_from_obj(rel_overview) if rel_overview else None,
-                pending_relationship_events=kvlist_from_obj(rel_events.get('events', [])),
-                addiction_status=kvlist_from_obj(addiction_status),
-                active_cravings=kvlist_from_obj(active_cravings),
+                relationship_overview=safe_kvlist(rel_overview) if rel_overview else None,
+                pending_relationship_events=safe_kvlist(rel_events.get('events', [])),
+                addiction_status=safe_kvlist(addiction_status),
+                active_cravings=safe_kvlist(active_cravings),
                 addiction_contexts=[],
                 player_money=100,
-                currency_system=kvlist_from_obj(currency_system),
+                currency_system=safe_kvlist(currency_system),
                 recent_transactions=[],
                 world_mood=world_mood,  # This is already a WorldMood enum
                 world_tension=world_tension,  # This is already a WorldTension model
-                tension_factors=kvlist_from_obj(tensions),
-                environmental_factors=kvlist_from_obj({
+                tension_factors=safe_kvlist(tensions),
+                environmental_factors=safe_kvlist({
                     "conflict_manifestations": conflict_manifestations,
                     "conflict_complexity": conflict_state.get('complexity_score', 0)
                 }),
                 location_data=str(location_data) if location_data else "",  # Convert to string as expected
-                ongoing_events=kvlist_from_obj(active_conflicts),  # Active conflicts are ongoing events
-                available_activities=kvlist_from_obj(available_activities),
+                ongoing_events=safe_kvlist(active_conflicts),  # Active conflicts are ongoing events
+                available_activities=safe_kvlist(available_activities),
                 event_history=[],
                 nyx_directives=[]
             )
