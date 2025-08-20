@@ -56,58 +56,57 @@ from .models import (
 # Context
 from .context import NyxContext
 
-# Tools (import the final part which includes all)
-from .tools_part3 import (
-    # Import the real narrator tool
-    tool_narrate_slice_of_life_scene,
-    
-    # Power Exchange and Routine Tools
-    narrate_power_exchange,
-    narrate_daily_routine,
-    
-    # Ambient and Pattern Detection Tools
-    generate_ambient_narration,
-    detect_narrative_patterns,
-    
-    # NPC Dialogue Tool
-    generate_npc_dialogue,
-    
-    # Memory Tools
-    retrieve_memories,
-    add_memory,
-    
-    # User Model Tools
-    get_user_model_guidance,
-    detect_user_revelations,
-    
-    # Emotional Tools
-    calculate_and_update_emotional_state,
-    calculate_emotional_impact,
-    
-    # Relationship Tools
-    update_relationship_state,
-    
-    # Performance and Activity Tools
-    check_performance_metrics,
-    get_activity_recommendations,
-    
-    # Belief and Decision Tools
-    manage_beliefs,
-    score_decision_options,
-    detect_conflicts_and_instability,
-    
-    # Image and Updates Tools
-    decide_image_generation,
-    generate_image_from_scene,
-    generate_universal_updates,
-    generate_universal_updates_impl,
-    
-    # Open World / Slice-of-life Tools
-    orchestrate_slice_scene,
-    check_world_state,
-    generate_emergent_event,
-    simulate_npc_autonomy,
-)
+# Tools (once they're complete, import from appropriate module)
+# For now, assuming they're split into tools_part1.py, tools_part2.py, tools_part3.py
+# Once you complete the tools modules, update these imports
+try:
+    from .tools import (
+        # Memory Tools
+        retrieve_memories,
+        add_memory,
+        
+        # User Model Tools
+        get_user_model_guidance,
+        detect_user_revelations,
+        
+        # Emotional Tools
+        calculate_and_update_emotional_state,
+        calculate_emotional_impact,
+        
+        # Relationship Tools
+        update_relationship_state,
+        
+        # Performance and Activity Tools
+        check_performance_metrics,
+        get_activity_recommendations,
+        
+        # Belief and Decision Tools
+        manage_beliefs,
+        score_decision_options,
+        detect_conflicts_and_instability,
+        
+        # Image and Updates Tools
+        decide_image_generation,
+        decide_image_generation_standalone,
+        generate_image_from_scene,
+        generate_universal_updates,
+        generate_universal_updates_impl,
+        
+        # Open World / Slice-of-life Tools
+        tool_narrate_slice_of_life_scene,
+        orchestrate_slice_scene,
+        check_world_state,
+        generate_emergent_event,
+        simulate_npc_autonomy,
+        generate_npc_dialogue,
+        narrate_power_exchange,
+        narrate_daily_routine,
+        generate_ambient_narration,
+        detect_narrative_patterns,
+    )
+except ImportError as e:
+    import logging
+    logging.warning(f"Some tools could not be imported: {e}")
 
 # Agents
 from .agents import (
@@ -169,6 +168,28 @@ from .utils import (
     detect_emergent_opportunities,
 )
 
+# Orchestrator - Main runtime functions
+from .orchestrator import (
+    process_user_input,
+    generate_reflection,
+    manage_scenario,
+    manage_relationships,
+    store_messages,
+    run_agent_safely,
+    run_agent_with_error_handling,
+)
+
+# Agent Factory - Agent creation utilities
+from .agent_factory import (
+    create_nyx_agent_with_prompt,
+    create_preset_aware_nyx_agent,
+)
+
+# Guardrails
+from .guardrails import (
+    content_moderation_guardrail,
+)
+
 # Compatibility layer
 from .compatibility import (
     AgentContext,
@@ -221,6 +242,24 @@ __all__ = [
     # Assembly functions
     'assemble_nyx_response',
     'resolve_scene_requests',
+    
+    # Main orchestration functions
+    'process_user_input',
+    'generate_reflection',
+    'manage_scenario',
+    'manage_relationships',
+    'store_messages',
+    
+    # Agent creation functions
+    'create_nyx_agent_with_prompt',
+    'create_preset_aware_nyx_agent',
+    
+    # Error handling
+    'run_agent_safely',
+    'run_agent_with_error_handling',
+    
+    # Guardrails
+    'content_moderation_guardrail',
     
     # Output models
     'NarrativeResponse',
