@@ -818,7 +818,10 @@ class NarratorContext:
 # ===============================================================================
 
 @function_tool
-async def narrate_slice_of_life_scene(ctx, payload: NarrateSliceOfLifeInput) -> str:
+async def narrate_slice_of_life_scene(
+    ctx: RunContextWrapper,  # Add type annotation
+    payload: NarrateSliceOfLifeInput
+) -> str:
     """Generate narration for a slice-of-life scene with full canonical tracking."""
     context = ctx.context
 
