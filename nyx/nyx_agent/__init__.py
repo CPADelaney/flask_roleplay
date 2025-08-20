@@ -86,7 +86,6 @@ try:
         detect_conflicts_and_instability,
         
         # Image and Updates Tools
-        decide_image_generation,
         decide_image_generation_standalone,
         generate_image_from_scene,
         generate_universal_updates,
