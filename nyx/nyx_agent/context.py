@@ -25,6 +25,23 @@ from .utils import (
     bytes_to_mb, _prune_list, _calculate_variance
 )
 
+try:
+    from story_agent.world_simulation_models import (
+        CompleteWorldState, WorldState, WorldMood, TimeOfDay,
+        ActivityType, PowerDynamicType, PowerExchange,
+        WorldTension, RelationshipDynamics, NPCRoutine,
+        CurrentTimeData, VitalsData, AddictionCravingData,
+        DreamData, RevelationData, ChoiceData, ChoiceProcessingResult,
+    )
+    from story_agent.world_director_agent import (
+        CompleteWorldDirector, WorldDirector,
+        CompleteWorldDirectorContext, WorldDirectorContext,
+    )
+    WORLD_SIMULATION_AVAILABLE = True
+except ImportError:
+    logger.warning("World simulation models not available - slice-of-life features disabled")
+    WORLD_SIMULATION_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 @dataclass
