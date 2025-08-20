@@ -584,51 +584,52 @@ class CompleteWorldDirectorContext:
                             "description": f"Deal with {conflict.get('type', 'ongoing')} conflict"
                         })
             
-            # Convert model instances to dicts for Pydantic
+            # FIXED: Convert all data to List[KeyValue] format as expected by the model
+            # Using kvlist_from_obj to convert dictionaries and lists properly
             return CompleteWorldState(
-                current_time=current_time.model_dump() if hasattr(current_time, 'model_dump') else current_time.dict() if hasattr(current_time, 'dict') else current_time,
-                calendar_names=self.calendar_names or {},
-                calendar_events=calendar_events,
-                player_vitals=vitals.model_dump() if hasattr(vitals, 'model_dump') else vitals.dict() if hasattr(vitals, 'dict') else vitals,
-                visible_stats=visible_stats,
-                hidden_stats=hidden_stats,
-                active_stat_combinations=stat_combinations,
-                stat_thresholds_active=stat_thresholds,
-                recent_memories=[m.to_dict() if hasattr(m, 'to_dict') else m for m in recent_memories],
+                current_time=current_time,  # This is already a CurrentTimeData model
+                calendar_names=kvlist_from_obj(self.calendar_names or {}),
+                calendar_events=kvlist_from_obj(calendar_events),
+                player_vitals=vitals,  # This is already a VitalsData model
+                visible_stats=kvlist_from_obj(visible_stats),
+                hidden_stats=kvlist_from_obj(hidden_stats),
+                active_stat_combinations=kvlist_from_obj(stat_combinations),
+                stat_thresholds_active=kvlist_from_obj(stat_thresholds),
+                recent_memories=kvlist_from_obj([m.to_dict() if hasattr(m, 'to_dict') else m for m in recent_memories]),
                 semantic_abstractions=[],
-                active_flashbacks=[flashback] if flashback else [],
-                pending_reveals=pending_reveals,
+                active_flashbacks=kvlist_from_obj([flashback] if flashback else []),
+                pending_reveals=kvlist_from_obj(pending_reveals),
                 pending_dreams=[],
-                recent_revelations=[revelation] if revelation else [],
+                recent_revelations=kvlist_from_obj([revelation] if revelation else []),
                 inner_monologues=[],
-                active_rules=triggered_rules,
+                active_rules=kvlist_from_obj(triggered_rules),
                 triggered_effects=[],
                 pending_effects=[],
-                player_inventory=inventory_result.get('items', []),
+                player_inventory=kvlist_from_obj(inventory_result.get('items', [])),
                 recent_item_changes=[],
-                active_npcs=npcs,
-                npc_masks={npc['npc_id']: npc.get('mask', {}) for npc in npcs if 'npc_id' in npc},
-                npc_narrative_stages={npc['npc_id']: npc.get('narrative_stage', '') for npc in npcs if 'npc_id' in npc},
-                relationship_states={},
-                relationship_dynamics=relationship_dynamics,
-                relationship_overview=rel_overview,
-                pending_relationship_events=rel_events.get('events', []),
-                addiction_status=addiction_status,
-                active_cravings=active_cravings,
-                addiction_contexts={},
+                active_npcs=kvlist_from_obj(npcs),
+                npc_masks=kvlist_from_obj({npc['npc_id']: npc.get('mask', {}) for npc in npcs if 'npc_id' in npc}),
+                npc_narrative_stages=kvlist_from_obj({npc['npc_id']: npc.get('narrative_stage', '') for npc in npcs if 'npc_id' in npc}),
+                relationship_states=[],
+                relationship_dynamics=relationship_dynamics,  # This is already a RelationshipDynamics model
+                relationship_overview=kvlist_from_obj(rel_overview) if rel_overview else None,
+                pending_relationship_events=kvlist_from_obj(rel_events.get('events', [])),
+                addiction_status=kvlist_from_obj(addiction_status),
+                active_cravings=kvlist_from_obj(active_cravings),
+                addiction_contexts=[],
                 player_money=100,
-                currency_system=currency_system,
+                currency_system=kvlist_from_obj(currency_system),
                 recent_transactions=[],
-                world_mood=world_mood,
-                world_tension=world_tension,
-                tension_factors=tensions,
-                environmental_factors={
+                world_mood=world_mood,  # This is already a WorldMood enum
+                world_tension=world_tension,  # This is already a WorldTension model
+                tension_factors=kvlist_from_obj(tensions),
+                environmental_factors=kvlist_from_obj({
                     "conflict_manifestations": conflict_manifestations,
                     "conflict_complexity": conflict_state.get('complexity_score', 0)
-                },
-                location_data=location_data,
-                ongoing_events=active_conflicts,  # Active conflicts are ongoing events
-                available_activities=available_activities,
+                }),
+                location_data=str(location_data) if location_data else "",  # Convert to string as expected
+                ongoing_events=kvlist_from_obj(active_conflicts),  # Active conflicts are ongoing events
+                available_activities=kvlist_from_obj(available_activities),
                 event_history=[],
                 nyx_directives=[]
             )
