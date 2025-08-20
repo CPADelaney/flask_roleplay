@@ -819,11 +819,29 @@ class NarratorContext:
 
 @function_tool
 async def narrate_slice_of_life_scene(
-    ctx: RunContextWrapper,  # Add type annotation
+    ctx: RunContextWrapper,
     payload: NarrateSliceOfLifeInput
 ) -> str:
     """Generate narration for a slice-of-life scene with full canonical tracking."""
-    context = ctx.context
+    
+    # Handle both NarratorContext and NyxContext
+    if hasattr(ctx.context, 'context'):
+        # This is likely a NyxContext wrapped in RunContextWrapper
+        nyx_context = ctx.context
+        
+        # Get or create narrator
+        if not hasattr(nyx_context, 'slice_of_life_narrator'):
+            nyx_context.slice_of_life_narrator = SliceOfLifeNarrator(
+                nyx_context.user_id,
+                nyx_context.conversation_id
+            )
+            await nyx_context.slice_of_life_narrator.initialize()
+        
+        context = nyx_context.slice_of_life_narrator.context
+    else:
+        # Original path - already a NarratorContext
+        context = ctx.context
+    
 
     # ---------- helpers (local, no imports needed) ----------
     import dataclasses as _dc
