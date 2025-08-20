@@ -779,6 +779,10 @@ __all__ = [
     'NarrativeResponse',
     'ImageGenerationDecision',
     
+    # Emotional state functions - ADD THESE
+    'get_emotional_state',
+    'update_emotional_state',
+    
     # Tool functions (for advanced usage)
     'retrieve_memories',
     'add_memory',
@@ -786,6 +790,7 @@ __all__ = [
     'detect_user_revelations',
     'generate_image_from_scene',
     'decide_image_generation',
+    'decide_image_generation_standalone',
     'calculate_emotional_impact',
     'calculate_and_update_emotional_state',
     'update_relationship_state',
@@ -810,4 +815,5 @@ __all__ = [
     'determine_image_generation',
     'process_user_input_with_openai',
     'process_user_input_standalone',
+    'mark_strategy_for_review',  # ADD THIS if needed
 ]
