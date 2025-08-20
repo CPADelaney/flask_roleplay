@@ -592,29 +592,48 @@ class CompleteWorldDirectorContext:
                 if isinstance(data, dict):
                     result = []
                     for k, v in data.items():
-                        if isinstance(v, (dict, list)) and v and not isinstance(v, (str, int, float, bool, type(None))):
-                            # Serialize complex nested structures to JSON string
+                        # Always serialize dicts and lists (even empty ones) to JSON strings
+                        if isinstance(v, dict):
                             import json
                             result.append(KVItem(key=str(k), value=json.dumps(v, default=str)))
-                        else:
+                        elif isinstance(v, list):
+                            import json
+                            result.append(KVItem(key=str(k), value=json.dumps(v, default=str)))
+                        elif v is None:
+                            result.append(KVItem(key=str(k), value=None))
+                        elif isinstance(v, (str, int, float, bool)):
                             result.append(KVItem(key=str(k), value=v))
+                        else:
+                            # For any other type, convert to string
+                            result.append(KVItem(key=str(k), value=str(v)))
                     return result
                 elif isinstance(data, list):
                     result = []
                     for i, v in enumerate(data):
+                        # Always serialize dicts and lists to JSON strings
                         if isinstance(v, dict):
-                            # Serialize dict items to JSON string
                             import json
                             result.append(KVItem(key=str(i), value=json.dumps(v, default=str)))
                         elif isinstance(v, list):
-                            # Serialize nested lists to JSON string
                             import json
                             result.append(KVItem(key=str(i), value=json.dumps(v, default=str)))
-                        else:
+                        elif v is None:
+                            result.append(KVItem(key=str(i), value=None))
+                        elif isinstance(v, (str, int, float, bool)):
                             result.append(KVItem(key=str(i), value=v))
+                        else:
+                            # For any other type, convert to string
+                            result.append(KVItem(key=str(i), value=str(v)))
                     return result
                 else:
-                    return [KVItem(key="value", value=data)]
+                    # For scalar values, return as is
+                    if isinstance(data, (str, int, float, bool)):
+                        return [KVItem(key="value", value=data)]
+                    else:
+                        return [KVItem(key="value", value=str(data))]
+            
+            # Import KVItem from the models
+            from story_agent.world_simulation_models import KVItem
             
             # FIXED: Convert all data to List[KeyValue] format with safe serialization
             return CompleteWorldState(
