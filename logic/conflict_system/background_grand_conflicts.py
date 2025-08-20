@@ -309,6 +309,143 @@ class BackgroundConflictSubsystem:
             'recent_events': update.get('events_today', []),
             'optional_opportunities': update.get('optional_opportunities', [])
         }
+
+    async def generate_background_conflict(self) -> BackgroundConflict:
+        """Generate a new background conflict dynamically"""
+        
+        # Select a random conflict type
+        conflict_type = random.choice(list(GrandConflictType))
+        
+        prompt = f"""
+        Generate a new background conflict:
+        
+        Type: {conflict_type.value}
+        
+        Create a grand-scale conflict that:
+        - Happens in the background of daily life
+        - Affects the world but not directly the player
+        - Creates atmosphere and conversation topics
+        - Feels like important world events
+        
+        Return JSON:
+        {{
+            "name": "Conflict name",
+            "description": "2-3 sentence description",
+            "factions": ["faction1", "faction2", "faction3"],
+            "current_state": "Current status of the conflict",
+            "intensity": 0.1 to 0.9,
+            "progress": 0 to 100,
+            "recent_developments": ["recent event 1", "recent event 2"],
+            "impact_on_daily_life": ["subtle impact 1", "subtle impact 2"],
+            "player_awareness": 0.0 to 1.0
+        }}
+        """
+        
+        response = await Runner.run(self.world_event_agent, prompt)
+        
+        try:
+            raw = extract_runner_response(response)
+            data = json.loads(raw)
+        except Exception as e:
+            logger.warning(f"Failed to parse conflict generation, using fallback: {e}")
+            # Fallback data
+            data = {
+                "name": f"The {conflict_type.value.replace('_', ' ').title()}",
+                "description": f"A {conflict_type.value} conflict develops in the background.",
+                "factions": ["Faction A", "Faction B"],
+                "current_state": "Emerging tensions",
+                "intensity": 0.3,
+                "progress": 0,
+                "recent_developments": [],
+                "impact_on_daily_life": ["Subtle changes in daily routines"],
+                "player_awareness": 0.1
+            }
+        
+        # Normalize data
+        name = str(data.get("name", f"Background {conflict_type.value}"))
+        description = str(data.get("description", "A conflict emerges"))
+        factions = data.get("factions", [])
+        if not isinstance(factions, list):
+            factions = []
+        factions = [str(f) for f in factions[:5]]  # Limit to 5 factions
+        
+        current_state = str(data.get("current_state", "Initial stages"))
+        
+        try:
+            intensity_val = float(data.get("intensity", 0.5))
+            intensity_val = max(0.1, min(0.9, intensity_val))
+        except:
+            intensity_val = 0.5
+        
+        try:
+            progress = float(data.get("progress", 0.0))
+            progress = max(0.0, min(100.0, progress))
+        except:
+            progress = 0.0
+        
+        recent_developments = data.get("recent_developments", [])
+        if not isinstance(recent_developments, list):
+            recent_developments = []
+        recent_developments = [str(d) for d in recent_developments[:5]]
+        
+        impact_on_daily_life = data.get("impact_on_daily_life", [])
+        if not isinstance(impact_on_daily_life, list):
+            impact_on_daily_life = []
+        impact_on_daily_life = [str(i) for i in impact_on_daily_life[:5]]
+        
+        try:
+            player_awareness = float(data.get("player_awareness", 0.1))
+            player_awareness = max(0.0, min(1.0, player_awareness))
+        except:
+            player_awareness = 0.1
+        
+        # Store in database
+        async with get_db_connection_context() as conn:
+            # Ensure table exists
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS BackgroundConflicts (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    conflict_type TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    factions JSONB,
+                    current_state TEXT,
+                    intensity FLOAT,
+                    progress FLOAT,
+                    player_awareness FLOAT,
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Insert the conflict
+            conflict_id = await conn.fetchval("""
+                INSERT INTO BackgroundConflicts
+                (user_id, conversation_id, conflict_type, name, description,
+                 factions, current_state, intensity, progress, player_awareness)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING id
+            """, self.user_id, self.conversation_id, conflict_type.value,
+            name, description, json.dumps(factions), current_state,
+            intensity_val, progress, player_awareness)
+        
+        # Create and return the BackgroundConflict object
+        return BackgroundConflict(
+            conflict_id=conflict_id,
+            conflict_type=conflict_type,
+            name=name,
+            description=description,
+            intensity=float_to_intensity(intensity_val),
+            progress=progress,
+            factions=factions,
+            current_state=current_state,
+            recent_developments=recent_developments,
+            impact_on_daily_life=impact_on_daily_life,
+            player_awareness_level=player_awareness
+        )
     
     async def is_relevant_to_scene(self, scene_context: Dict[str, Any]) -> bool:
         """Check if background system is relevant to scene"""
