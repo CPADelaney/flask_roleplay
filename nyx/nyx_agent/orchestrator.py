@@ -19,7 +19,6 @@ from .assembly import assemble_nyx_response, resolve_scene_requests
 from .tools import (
     update_relationship_state,
     generate_universal_updates_impl,
-    decide_image_generation_standalone,
 )
 from .utils import (
     _did_call_tool,
