@@ -283,6 +283,10 @@ __all__ = [
     'check_world_state',
     'generate_emergent_event',
     'simulate_npc_autonomy',
+
+    'get_emotional_state',  # ADD THIS
+    'update_emotional_state',  # ADD THIS
+    'mark_strategy_for_review',  # ADD THIS
     
     # Helper functions
     'run_compat',
