@@ -39,7 +39,9 @@ from .nyx_agent.compatibility import (
     process_user_input_with_openai,
     process_user_input_standalone,
     mark_strategy_for_review,
-    generate_base_response
+    generate_base_response,
+    get_emotional_state,  # Add this
+    update_emotional_state  # Add this
 )
 
 # Import agents SDK components
