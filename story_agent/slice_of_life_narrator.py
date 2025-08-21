@@ -1027,17 +1027,14 @@ async def narrate_slice_of_life_scene(
                     content=scene_desc,
                     memory_type="scene",
                     importance=significance / 10.0,
-                    tags=["scene", scene.event_type.value] + (["conflict_present"] if conflict_influences else []),
-                    metadata={
-                        "scene_type": scene.event_type.value,
-                        "location": canonical_location,
-                        "participants": scene.participants,
-                        "conflicts_active": len(conflict_influences) > 0,
-                        "tone": tone.value,
-                        "focus": focus.value,
-                        "power_hints": power_hints,
-                        "canonical_significance": significance
-                    }
+                    tags=["scene", scene.event_type.value, f"tone_{tone.value}", f"focus_{focus.value}"] + 
+                         (["conflict_present"] if conflict_influences else []) +
+                         [f"npc_{npc_id}" for npc_id in scene.participants[:3]],  # Add NPC tags
+                    metadata=MemoryMetadata(
+                        location=canonical_location,
+                        context_type=scene.event_type.value,
+                        emotion=tone.value
+                    )
                 )
             )
         except Exception as e:
@@ -1239,8 +1236,12 @@ async def generate_npc_dialogue(
                     content=f"{npc['npc_name']}: {dialogue}",
                     memory_type="dialogue",
                     importance=0.6,
-                    tags=["dialogue", f"npc_{npc_id}", stage.name],
-                    metadata={"npc_id": str(npc_id), "tone": tone, "stage": stage.name},
+                    tags=["dialogue", f"npc_{npc_id}", stage.name, f"tone_{tone}"],
+                    metadata=MemoryMetadata(
+                        npc_id=str(npc_id),
+                        emotion=tone,
+                        context_type=stage.name
+                    )
                 )
             )
         except Exception as e:
@@ -1510,14 +1511,13 @@ async def narrate_power_exchange(
                 content=f"Power exchange with {npc['npc_name']}: {moment}",
                 memory_type="power_exchange",
                 importance=min(1.0, 0.7 + exchange.intensity * 0.3),
-                tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value],
-                metadata={
-                    "npc_id": str(exchange.initiator_npc_id),
-                    "type": exchange.exchange_type.value,
-                    "intensity": exchange.intensity,
-                    "public": exchange.is_public,
-                    "canonical_significance": significance
-                }
+                tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value,
+                      f"intensity_{int(exchange.intensity*10)}", f"significance_{significance}"],
+                metadata=MemoryMetadata(
+                    npc_id=str(exchange.initiator_npc_id),
+                    context_type=exchange.exchange_type.value,
+                    location=canonical_location if 'canonical_location' in locals() else None
+                )
             )
         )
     
@@ -2601,8 +2601,10 @@ class SliceOfLifeNarrator:
                         content=f"Player action: {action}",
                         memory_type="decision",
                         importance=0.7,
-                        tags=["player_action"],
-                        metadata={"affected_npcs": affected_npcs or []}
+                        tags=["player_action"] + [f"npc_{npc_id}" for npc_id in (affected_npcs or [])[:3]],
+                        metadata=MemoryMetadata(
+                            context_type="player_action"
+                        )
                     )
                 )
             except Exception as e:
