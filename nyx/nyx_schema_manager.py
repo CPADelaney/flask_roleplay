@@ -240,8 +240,6 @@ class NyxSchemaManager:
             
             Format as valid JSON.
             """,
-            temperature=0.2,
-            max_tokens=800
         )
         
         # Parse and validate the proposal
