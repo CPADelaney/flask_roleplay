@@ -740,8 +740,6 @@ async def add_nyx_hosting_style(narrator_response: str, world_state: Any) -> Dic
     narrative = await generate_text_completion(
         system_prompt="You are Nyx, the AI Dominant host of this simulation",
         user_prompt=prompt,
-        temperature=0.8,
-        max_tokens=300,
     )
     return {"narrative": narrative}
 
