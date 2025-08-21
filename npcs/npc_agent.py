@@ -50,7 +50,7 @@ Return *ONLY* valid JSON with keys:
   target_reactions   – list[dict]   (each needs: entity, reaction, intensity 0-1)
 """,
         model=openai_model,
-        model_settings=ModelSettings(temperature=0.7)
+        model_settings=ModelSettings()
     )
 else:
     action_outcome_generator = None
@@ -66,7 +66,7 @@ create ONE sentence that fits the tone of a dark-erotic RPG but is PG-13.
 Return JSON: { "details": "<sentence>" }
 """,
         model=openai_model,
-        model_settings=ModelSettings(temperature=0.8)
+        model_settings=ModelSettings()
     )
 else:
     interaction_detail_generator = None
@@ -82,7 +82,7 @@ produce a short `description` for what the NPC is doing.
 Return JSON: { "description": "<text>" }
 """,
         model=openai_model,
-        model_settings=ModelSettings(temperature=0.75)
+        model_settings=ModelSettings()
     )
 else:
     activity_generator = None
@@ -116,8 +116,6 @@ Return a JSON object with:
         response = await client.chat.completions.create(
             model="gpt-5-nano",
             messages=messages,
-            temperature=0.7,
-            max_tokens=300,
             response_format={"type": "json_object"}
         )
         
@@ -172,8 +170,6 @@ Make it vivid but appropriate for a narrative game (PG-13)."""
         response = await client.chat.completions.create(
             model="gpt-5-nano",
             messages=messages,
-            temperature=0.8,
-            max_tokens=100,
             response_format={"type": "json_object"}
         )
         
@@ -211,8 +207,6 @@ Location: {location}"""
         response = await client.chat.completions.create(
             model="gpt-5-nano",
             messages=messages,
-            temperature=0.75,
-            max_tokens=80,
             response_format={"type": "json_object"}
         )
         
@@ -1236,8 +1230,6 @@ Generate a single action as JSON with these fields:
             response = await client.chat.completions.create(
                 model="gpt-5-nano",
                 messages=messages,
-                temperature=0.5,
-                max_tokens=200,
                 response_format={"type": "json_object"}
             )
             
