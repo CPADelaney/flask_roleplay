@@ -262,6 +262,44 @@ class VectorService:
             f"Closed vector service for user {self.user_id}, "
             f"conversation {self.conversation_id}"
         )
+
+    async def get_context_for_input(
+        self,
+        input_text: str,
+        current_location: Optional[str] = None,
+        max_items: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Public method to get relevant context for input text.
+        
+        Args:
+            input_text: Current input text
+            current_location: Optional current location
+            max_items: Maximum number of context items
+            
+        Returns:
+            Dict with relevant context from vector database
+        """
+        # Call the internal method and convert result to dict
+        result = await self._get_context_for_input(
+            input_text=input_text,
+            current_location=current_location,
+            max_items=max_items
+        )
+        
+        # Convert VectorContextResult to dict for compatibility
+        if hasattr(result, 'dict'):
+            return result.dict()
+        elif hasattr(result, 'model_dump'):
+            return result.model_dump()
+        else:
+            # If it's already a dict or has a compatible structure
+            return {
+                "npcs": [item.dict() if hasattr(item, 'dict') else item for item in result.npcs],
+                "locations": [item.dict() if hasattr(item, 'dict') else item for item in result.locations],
+                "memories": [item.dict() if hasattr(item, 'dict') else item for item in result.memories],
+                "narratives": [item.dict() if hasattr(item, 'dict') else item for item in result.narratives]
+            }
     
     # ---------------------------------------------------------------------
     #           INTERNAL (PRIVATE) METHODS (no @function_tool, have `self`)
