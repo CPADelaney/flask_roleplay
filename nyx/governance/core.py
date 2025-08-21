@@ -342,7 +342,6 @@ class ResourceLimitManager:
         self._cache_ttl = timedelta(minutes=5)  # Default, overridden by config
         self._lock = asyncio.Lock()
         self._initialized = False
-        self._registered_agent_keys: Set[Tuple[str, str]] = set()
         
         # Configuration
         self._config: Optional[ResourceConfig] = None
@@ -660,17 +659,20 @@ class NyxUnifiedGovernor(
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.player_name = player_name  # Can be set later via set_player_name()
-
+    
         self._discovery_completed: bool = False 
         
         # Will be initialized in _initialize_systems() to avoid circular dependency
         self.lore_system: Optional[Any] = None
-
+    
         # Core systems and state
         self.memory_system = None
         self.game_state = None
         self.registered_agents: Dict[str, Dict[str, Any]] = {}     # {agent_type: {agent_id: instance}}
-
+    
+        # Add this line - Initialize the set for tracking registered agents
+        self._registered_agent_keys: Set[Tuple[str, str]] = set()
+    
         # Use async queue for agent registration to avoid lock starvation
         self._agent_registration_queue = asyncio.Queue()
         self._registration_task: Optional[asyncio.Task] = None
@@ -687,6 +689,7 @@ class NyxUnifiedGovernor(
         self.coordination_history: List[Dict[str, Any]] = []
         self.memory_integration = None
         self.memory_graph = None
+        self._registered_agent_keys: Set[Tuple[str, str]] = set()
     
         # Learning state
         self.strategy_effectiveness: Dict[str, Any] = {}
