@@ -1092,23 +1092,8 @@ async def get_comprehensive_context(
     source_version: Optional[int] = None,
     summary_level: Optional[int] = None
 ) -> Dict[str, Any]:
-    """
-    Get comprehensive context optimized for token efficiency and relevance
+    """Get comprehensive context optimized for token efficiency and relevance"""
     
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        input_text: Current user input
-        location: Optional current location
-        context_budget: Token budget
-        use_vector_search: Whether to use vector search
-        use_delta: Whether to include delta changes
-        source_version: Optional source version for delta tracking 
-        summary_level: Optional summary level (0-3)
-        
-    Returns:
-        Optimized context dictionary
-    """
     # Get context service
     service = await get_context_service(user_id, conversation_id)
     
@@ -1134,11 +1119,13 @@ async def get_comprehensive_context(
     # Add relationship overview
     from logic.dynamic_relationships import OptimizedRelationshipManager
     
+    # FIX 1: Use function parameters, not self
     rel_manager = OptimizedRelationshipManager(user_id, conversation_id)
     
     # Get key relationships
     key_relationships = []
-    for npc in context_data.get("npcs", [])[:5]:  # Top 5 NPCs
+    # FIX 2: Use 'context' not 'context_data'
+    for npc in context.get("npcs", [])[:5]:  # Top 5 NPCs
         state = await rel_manager.get_relationship_state(
             "player", 0,
             "npc", npc["npc_id"]
@@ -1150,7 +1137,8 @@ async def get_comprehensive_context(
             "relationship_summary": state.to_summary()
         })
     
-    context_data["key_relationships"] = key_relationships
+    # FIX 3: Use 'context' not 'context_data'
+    context["key_relationships"] = key_relationships
     
     return context
 
