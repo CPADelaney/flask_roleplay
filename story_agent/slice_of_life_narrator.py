@@ -415,6 +415,7 @@ from context.memory_manager import (
     MemoryAddRequest,
     MemorySearchRequest
 )
+from context.models import MemoryMetadata  # ADD THIS
 from context.vector_service import (
     get_vector_service,
     VectorService
