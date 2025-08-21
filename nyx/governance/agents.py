@@ -355,16 +355,21 @@ class AgentGovernanceMixin:
             # Resource optimizer is optional
             pass
         
-        # 7. Register all discovered agents
+        # 7. Register all discovered agents (with duplicate check)
         for agent_type, agent_id in registrations:
-            await self.register_agent(
-                agent_type=agent_type,  # Now this is always a string
-                agent_id=agent_id,
-                agent_instance=None  # Will be created lazily
-            )
+            # Check if already registered before queuing
+            if not self.is_agent_registered(agent_id, agent_type):
+                await self.register_agent(
+                    agent_type=agent_type,
+                    agent_id=agent_id,
+                    agent_instance=None  # Will be created lazily
+                )
+                logger.info(f"[discover] registered new agent {agent_type}/{agent_id}")
+            else:
+                logger.debug(f"[discover] agent {agent_type}/{agent_id} already registered, skipping")
         
         self._discovery_completed = True
-        logger.info(f"[discover] completed – {len(registrations)} agents queued")
+        logger.info(f"[discover] completed – {len(registrations)} agents processed")
     
     
     async def _discover_npc_agents(governor):
