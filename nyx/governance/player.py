@@ -362,8 +362,6 @@ class PlayerGovernanceMixin:
             reasoning = await generate_text_completion(
                 system_prompt="You are Nyx, an authoritative governance system maintaining narrative coherence.",
                 user_prompt=prompt,
-                temperature=0.7,
-                max_tokens=200,
                 task_type="decision"
             )
             return reasoning.strip()
@@ -415,8 +413,6 @@ class PlayerGovernanceMixin:
             response = await generate_text_completion(
                 system_prompt="You are Nyx, suggesting alternatives that enhance the game experience.",
                 user_prompt=prompt,
-                temperature=0.8,
-                max_tokens=300,
                 task_type="decision"
             )
             
