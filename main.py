@@ -156,7 +156,7 @@ def ensure_int_ids(user_id=None, conversation_id=None):
 ###############################################################################
 
 # Ensure this task ONLY uses asyncpg for DB access
-async def background_chat_task(conversation_id, user_input, user_id, universal_update=None, sio=None):
+async def background_chat_task(conversation_id, user_input, user_id, universal_update=None, sio=None, request_id=None):
     """
     Background task for processing chat messages using Nyx agent with OpenAI integration.
     """
@@ -170,19 +170,24 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         logger.error(f"[BG Task] Invalid ID format: conversation_id={conversation_id}, user_id={user_id}, error={e}")
         if sio:
             await sio.emit('error', {'error': 'Invalid ID format'}, room=str(conversation_id))
+        # Clear request flag before returning
+        if request_id:
+            await clear_request_processing(request_id)
         return
         
     from quart import current_app
     if not sio:
         logger.error(f"[BG Task {conversation_id}] No socketio instance provided")
+        if request_id:
+            await clear_request_processing(request_id)
         return
 
-    logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
-    try:
+    logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}, request_id={request_id}")
+    
+    try:  # Main try block for the entire function
         # Get aggregator context (ensure this function is async or thread-safe if it hits DB)
-        # If sync and hits DB, consider running in an executor or making it async
         from logic.aggregator_sdk import get_aggregated_roleplay_context
-        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase") # Adjust player name if needed
+        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
 
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
@@ -192,7 +197,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             "aggregator_data": aggregator_data
         }
 
-        # Apply universal update if provided (ensure this uses its own connection)
+        # Apply universal update if provided
         if universal_update:
             logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
             try:
@@ -201,8 +206,6 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 updater_context = UniversalUpdaterContext(user_id, conversation_id)
                 await updater_context.initialize()
                 
-                # apply_universal_updates_async should use its own connection internally
-                # Don't pass a connection from outside
                 await apply_universal_updates_async(
                     updater_context,
                     user_id,
@@ -227,7 +230,6 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
-        # Ensure this function is async
         from nyx.nyx_agent_sdk import process_user_input_with_openai
         logger.info(f"[BG Task {conversation_id}] Processing input with Nyx agent...")
         response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
@@ -247,8 +249,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 
         # Store the Nyx response in DB using asyncpg
         try:
-            async with get_db_connection_context() as conn: # Use async context manager
-                await conn.execute( # Use await and $n params
+            async with get_db_connection_context() as conn:
+                await conn.execute(
                     """INSERT INTO messages (conversation_id, sender, content, created_at)
                        VALUES ($1, $2, $3, NOW())""",
                     conversation_id, "Nyx", message_content
@@ -264,18 +266,17 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             img_settings = response["function_args"]["image_generation"]
             should_generate = should_generate or img_settings.get("generate", False)
 
-        # Generate image if needed (ensure generate_roleplay_image_from_gpt is async)
+        # Generate image if needed
         if should_generate:
             logger.info(f"[BG Task {conversation_id}] Image generation triggered.")
             try:
-                img_data = { # Prepare data structure
+                img_data = {
                     "narrative": message_content,
                     "image_generation": response.get("function_args", {}).get("image_generation", {
                         "generate": True, "priority": "medium", "focus": "balanced",
                         "framing": "medium_shot", "reason": "Narrative moment"
                     })
                 }
-                # Ensure generate_roleplay_image_from_gpt is async
                 res = await generate_roleplay_image_from_gpt(img_data, user_id, conversation_id)
 
                 if res and "image_urls" in res and res["image_urls"]:
@@ -295,23 +296,26 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         if message_content:
             logger.debug(f"[BG Task {conversation_id}] Streaming tokens...")
             chunk_size = 5
-            delay = 0.01 # Small delay between chunks
+            delay = 0.01
             for i in range(0, len(message_content), chunk_size):
                 token = message_content[i:i+chunk_size]
                 await sio.emit('new_token', {'token': token}, room=str(conversation_id))
-                await asyncio.sleep(delay) # Use asyncio.sleep in async task
+                await asyncio.sleep(delay)
 
-            await sio.emit('done', {'full_text': message_content}, room=str(conversation_id))
+            await sio.emit('done', {'full_text': message_content, 'request_id': request_id}, room=str(conversation_id))
             logger.info(f"[BG Task {conversation_id}] Finished streaming response.")
         else:
-             logger.warning(f"[BG Task {conversation_id}] No message content to stream.")
-             await sio.emit('done', {'full_text': ''}, room=str(conversation_id)) # Still signal done
+            logger.warning(f"[BG Task {conversation_id}] No message content to stream.")
+            await sio.emit('done', {'full_text': '', 'request_id': request_id}, room=str(conversation_id))
 
     except Exception as e:
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
         await sio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
-
-app_is_ready = asyncio.Event()
+    finally:
+        # Always clear the processing flag when done
+        if request_id:
+            await clear_request_processing(request_id)
+            logger.debug(f"[BG Task {conversation_id}] Cleared processing flag for request_id={request_id}")
 
 async def initialize_preset_stories():
     """Load all preset stories into database on startup"""
@@ -559,70 +563,118 @@ def create_quart_app():
              allow_headers="*")
         logger.info(f"CORS configured with specific origins: {origins}")
 
-
-    # 5) Socket.IO event handlers
+    async def mark_request_processing(request_id: str, timeout: int = 60) -> bool:
+        """
+        Mark request as processing. Returns True if this is a new request,
+        False if it's already being processed.
+        """
+        if not app.redis_rate_limit_pool:
+            # No Redis, can't deduplicate
+            return True
+        
+        try:
+            key = f"processing:{request_id}"
+            # Set with NX (only if not exists) and EX (expire after timeout)
+            # Returns True if key was set, None if it already existed
+            result = await app.redis_rate_limit_pool.set(
+                key, "1", nx=True, ex=timeout
+            )
+            return result is not None  # True if we set it, False if already existed
+        except Exception as e:
+            logger.error(f"Redis error checking request {request_id}: {e}")
+            return True  # On error, allow processing to continue
+    
+    async def clear_request_processing(request_id: str):
+        """Clear the processing flag for a request"""
+        if app.redis_rate_limit_pool:
+            try:
+                key = f"processing:{request_id}"
+                await app.redis_rate_limit_pool.delete(key)
+            except Exception as e:
+                logger.error(f"Redis error clearing request {request_id}: {e}")
+    
+    # Modified Socket.IO handler
     @sio.on("storybeat")
     async def on_storybeat(sid, data):
-        if not app_is_ready.is_set():
-            logger.warning(f"Received 'storybeat' from sid={sid} before app is fully ready. Rejecting.")
-            await sio.emit('error', {'error': 'Server is initializing, please try again in a moment.'}, to=sid)
-            return
+        # Generate or get request ID
+        request_id = data.get('request_id')
+        if not request_id:
+            request_id = f"{sid}_{uuid.uuid4().hex[:8]}"
+            logger.debug(f"Generated request_id: {request_id}")
         
-        sock_sess = await sio.get_session(sid)
-        user_id = sock_sess.get("user_id", "anonymous")
-        
-        # Reject anonymous users
-        if user_id == "anonymous":
-            logger.warning(f"Socket session has anonymous user, cannot process authenticated request")
-            await sio.emit('error', {
-                'error': 'Not authenticated. Please refresh the page and log in again.',
-                'requiresAuth': True
+        # Try to mark as processing (atomic operation)
+        if not await mark_request_processing(request_id):
+            logger.warning(f"Duplicate request {request_id} ignored for sid={sid}")
+            await sio.emit('duplicate_request', {
+                'request_id': request_id,
+                'message': 'Request already being processed'
             }, to=sid)
             return
         
-        # Ensure user_id is int
-        if isinstance(user_id, str) and user_id.isdigit():
-            user_id = int(user_id)
-        
-        # Get and validate conversation_id
-        conversation_id = data.get("conversation_id")
-        if conversation_id is not None:
-            try:
-                conversation_id = int(conversation_id)
-            except (ValueError, TypeError):
-                logger.error(f"Invalid conversation_id from client: {conversation_id}")
-                await sio.emit('error', {'error': 'Invalid conversation_id format'}, to=sid)
-                return
-        
-        user_input = data.get("user_input")
-        universal_update = data.get("universal_update")
-        
-        app.logger.info(f"Received 'storybeat' from sid={sid}, user_id={user_id}, conv_id={conversation_id}")
-        
-        # Basic validation
-        if not all([conversation_id is not None, user_input is not None]):
-            error_msg = "Invalid 'storybeat' payload: missing conversation_id or user_input."
-            app.logger.error(f"{error_msg} SID: {sid}. Data: {data}")
-            await sio.emit('error', {'error': error_msg}, room=str(conversation_id))
-            return
-        
         try:
-            await sio.emit("processing", {"message": "Your request is being processed..."}, to=sid)
+            if not app_is_ready.is_set():
+                logger.warning(f"Received 'storybeat' from sid={sid} before app is fully ready. Rejecting.")
+                await sio.emit('error', {'error': 'Server is initializing, please try again in a moment.'}, to=sid)
+                return
+            
+            sock_sess = await sio.get_session(sid)
+            user_id = sock_sess.get("user_id", "anonymous")
+            
+            # Reject anonymous users
+            if user_id == "anonymous":
+                logger.warning(f"Socket session has anonymous user, cannot process authenticated request")
+                await sio.emit('error', {
+                    'error': 'Not authenticated. Please refresh the page and log in again.',
+                    'requiresAuth': True
+                }, to=sid)
+                return
+            
+            # Ensure user_id is int
+            if isinstance(user_id, str) and user_id.isdigit():
+                user_id = int(user_id)
+            
+            # Get and validate conversation_id
+            conversation_id = data.get("conversation_id")
+            if conversation_id is not None:
+                try:
+                    conversation_id = int(conversation_id)
+                except (ValueError, TypeError):
+                    logger.error(f"Invalid conversation_id from client: {conversation_id}")
+                    await sio.emit('error', {'error': 'Invalid conversation_id format'}, to=sid)
+                    return
+            
+            user_input = data.get("user_input")
+            universal_update = data.get("universal_update")
+            
+            app.logger.info(f"Received 'storybeat' from sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
+            
+            # Basic validation
+            if not all([conversation_id is not None, user_input is not None]):
+                error_msg = "Invalid 'storybeat' payload: missing conversation_id or user_input."
+                app.logger.error(f"{error_msg} SID: {sid}. Data: {data}")
+                await sio.emit('error', {'error': error_msg}, room=str(conversation_id))
+                return
+            
+            await sio.emit("processing", {"message": "Your request is being processed...", "request_id": request_id}, to=sid)
             
             # Start background task with proper user_id
+            # Pass request_id so it can be cleared when done
             sio.start_background_task(
                 background_chat_task,
                 conversation_id,
                 user_input,
-                user_id,  # This will now be the actual user ID, not "anonymous"
+                user_id,
                 universal_update,
-                sio
+                sio,
+                request_id  # Add this parameter
             )
-            app.logger.info(f"Started background_chat_task for sid={sid}, user_id={user_id}, conv_id={conversation_id}")
+            app.logger.info(f"Started background_chat_task for sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
         
         except Exception as e:
             app.logger.error(f"Error dispatching background_chat_task for sid={sid}: {e}", exc_info=True)
             await sio.emit('error', {'error': 'Server failed to initiate message processing.'}, room=str(conversation_id))
+            # Clear the processing flag on error
+            await clear_request_processing(request_id)
 
 
     @app.before_serving
