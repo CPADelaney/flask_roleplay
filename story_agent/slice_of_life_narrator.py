@@ -92,6 +92,22 @@ def _apply_world_state_influence(
 
     return tone, requires_response, effects
 
+def _unwrap_run_ctx(x, max_hops: int = 4):
+    """
+    Follow `.context` links until we find an object with user_id & conversation_id,
+    or we run out of hops.
+    """
+    base = x
+    for _ in range(max_hops):
+        if hasattr(base, "user_id") and hasattr(base, "conversation_id"):
+            return base
+        nxt = getattr(base, "context", None)
+        if nxt is None or nxt is base:
+            break
+        base = nxt
+    return base
+
+
 # ===============================================================================
 # CRITICAL FIX: Agent-Safe Base Model
 # ===============================================================================
@@ -823,25 +839,24 @@ async def narrate_slice_of_life_scene(
     payload: NarrateSliceOfLifeInput
 ) -> str:
     """Generate narration for a slice-of-life scene with full canonical tracking."""
-    
-    # Handle both NarratorContext and NyxContext
-    if hasattr(ctx.context, 'context'):
-        # This is likely a NyxContext wrapped in RunContextWrapper
-        nyx_context = ctx.context
-        
-        # Get or create narrator
-        if not hasattr(nyx_context, 'slice_of_life_narrator'):
-            nyx_context.slice_of_life_narrator = SliceOfLifeNarrator(
-                nyx_context.user_id,
-                nyx_context.conversation_id
-            )
-            await nyx_context.slice_of_life_narrator.initialize()
-        
-        context = nyx_context.slice_of_life_narrator.context
-    else:
-        # Original path - already a NarratorContext
-        context = ctx.context
-    
+
+    # --- robust unwrapping of RunContextWrapper(s) ---
+    host = _unwrap_run_ctx(ctx)                # handles nested wrappers
+    if not (hasattr(host, "user_id") and hasattr(host, "conversation_id")):
+        # As a last-ditch attempt, try unwrapping ctx.context explicitly
+        host = _unwrap_run_ctx(getattr(ctx, "context", ctx))
+    if not (hasattr(host, "user_id") and hasattr(host, "conversation_id")):
+        raise RuntimeError("Could not resolve host context; missing user_id/conversation_id")
+
+    # --- ensure narrator is attached to the *host* context, not the wrapper ---
+    narrator = getattr(host, "slice_of_life_narrator", None)
+    if narrator is None:
+        narrator = SliceOfLifeNarrator(host.user_id, host.conversation_id)
+        await narrator.initialize()
+        setattr(host, "slice_of_life_narrator", narrator)
+
+    # This is the per-agent working context you use below
+    context = narrator.context
 
     # ---------- helpers (local, no imports needed) ----------
     import dataclasses as _dc
