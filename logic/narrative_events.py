@@ -192,8 +192,6 @@ Generate the inner monologue:"""
         monologue = await generate_text_completion(
             system_prompt="You are generating authentic inner thoughts for a character gradually experiencing psychological changes.",
             user_prompt=prompt,
-            temperature=0.7,
-            max_tokens=100,
             task_type="reflection"
         )
         
