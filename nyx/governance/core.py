@@ -342,6 +342,7 @@ class ResourceLimitManager:
         self._cache_ttl = timedelta(minutes=5)  # Default, overridden by config
         self._lock = asyncio.Lock()
         self._initialized = False
+        self._registered_agent_keys: Set[Tuple[str, str]] = set()
         
         # Configuration
         self._config: Optional[ResourceConfig] = None
@@ -796,9 +797,18 @@ class NyxUnifiedGovernor(
                     
                 agent_type, agent_id, agent_instance = registration
                 
+                # Fast check using set
+                agent_key = (agent_type, agent_id)
+                if agent_key in self._registered_agent_keys:
+                    logger.debug(f"Agent {agent_type}/{agent_id} already registered, skipping")
+                    continue
+                
                 # Perform the actual registration
                 if agent_type not in self.registered_agents:
                     self.registered_agents[agent_type] = {}
+                
+                self.registered_agents[agent_type][agent_id] = agent_instance
+                self._registered_agent_keys.add(agent_key)  # Add to set
                 
                 if agent_id in self.registered_agents[agent_type]:
                     logger.warning(f"Agent {agent_id} already registered, updating")
