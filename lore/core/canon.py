@@ -1172,6 +1172,7 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
             return similar['location_name']
     
     # Create new location
+    # IMPORTANT: Convert all list/array fields to JSON strings
     location_id = await conn.fetchval("""
         INSERT INTO Locations (
             user_id, conversation_id, location_name, description,
@@ -1190,10 +1191,10 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         kwargs.get('economic_importance', 'moderate'),
         kwargs.get('strategic_value', 5),
         kwargs.get('population_density', 'moderate'),
-        kwargs.get('notable_features', []),
-        kwargs.get('hidden_aspects', []),
-        kwargs.get('access_restrictions', []),
-        kwargs.get('local_customs', []),
+        json.dumps(kwargs.get('notable_features', [])),     # Convert to JSON string
+        json.dumps(kwargs.get('hidden_aspects', [])),       # Convert to JSON string
+        json.dumps(kwargs.get('access_restrictions', [])),  # Convert to JSON string
+        json.dumps(kwargs.get('local_customs', [])),        # Convert to JSON string
         search_vector
     )
     
