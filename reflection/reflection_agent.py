@@ -17,7 +17,7 @@ class ReflectionAgent(Agent):
             
             Keep insights under 100 words and focus on actionable observations.""",
             model="gpt-5-nano",  # or whatever model you prefer
-            model_settings=ModelSettings(temperature=0.7, max_tokens=200)
+            model_settings=ModelSettings()
         )
 
 async def run_reflection(events: list) -> str:
