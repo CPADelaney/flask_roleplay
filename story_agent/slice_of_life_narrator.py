@@ -532,279 +532,7 @@ class NarratorContext:
         if self._conflict_synthesizer is None:
             self._conflict_synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
     
-        
-    @function_tool
-    async def narrate_power_exchange(
-        ctx,
-        exchange: PowerExchange,
-        world_state: WorldState
-    ) -> str:
-        """Generate narration for a power exchange moment with Nyx tracking, memory, and canonical consistency."""
-        context = ctx.context
-        
-        # Import canon functions
-        from lore.core.canon import (
-            ensure_canonical_context,
-            log_canonical_event,
-            find_or_create_npc,
-            find_or_create_location,
-            find_or_create_historical_event,
-            update_current_roleplay,
-            create_journal_entry,
-            find_or_create_social_link
-        )
-        
-        # Create canonical context
-        canonical_ctx = ensure_canonical_context({
-            'user_id': context.user_id,
-            'conversation_id': context.conversation_id
-        })
-        
-        # Refresh context for power exchange
-        await context.refresh_context(input_text=f"Power exchange: {exchange.exchange_type.value}")
-        
-        # Get NPC details and ensure canonical existence
-        async with get_db_connection_context() as conn:
-            # First ensure NPC exists canonically
-            npc = await conn.fetchrow("""
-                SELECT npc_id, npc_name, dominance, personality_traits, current_location
-                FROM NPCStats
-                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-            """, exchange.initiator_npc_id, context.user_id, context.conversation_id)
             
-            if not npc:
-                # Create NPC canonically if doesn't exist
-                canonical_npc_id = await find_or_create_npc(
-                    canonical_ctx, conn,
-                    npc_name=f"Dominant_{exchange.initiator_npc_id}",
-                    role="dominant",
-                    dominance=80,  # High dominance for power exchange initiator
-                    personality_traits=["commanding", "confident", "observant"]
-                )
-                
-                # Re-fetch the created NPC
-                npc = await conn.fetchrow("""
-                    SELECT npc_id, npc_name, dominance, personality_traits, current_location
-                    FROM NPCStats
-                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                """, canonical_npc_id, context.user_id, context.conversation_id)
-            
-            # Ensure location exists
-            location = world_state.current_location if hasattr(world_state, 'current_location') else "private_space"
-            canonical_location = await find_or_create_location(
-                canonical_ctx, conn,
-                location_name=location,
-                description=f"The space where power dynamics shift",
-                location_type="intimate" if not exchange.is_public else "public",
-                cultural_significance="high" if exchange.intensity > 0.7 else "moderate"
-            )
-            
-            # Ensure social link exists and is updated
-            link_id = await find_or_create_social_link(
-                canonical_ctx, conn,
-                entity1_type='npc',
-                entity1_id=exchange.initiator_npc_id,
-                entity2_type='player',
-                entity2_id=context.user_id,
-                link_type='power_dynamic',
-                link_level=int(exchange.intensity * 100)
-            )
-        
-        # Track with Nyx governance if active
-        governance_tracking = []
-        if governance_active and nyx_governance:
-            try:
-                tracking_data = await nyx_governance.track_power_exchange(
-                    npc_id=exchange.initiator_npc_id,
-                    exchange_type=exchange.exchange_type.value,
-                    intensity=exchange.intensity,
-                    timestamp=datetime.now(timezone.utc)
-                )
-                governance_tracking = [
-                    KeyValue(key=k, value=str(v)) for k, v in tracking_data.items()
-                ] if tracking_data else []
-            except Exception as e:
-                logger.warning(f"Could not track power exchange with governance: {e}")
-        
-        # Get relationship state
-        rel_state = await relationship_manager.get_relationship_state(
-            'npc', exchange.initiator_npc_id, 'player', context.user_id
-        )
-        
-        # Generate narration components
-        setup = await _generate_power_moment_setup(context, exchange, npc, world_state)
-        moment = await _generate_power_moment_description(context, exchange, npc)
-        aftermath = await _generate_power_moment_aftermath(context, exchange, world_state.relationship_dynamics)
-        player_feelings = await _generate_player_feelings(context, exchange, world_state.relationship_dynamics)
-        
-        # Generate response options
-        options = await _generate_power_response_options(
-            context, exchange, npc['dominance'], rel_state
-        )
-        
-        # Calculate potential consequences
-        consequences = await _calculate_power_consequences(context, exchange, world_state)
-        
-        narration = PowerMomentNarration(
-            setup=setup,
-            moment=moment,
-            aftermath=aftermath,
-            player_feelings=player_feelings,
-            options_presentation=options,
-            potential_consequences=consequences,
-            governance_tracking=governance_tracking
-        )
-        
-        # Store power exchange canonically with full context
-        async with get_db_connection_context() as conn:
-            # Calculate significance based on multiple factors
-            base_significance = 7  # Power exchanges are always significant
-            if exchange.intensity > 0.8:
-                base_significance += 2
-            elif exchange.intensity > 0.6:
-                base_significance += 1
-            
-            if exchange.exchange_type in [PowerDynamicType.INTIMATE_COMMAND, PowerDynamicType.PUBLIC_DISPLAY]:
-                base_significance += 1
-            
-            significance = min(base_significance, 10)
-            
-            # Log the main power exchange event
-            await log_canonical_event(
-                canonical_ctx, conn,
-                f"Power exchange: {npc['npc_name']} exercised {exchange.exchange_type.value} over player (intensity: {exchange.intensity:.2f})",
-                tags=[
-                    "power_exchange",
-                    "dynamics",
-                    f"npc_{exchange.initiator_npc_id}",
-                    exchange.exchange_type.value.replace("_", "-").lower(),
-                    f"location_{canonical_location}",
-                    "public" if exchange.is_public else "private"
-                ] + ([f"witness_{w}" for w in exchange.witnesses] if exchange.witnesses else []),
-                significance=significance
-            )
-            
-            # Update CurrentRoleplay to track power dynamics state
-            current_submission = world_state.relationship_dynamics.player_submission_level if hasattr(world_state, 'relationship_dynamics') else 0.5
-            new_submission = min(1.0, current_submission + (exchange.intensity * 0.1))
-            
-            await update_current_roleplay(
-                canonical_ctx, conn,
-                'PlayerSubmissionLevel',
-                str(new_submission)
-            )
-            
-            await update_current_roleplay(
-                canonical_ctx, conn,
-                'LastPowerExchange',
-                f"{npc['npc_name']}:{exchange.exchange_type.value}:{exchange.intensity}"
-            )
-            
-            # Create historical event for major power exchanges
-            if significance >= 8:
-                event_id = await find_or_create_historical_event(
-                    canonical_ctx, conn,
-                    event_name=f"Significant power exchange with {npc['npc_name']}",
-                    description=f"{setup} {moment} {aftermath}",
-                    date_description="Present moment",
-                    event_type="power_dynamic",
-                    significance=significance,
-                    involved_entities=[f"npc_{exchange.initiator_npc_id}", "player"],
-                    location=canonical_location,
-                    consequences=[f"submission_increased:{(exchange.intensity * 0.1):.2f}"],
-                    disputed_facts=["The exact nature of control"] if exchange.resistance_possible else []
-                )
-            
-            # Create journal entry from player's perspective
-            journal_text = f"{moment}\n\nFeeling: {player_feelings}"
-            if options:
-                journal_text += f"\n\nOptions considered: {', '.join(options[:2])}"
-            
-            await create_journal_entry(
-                canonical_ctx, conn,
-                entry_type="power_exchange",
-                entry_text=journal_text,
-                revelation_types="power_dynamic",
-                narrative_moment=True,
-                fantasy_flag=exchange.exchange_type == PowerDynamicType.INTIMATE_COMMAND,
-                intensity_level=int(exchange.intensity * 10),
-                entry_metadata={
-                    "npc_id": exchange.initiator_npc_id,
-                    "npc_name": npc['npc_name'],
-                    "exchange_type": exchange.exchange_type.value,
-                    "location": canonical_location,
-                    "public": exchange.is_public,
-                    "witnesses": exchange.witnesses,
-                    "resistance_possible": exchange.resistance_possible,
-                    "player_submission": new_submission
-                },
-                importance=exchange.intensity,
-                tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value]
-            )
-            
-            # Log witnesses if present
-            if exchange.is_public and exchange.witnesses:
-                for witness_id in exchange.witnesses:
-                    await log_canonical_event(
-                        canonical_ctx, conn,
-                        f"NPC {witness_id} witnessed power exchange between {npc['npc_name']} and player",
-                        tags=[f"npc_{witness_id}", "witness", "power_exchange", f"location_{canonical_location}"],
-                        significance=5
-                    )
-            
-            # Track cumulative power dynamics
-            power_history = await conn.fetchval("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id = $1 AND conversation_id = $2 AND key = 'PowerExchangeCount'
-            """, context.user_id, context.conversation_id)
-            
-            exchange_count = int(power_history) if power_history else 0
-            exchange_count += 1
-            
-            await update_current_roleplay(
-                canonical_ctx, conn,
-                'PowerExchangeCount',
-                str(exchange_count)
-            )
-            
-            # Track power exchange patterns if multiple with same NPC
-            npc_exchanges = await conn.fetchval("""
-                SELECT COUNT(*) FROM CanonicalEvents
-                WHERE user_id = $1 AND conversation_id = $2
-                AND $3 = ANY(tags) AND 'power_exchange' = ANY(tags)
-            """, context.user_id, context.conversation_id, f"npc_{exchange.initiator_npc_id}")
-            
-            if npc_exchanges >= 3:
-                await log_canonical_event(
-                    canonical_ctx, conn,
-                    f"Power dynamic pattern established with {npc['npc_name']} ({npc_exchanges} exchanges)",
-                    tags=["pattern", "power_dynamic", f"npc_{exchange.initiator_npc_id}", "relationship_progression"],
-                    significance=8
-                )
-        
-        # Store in memory as significant event
-        if memory_manager:
-            await memory_manager.add_memory(
-                MemoryAddRequest(
-                    user_id=context.user_id,
-                    conversation_id=context.conversation_id,
-                    content=f"Power exchange with {npc['npc_name']}: {moment}",
-                    memory_type="power_exchange",
-                    importance=min(1.0, 0.7 + exchange.intensity * 0.3),
-                    tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value],
-                    metadata={
-                        "npc_id": str(exchange.initiator_npc_id),
-                        "type": exchange.exchange_type.value,
-                        "intensity": exchange.intensity,
-                        "public": exchange.is_public,
-                        "canonical_significance": significance
-                    }
-                )
-            )
-        
-        # Return JSON string
-        return narration.model_dump_json()
-    
     async def _detect_system_intersections(self):
         """Detect interesting system intersections"""
         self.system_intersections = []
@@ -1238,6 +966,9 @@ async def generate_npc_dialogue(
     player_input: Optional[str] = None
 ) -> str:
     """Generate contextual NPC dialogue with power dynamics awareness."""
+    import uuid
+    call_id = uuid.uuid4().hex[:8]
+    
     # Get the proper contexts
     host = _unwrap_run_ctx(ctx)
     if not (hasattr(host, "user_id") and hasattr(host, "conversation_id")):
@@ -1252,13 +983,25 @@ async def generate_npc_dialogue(
     context = narrator.context  # NarratorContext
     op_ctx = host               # Operational context
     
+    # Get attributes with fallback to operational context
+    governance_active = getattr(context, "governance_active", 
+                                getattr(op_ctx, "governance_active", False))
+    nyx_governance = getattr(context, "nyx_governance", 
+                            getattr(op_ctx, "nyx_governance", None))
+    relationship_manager = getattr(context, "relationship_manager", 
+                                  getattr(op_ctx, "relationship_manager", None))
+    memory_manager = getattr(context, "memory_manager", 
+                            getattr(op_ctx, "memory_manager", None))
+    world_director = getattr(context, "world_director", 
+                            getattr(op_ctx, "world_director", None))
+    
     logger.info(
         "NPC_DIALOGUE[%s]: enter npc_id=%s situation=%r ws_provided=%s ws=%s",
         call_id, npc_id, situation, world_state is not None, _ws_brief(world_state)
     )
 
     # If callers don't pass world_state, fetch it.
-    if world_state is None:
+    if world_state is None and world_director:
         try:
             world_state = await world_director.get_world_state()
             logger.info("NPC_DIALOGUE[%s]: fetched world_state via fallback ws=%s",
@@ -1267,12 +1010,9 @@ async def generate_npc_dialogue(
             logger.warning("NPC_DIALOGUE[%s]: failed to fetch world_state: %s", call_id, e)
             world_state = None
 
-    # Refresh context if player input provided
+    # Safe refresh context if player input provided
     if player_input:
         await _try_refresh_context(player_input, context, op_ctx)
-            await context.refresh_context(player_input)
-        except Exception as e:
-            logger.warning("NPC_DIALOGUE[%s]: refresh_context failed: %s", call_id, e)
 
     # Get NPC details
     async with get_db_connection_context() as conn:
@@ -1300,9 +1040,15 @@ async def generate_npc_dialogue(
 
     # Narrative stage + relationship
     stage = await get_npc_narrative_stage(context.user_id, context.conversation_id, npc_id)
-    relationship_context = await relationship_manager.get_relationship_state(
-        "npc", npc_id, "player", context.user_id
-    )
+    
+    relationship_context = None
+    if relationship_manager:
+        try:
+            relationship_context = await relationship_manager.get_relationship_state(
+                "npc", npc_id, "player", context.user_id
+            )
+        except Exception as e:
+            logger.warning("NPC_DIALOGUE[%s]: could not get relationship state: %s", call_id, e)
 
     # Memory search (best-effort)
     npc_memories = []
@@ -1321,9 +1067,9 @@ async def generate_npc_dialogue(
         except Exception as e:
             logger.warning("NPC_DIALOGUE[%s]: memory search failed: %s", call_id, e)
 
-    # Governance
+    # Governance check using cached variables
     governance_approved = True
-    if governance_active:
+    if governance_active and nyx_governance:
         try:
             approval = await nyx_governance.check_permission(
                 agent_type="narrator",
@@ -1394,7 +1140,7 @@ async def generate_npc_dialogue(
         context_informed=bool(context.current_context and "npcs" in context.current_context),
     )
 
-    # Memory (best-effort)
+    # Memory storage (best-effort) using cached memory_manager
     if memory_manager:
         try:
             await memory_manager.add_memory(
@@ -1417,91 +1163,277 @@ async def generate_npc_dialogue(
     )
     return dialogue_obj.model_dump_json()
 
-@function_tool
-async def narrate_power_exchange(
-    ctx,
-    exchange: PowerExchange,
-    world_state: WorldState
-) -> str:
-    """Generate narration for a power exchange moment with Nyx tracking and memory."""
-    context = ctx.context
-    
-    # Refresh context for power exchange
-    await context.refresh_context(input_text=f"Power exchange: {exchange.exchange_type.value}")
-    
-    # Get NPC details
-    async with get_db_connection_context() as conn:
-        npc = await conn.fetchrow("""
-            SELECT npc_name, dominance, personality_traits
-            FROM NPCStats
-            WHERE npc_id = $1
-        """, exchange.initiator_npc_id)
-    
-    # Track with Nyx governance if active
-    governance_tracking = []
-    if governance_active and nyx_governance:
-        try:
-            tracking_data = await nyx_governance.track_power_exchange(
-                npc_id=exchange.initiator_npc_id,
-                exchange_type=exchange.exchange_type.value,
-                intensity=exchange.intensity,
-                timestamp=datetime.now(timezone.utc)
-            )
-            governance_tracking = [
-                KeyValue(key=k, value=str(v)) for k, v in tracking_data.items()
-            ] if tracking_data else []
-        except Exception as e:
-            logger.warning(f"Could not track power exchange with governance: {e}")
-    
-    # Get relationship state
-    rel_state = await relationship_manager.get_relationship_state(
-        'npc', exchange.initiator_npc_id, 'player', context.user_id
-    )
-    
-    # Generate narration components
-    setup = await _generate_power_moment_setup(context, exchange, npc, world_state)
-    moment = await _generate_power_moment_description(context, exchange, npc)
-    aftermath = await _generate_power_moment_aftermath(context, exchange, world_state.relationship_dynamics)
-    player_feelings = await _generate_player_feelings(context, exchange, world_state.relationship_dynamics)
-    
-    # Generate response options
-    options = await _generate_power_response_options(
-        context, exchange, npc['dominance'], rel_state
-    )
-    
-    # Calculate potential consequences
-    consequences = await _calculate_power_consequences(context, exchange, world_state)
-    
-    narration = PowerMomentNarration(
-        setup=setup,
-        moment=moment,
-        aftermath=aftermath,
-        player_feelings=player_feelings,
-        options_presentation=options,
-        potential_consequences=consequences,
-        governance_tracking=governance_tracking
-    )
-    
-    # Store in memory as significant event
-    if memory_manager:
-        await memory_manager.add_memory(
-            MemoryAddRequest(
-                user_id=context.user_id,
-                conversation_id=context.conversation_id,
-                content=f"Power exchange with {npc['npc_name']}: {moment}",
-                memory_type="power_exchange",
-                importance=0.9,
-                tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value],
-                metadata={
-                    "npc_id": str(exchange.initiator_npc_id),
-                    "type": exchange.exchange_type.value,
-                    "intensity": exchange.intensity
-                }
-            )
+    @function_tool
+    async def narrate_power_exchange(
+        ctx,
+        exchange: PowerExchange,
+        world_state: WorldState
+    ) -> str:
+        """Generate narration for a power exchange moment with Nyx tracking, memory, and canonical consistency."""
+        context = ctx.context
+        
+        # Import canon functions
+        from lore.core.canon import (
+            ensure_canonical_context,
+            log_canonical_event,
+            find_or_create_npc,
+            find_or_create_location,
+            find_or_create_historical_event,
+            update_current_roleplay,
+            create_journal_entry,
+            find_or_create_social_link
         )
-    
-    # Return JSON string
-    return narration.model_dump_json()
+        
+        # Create canonical context
+        canonical_ctx = ensure_canonical_context({
+            'user_id': context.user_id,
+            'conversation_id': context.conversation_id
+        })
+        
+        # Refresh context for power exchange
+        await _try_refresh_context(f"Power exchange: {exchange.exchange_type.value}", context)
+        
+        # Get NPC details and ensure canonical existence
+        async with get_db_connection_context() as conn:
+            # First ensure NPC exists canonically
+            npc = await conn.fetchrow("""
+                SELECT npc_id, npc_name, dominance, personality_traits, current_location
+                FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, exchange.initiator_npc_id, context.user_id, context.conversation_id)
+            
+            if not npc:
+                # Create NPC canonically if doesn't exist
+                canonical_npc_id = await find_or_create_npc(
+                    canonical_ctx, conn,
+                    npc_name=f"Dominant_{exchange.initiator_npc_id}",
+                    role="dominant",
+                    dominance=80,  # High dominance for power exchange initiator
+                    personality_traits=["commanding", "confident", "observant"]
+                )
+                
+                # Re-fetch the created NPC
+                npc = await conn.fetchrow("""
+                    SELECT npc_id, npc_name, dominance, personality_traits, current_location
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, canonical_npc_id, context.user_id, context.conversation_id)
+            
+            # Ensure location exists
+            location = world_state.current_location if hasattr(world_state, 'current_location') else "private_space"
+            canonical_location = await find_or_create_location(
+                canonical_ctx, conn,
+                location_name=location,
+                description=f"The space where power dynamics shift",
+                location_type="intimate" if not exchange.is_public else "public",
+                cultural_significance="high" if exchange.intensity > 0.7 else "moderate"
+            )
+            
+            # Ensure social link exists and is updated
+            link_id = await find_or_create_social_link(
+                canonical_ctx, conn,
+                entity1_type='npc',
+                entity1_id=exchange.initiator_npc_id,
+                entity2_type='player',
+                entity2_id=context.user_id,
+                link_type='power_dynamic',
+                link_level=int(exchange.intensity * 100)
+            )
+        
+        # Track with Nyx governance if active
+        governance_tracking = []
+        if governance_active and nyx_governance:
+            try:
+                tracking_data = await nyx_governance.track_power_exchange(
+                    npc_id=exchange.initiator_npc_id,
+                    exchange_type=exchange.exchange_type.value,
+                    intensity=exchange.intensity,
+                    timestamp=datetime.now(timezone.utc)
+                )
+                governance_tracking = [
+                    KeyValue(key=k, value=str(v)) for k, v in tracking_data.items()
+                ] if tracking_data else []
+            except Exception as e:
+                logger.warning(f"Could not track power exchange with governance: {e}")
+        
+        # Get relationship state
+        rel_state = await relationship_manager.get_relationship_state(
+            'npc', exchange.initiator_npc_id, 'player', context.user_id
+        )
+        
+        # Generate narration components
+        setup = await _generate_power_moment_setup(context, exchange, npc, world_state)
+        moment = await _generate_power_moment_description(context, exchange, npc)
+        aftermath = await _generate_power_moment_aftermath(context, exchange, world_state.relationship_dynamics)
+        player_feelings = await _generate_player_feelings(context, exchange, world_state.relationship_dynamics)
+        
+        # Generate response options
+        options = await _generate_power_response_options(
+            context, exchange, npc['dominance'], rel_state
+        )
+        
+        # Calculate potential consequences
+        consequences = await _calculate_power_consequences(context, exchange, world_state)
+        
+        narration = PowerMomentNarration(
+            setup=setup,
+            moment=moment,
+            aftermath=aftermath,
+            player_feelings=player_feelings,
+            options_presentation=options,
+            potential_consequences=consequences,
+            governance_tracking=governance_tracking
+        )
+        
+        # Store power exchange canonically with full context
+        async with get_db_connection_context() as conn:
+            # Calculate significance based on multiple factors
+            base_significance = 7  # Power exchanges are always significant
+            if exchange.intensity > 0.8:
+                base_significance += 2
+            elif exchange.intensity > 0.6:
+                base_significance += 1
+            
+            if exchange.exchange_type in [PowerDynamicType.INTIMATE_COMMAND, PowerDynamicType.PUBLIC_DISPLAY]:
+                base_significance += 1
+            
+            significance = min(base_significance, 10)
+            
+            # Log the main power exchange event
+            await log_canonical_event(
+                canonical_ctx, conn,
+                f"Power exchange: {npc['npc_name']} exercised {exchange.exchange_type.value} over player (intensity: {exchange.intensity:.2f})",
+                tags=[
+                    "power_exchange",
+                    "dynamics",
+                    f"npc_{exchange.initiator_npc_id}",
+                    exchange.exchange_type.value.replace("_", "-").lower(),
+                    f"location_{canonical_location}",
+                    "public" if exchange.is_public else "private"
+                ] + ([f"witness_{w}" for w in exchange.witnesses] if exchange.witnesses else []),
+                significance=significance
+            )
+            
+            # Update CurrentRoleplay to track power dynamics state
+            current_submission = world_state.relationship_dynamics.player_submission_level if hasattr(world_state, 'relationship_dynamics') else 0.5
+            new_submission = min(1.0, current_submission + (exchange.intensity * 0.1))
+            
+            await update_current_roleplay(
+                canonical_ctx, conn,
+                'PlayerSubmissionLevel',
+                str(new_submission)
+            )
+            
+            await update_current_roleplay(
+                canonical_ctx, conn,
+                'LastPowerExchange',
+                f"{npc['npc_name']}:{exchange.exchange_type.value}:{exchange.intensity}"
+            )
+            
+            # Create historical event for major power exchanges
+            if significance >= 8:
+                event_id = await find_or_create_historical_event(
+                    canonical_ctx, conn,
+                    event_name=f"Significant power exchange with {npc['npc_name']}",
+                    description=f"{setup} {moment} {aftermath}",
+                    date_description="Present moment",
+                    event_type="power_dynamic",
+                    significance=significance,
+                    involved_entities=[f"npc_{exchange.initiator_npc_id}", "player"],
+                    location=canonical_location,
+                    consequences=[f"submission_increased:{(exchange.intensity * 0.1):.2f}"],
+                    disputed_facts=["The exact nature of control"] if exchange.resistance_possible else []
+                )
+            
+            # Create journal entry from player's perspective
+            journal_text = f"{moment}\n\nFeeling: {player_feelings}"
+            if options:
+                journal_text += f"\n\nOptions considered: {', '.join(options[:2])}"
+            
+            await create_journal_entry(
+                canonical_ctx, conn,
+                entry_type="power_exchange",
+                entry_text=journal_text,
+                revelation_types="power_dynamic",
+                narrative_moment=True,
+                fantasy_flag=exchange.exchange_type == PowerDynamicType.INTIMATE_COMMAND,
+                intensity_level=int(exchange.intensity * 10),
+                entry_metadata={
+                    "npc_id": exchange.initiator_npc_id,
+                    "npc_name": npc['npc_name'],
+                    "exchange_type": exchange.exchange_type.value,
+                    "location": canonical_location,
+                    "public": exchange.is_public,
+                    "witnesses": exchange.witnesses,
+                    "resistance_possible": exchange.resistance_possible,
+                    "player_submission": new_submission
+                },
+                importance=exchange.intensity,
+                tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value]
+            )
+            
+            # Log witnesses if present
+            if exchange.is_public and exchange.witnesses:
+                for witness_id in exchange.witnesses:
+                    await log_canonical_event(
+                        canonical_ctx, conn,
+                        f"NPC {witness_id} witnessed power exchange between {npc['npc_name']} and player",
+                        tags=[f"npc_{witness_id}", "witness", "power_exchange", f"location_{canonical_location}"],
+                        significance=5
+                    )
+            
+            # Track cumulative power dynamics
+            power_history = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'PowerExchangeCount'
+            """, context.user_id, context.conversation_id)
+            
+            exchange_count = int(power_history) if power_history else 0
+            exchange_count += 1
+            
+            await update_current_roleplay(
+                canonical_ctx, conn,
+                'PowerExchangeCount',
+                str(exchange_count)
+            )
+            
+            # Track power exchange patterns if multiple with same NPC
+            npc_exchanges = await conn.fetchval("""
+                SELECT COUNT(*) FROM CanonicalEvents
+                WHERE user_id = $1 AND conversation_id = $2
+                AND $3 = ANY(tags) AND 'power_exchange' = ANY(tags)
+            """, context.user_id, context.conversation_id, f"npc_{exchange.initiator_npc_id}")
+            
+            if npc_exchanges >= 3:
+                await log_canonical_event(
+                    canonical_ctx, conn,
+                    f"Power dynamic pattern established with {npc['npc_name']} ({npc_exchanges} exchanges)",
+                    tags=["pattern", "power_dynamic", f"npc_{exchange.initiator_npc_id}", "relationship_progression"],
+                    significance=8
+                )
+        
+        # Store in memory as significant event
+        if memory_manager:
+            await memory_manager.add_memory(
+                MemoryAddRequest(
+                    user_id=context.user_id,
+                    conversation_id=context.conversation_id,
+                    content=f"Power exchange with {npc['npc_name']}: {moment}",
+                    memory_type="power_exchange",
+                    importance=min(1.0, 0.7 + exchange.intensity * 0.3),
+                    tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value],
+                    metadata={
+                        "npc_id": str(exchange.initiator_npc_id),
+                        "type": exchange.exchange_type.value,
+                        "intensity": exchange.intensity,
+                        "public": exchange.is_public,
+                        "canonical_significance": significance
+                    }
+                )
+            )
+        
+        # Return JSON string
+        return narration.model_dump_json()
 
 @function_tool
 async def narrate_daily_routine(
@@ -2513,12 +2445,19 @@ class SliceOfLifeNarrator:
             "system_triggers": narration.system_triggers if hasattr(narration, 'system_triggers') else [],
             "conflict_triggered": conflict_triggered  # NEW
         }
+        
     async def _process_player_action(self, action: str, world_state: Any, affected_npcs: List[int]) -> Dict[str, Any]:
         """Process player action for system consequences"""
         context = self.context
         
+        # Get attributes with fallback to operational context
+        # (Since this is a class method, we need to check both contexts)
+        governance_active = getattr(context, "governance_active", False)
+        nyx_governance = getattr(context, "nyx_governance", None)
+        memory_manager = getattr(context, "memory_manager", None)
+        
         # Check governance approval
-        if governance_active:
+        if governance_active and nyx_governance:
             try:
                 approval = await nyx_governance.check_permission(
                     agent_type="narrator",
@@ -2533,8 +2472,8 @@ class SliceOfLifeNarrator:
                         "dynamic_shift": None,
                         "governance_blocked": True
                     }
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Governance check failed for player action: {e}")
         
         # Generate action acknowledgment
         acknowledgment = await _acknowledge_player_action(context, action)
@@ -2556,24 +2495,29 @@ class SliceOfLifeNarrator:
         
         # Determine if this shifts any dynamics
         dynamic_shift = None
-        if world_state.relationship_dynamics.player_submission_level > 0.5:
-            dynamic_shift = await _check_for_dynamic_shift(
-                context, action, world_state.relationship_dynamics
-            )
-        
-        # Record action in memory
-        if memory_manager:
-            await memory_manager.add_memory(
-                MemoryAddRequest(
-                    user_id=context.user_id,
-                    conversation_id=context.conversation_id,
-                    content=f"Player action: {action}",
-                    memory_type="decision",
-                    importance=0.7,
-                    tags=["player_action"],
-                    metadata={"affected_npcs": affected_npcs or []}
+        if hasattr(world_state, 'relationship_dynamics'):
+            dynamics = world_state.relationship_dynamics
+            if hasattr(dynamics, 'player_submission_level') and dynamics.player_submission_level > 0.5:
+                dynamic_shift = await _check_for_dynamic_shift(
+                    context, action, dynamics
                 )
-            )
+        
+        # Record action in memory using cached memory_manager
+        if memory_manager:
+            try:
+                await memory_manager.add_memory(
+                    MemoryAddRequest(
+                        user_id=context.user_id,
+                        conversation_id=context.conversation_id,
+                        content=f"Player action: {action}",
+                        memory_type="decision",
+                        importance=0.7,
+                        tags=["player_action"],
+                        metadata={"affected_npcs": affected_npcs or []}
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Failed to store player action in memory: {e}")
         
         return {
             "acknowledgment": acknowledgment,
@@ -2581,7 +2525,7 @@ class SliceOfLifeNarrator:
             "npc_reactions": npc_reactions,
             "dynamic_shift": dynamic_shift,
             "maintains_atmosphere": True,
-            "governance_approved": True
+            "governance_approved": not (governance_active and nyx_governance and not approval.get("approved", True)) if 'approval' in locals() else True
         }
     
     async def narrate_time_transition(self, old_time: str, new_time: str) -> str:
