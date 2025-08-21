@@ -1258,11 +1258,32 @@ async def generate_universal_updates_impl(
     """Implementation of generate universal updates from the narrative using the Universal Updater."""
     from logic.universal_updater_agent import process_universal_update
 
-    app_ctx = _unwrap_tool_ctx(ctx)
+    # Handle both RunContextWrapper and direct NyxContext
+    if hasattr(ctx, 'context'):
+        # This is a RunContextWrapper, get the actual context
+        app_ctx = ctx.context
+    else:
+        # This might be a direct NyxContext or other context
+        app_ctx = ctx
 
+    # Try to get user_id and conversation_id
     user_id = getattr(app_ctx, "user_id", None)
     convo_id = getattr(app_ctx, "conversation_id", None)
+    
+    # If still not found, try unwrapping further (fallback)
+    if (user_id is None or convo_id is None) and hasattr(app_ctx, 'context'):
+        inner_ctx = app_ctx.context
+        user_id = getattr(inner_ctx, "user_id", user_id)
+        convo_id = getattr(inner_ctx, "conversation_id", convo_id)
+    
     if user_id is None or convo_id is None:
+        # Log more details for debugging
+        logger.error(
+            "generate_universal_updates_impl: Could not find user_id/conversation_id. "
+            f"ctx type: {type(ctx).__name__}, "
+            f"app_ctx type: {type(app_ctx).__name__}, "
+            f"has context attr: {hasattr(app_ctx, 'context')}"
+        )
         return UniversalUpdateResult(
             success=False,
             updates_generated=False,
@@ -1283,18 +1304,18 @@ async def generate_universal_updates_impl(
         elif not isinstance(update_result, dict):
             update_result = {"success": bool(update_result), "details": None}
 
+        # Update context if possible
         ctx_map, writable = _ensure_context_map(app_ctx)
         if writable and "universal_updates" not in ctx_map:
             ctx_map["universal_updates"] = {}
 
-        # Merge details if present (handle list/dict/pydantic)
+        # Merge details if present
         details = update_result.get("details")
         if details:
             if hasattr(details, "model_dump"):
                 details = details.model_dump()
 
             if isinstance(details, list):
-                # try helper, otherwise best-effort kv conversion
                 try:
                     from logic.universal_updater_agent import array_to_dict
                     details_dict = array_to_dict(details)
