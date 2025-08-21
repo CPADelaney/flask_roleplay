@@ -418,7 +418,6 @@ class ReconsolidationManager:
                     {"role": "system", "content": "You simulate human memory reconsolidation."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=500
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
