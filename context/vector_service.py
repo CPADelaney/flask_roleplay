@@ -151,6 +151,13 @@ class VectorService:
         self.batch_queue = asyncio.Queue()
         self.batch_task = None
         self.enabled = False  # Will be set during initialization
+
+        self.collections = {
+            "npc": "npc_embeddings",
+            "location": "location_embeddings", 
+            "memory": "memory_embeddings",
+            "narrative": "narrative_embeddings"
+        }
     
     async def initialize(self):
         """Initialize the vector service (async)"""
@@ -392,7 +399,7 @@ class VectorService:
                         elif operation == "add_memory":
                             result = await self._add_memory(item["data"])
                         elif operation == "add_entity":
-                            result = await self._add_entity(item["data"])
+                            result = await self.add_entity(item["data"])
                         else:
                             result = {"error": f"Unknown operation: {operation}"}
                         
@@ -597,6 +604,210 @@ class VectorService:
             ids=[f"{entity_type}_{entity_id}"],
             vectors=[embedding],
             metadata=[full_metadata]
+        )
+    
+    async def search_entities(
+        self,
+        query_text: str,
+        entity_types: Optional[List[str]] = None,
+        top_k: int = 10,
+        filter_dict: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Public method to search for entities by query text.
+        
+        Args:
+            query_text: Query text for search
+            entity_types: List of entity types to search (e.g., ["memory", "npc"])
+            top_k: Number of results to return
+            filter_dict: Optional filter conditions
+            
+        Returns:
+            List of search results with metadata
+        """
+        if not await self.is_initialized():
+            return []
+        
+        # Get embedding for query
+        query_embedding = await self._get_embedding(query_text)
+        
+        # Use entity manager to perform the search
+        if self.entity_manager:
+            return await self.entity_manager.search_entities(
+                query_text=query_text,
+                query_embedding=query_embedding,
+                entity_types=entity_types,
+                top_k=top_k,
+                filter_dict=filter_dict
+            )
+        
+        return []
+    
+    async def add_entity(
+        self,
+        entity_type: str,
+        entity_id: str,
+        content: str,
+        embedding: Optional[List[float]] = None,
+        **metadata
+    ) -> bool:
+        """
+        Public method to add an entity to the vector database.
+        
+        Args:
+            entity_type: Type of entity (npc, location, memory, narrative)
+            entity_id: Unique ID for the entity
+            content: Text content for the entity
+            embedding: Optional pre-computed embedding
+            **metadata: Additional metadata for the entity
+            
+        Returns:
+            bool: Success status
+        """
+        if not await self.is_initialized():
+            return False
+        
+        future = asyncio.get_event_loop().create_future()
+        data = {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "content": content,
+            "embedding": embedding,
+            **metadata
+        }
+        
+        await self.batch_queue.put({
+            "operation": "add_entity",
+            "data": data,
+            "future": future
+        })
+        
+        try:
+            return await future
+        except Exception as e:
+            logger.error(f"Error in add_entity: {e}")
+            return False
+    
+    async def add_npc(
+        self,
+        npc_id: str,
+        npc_name: str,
+        description: str = "",
+        personality: str = "",
+        location: Optional[str] = None,
+        embedding: Optional[List[float]] = None,
+        **extra_metadata
+    ) -> bool:
+        """
+        Public method to add an NPC to the vector database.
+        
+        Args:
+            npc_id: Unique identifier for the NPC
+            npc_name: Name of the NPC
+            description: Physical description
+            personality: Personality traits
+            location: Current location
+            embedding: Optional pre-computed embedding
+            **extra_metadata: Additional metadata fields
+            
+        Returns:
+            bool: Success status
+        """
+        if not await self.is_initialized():
+            return False
+        
+        # Create content for embedding if not provided
+        content = f"NPC: {npc_name}. {description} {personality}"
+        
+        return await self.add_entity(
+            entity_type="npc",
+            entity_id=npc_id,
+            content=content,
+            embedding=embedding,
+            npc_name=npc_name,
+            description=description,
+            personality=personality,
+            location=location,
+            **extra_metadata
+        )
+    
+    async def add_location(
+        self,
+        location_id: str,
+        location_name: str,
+        description: str = "",
+        location_type: Optional[str] = None,
+        connected_locations: Optional[List[str]] = None,
+        embedding: Optional[List[float]] = None,
+        **extra_metadata
+    ) -> bool:
+        """
+        Public method to add a location to the vector database.
+        
+        Args:
+            location_id: Unique identifier for the location
+            location_name: Name of the location
+            description: Location description
+            location_type: Type of location (city, dungeon, etc.)
+            connected_locations: List of connected location IDs
+            embedding: Optional pre-computed embedding
+            **extra_metadata: Additional metadata fields
+            
+        Returns:
+            bool: Success status
+        """
+        if not await self.is_initialized():
+            return False
+        
+        # Create content for embedding if not provided
+        content = f"Location: {location_name}. {description}"
+        
+        return await self.add_entity(
+            entity_type="location",
+            entity_id=location_id,
+            content=content,
+            embedding=embedding,
+            location_name=location_name,
+            description=description,
+            location_type=location_type,
+            connected_locations=connected_locations or [],
+            **extra_metadata
+        )
+    
+    async def add_narrative(
+        self,
+        narrative_id: str,
+        content: str,
+        narrative_type: str = "story",
+        importance: float = 0.5,
+        embedding: Optional[List[float]] = None,
+        **extra_metadata
+    ) -> bool:
+        """
+        Public method to add a narrative element to the vector database.
+        
+        Args:
+            narrative_id: Unique identifier for the narrative
+            content: Narrative content text
+            narrative_type: Type of narrative (story, quest, etc.)
+            importance: Importance score (0-1)
+            embedding: Optional pre-computed embedding
+            **extra_metadata: Additional metadata fields
+            
+        Returns:
+            bool: Success status
+        """
+        if not await self.is_initialized():
+            return False
+        
+        return await self.add_entity(
+            entity_type="narrative",
+            entity_id=narrative_id,
+            content=content,
+            embedding=embedding,
+            narrative_type=narrative_type,
+            importance=importance,
+            **extra_metadata
         )
     
     async def _get_context_for_input(
