@@ -1472,8 +1472,6 @@ Output as JSON with choices and consequences."""
         response = await generate_text_completion(
             system_prompt="You are creating addiction mechanics that drive narrative tension.",
             user_prompt=prompt,
-            temperature=0.8,
-            max_tokens=800
         )
 
         try:
@@ -1570,8 +1568,6 @@ Output as JSON with symbolic imagery and potential insights gained."""
         dream_response = await generate_text_completion(
             system_prompt="You are a dream sequence director creating symbolic narratives.",
             user_prompt=prompt,
-            temperature=0.9,
-            max_tokens=1000
         )
         
         try:
@@ -1635,8 +1631,6 @@ Output as JSON with introspective narrative."""
         response = await generate_text_completion(
             system_prompt="You are creating moments of psychological clarity and self-awareness.",
             user_prompt=prompt,
-            temperature=0.7,
-            max_tokens=800
         )
         
         try:
@@ -2285,8 +2279,6 @@ Output as narrative insight, not JSON."""
                 result.narrative_analysis = await generate_text_completion(
                     system_prompt="You are a narrative analyst finding emergent stories in complex patterns.",
                     user_prompt=analysis_prompt,
-                    temperature=0.6,
-                    max_tokens=400
                 )
             except Exception as e:
                 logger.error(f"Error generating narrative analysis: {e}")
@@ -2407,7 +2399,7 @@ def create_complete_world_director():
             instructions=agent_instructions,
             tools=all_tools,
             model="gpt-5-nano",
-            model_settings=ModelSettings(temperature=0.7, max_tokens=2048)
+            model_settings=ModelSettings()
         )
         return agent
     except Exception as e:
