@@ -409,7 +409,7 @@ from context.context_service import (
     get_comprehensive_context,
     ContextService
 )
-from memory_manager import (
+from context.memory_manager import (
     get_memory_manager,
     MemoryManager,
     MemoryAddRequest,
