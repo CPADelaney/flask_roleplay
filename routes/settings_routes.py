@@ -202,8 +202,6 @@ async def generate_mega_setting_logic() -> dict[str, Any]:
         response   = gpt_client.chat.completions.create(
             model="gpt-5-nano",
             messages=[{"role": "system", "content": fusion_prompt}],
-            temperature=0.7,
-            max_tokens=300,
         )
         unified_description = response.choices[0].message.content.strip()
     except Exception as e:
