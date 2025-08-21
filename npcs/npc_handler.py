@@ -375,8 +375,6 @@ Include subtle power dynamics if appropriate based on their dominance levels."""
                 client,
                 model="gpt-5-nano",
                 messages=messages,
-                temperature=temperature,
-                max_tokens=300
             )
             
             interaction_text = response.choices[0].message.content
@@ -483,8 +481,6 @@ Include subtle psychological elements if appropriate."""
                 client,
                 model="gpt-5-nano",
                 messages=messages,
-                temperature=temperature,
-                max_tokens=100
             )
             
             return response.choices[0].message.content.strip()
