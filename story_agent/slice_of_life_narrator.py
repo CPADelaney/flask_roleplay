@@ -532,6 +532,74 @@ class NarratorContext:
         if self._conflict_synthesizer is None:
             self._conflict_synthesizer = await get_synthesizer(self.user_id, self.conversation_id)
     
+    async def refresh_context(self, input_text: Optional[str] = None):
+        """Refresh context with latest data from all systems"""
+        try:
+            # Update world state
+            if self._world_director:
+                self.current_world_state = await self._world_director.get_world_state()
+            
+            # Update player stats
+            try:
+                self.player_stats = await get_all_player_stats(self.user_id, self.conversation_id)
+            except Exception as e:
+                logger.debug(f"Stats update failed during refresh: {e}")
+            
+            # Update vitals
+            try:
+                self.current_vitals = await get_current_vitals(self.user_id, self.conversation_id)
+            except Exception as e:
+                logger.debug(f"Vitals update failed during refresh: {e}")
+            
+            # Update addictions
+            try:
+                self.active_addictions = await get_addiction_status(self.user_id, self.conversation_id)
+            except Exception as e:
+                logger.debug(f"Addiction status update failed during refresh: {e}")
+            
+            # Get recent memories if memory manager exists
+            if self._memory_manager:
+                try:
+                    memory_result = await self._memory_manager.search_memories(
+                        MemorySearchRequest(
+                            query_text=input_text or "recent",
+                            memory_types=["scene", "interaction", "npc"],
+                            limit=10,
+                            user_id=self.user_id,
+                            conversation_id=self.conversation_id
+                        )
+                    )
+                    self.active_memories = getattr(memory_result, "memories", []) or []
+                except Exception as e:
+                    logger.debug(f"Memory search failed during refresh: {e}")
+            
+            # Update conflicts if synthesizer exists
+            if self._conflict_synthesizer:
+                try:
+                    conflict_state = await self._conflict_synthesizer.get_active_conflicts()
+                    self.active_conflicts = conflict_state.get('conflicts', [])
+                    self.conflict_manifestations = conflict_state.get('manifestations', [])
+                except Exception as e:
+                    logger.debug(f"Conflict update failed during refresh: {e}")
+            
+            # Detect system intersections
+            await self._detect_system_intersections()
+            
+            # Update current context
+            if self._context_service:
+                try:
+                    comprehensive = await get_comprehensive_context(
+                        self.user_id, 
+                        self.conversation_id,
+                        input_text
+                    )
+                    self.current_context = comprehensive
+                except Exception as e:
+                    logger.debug(f"Context service update failed: {e}")
+            
+        except Exception as e:
+            logger.warning(f"Error during context refresh: {e}")
+            # Continue even if refresh partially fails
             
     async def _detect_system_intersections(self):
         """Detect interesting system intersections"""
