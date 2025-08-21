@@ -545,29 +545,33 @@ class NarratorContext:
             except Exception as e:
                 logger.debug(f"Stats update failed during refresh: {e}")
             
+            # Get player name for addiction check
+            player_name = "Chase"  # Default
+            if self.player_stats and isinstance(self.player_stats, dict):
+                player_name = self.player_stats.get('player_name', 'Chase')
+            
             # Update vitals
             try:
                 self.current_vitals = await get_current_vitals(self.user_id, self.conversation_id)
             except Exception as e:
                 logger.debug(f"Vitals update failed during refresh: {e}")
             
-            # Update addictions
+            # Update addictions with player_name
             try:
-                self.active_addictions = await get_addiction_status(self.user_id, self.conversation_id)
+                self.active_addictions = await get_addiction_status(
+                    self.user_id, self.conversation_id, player_name
+                )
             except Exception as e:
                 logger.debug(f"Addiction status update failed during refresh: {e}")
             
             # Get recent memories if memory manager exists
             if self._memory_manager:
                 try:
+                    # Call search_memories directly with parameters
                     memory_result = await self._memory_manager.search_memories(
-                        MemorySearchRequest(
-                            query_text=input_text or "recent",
-                            memory_types=["scene", "interaction", "npc"],
-                            limit=10,
-                            user_id=self.user_id,
-                            conversation_id=self.conversation_id
-                        )
+                        query_text=input_text or "recent",
+                        memory_types=["scene", "interaction", "npc"],
+                        limit=10
                     )
                     self.active_memories = getattr(memory_result, "memories", []) or []
                 except Exception as e:
@@ -576,9 +580,17 @@ class NarratorContext:
             # Update conflicts if synthesizer exists
             if self._conflict_synthesizer:
                 try:
-                    conflict_state = await self._conflict_synthesizer.get_active_conflicts()
-                    self.active_conflicts = conflict_state.get('conflicts', [])
-                    self.conflict_manifestations = conflict_state.get('manifestations', [])
+                    system_state = await self._conflict_synthesizer.get_system_state()
+                    # Extract active conflicts from state
+                    self.active_conflicts = []
+                    conflict_states = system_state.get('conflict_states', {})
+                    for conflict_id, conflict_data in conflict_states.items():
+                        self.active_conflicts.append({
+                            'id': conflict_id,
+                            'type': conflict_data.get('type', 'unknown'),
+                            'participants': conflict_data.get('participants', [])
+                        })
+                    self.conflict_manifestations = []
                 except Exception as e:
                     logger.debug(f"Conflict update failed during refresh: {e}")
             
@@ -599,7 +611,6 @@ class NarratorContext:
             
         except Exception as e:
             logger.warning(f"Error during context refresh: {e}")
-            # Continue even if refresh partially fails
             
     async def _detect_system_intersections(self):
         """Detect interesting system intersections"""
@@ -619,18 +630,19 @@ class NarratorContext:
         except:
             pass
         
-        # Check vitals + rules
+        # Check vitals + rules (FIXED)
         if self.current_vitals:
-            if self.current_vitals.get("fatigue", 0) > 80:
+            # Use attribute access for Pydantic model
+            if hasattr(self.current_vitals, 'fatigue') and self.current_vitals.fatigue > 80:
                 self.system_intersections.append("extreme_fatigue")
-            if self.current_vitals.get("hunger", 100) < 20:
+            if hasattr(self.current_vitals, 'hunger') and self.current_vitals.hunger < 20:
                 self.system_intersections.append("severe_hunger")
         
         # Check memory patterns
         if self.active_memories and len(self.active_memories) > 3:
             self.system_intersections.append("memory_accumulation")
         
-        # NEW: Check conflict intersections
+        # Check conflict intersections
         if self.active_conflicts:
             self.system_intersections.append(f"active_conflicts:{len(self.active_conflicts)}")
             
@@ -832,10 +844,11 @@ async def narrate_slice_of_life_scene(
     governance_notes = None
     if governance_active:
         try:
-            approval = await nyx_governance.check_permission(
+            approval = await nyx_governance.check_action_permission(
                 agent_type="narrator",
+                agent_id="slice_of_life_narrator",
                 action_type="narrate_scene",
-                context={
+                action_details={
                     "scene": _to_serializable(scene),
                     "scene_type": payload.scene_type,
                     "has_conflicts": len(conflict_influences) > 0
