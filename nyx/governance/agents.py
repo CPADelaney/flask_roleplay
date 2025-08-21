@@ -60,13 +60,12 @@ class AgentGovernanceMixin:
             True if the agent is registered, False otherwise
         """
         if agent_type:
-            # Check specific agent type
-            return (agent_type in self.registered_agents and 
-                    agent_id in self.registered_agents.get(agent_type, {}))
+            # Fast check with set
+            return (agent_type, agent_id) in self._registered_agent_keys
         else:
             # Check all agent types
-            for agents_dict in self.registered_agents.values():
-                if agent_id in agents_dict:
+            for check_type in self.registered_agents.keys():
+                if (check_type, agent_id) in self._registered_agent_keys:
                     return True
             return False
     
