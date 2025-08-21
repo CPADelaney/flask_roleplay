@@ -615,12 +615,12 @@ async def insert_or_update_game_rules():
         },
         {
             "rule_name": "NPC Exploitation: Low Resilience",
-            "condition": "Mental Resilience < 30",
+            "condition": "Mental_Resilience < 30",
             "effect": "NPC Cruelty intensifies to break you further"
         },
         {
             "rule_name": "NPC Exploitation: Low Endurance",
-            "condition": "Physical Endurance < 30",
+            "condition": "Physical_Endurance < 30",
             "effect": "Collaborative physical punishments among NPCs"
         }
     ]
