@@ -203,7 +203,7 @@ class SceneFocus(Enum):
 # Import World Director Models (they should also use AgentSafeModel)
 # ===============================================================================
 
-from story_agent.world_director_agent import (
+from story_agent.world_simulation_models import (
     WorldState, WorldMood, TimeOfDay, ActivityType, PowerDynamicType
 )
 
