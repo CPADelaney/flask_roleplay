@@ -251,8 +251,6 @@ Generate appropriate actions for this NPC."""
                 client,
                 model="gpt-5-nano",
                 messages=messages,
-                temperature=temperature,
-                max_tokens=1000,
                 response_format={"type": "json_object"}  # Force JSON response
             )
 
@@ -1119,8 +1117,6 @@ Write a brief internal narrative for this decision."""
                 client,
                 model="gpt-5-nano",
                 messages=messages,
-                temperature=temperature + 0.1,  # Slightly higher for more creative narratives
-                max_tokens=150
             )
             
             narrative = response.choices[0].message.content
