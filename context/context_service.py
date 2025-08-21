@@ -1134,7 +1134,7 @@ async def get_comprehensive_context(
     # Add relationship overview
     from logic.dynamic_relationships import OptimizedRelationshipManager
     
-    rel_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+    rel_manager = OptimizedRelationshipManager(user_id, conversation_id)
     
     # Get key relationships
     key_relationships = []
