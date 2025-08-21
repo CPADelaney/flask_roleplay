@@ -738,8 +738,12 @@ async def create_preset_aware_nyx_agent(
 
 async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
     """Standalone image generation decision without tool context"""
-    from .nyx_agent.models import ImageGenerationDecision
-    from .nyx_agent.utils import _score_scene_text, _build_image_prompt
+    from .models import ImageGenerationDecision
+    from .utils import _score_scene_text, _build_image_prompt
+    
+    # Ensure we have the actual NyxContext, not a wrapper
+    if hasattr(ctx, 'context'):
+        ctx = ctx.context
     
     score = _score_scene_text(scene_text)
     recent_images = ctx.current_context.get("recent_image_count", 0)
