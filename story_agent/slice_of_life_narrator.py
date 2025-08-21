@@ -107,6 +107,24 @@ def _unwrap_run_ctx(x, max_hops: int = 4):
         base = nxt
     return base
 
+async def _try_refresh_context(reason: str, *candidates):
+    """
+    Try to call refresh_context on the first candidate that has it.
+    Returns True if successful, False otherwise.
+    """
+    for c in candidates:
+        if c is None:
+            continue
+        fn = getattr(c, "refresh_context", None)
+        if callable(fn):
+            try:
+                await fn(reason)
+                return True
+            except Exception as e:
+                logger.debug(f"refresh_context failed on {type(c).__name__}: {e}")
+    return False
+
+
 
 # ===============================================================================
 # CRITICAL FIX: Agent-Safe Base Model
@@ -391,7 +409,7 @@ from context.context_service import (
     get_comprehensive_context,
     ContextService
 )
-from context.memory_manager import (
+from memory_manager import (
     get_memory_manager,
     MemoryManager,
     MemoryAddRequest,
@@ -594,9 +612,9 @@ class NarratorContext:
         
         # Track with Nyx governance if active
         governance_tracking = []
-        if context.governance_active and context.nyx_governance:
+        if governance_active and nyx_governance:
             try:
-                tracking_data = await context.nyx_governance.track_power_exchange(
+                tracking_data = await nyx_governance.track_power_exchange(
                     npc_id=exchange.initiator_npc_id,
                     exchange_type=exchange.exchange_type.value,
                     intensity=exchange.intensity,
@@ -609,7 +627,7 @@ class NarratorContext:
                 logger.warning(f"Could not track power exchange with governance: {e}")
         
         # Get relationship state
-        rel_state = await context.relationship_manager.get_relationship_state(
+        rel_state = await relationship_manager.get_relationship_state(
             'npc', exchange.initiator_npc_id, 'player', context.user_id
         )
         
@@ -765,8 +783,8 @@ class NarratorContext:
                 )
         
         # Store in memory as significant event
-        if context.memory_manager:
-            await context.memory_manager.add_memory(
+        if memory_manager:
+            await memory_manager.add_memory(
                 MemoryAddRequest(
                     user_id=context.user_id,
                     conversation_id=context.conversation_id,
@@ -839,24 +857,50 @@ async def narrate_slice_of_life_scene(
     payload: NarrateSliceOfLifeInput
 ) -> str:
     """Generate narration for a slice-of-life scene with full canonical tracking."""
-
-    # --- robust unwrapping of RunContextWrapper(s) ---
-    host = _unwrap_run_ctx(ctx)                # handles nested wrappers
+    
+    # --- Robust unwrapping of RunContextWrapper(s) ---
+    host = _unwrap_run_ctx(ctx)  # Find the actual host context
     if not (hasattr(host, "user_id") and hasattr(host, "conversation_id")):
-        # As a last-ditch attempt, try unwrapping ctx.context explicitly
+        # Try unwrapping ctx.context explicitly as fallback
         host = _unwrap_run_ctx(getattr(ctx, "context", ctx))
+    
     if not (hasattr(host, "user_id") and hasattr(host, "conversation_id")):
         raise RuntimeError("Could not resolve host context; missing user_id/conversation_id")
 
-    # --- ensure narrator is attached to the *host* context, not the wrapper ---
+    # --- Ensure narrator is attached to the *host* context, not the wrapper ---
     narrator = getattr(host, "slice_of_life_narrator", None)
     if narrator is None:
         narrator = SliceOfLifeNarrator(host.user_id, host.conversation_id)
         await narrator.initialize()
         setattr(host, "slice_of_life_narrator", narrator)
 
-    # This is the per-agent working context you use below
-    context = narrator.context
+    # Work with two contexts:
+    context = narrator.context          # NarratorContext (for narration internals)
+    op_ctx = host                       # Operational context (has refresh_context, etc.)
+
+    # --- SAFE REFRESH: Try narrator context first, then host context ---
+    refresh_reason = payload.player_action or payload.scene_type
+    await _try_refresh_context(refresh_reason, context, op_ctx)
+
+    # --- Get attributes with fallback to operational context ---
+    governance_active = getattr(context, "governance_active", 
+                                getattr(op_ctx, "governance_active", False))
+    nyx_governance = getattr(context, "nyx_governance", 
+                            getattr(op_ctx, "nyx_governance", None))
+    relationship_manager = getattr(context, "relationship_manager", 
+                                  getattr(op_ctx, "relationship_manager", None))
+    memory_manager = getattr(context, "memory_manager", 
+                            getattr(op_ctx, "memory_manager", None))
+    active_conflicts = getattr(context, "active_conflicts", 
+                              getattr(op_ctx, "active_conflicts", []))
+    conflict_manifestations = getattr(context, "conflict_manifestations", 
+                                     getattr(op_ctx, "conflict_manifestations", []))
+    system_intersections = getattr(context, "system_intersections", 
+                                   getattr(op_ctx, "system_intersections", []))
+    active_memories = getattr(context, "active_memories", 
+                             getattr(op_ctx, "active_memories", []))
+    world_director = getattr(context, "world_director", 
+                            getattr(op_ctx, "world_director", None))
 
     # ---------- helpers (local, no imports needed) ----------
     import dataclasses as _dc
@@ -917,7 +961,7 @@ async def narrate_slice_of_life_scene(
         except Exception:
             world_state = None
     if world_state is None:
-        world_state = await context.world_director.get_world_state()
+        world_state = await world_director.get_world_state()
 
     # Synthesize a scene if needed
     if scene is None:
@@ -990,9 +1034,9 @@ async def narrate_slice_of_life_scene(
     # ---------- governance ----------
     governance_approved = True
     governance_notes = None
-    if context.governance_active:
+    if governance_active:
         try:
-            approval = await context.nyx_governance.check_permission(
+            approval = await nyx_governance.check_permission(
                 agent_type="narrator",
                 action_type="narrate_scene",
                 context={
@@ -1010,7 +1054,7 @@ async def narrate_slice_of_life_scene(
     relationship_contexts = {}
     for npc_id in scene.participants:
         try:
-            rel_state = await context.relationship_manager.get_relationship_state(
+            rel_state = await relationship_manager.get_relationship_state(
                 'npc', npc_id, 'player', context.user_id
             )
             relationship_contexts[npc_id] = rel_state
@@ -1157,9 +1201,9 @@ async def narrate_slice_of_life_scene(
                 except Exception as e:
                     logger.warning(f"log_canonical_event (npc {npc_id}) failed: {e}")
 
-    if context.memory_manager:
+    if memory_manager:
         try:
-            await context.memory_manager.add_memory(
+            await memory_manager.add_memory(
                 MemoryAddRequest(
                     user_id=context.user_id,
                     conversation_id=context.conversation_id,
@@ -1190,13 +1234,24 @@ async def generate_npc_dialogue(
     ctx,
     npc_id: int,
     situation: str,
-    world_state: Optional[WorldState] = None,   # optional
+    world_state: Optional[WorldState] = None,
     player_input: Optional[str] = None
 ) -> str:
     """Generate contextual NPC dialogue with power dynamics awareness."""
-    context = ctx.context
-    call_id = uuid.uuid4().hex[:8]
-
+    # Get the proper contexts
+    host = _unwrap_run_ctx(ctx)
+    if not (hasattr(host, "user_id") and hasattr(host, "conversation_id")):
+        host = _unwrap_run_ctx(getattr(ctx, "context", ctx))
+    
+    narrator = getattr(host, "slice_of_life_narrator", None)
+    if narrator is None:
+        narrator = SliceOfLifeNarrator(host.user_id, host.conversation_id)
+        await narrator.initialize()
+        setattr(host, "slice_of_life_narrator", narrator)
+    
+    context = narrator.context  # NarratorContext
+    op_ctx = host               # Operational context
+    
     logger.info(
         "NPC_DIALOGUE[%s]: enter npc_id=%s situation=%r ws_provided=%s ws=%s",
         call_id, npc_id, situation, world_state is not None, _ws_brief(world_state)
@@ -1205,7 +1260,7 @@ async def generate_npc_dialogue(
     # If callers don't pass world_state, fetch it.
     if world_state is None:
         try:
-            world_state = await context.world_director.get_world_state()
+            world_state = await world_director.get_world_state()
             logger.info("NPC_DIALOGUE[%s]: fetched world_state via fallback ws=%s",
                         call_id, _ws_brief(world_state))
         except Exception as e:
@@ -1214,7 +1269,7 @@ async def generate_npc_dialogue(
 
     # Refresh context if player input provided
     if player_input:
-        try:
+        await _try_refresh_context(player_input, context, op_ctx)
             await context.refresh_context(player_input)
         except Exception as e:
             logger.warning("NPC_DIALOGUE[%s]: refresh_context failed: %s", call_id, e)
@@ -1245,15 +1300,15 @@ async def generate_npc_dialogue(
 
     # Narrative stage + relationship
     stage = await get_npc_narrative_stage(context.user_id, context.conversation_id, npc_id)
-    relationship_context = await context.relationship_manager.get_relationship_state(
+    relationship_context = await relationship_manager.get_relationship_state(
         "npc", npc_id, "player", context.user_id
     )
 
     # Memory search (best-effort)
     npc_memories = []
-    if context.memory_manager:
+    if memory_manager:
         try:
-            memory_search_result = await context.memory_manager.search_memories(
+            memory_search_result = await memory_manager.search_memories(
                 MemorySearchRequest(
                     query_text=f"npc_{npc_id} {situation}",
                     memory_types=["dialogue", "interaction", "npc"],
@@ -1268,9 +1323,9 @@ async def generate_npc_dialogue(
 
     # Governance
     governance_approved = True
-    if context.governance_active:
+    if governance_active:
         try:
-            approval = await context.nyx_governance.check_permission(
+            approval = await nyx_governance.check_permission(
                 agent_type="narrator",
                 action_type="npc_dialogue",
                 context={"npc_id": npc_id, "stage": stage.name},
@@ -1340,9 +1395,9 @@ async def generate_npc_dialogue(
     )
 
     # Memory (best-effort)
-    if context.memory_manager:
+    if memory_manager:
         try:
-            await context.memory_manager.add_memory(
+            await memory_manager.add_memory(
                 MemoryAddRequest(
                     user_id=context.user_id,
                     conversation_id=context.conversation_id,
@@ -1384,9 +1439,9 @@ async def narrate_power_exchange(
     
     # Track with Nyx governance if active
     governance_tracking = []
-    if context.governance_active and context.nyx_governance:
+    if governance_active and nyx_governance:
         try:
-            tracking_data = await context.nyx_governance.track_power_exchange(
+            tracking_data = await nyx_governance.track_power_exchange(
                 npc_id=exchange.initiator_npc_id,
                 exchange_type=exchange.exchange_type.value,
                 intensity=exchange.intensity,
@@ -1399,7 +1454,7 @@ async def narrate_power_exchange(
             logger.warning(f"Could not track power exchange with governance: {e}")
     
     # Get relationship state
-    rel_state = await context.relationship_manager.get_relationship_state(
+    rel_state = await relationship_manager.get_relationship_state(
         'npc', exchange.initiator_npc_id, 'player', context.user_id
     )
     
@@ -1428,8 +1483,8 @@ async def narrate_power_exchange(
     )
     
     # Store in memory as significant event
-    if context.memory_manager:
-        await context.memory_manager.add_memory(
+    if memory_manager:
+        await memory_manager.add_memory(
             MemoryAddRequest(
                 user_id=context.user_id,
                 conversation_id=context.conversation_id,
@@ -2301,7 +2356,7 @@ class SliceOfLifeNarrator:
 
         if world_state is None:
             try:
-                world_state = await self.context.world_director.get_world_state()
+                world_state = await self.world_director.get_world_state()
                 logger.info("NPC_DIALOGUE_ADAPTER[%s]: fetched ws=%s", call_id, _ws_brief(world_state))
             except Exception as e:
                 logger.warning("NPC_DIALOGUE_ADAPTER[%s]: failed to fetch ws: %s", call_id, e)
@@ -2328,7 +2383,7 @@ class SliceOfLifeNarrator:
         """Generate narration for current world state"""
         await self.context.refresh_context()
         
-        world_state = await self.context.world_director.get_world_state()
+        world_state = await self.world_director.get_world_state()
         
         # Create a scene from world state
         scene = SliceOfLifeEvent(
@@ -2382,7 +2437,7 @@ class SliceOfLifeNarrator:
                 conflict_triggered = conflict_result
         
         # Get world state and determine affected NPCs
-        world_state = await self.context.world_director.get_world_state()
+        world_state = await self.world_director.get_world_state()
         affected_npcs = []
         
         # Check if input is dialogue
@@ -2463,9 +2518,9 @@ class SliceOfLifeNarrator:
         context = self.context
         
         # Check governance approval
-        if context.governance_active:
+        if governance_active:
             try:
-                approval = await context.nyx_governance.check_permission(
+                approval = await nyx_governance.check_permission(
                     agent_type="narrator",
                     action_type="player_action",
                     context={"action": action, "affected_npcs": affected_npcs}
@@ -2507,8 +2562,8 @@ class SliceOfLifeNarrator:
             )
         
         # Record action in memory
-        if context.memory_manager:
-            await context.memory_manager.add_memory(
+        if memory_manager:
+            await memory_manager.add_memory(
                 MemoryAddRequest(
                     user_id=context.user_id,
                     conversation_id=context.conversation_id,
@@ -2531,7 +2586,7 @@ class SliceOfLifeNarrator:
     
     async def narrate_time_transition(self, old_time: str, new_time: str) -> str:
         """Narrate time passing"""
-        world_state = await self.context.world_director.get_world_state()
+        world_state = await self.world_director.get_world_state()
         
         # Refresh context for transition
         await self.context.refresh_context()
@@ -2553,7 +2608,7 @@ class SliceOfLifeNarrator:
         """Orchestrate a complete scene with multiple elements"""
         await self.initialize()
         
-        world_state = await self.context.world_director.get_world_state()
+        world_state = await self.world_director.get_world_state()
         npcs = npcs or []
         
         # NEW: Check for conflict involvement
@@ -2745,7 +2800,7 @@ class SliceOfLifeNarrator:
         """Handle interaction with multiple NPCs"""
         await self.initialize()
         
-        world_state = await self.context.world_director.get_world_state()
+        world_state = await self.world_director.get_world_state()
         
         # Create group scene
         scene = SliceOfLifeEvent(
