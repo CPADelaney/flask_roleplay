@@ -1323,7 +1323,9 @@ class MemoryManager:
         await self.initialize()
         
         request = MemorySearchRequest(
-            query_text=query_text,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            query_text=query_text,  # FIX: Changed from 'content' to 'query_text'
             memory_types=memory_types or [],
             tags=tags or [],
             limit=limit,
