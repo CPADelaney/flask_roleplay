@@ -1857,26 +1857,133 @@ async def find_or_create_npc_group(ctx, conn, group_data: Dict[str, Any]) -> int
 
 async def create_journal_entry(ctx, conn, entry_type: str, entry_text: str, **kwargs) -> int:
     """
-    Create a journal entry canonically.
+    Create a journal entry - now backwards compatible but internally simplified.
     """
+    ctx = ensure_canonical_context(ctx)
+    
+    # Handle legacy boolean parameters by converting to strings/None
+    narrative_moment = kwargs.get('narrative_moment')
+    if isinstance(narrative_moment, bool):
+        narrative_moment = "true" if narrative_moment else None
+    
+    fantasy_flag = kwargs.get('fantasy_flag')
+    if isinstance(fantasy_flag, bool):
+        fantasy_flag = True if fantasy_flag else False
+    
+    # Determine significance from various legacy fields
+    significance = kwargs.get('importance', 0.5)
+    if kwargs.get('intensity_level'):
+        # Scale intensity (0-10) to significance (0-1)
+        significance = max(significance, kwargs.get('intensity_level', 0) / 10.0)
+    if narrative_moment == "true":
+        significance = max(significance, 0.7)  # Narrative moments are significant
+    
+    # Build tags from legacy parameters
+    tags = kwargs.get('tags', [])
+    if entry_type:
+        tags.append(entry_type)
+    if kwargs.get('revelation_types'):
+        tags.append(kwargs.get('revelation_types'))
+    if fantasy_flag:
+        tags.append('fantasy')
+    
+    # Collect all metadata (including legacy fields)
+    metadata = kwargs.get('entry_metadata', {})
+    metadata.update({
+        'entry_type': entry_type,  # Preserve for backwards compat
+        'revelation_types': kwargs.get('revelation_types'),
+        'narrative_moment': narrative_moment,
+        'fantasy_flag': fantasy_flag,
+        'intensity_level': kwargs.get('intensity_level'),
+        # Any other legacy fields that were passed
+        **{k: v for k, v in kwargs.items() 
+           if k not in ['tags', 'importance', 'entry_metadata']}
+    })
+    
+    # Clean up None values from metadata
+    metadata = {k: v for k, v in metadata.items() if v is not None}
+    
+    # Generate embedding for semantic search
+    embedding = await generate_embedding(entry_text)
+    
+    # Use a simpler insert that works with the current schema
     entry_id = await conn.fetchval("""
         INSERT INTO PlayerJournal (
             user_id, conversation_id, entry_type, entry_text,
-            revelation_types, narrative_moment, fantasy_flag,
-            intensity_level, timestamp, entry_metadata,
-            importance, tags
+            importance, tags, entry_metadata, embedding,
+            created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, $9::jsonb, $10, $11::jsonb)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, CURRENT_TIMESTAMP)
         RETURNING id
     """,
-        ctx.user_id, ctx.conversation_id, entry_type, entry_text,
-        kwargs.get('revelation_types'),
-        kwargs.get('narrative_moment'),
-        kwargs.get('fantasy_flag', False),
-        kwargs.get('intensity_level', 0),
-        json.dumps(kwargs.get('entry_metadata', {})),
-        kwargs.get('importance', 0.5),
-        json.dumps(kwargs.get('tags', []))
+        ctx.user_id, 
+        ctx.conversation_id, 
+        entry_type,
+        entry_text,
+        significance,
+        json.dumps(tags),
+        json.dumps(metadata),
+        embedding
+    )
+    
+    return entry_id
+
+# use this for new code
+
+async def add_journal_entry(ctx, conn, entry_text: str, significance: float = None) -> int:
+    """
+    Simplified journal entry creation for new code.
+    Let the LLM determine most metadata.
+    """
+    ctx = ensure_canonical_context(ctx)
+    
+    # If significance not provided, ask LLM
+    if significance is None:
+        significance_prompt = f"""
+        Rate the significance of this journal entry from 0-1:
+        "{entry_text[:500]}"
+        
+        Reply with just a number.
+        """
+        try:
+            significance = float(await generate_text_completion(
+                system_prompt="You rate journal entry significance",
+                user_prompt=significance_prompt,
+                model='gpt-5-nano'
+            ))
+        except:
+            significance = 0.5
+    
+    # Generate smart tags
+    tags_prompt = f"""
+    Suggest 3-5 single word tags for this journal entry:
+    "{entry_text[:500]}"
+    
+    Reply with comma-separated tags.
+    """
+    try:
+        tags_response = await generate_text_completion(
+            system_prompt="You generate journal tags",
+            user_prompt=tags_prompt,
+            model='gpt-5-nano'
+        )
+        tags = [t.strip() for t in tags_response.split(',')]
+    except:
+        tags = []
+    
+    # Generate embedding
+    embedding = await generate_embedding(entry_text)
+    
+    entry_id = await conn.fetchval("""
+        INSERT INTO PlayerJournal (
+            user_id, conversation_id, entry_text,
+            significance, tags, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, entry_text,
+        significance, json.dumps(tags), embedding
     )
     
     return entry_id
