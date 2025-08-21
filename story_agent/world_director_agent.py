@@ -2842,33 +2842,74 @@ class CompleteWorldDirector:
                 "relationship_events": {'events': []},
                 "vitals_updated": {"success": False, "error": str(e)}
             }
-def ensure_canonical_consistency():
-    """Ensure all world director operations maintain canonical consistency"""
-    logger.info("World Director configured with canonical consistency")
 
-async def validate_canonical_integration(context: CompleteWorldDirectorContext):
-    """Validate that canonical integration is working properly"""
-    if not context.canonical_context:
-        raise ValueError("Canonical context not initialized")
+    async def get_world_state(self) -> Any:
+        """Get the current world state, rebuilding if necessary"""
+        try:
+            await self.initialize()
+            
+            if not self.context:
+                logger.warning("Context not initialized when getting world state")
+                return self._get_fallback_world_state()
+            
+            # Always rebuild to ensure fresh state
+            self.context.current_world_state = await self.context._build_complete_world_state()
+            return self.context.current_world_state
+            
+        except Exception as e:
+            logger.error(f"Error getting world state: {e}", exc_info=True)
+            # Return a minimal fallback state
+            return self._get_fallback_world_state()
     
-    try:
-        async with get_db_connection_context() as conn:
-            await log_canonical_event(
-                context.canonical_context, conn,
-                "Canonical integration validation successful",
-                tags=["validation", "canonical", "world_director"],
-                significance=3
-            )
-        return True
-    except Exception as e:
-        logger.error(f"Canonical integration validation failed: {e}")
-        return False
-
-def get_canonical_context_from_world_director(director: CompleteWorldDirector) -> Optional[CanonicalContext]:
-    """Extract canonical context from world director"""
-    if director.context and director.context.canonical_context:
-        return director.context.canonical_context
-    return None
+    def _get_fallback_world_state(self):
+        """Return a minimal fallback world state when operations fail"""
+        from story_agent.world_simulation_models import (
+            CompleteWorldState,
+            WorldMood,
+            TimeOfDay,
+            CurrentTimeData,
+            VitalsData
+        )
+        
+        return CompleteWorldState(
+            current_time=CurrentTimeData(
+                year=2025, month=1, day=1,
+                hour=12, minute=0,
+                time_of_day=TimeOfDay.AFTERNOON
+            ),
+            player_vitals=VitalsData(
+                hunger=50, thirst=50, fatigue=30, arousal=0
+            ),
+            world_mood=WorldMood.RELAXED
+        )
+    
+    def ensure_canonical_consistency():
+        """Ensure all world director operations maintain canonical consistency"""
+        logger.info("World Director configured with canonical consistency")
+    
+    async def validate_canonical_integration(context: CompleteWorldDirectorContext):
+        """Validate that canonical integration is working properly"""
+        if not context.canonical_context:
+            raise ValueError("Canonical context not initialized")
+        
+        try:
+            async with get_db_connection_context() as conn:
+                await log_canonical_event(
+                    context.canonical_context, conn,
+                    "Canonical integration validation successful",
+                    tags=["validation", "canonical", "world_director"],
+                    significance=3
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Canonical integration validation failed: {e}")
+            return False
+    
+    def get_canonical_context_from_world_director(director: CompleteWorldDirector) -> Optional[CanonicalContext]:
+        """Extract canonical context from world director"""
+        if director.context and director.context.canonical_context:
+            return director.context.canonical_context
+        return None
 
 # Export canonical integration flag
 CANONICAL_INTEGRATION_ENABLED = True
