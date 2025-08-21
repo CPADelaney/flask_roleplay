@@ -179,9 +179,6 @@ Flag content with: explicit violence, sexual content, illegal activities, hate s
         response = await client.chat.completions.create(
             model="gpt-5-nano",
             messages=messages,
-            temperature=0.1,
-            max_tokens=150,
-            response_format={"type": "json_object"}
         )
         
         result = json.loads(response.choices[0].message.content)
@@ -318,7 +315,7 @@ class NPCAgentSystem:
                 """,
                 output_type=ModerationCheck,
                 model=openai_model,
-                model_settings=ModelSettings(temperature=0.1)
+                model_settings=ModelSettings()
             )
             
             async def moderation_guardrail(
@@ -370,7 +367,7 @@ class NPCAgentSystem:
                 Your responses should be efficient and focused on the specific task requested.
                 """,
                 model=openai_model,
-                model_settings=ModelSettings(temperature=0.2),
+                model_settings=ModelSettings(),
                 tools=[
                     function_tool(self.handle_player_action, strict_mode=False),
                     function_tool(self.process_npc_scheduled_activities, strict_mode=False),
