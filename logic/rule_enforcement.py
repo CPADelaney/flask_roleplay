@@ -359,8 +359,6 @@ async def apply_effect(effect_str, player_name, npc_id=None):
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": "Generate a unique punishment scenario."}
                         ],
-                        max_tokens=200,
-                        temperature=1.0
                     )
                     scenario = gpt_resp.choices[0].message.content.strip()
                     result["punishmentScenario"] = scenario
