@@ -6,6 +6,7 @@ import logging
 import logging.config  # <-- new
 import time
 import json
+import uuid
 from typing import Dict, Any, Optional
 
 # ---- Logging setup (flip with LOG_LEVEL env var) ---------------------
