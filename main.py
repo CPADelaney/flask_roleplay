@@ -8,6 +8,7 @@ import time
 import json
 import uuid
 from typing import Dict, Any, Optional
+from nyx.nyx_agent.utils import _extract_last_assistant_text
 
 # ---- Logging setup (flip with LOG_LEVEL env var) ---------------------
 def setup_logging(level: str | None = None) -> None:
@@ -162,7 +163,7 @@ def ensure_int_ids(user_id=None, conversation_id=None):
 async def background_chat_task(conversation_id, user_input, user_id, universal_update=None, sio=None, request_id=None, redis_pool=None):
     """
     Background task for processing chat messages using Nyx agent with OpenAI integration.
-    Now accepts redis_pool parameter for request deduplication.
+    Enhanced with proper streaming and error handling.
     """
     # FIX: Convert string IDs to integers immediately
     try:
@@ -174,7 +175,6 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         logger.error(f"[BG Task] Invalid ID format: conversation_id={conversation_id}, user_id={user_id}, error={e}")
         if sio:
             await sio.emit('error', {'error': 'Invalid ID format'}, room=str(conversation_id))
-        # Clear request flag before returning
         if request_id:
             await clear_request_processing(request_id, redis_pool)
         return
@@ -251,11 +251,32 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 await clear_request_processing(request_id, redis_pool)
             return
 
-        # Extract the message content
-        message_content = response.get("message", "")
-        if not message_content and "function_args" in response:
-            message_content = response["function_args"].get("narrative", "")
-        logger.debug(f"[BG Task {conversation_id}] Nyx response: {message_content[:100]}...")
+        # ENHANCED RESPONSE HANDLING - Extract the message content properly
+        message_content = ""
+        
+        # Try multiple ways to get the response text
+        if isinstance(response, dict):
+            # First try: direct response field
+            message_content = response.get("response", "")
+            
+            # Second try: nested function_args
+            if not message_content and "function_args" in response:
+                message_content = response["function_args"].get("narrative", "")
+            
+            # Third try: metadata field
+            if not message_content and "metadata" in response:
+                message_content = response["metadata"].get("response", "")
+            
+            # Fourth try: message field
+            if not message_content:
+                message_content = response.get("message", "")
+
+        # Fallback to a default message if still empty
+        if not message_content:
+            message_content = "I'm processing your request... something went wrong with the response formatting."
+            logger.warning(f"[BG Task {conversation_id}] No message content found in response: {list(response.keys()) if isinstance(response, dict) else type(response)}")
+
+        logger.debug(f"[BG Task {conversation_id}] Extracted message content: {message_content[:100]}...")
 
         # Store the Nyx response in DB using asyncpg
         try:
@@ -271,22 +292,42 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             # Continue but log the error
 
         # Check if we should generate an image
-        should_generate = response.get("generate_image", False)
-        if "function_args" in response and "image_generation" in response["function_args"]:
-            img_settings = response["function_args"]["image_generation"]
-            should_generate = should_generate or img_settings.get("generate", False)
+        should_generate = False
+        if isinstance(response, dict):
+            should_generate = response.get("generate_image", False)
+            if "function_args" in response and "image_generation" in response["function_args"]:
+                img_settings = response["function_args"]["image_generation"]
+                should_generate = should_generate or img_settings.get("generate", False)
+            
+            # Also check metadata
+            if "metadata" in response and "image" in response["metadata"]:
+                should_generate = should_generate or response["metadata"]["image"].get("should_generate", False)
 
         # Generate image if needed
         if should_generate:
             logger.info(f"[BG Task {conversation_id}] Image generation triggered.")
             try:
+                # Build image data from response
                 img_data = {
                     "narrative": message_content,
-                    "image_generation": response.get("function_args", {}).get("image_generation", {
-                        "generate": True, "priority": "medium", "focus": "balanced",
-                        "framing": "medium_shot", "reason": "Narrative moment"
-                    })
+                    "image_generation": {
+                        "generate": True, 
+                        "priority": "medium", 
+                        "focus": "balanced",
+                        "framing": "medium_shot", 
+                        "reason": "Narrative moment"
+                    }
                 }
+                
+                # Try to get better image data from response
+                if isinstance(response, dict):
+                    if "function_args" in response and "image_generation" in response["function_args"]:
+                        img_data["image_generation"].update(response["function_args"]["image_generation"])
+                    elif "metadata" in response and "image" in response["metadata"]:
+                        img_prompt = response["metadata"]["image"].get("prompt")
+                        if img_prompt:
+                            img_data["image_generation"]["prompt"] = img_prompt
+
                 res = await generate_roleplay_image_from_gpt(img_data, user_id, conversation_id)
 
                 if res and "image_urls" in res and res["image_urls"]:
@@ -295,32 +336,65 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                     reason = img_data["image_generation"].get("reason", "Narrative moment")
                     logger.info(f"[BG Task {conversation_id}] Image generated: {image_url}")
                     await sio.emit('image', {
-                        'image_url': image_url, 'prompt_used': prompt_used, 'reason': reason
+                        'image_url': image_url, 
+                        'prompt_used': prompt_used, 
+                        'reason': reason
                     }, room=str(conversation_id))
                 else:
                     logger.warning(f"[BG Task {conversation_id}] Image generation task ran but produced no valid URLs. Response: {res}")
             except Exception as img_err:
                 logger.error(f"[BG Task {conversation_id}] Error generating image: {img_err}", exc_info=True)
 
-        # Stream the text tokens
-        if message_content:
-            logger.debug(f"[BG Task {conversation_id}] Streaming tokens...")
+        # ENHANCED STREAMING with proper text validation
+        if message_content and message_content.strip():
+            # Clean and validate the message content
+            stream_text = message_content.strip()
+            
+            # Log what we're actually sending (helps with debugging)
+            logger.debug(f"[BG Task {conversation_id}] Streaming text len={len(stream_text)} preview={stream_text[:80]!r}")
+            
+            # Stream the text tokens
             chunk_size = 5
             delay = 0.01
-            for i in range(0, len(message_content), chunk_size):
-                token = message_content[i:i+chunk_size]
+            for i in range(0, len(stream_text), chunk_size):
+                token = stream_text[i:i+chunk_size]
                 await sio.emit('new_token', {'token': token}, room=str(conversation_id))
                 await asyncio.sleep(delay)
 
-            await sio.emit('done', {'full_text': message_content, 'request_id': request_id}, room=str(conversation_id))
-            logger.info(f"[BG Task {conversation_id}] Finished streaming response.")
+            # Send final completion message with enhanced data
+            completion_data = {
+                'full_text': stream_text, 
+                'request_id': request_id,
+                'success': True,
+                'metadata': response.get('metadata') if isinstance(response, dict) else None
+            }
+            
+            await sio.emit('done', completion_data, room=str(conversation_id))
+            logger.info(f"[BG Task {conversation_id}] Finished streaming response (len={len(stream_text)}).")
         else:
-            logger.warning(f"[BG Task {conversation_id}] No message content to stream.")
-            await sio.emit('done', {'full_text': '', 'request_id': request_id}, room=str(conversation_id))
+            logger.warning(f"[BG Task {conversation_id}] No message content to stream after processing.")
+            await sio.emit('done', {
+                'full_text': 'I encountered an issue generating a response. Please try again.', 
+                'request_id': request_id,
+                'success': False,
+                'error': 'Empty response content'
+            }, room=str(conversation_id))
 
     except Exception as e:
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
-        await sio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
+        
+        # Send a user-friendly error message
+        error_response = 'I encountered an error processing your message. Please try again.'
+        await sio.emit('error', {'error': f"Server error: {str(e)}"}, room=str(conversation_id))
+        
+        # Also send a done event with the error for consistency
+        await sio.emit('done', {
+            'full_text': error_response,
+            'request_id': request_id,
+            'success': False,
+            'error': str(e)
+        }, room=str(conversation_id))
+        
     finally:
         # Always clear the processing flag when done
         if request_id:
@@ -849,10 +923,10 @@ def create_quart_app():
             await sio.emit("error", {"error": "Empty message"}, to=sid)
             return
         
-        # Generate request_id for deduplication (optional for message handler)
-        request_id = f"{sid}_{uuid.uuid4().hex[:8]}"
+        # Generate request_id for deduplication
+        request_id = data.get('request_id') or f"{sid}_{uuid.uuid4().hex[:8]}"
         
-        # Try to mark as processing (optional for message handler)
+        # Try to mark as processing
         if not await mark_request_processing(request_id, app.redis_rate_limit_pool):
             logger.warning(f"Duplicate message request {request_id} ignored for sid={sid}")
             await sio.emit('duplicate_request', {
@@ -862,9 +936,9 @@ def create_quart_app():
             return
         
         # Emit acknowledgment
-        await sio.emit("message_received", {"status": "processing"}, to=sid)
+        await sio.emit("message_received", {"status": "processing", "request_id": request_id}, to=sid)
         
-        # Start background task
+        # Start background task with enhanced error handling
         try:
             sio.start_background_task(
                 background_chat_task,
@@ -873,14 +947,25 @@ def create_quart_app():
                 user_id,  # Properly authenticated user_id
                 None,  # universal_update
                 sio,
-                request_id,  # Now passing request_id for deduplication
+                request_id,
                 app.redis_rate_limit_pool  # Pass the redis pool
             )
-            app.logger.info(f"Started background task for message from user {user_id}, conv_id={conversation_id}")
+            app.logger.info(f"Started background task for message from user {user_id}, conv_id={conversation_id}, request_id={request_id}")
             
         except Exception as e:
             app.logger.error(f"Error starting message processing task: {e}", exc_info=True)
+            
+            # Send error to client
             await sio.emit('error', {'error': 'Failed to process message'}, room=str(conversation_id))
+            
+            # Also send done event for consistency
+            await sio.emit('done', {
+                'full_text': 'I encountered an error starting to process your message. Please try again.',
+                'request_id': request_id,
+                'success': False,
+                'error': 'Task startup failed'
+            }, room=str(conversation_id))
+            
             # Clear the processing flag on error
             await clear_request_processing(request_id, app.redis_rate_limit_pool)
 
