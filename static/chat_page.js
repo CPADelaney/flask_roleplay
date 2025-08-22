@@ -103,15 +103,23 @@ window.disableDebugMode = function() {
 };
 
 // Get current connection status for debugging
-window.getConnectionStatus = function() {
+window.getConnectionStatus = function () {
+  const socketId =
+    socketManager && socketManager.socket ? socketManager.socket.id : null;
+
+  const pendingRequestsCount =
+    AppState && AppState.pendingRequests instanceof Map
+      ? AppState.pendingRequests.size
+      : 0;
+
   return {
-    connected: AppState.isConnected,
+    connected: !!AppState.isConnected,
     status: AppState.connectionStatus,
     currentRoom: AppState.currentRoomId,
     currentConversation: AppState.currentConvId,
-    socketId: socketManager.socket ? socketManager.socket.id : null,
-    pendingRequests: AppState.pendingRequests.size,
-    isSending: AppState.isSendingMessage
+    socketId: socketId,
+    pendingRequests: pendingRequestsCount,
+    isSending: !!AppState.isSendingMessage
   };
 };
 
