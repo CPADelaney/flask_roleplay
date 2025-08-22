@@ -445,15 +445,45 @@ class VectorService:
             metadata_dict = result.get("metadata", {})
             entity_type = metadata_dict.get("entity_type", "")
             
-            # Create appropriate metadata object
+            # FIX: Filter metadata_dict to only include fields relevant to each metadata type
             if entity_type == "npc":
-                metadata = NPCMetadata(**metadata_dict)
+                # Filter to NPCMetadata fields
+                filtered_metadata = {
+                    k: v for k, v in metadata_dict.items()
+                    if k in ['personality', 'occupation', 'faction', 'mood', 'location',
+                            'entity_class', 'relationships', 'attributes', 'status', 'tags',
+                            'timestamp', 'source', 'version']
+                }
+                metadata = NPCMetadata(**filtered_metadata)
             elif entity_type == "location":
-                metadata = LocationMetadata(**metadata_dict)
+                # Filter to LocationMetadata fields
+                filtered_metadata = {
+                    k: v for k, v in metadata_dict.items()
+                    if k in ['location_type', 'population', 'danger_level', 'resources', 
+                            'quests_available', 'entity_class', 'relationships', 'attributes', 
+                            'status', 'tags', 'timestamp', 'source', 'version']
+                }
+                metadata = LocationMetadata(**filtered_metadata)
             elif entity_type == "memory":
-                metadata = MemoryMetadata(**metadata_dict)
+                # Filter to MemoryMetadata fields
+                filtered_metadata = {
+                    k: v for k, v in metadata_dict.items()
+                    if k in ['npc_id', 'location_id', 'quest_id', 'emotion', 'context_type',
+                            'related_memories', 'conflict_id', 'conflict_name', 'conflict_type',
+                            'phase', 'location', 'conflict_identifier', 'timestamp', 'source', 'version']
+                }
+                # Handle special mappings for memory metadata
+                if 'location' not in filtered_metadata and 'location_id' in metadata_dict:
+                    filtered_metadata['location'] = metadata_dict['location_id']
+                metadata = MemoryMetadata(**filtered_metadata)
             else:
-                metadata = EntityMetadata(**metadata_dict)
+                # Filter to EntityMetadata fields
+                filtered_metadata = {
+                    k: v for k, v in metadata_dict.items()
+                    if k in ['entity_class', 'relationships', 'attributes', 'status', 'tags',
+                            'timestamp', 'source', 'version']
+                }
+                metadata = EntityMetadata(**filtered_metadata)
             
             typed_results.append(VectorSearchResultItem(
                 id=result.get("id", ""),
