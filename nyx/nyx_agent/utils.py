@@ -393,15 +393,42 @@ async def _ensure_world_state_from_ctx(app_ctx: Any):
     except Exception:
         return None
 
-def _extract_last_assistant_text(resp) -> str:
-    """Extract the last assistant message text from response"""
-    msgs = [c for c in resp if c.get("type") == "message" and c.get("role") == "assistant"]
-    if not msgs:
-        return ""
-    parts = msgs[-1].get("content") or []
-    for part in reversed(parts):
-        if part.get("type") == "output_text" and part.get("text"):
-            return part["text"]
+def _extract_last_assistant_text(events: list) -> str:
+    """Extract the last assistant message text from response events"""
+    # Walk backward through events to find assistant text
+    for e in reversed(events or []):
+        if not isinstance(e, dict):
+            continue
+            
+        t = e.get("type")
+        
+        # Check for message-type events
+        if t in ("message", "assistant_message", "assistant_response"):
+            content = e.get("content") or []
+            
+            # If content is a flat string
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+            
+            # Items may be dicts like {"type":"output_text","text":"..."}
+            for item in reversed(content):
+                if isinstance(item, dict):
+                    it = item.get("type")
+                    tx = item.get("text")
+                    if it in ("output_text", "text") and isinstance(tx, str) and tx.strip():
+                        return tx.strip()
+        
+        # Accept events that only have role
+        if e.get("role") == "assistant":
+            flat = e.get("text")
+            if isinstance(flat, str) and flat.strip():
+                return flat.strip()
+        
+        # Some SDKs flatten the text directly
+        flat_text = e.get("text")
+        if isinstance(flat_text, str) and flat_text.strip():
+            return flat_text.strip()
+    
     return ""
 
 def _did_call_tool(resp, tool_name: str) -> bool:
