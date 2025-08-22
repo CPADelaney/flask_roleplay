@@ -789,7 +789,7 @@ class NyxUnifiedGovernor(
             logger.info("Governor initialization complete")
         
         return self
-
+    
     async def _process_agent_registrations(self):
         """Process agent registrations from queue to avoid lock contention."""
         while True:
@@ -810,13 +810,12 @@ class NyxUnifiedGovernor(
                 if agent_type not in self.registered_agents:
                     self.registered_agents[agent_type] = {}
                 
-                self.registered_agents[agent_type][agent_id] = agent_instance
-                self._registered_agent_keys.add(agent_key)  # Add to set
-                
+                # Check BEFORE adding (this is the fix!)
                 if agent_id in self.registered_agents[agent_type]:
                     logger.warning(f"Agent {agent_id} already registered, updating")
                 
                 self.registered_agents[agent_type][agent_id] = agent_instance
+                self._registered_agent_keys.add(agent_key)  # Add to set
                 
                 # Initialize tracking structures
                 for tracking_dict in [self.agent_goals, self.agent_performance, self.agent_learning]:
