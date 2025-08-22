@@ -10,8 +10,13 @@ that integrates with Nyx governance.
 import logging
 import json
 import asyncio
+import traceback  # ADD THIS
+import time  # ADD THIS
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union
+from collections import defaultdict  # ADD THIS
+
+
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -77,6 +82,90 @@ class InventorySafety(BaseModel):
     is_appropriate: bool = Field(..., description="Whether the operation is appropriate")
     reasoning: str = Field(..., description="Reasoning for the decision")
     suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
+
+class CallTracker:
+    """Track function calls for debugging duplicate calls"""
+    def __init__(self):
+        self.call_counts = defaultdict(lambda: defaultdict(int))
+        self.call_history = []
+        self.last_call_time = {}
+        
+    def track_call(self, func_name: str, user_id: int, conversation_id: int, player_name: str = None):
+        """Track a function call with detailed info"""
+        now = time.time()
+        call_key = f"{func_name}:{user_id}:{conversation_id}:{player_name}"
+        
+        # Check for rapid duplicate calls
+        if call_key in self.last_call_time:
+            time_since_last = now - self.last_call_time[call_key]
+            if time_since_last < 1.0:  # Less than 1 second
+                logger.warning(f"DUPLICATE CALL DETECTED: {func_name} called again after {time_since_last:.3f}s")
+                logger.warning(f"Call key: {call_key}")
+        
+        self.last_call_time[call_key] = now
+        self.call_counts[func_name][call_key] += 1
+        
+        # Store call history with stack trace
+        stack_lines = traceback.format_stack(limit=10)
+        # Filter to relevant lines
+        filtered_stack = []
+        for line in stack_lines:
+            if any(x in line for x in ['/nyx/', '/logic/', '/routes/', '/tasks.py', '/main.py']):
+                filtered_stack.append(line.strip())
+        
+        call_info = {
+            'time': now,
+            'func': func_name,
+            'user_id': user_id,
+            'conversation_id': conversation_id,
+            'player_name': player_name,
+            'count': self.call_counts[func_name][call_key],
+            'stack': filtered_stack[-5:]  # Last 5 relevant stack frames
+        }
+        
+        self.call_history.append(call_info)
+        
+        # Log the call with stack info
+        logger.info(f"📦 INVENTORY CALL #{self.call_counts[func_name][call_key]}: {func_name}")
+        logger.info(f"   User: {user_id}, Conv: {conversation_id}, Player: {player_name}")
+        logger.info(f"   Called from:")
+        for frame in filtered_stack[-3:]:  # Show last 3 frames
+            logger.info(f"     {frame}")
+        
+        # Keep history limited
+        if len(self.call_history) > 100:
+            self.call_history = self.call_history[-50:]
+    
+    def get_report(self):
+        """Get a report of call patterns"""
+        report = {
+            'total_calls': sum(sum(counts.values()) for counts in self.call_counts.values()),
+            'by_function': {},
+            'recent_duplicates': []
+        }
+        
+        for func, counts in self.call_counts.items():
+            report['by_function'][func] = {
+                'total': sum(counts.values()),
+                'unique_contexts': len(counts),
+                'top_callers': sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            }
+        
+        # Find recent duplicate calls
+        now = time.time()
+        for i in range(len(self.call_history) - 1, max(0, len(self.call_history) - 20), -1):
+            call = self.call_history[i]
+            if now - call['time'] < 60 and call['count'] > 1:  # Within last minute
+                report['recent_duplicates'].append({
+                    'func': call['func'],
+                    'count': call['count'],
+                    'age_seconds': now - call['time']
+                })
+        
+        return report
+
+# Create global tracker instance
+call_tracker = CallTracker()
 
 # -------------------------------------------------------------------------------
 # Agent Context
@@ -392,60 +481,150 @@ async def get_player_inventory(
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
 
-    # Check permission (Keep as is)
+    # ADD THIS: Debug logging
+    logger.info("=" * 60)
+    logger.info(f"GET_PLAYER_INVENTORY CALLED")
+    logger.info(f"Time: {datetime.now().isoformat()}")
+    logger.info(f"User ID: {user_id}, Conv ID: {conversation_id}, Player: {player_name}")
+    
+    # Track the call
+    call_tracker.track_call("get_player_inventory", user_id, conversation_id, player_name)
+    
+    # ADD THIS: Log the calling context
+    logger.info("Context info:")
+    if hasattr(ctx, 'context'):
+        for attr in ['agent_type', 'agent_id', 'request_id', 'trace_id']:
+            if hasattr(ctx.context, attr):
+                logger.info(f"  {attr}: {getattr(ctx.context, attr)}")
+    
+    # ADD THIS: Check who's calling via stack inspection
+    stack = traceback.extract_stack()
+    logger.info("Call stack (last 10 frames):")
+    for i, frame in enumerate(stack[-10:]):  # Last 10 frames
+        if any(keyword in frame.filename for keyword in ['nyx', 'agent', 'inventory', 'aggregator', 'logic']):
+            logger.info(f"  Frame {i}: {frame.filename}:{frame.lineno} in {frame.name}")
+            if frame.line:
+                logger.info(f"    Code: {frame.line.strip()}")
+    
+    logger.info("=" * 60)
+
+    # Check permission
+    logger.debug(f"Checking permission for get_inventory operation...")
     permission = await governor.check_action_permission(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="inventory_system",
         action_type="get_inventory",
         action_details={"player": player_name}
     )
+    
     if not permission["approved"]:
-        return InventoryList(items=[], player_name=player_name, total_items=0, error=permission["reasoning"]).model_dump()
+        logger.warning(f"Permission denied for get_inventory: {permission['reasoning']}")
+        return InventoryList(
+            items=[], 
+            player_name=player_name, 
+            total_items=0, 
+            error=permission["reasoning"]
+        ).model_dump()
+    
+    logger.debug(f"Permission granted for get_inventory")
 
-
-    # --- Updated DB Access ---
+    # Query database
     query = """
         SELECT item_name, item_description, item_effect, category, quantity
         FROM PlayerInventory
         WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
         ORDER BY item_name
     """
+    
     inventory_items = []
+    start_time = time.time()
+    
     try:
-        async with get_db_connection_context() as conn: # Use context manager
-            rows: List[asyncpg.Record] = await conn.fetch(
-                query, user_id, conversation_id, player_name
-            )
-
+        logger.debug(f"Executing database query for inventory...")
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch(query, user_id, conversation_id, player_name)
+            
+            logger.info(f"Database returned {len(rows)} items in {time.time() - start_time:.3f}s")
+            
             for row in rows:
-                 # Use Pydantic model for structure
-                 inventory_items.append(InventoryItem(
-                     item_name=row["item_name"],
-                     player_name=player_name, # Add player name here
-                     item_description=row["item_description"],
-                     item_effect=row["item_effect"],
-                     category=row["category"],
-                     quantity=row["quantity"]
-                 ))
+                # Use Pydantic model for structure
+                item = InventoryItem(
+                    item_name=row["item_name"],
+                    player_name=player_name,
+                    item_description=row["item_description"],
+                    item_effect=row["item_effect"],
+                    category=row["category"],
+                    quantity=row["quantity"]
+                )
+                inventory_items.append(item)
+                
+                # Log each item for debugging
+                logger.debug(f"  Item: {row['item_name']} x{row['quantity']} (category: {row['category']})")
 
-        # Report action to governance (Keep as is)
+        # Report action to governance
+        logger.debug(f"Reporting action to governance...")
         await governor.process_agent_action_report(
             agent_type=AgentType.UNIVERSAL_UPDATER,
             agent_id="inventory_system",
             action={"type": "get_inventory", "player": player_name},
             result={"items_count": len(inventory_items)}
         )
-
-        # Return using Pydantic model
-        return InventoryList(items=inventory_items, player_name=player_name, total_items=len(inventory_items)).model_dump()
+        
+        # Create result
+        result = InventoryList(
+            items=inventory_items, 
+            player_name=player_name, 
+            total_items=len(inventory_items)
+        ).model_dump()
+        
+        # Log summary
+        logger.info(f"✅ Successfully retrieved {len(inventory_items)} items for {player_name}")
+        logger.info(f"   Total execution time: {time.time() - start_time:.3f}s")
+        
+        # If this is being called repeatedly, log a warning
+        if call_tracker.call_counts["get_player_inventory"][f"get_player_inventory:{user_id}:{conversation_id}:{player_name}"] > 3:
+            logger.warning(f"⚠️ get_player_inventory has been called {call_tracker.call_counts['get_player_inventory'][f'get_player_inventory:{user_id}:{conversation_id}:{player_name}']} times for this context!")
+            logger.warning(f"   Consider using caching or checking for duplicate calls")
+        
+        return result
 
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"DB Error getting inventory for '{player_name}': {db_err}", exc_info=True)
-        return InventoryList(items=[], player_name=player_name, total_items=0, error=f"Database error: {db_err}").model_dump()
+        logger.error(f"❌ DB Error getting inventory for '{player_name}': {db_err}", exc_info=True)
+        logger.error(f"   Query execution time before error: {time.time() - start_time:.3f}s")
+        
+        # Report error to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action={"type": "get_inventory", "player": player_name},
+            result={"error": str(db_err), "items_count": 0}
+        )
+        
+        return InventoryList(
+            items=[], 
+            player_name=player_name, 
+            total_items=0, 
+            error=f"Database error: {db_err}"
+        ).model_dump()
+        
     except Exception as e:
-        logger.error(f"Error getting inventory for '{player_name}': {e}", exc_info=True)
-        return InventoryList(items=[], player_name=player_name, total_items=0, error=str(e)).model_dump()
-    # No finally block needed
+        logger.error(f"❌ Unexpected error getting inventory for '{player_name}': {e}", exc_info=True)
+        logger.error(f"   Execution time before error: {time.time() - start_time:.3f}s")
+        
+        # Report error to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action={"type": "get_inventory", "player": player_name},
+            result={"error": str(e), "items_count": 0}
+        )
+        
+        return InventoryList(
+            items=[], 
+            player_name=player_name, 
+            total_items=0, 
+            error=str(e)
+        ).model_dump()
 
 @function_tool
 async def update_item_effect(
@@ -937,6 +1116,21 @@ async def remove_item(
     
     return operation_result
 
+async def get_call_report(user_id: int = None, conversation_id: int = None) -> Dict[str, Any]:
+    """Get a report of inventory call patterns for debugging"""
+    report = call_tracker.get_report()
+    
+    # Add current timestamp
+    report['timestamp'] = datetime.now().isoformat()
+    report['user_filter'] = user_id
+    report['conversation_filter'] = conversation_id
+    
+    # Log the report
+    logger.info("INVENTORY CALL REPORT:")
+    logger.info(json.dumps(report, indent=2))
+    
+    return report
+
 async def get_inventory(
     user_id: int,
     conversation_id: int,
@@ -944,18 +1138,18 @@ async def get_inventory(
 ) -> Dict[str, Any]:
     """
     Get player inventory with governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        player_name: Name of the player (default: "Chase")
-        
-    Returns:
-        Inventory data
     """
+    # ADD THIS: Entry point logging
+    logger.info(f"🎯 MAIN get_inventory() called - User: {user_id}, Conv: {conversation_id}, Player: {player_name}")
+    call_tracker.track_call("get_inventory_main", user_id, conversation_id, player_name)
+    
     # Create inventory context
     inventory_context = InventoryContext(user_id, conversation_id)
     await inventory_context.initialize()
+    
+    # ADD THIS: Add request tracking to context
+    inventory_context.request_id = f"inv_{int(time.time()*1000)}_{user_id}_{conversation_id}"
+    logger.info(f"Request ID: {inventory_context.request_id}")
     
     # Create trace for monitoring
     with trace(
