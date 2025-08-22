@@ -135,8 +135,8 @@ async def run_agent_with_error_handling(
 
 async def decide_image_generation_standalone(ctx: NyxContext, scene_text: str) -> str:
     """Standalone image generation decision without tool context"""
-    from .models import ImageGenerationDecision
-    from .utils import _score_scene_text, _build_image_prompt
+    from .nyx_agent.models import ImageGenerationDecision  # Changed from .models
+    from .nyx_agent.utils import _score_scene_text, _build_image_prompt  # Changed from .utils
     
     # Ensure we have the actual NyxContext, not a wrapper
     if hasattr(ctx, 'context'):
