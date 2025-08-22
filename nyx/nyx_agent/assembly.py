@@ -11,17 +11,11 @@ from .utils import _tool_output, _extract_last_assistant_text
 logger = logging.getLogger(__name__)
 
 def assemble_nyx_response(resp: list) -> Dict[str, Any]:
-    """Assemble final response from agent run with full narrator integration.
-
-    Prefers the concrete narrator output (tool_narrate_slice_of_life_scene) if available.
-    Falls back to orchestrate_slice_scene packaging or other tools/dialogue.
-    """
+    """Assemble final response from agent run with full narrator integration."""
+    
     # --- Pull tool outputs ----------------------------------------------------
-    # Primary scene sources
     narrator_scene = _tool_output(resp, "tool_narrate_slice_of_life_scene")
     packaged_scene = _tool_output(resp, "orchestrate_slice_scene")
-
-    # Other contributors
     dialogue = _tool_output(resp, "generate_npc_dialogue")
     world = _tool_output(resp, "check_world_state")
     npc = _tool_output(resp, "simulate_npc_autonomy")
@@ -32,19 +26,22 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
     routine = _tool_output(resp, "narrate_daily_routine")
     ambient = _tool_output(resp, "generate_ambient_narration")
 
+    # --- 1) Pull assistant text EARLY for fallback ---------------------------
+    last_assistant_text = _extract_last_assistant_text(resp) or ""
+
+    # --- 2) Narrative text ----------------------------------------------------
+    narrative = ""
+    atmosphere = ""
+    nyx_commentary = None
+    governance_approved = True
+    context_aware = False
+
     # Prefer the actual narrator-produced scene
     scene = None
     if isinstance(narrator_scene, dict) and not narrator_scene.get("narrator_request"):
         scene = narrator_scene
     elif isinstance(packaged_scene, dict):
         scene = packaged_scene
-
-    # --- 1) Narrative text ----------------------------------------------------
-    narrative = ""
-    atmosphere = ""
-    nyx_commentary = None
-    governance_approved = True
-    context_aware = False
 
     if scene and isinstance(scene, dict):
         narrative = scene.get("narrative") or scene.get("scene_description") or ""
@@ -55,7 +52,7 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
 
         # If still nothing, try inner scene structure
         if not narrative and "scene" in scene and isinstance(scene["scene"], dict):
-            narrative = scene["scene"].get("description", "") or narrative
+            narrative = scene["scene"].get("description", "") or ""
 
     # Dialogue fallback
     if (not narrative or not narrative.strip()) and isinstance(dialogue, dict):
@@ -68,17 +65,19 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
 
     # Power exchange fallback
     if (not narrative or not narrative.strip()) and isinstance(power, dict):
-        narrative = power.get("narrative") or power.get("moment", "") or narrative
+        narrative = power.get("narrative") or power.get("moment", "") or ""
 
     # Routine fallback
     if (not narrative or not narrative.strip()) and isinstance(routine, dict):
-        narrative = routine.get("description") or routine.get("routine_with_dynamics", "") or narrative
+        narrative = routine.get("description") or routine.get("routine_with_dynamics", "") or ""
 
-    # Final assistant-text fallback
+    # Final assistant-text fallback (make sure this can never end up empty)
     if not narrative or not narrative.strip():
-        narrative = _extract_last_assistant_text(resp) or "The moment unfolds in the simulation."
+        narrative = last_assistant_text or "The moment unfolds in the simulation."
 
-    # --- 2) World metadata ----------------------------------------------------
+    narrative = narrative.strip()
+
+    # --- 3) World metadata ----------------------------------------------------
     world_mood = "neutral"
     time_of_day = "Unknown"
     tension_level = 3
@@ -99,16 +98,22 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    # --- 3) Choices / available activities -----------------------------------
+    # Clamp/validate tension level
+    if not isinstance(tension_level, int):
+        try:
+            tension_level = int(tension_level)
+        except Exception:
+            tension_level = 3
+    tension_level = max(0, min(10, tension_level))
+
+    # --- 4) Choices / available activities (with deduplication) --------------
     available: list[str] = []
 
     if scene and isinstance(scene, dict):
         available = list(scene.get("available_activities") or [])
         if not available:
-            # some narrators return 'choices'
             ch = scene.get("choices") or []
             if isinstance(ch, list):
-                # Normalize choice texts if they are dicts
                 normalized = []
                 for c in ch:
                     if isinstance(c, dict):
@@ -126,8 +131,11 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
 
     if not available:
         available = ["observe", "browse", "leave", "interact"]
+    
+    # Dedupe and clean up choices
+    available = [c for c in dict.fromkeys(x.strip() for x in available if isinstance(x, str) and x.strip())]
 
-    # --- 4) Emergent opportunities -------------------------------------------
+    # --- 5) Emergent opportunities -------------------------------------------
     emergent_opportunities: list[str] = []
     if scene and isinstance(scene, dict):
         eo = scene.get("emergent_opportunities") or []
@@ -139,7 +147,7 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
         if isinstance(evt, dict):
             emergent_opportunities.append(evt.get("title", "Emergent event"))
 
-    # --- 5) Power undertones --------------------------------------------------
+    # --- 6) Power undertones --------------------------------------------------
     power_undertones: list[str] = []
     if scene and isinstance(scene, dict):
         power_undertones = scene.get("power_undertones") or scene.get("power_dynamic_hints") or []
@@ -149,13 +157,6 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
 
     if not power_undertones:
         power_undertones = ["subtle control dynamics"]
-
-    # --- 6) Tension type safety ----------------------------------------------
-    if not isinstance(tension_level, (int, float)):
-        try:
-            tension_level = int(tension_level)
-        except Exception:
-            tension_level = 3
 
     # --- 7) Image decision ----------------------------------------------------
     should_image = False
@@ -196,6 +197,7 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
     # --- 10) Build final response --------------------------------------------
     response: Dict[str, Any] = {
         "narrative": narrative,
+        "full_text": narrative,  # 🔑 Compatibility for streamer
         "world": {
             "mood": world_mood,
             "time_of_day": time_of_day,
@@ -217,14 +219,14 @@ def assemble_nyx_response(resp: list) -> Dict[str, Any]:
         },
         "npc": npc_data if npc_data else None,
         "telemetry": {
-            "tools_called": sorted({
+            "tools_called": sorted(list({
                 c.get("name") for c in resp
-                if isinstance(c, dict) and c.get("type") == "function_call"
-            }),
-            "tools_with_output": sorted({
+                if isinstance(c, dict) and c.get("type") == "function_call" and c.get("name")
+            })),
+            "tools_with_output": sorted(list({
                 c.get("name") for c in resp
-                if isinstance(c, dict) and c.get("type") == "function_call_output"
-            }),
+                if isinstance(c, dict) and c.get("type") == "function_call_output" and c.get("name")
+            })),
             "narrator_used": bool(scene and context_aware),
         },
     }
