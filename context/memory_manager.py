@@ -1104,7 +1104,14 @@ class MemoryManager:
         if row["entry_metadata"]:
             try:
                 metadata_dict = json.loads(row["entry_metadata"])
-                metadata = MemoryMetadata(**metadata_dict)
+                # FIX: Filter to only include valid MemoryMetadata fields
+                valid_fields = {
+                    'npc_id', 'location_id', 'quest_id', 'emotion', 'context_type',
+                    'related_memories', 'conflict_id', 'conflict_name', 'conflict_type',
+                    'phase', 'location', 'conflict_identifier', 'timestamp', 'source', 'version'
+                }
+                filtered_metadata = {k: v for k, v in metadata_dict.items() if k in valid_fields}
+                metadata = MemoryMetadata(**filtered_metadata)
             except (json.JSONDecodeError, TypeError, ValidationError):
                 metadata = MemoryMetadata()
         
