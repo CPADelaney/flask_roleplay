@@ -26,3 +26,11 @@ async def debug_connections():
             "message": f"Database connection error: {str(e)}",
             "traceback": traceback.format_exc()
         }), 500
+
+from logic.inventory_system_sdk import get_call_report
+
+@debug_bp.route('/inventory/calls', methods=['GET'])
+async def debug_inventory_calls():
+    """Get inventory call report for debugging"""
+    report = await get_call_report()
+    return jsonify(report)
