@@ -159,9 +159,10 @@ def ensure_int_ids(user_id=None, conversation_id=None):
 ###############################################################################
 
 # Ensure this task ONLY uses asyncpg for DB access
-async def background_chat_task(conversation_id, user_input, user_id, universal_update=None, sio=None, request_id=None):
+async def background_chat_task(conversation_id, user_input, user_id, universal_update=None, sio=None, request_id=None, redis_pool=None):
     """
     Background task for processing chat messages using Nyx agent with OpenAI integration.
+    Now accepts redis_pool parameter for request deduplication.
     """
     # FIX: Convert string IDs to integers immediately
     try:
@@ -175,14 +176,14 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             await sio.emit('error', {'error': 'Invalid ID format'}, room=str(conversation_id))
         # Clear request flag before returning
         if request_id:
-            await clear_request_processing(request_id)
+            await clear_request_processing(request_id, redis_pool)
         return
         
     from quart import current_app
     if not sio:
         logger.error(f"[BG Task {conversation_id}] No socketio instance provided")
         if request_id:
-            await clear_request_processing(request_id)
+            await clear_request_processing(request_id, redis_pool)
         return
 
     logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}, request_id={request_id}")
@@ -226,10 +227,14 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
                 logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
                 await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                if request_id:
+                    await clear_request_processing(request_id, redis_pool)
                 return
             except Exception as update_err:
                 logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
                 await sio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                if request_id:
+                    await clear_request_processing(request_id, redis_pool)
                 return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
@@ -242,6 +247,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
             logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
             await sio.emit('error', {'error': error_msg}, room=str(conversation_id))
+            if request_id:
+                await clear_request_processing(request_id, redis_pool)
             return
 
         # Extract the message content
@@ -317,7 +324,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
     finally:
         # Always clear the processing flag when done
         if request_id:
-            await clear_request_processing(request_id)
+            await clear_request_processing(request_id, redis_pool)
             logger.debug(f"[BG Task {conversation_id}] Cleared processing flag for request_id={request_id}")
 
 async def initialize_preset_stories():
@@ -479,6 +486,36 @@ async def initialize_systems(app: Quart):
 # quart APP CREATION
 ###############################################################################
 
+async def mark_request_processing(request_id: str, timeout: int = 60) -> bool:
+    """
+    Mark request as processing. Returns True if this is a new request,
+    False if it's already being processed.
+    """
+    if not app.redis_rate_limit_pool:
+        # No Redis, can't deduplicate
+        return True
+    
+    try:
+        key = f"processing:{request_id}"
+        # Set with NX (only if not exists) and EX (expire after timeout)
+        # Returns True if key was set, None if it already existed
+        result = await app.redis_rate_limit_pool.set(
+            key, "1", nx=True, ex=timeout
+        )
+        return result is not None  # True if we set it, False if already existed
+    except Exception as e:
+        logger.error(f"Redis error checking request {request_id}: {e}")
+        return True  # On error, allow processing to continue
+
+async def clear_request_processing(request_id: str):
+    """Clear the processing flag for a request"""
+    if app.redis_rate_limit_pool:
+        try:
+            key = f"processing:{request_id}"
+            await app.redis_rate_limit_pool.delete(key)
+        except Exception as e:
+            logger.error(f"Redis error clearing request {request_id}: {e}")
+
 def create_quart_app():
     app = Quart(__name__, static_folder="static", template_folder="templates")
     QuartSchema(app)
@@ -566,35 +603,7 @@ def create_quart_app():
              allow_headers="*")
         logger.info(f"CORS configured with specific origins: {origins}")
 
-    async def mark_request_processing(request_id: str, timeout: int = 60) -> bool:
-        """
-        Mark request as processing. Returns True if this is a new request,
-        False if it's already being processed.
-        """
-        if not app.redis_rate_limit_pool:
-            # No Redis, can't deduplicate
-            return True
-        
-        try:
-            key = f"processing:{request_id}"
-            # Set with NX (only if not exists) and EX (expire after timeout)
-            # Returns True if key was set, None if it already existed
-            result = await app.redis_rate_limit_pool.set(
-                key, "1", nx=True, ex=timeout
-            )
-            return result is not None  # True if we set it, False if already existed
-        except Exception as e:
-            logger.error(f"Redis error checking request {request_id}: {e}")
-            return True  # On error, allow processing to continue
-    
-    async def clear_request_processing(request_id: str):
-        """Clear the processing flag for a request"""
-        if app.redis_rate_limit_pool:
-            try:
-                key = f"processing:{request_id}"
-                await app.redis_rate_limit_pool.delete(key)
-            except Exception as e:
-                logger.error(f"Redis error clearing request {request_id}: {e}")
+
     
     # Modified Socket.IO handler
     @sio.on("storybeat")
@@ -605,8 +614,8 @@ def create_quart_app():
             request_id = f"{sid}_{uuid.uuid4().hex[:8]}"
             logger.debug(f"Generated request_id: {request_id}")
         
-        # Try to mark as processing (atomic operation)
-        if not await mark_request_processing(request_id):
+        # Try to mark as processing (atomic operation) - use global function with redis pool
+        if not await mark_request_processing(request_id, app.redis_rate_limit_pool):
             logger.warning(f"Duplicate request {request_id} ignored for sid={sid}")
             await sio.emit('duplicate_request', {
                 'request_id': request_id,
@@ -660,8 +669,7 @@ def create_quart_app():
             
             await sio.emit("processing", {"message": "Your request is being processed...", "request_id": request_id}, to=sid)
             
-            # Start background task with proper user_id
-            # Pass request_id so it can be cleared when done
+            # Start background task with proper user_id and redis_pool
             sio.start_background_task(
                 background_chat_task,
                 conversation_id,
@@ -669,16 +677,16 @@ def create_quart_app():
                 user_id,
                 universal_update,
                 sio,
-                request_id  # Add this parameter
+                request_id,
+                app.redis_rate_limit_pool  # Pass the redis pool
             )
             app.logger.info(f"Started background_chat_task for sid={sid}, user_id={user_id}, conv_id={conversation_id}, request_id={request_id}")
         
         except Exception as e:
             app.logger.error(f"Error dispatching background_chat_task for sid={sid}: {e}", exc_info=True)
             await sio.emit('error', {'error': 'Server failed to initiate message processing.'}, room=str(conversation_id))
-            # Clear the processing flag on error
-            await clear_request_processing(request_id)
-
+            # Clear the processing flag on error - use global function with redis pool
+            await clear_request_processing(request_id, app.redis_rate_limit_pool)
 
     @app.before_serving
     async def on_startup():
@@ -830,6 +838,18 @@ def create_quart_app():
             await sio.emit("error", {"error": "Empty message"}, to=sid)
             return
         
+        # Generate request_id for deduplication (optional for message handler)
+        request_id = f"{sid}_{uuid.uuid4().hex[:8]}"
+        
+        # Try to mark as processing (optional for message handler)
+        if not await mark_request_processing(request_id, app.redis_rate_limit_pool):
+            logger.warning(f"Duplicate message request {request_id} ignored for sid={sid}")
+            await sio.emit('duplicate_request', {
+                'request_id': request_id,
+                'message': 'Message already being processed'
+            }, to=sid)
+            return
+        
         # Emit acknowledgment
         await sio.emit("message_received", {"status": "processing"}, to=sid)
         
@@ -841,13 +861,17 @@ def create_quart_app():
                 message_content,
                 user_id,  # Properly authenticated user_id
                 None,  # universal_update
-                sio
+                sio,
+                request_id,  # Now passing request_id for deduplication
+                app.redis_rate_limit_pool  # Pass the redis pool
             )
             app.logger.info(f"Started background task for message from user {user_id}, conv_id={conversation_id}")
             
         except Exception as e:
             app.logger.error(f"Error starting message processing task: {e}", exc_info=True)
             await sio.emit('error', {'error': 'Failed to process message'}, room=str(conversation_id))
+            # Clear the processing flag on error
+            await clear_request_processing(request_id, app.redis_rate_limit_pool)
 
     # 6) Security headers
     @app.after_request
