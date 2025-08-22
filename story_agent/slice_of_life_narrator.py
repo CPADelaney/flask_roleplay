@@ -1022,21 +1022,17 @@ async def narrate_slice_of_life_scene(
     if memory_manager:
         try:
             await memory_manager.add_memory(
-                MemoryAddRequest(
-                    user_id=context.user_id,
-                    conversation_id=context.conversation_id,
-                    content=scene_desc,
-                    memory_type="scene",
-                    importance=significance / 10.0,
-                    tags=["scene", scene.event_type.value, f"tone_{tone.value}", f"focus_{focus.value}"] + 
-                         (["conflict_present"] if conflict_influences else []) +
-                         [f"npc_{npc_id}" for npc_id in scene.participants[:3]],  # Add NPC tags
-                    metadata=MemoryMetadata(
-                        location=canonical_location,
-                        context_type=scene.event_type.value,
-                        emotion=tone.value
-                    )
-                )
+                content=scene_desc,
+                memory_type="scene",
+                importance=significance / 10.0,
+                tags=["scene", scene.event_type.value, f"tone_{tone.value}", f"focus_{focus.value}"] + 
+                     (["conflict_present"] if conflict_influences else []) +
+                     [f"npc_{npc_id}" for npc_id in scene.participants[:3]],
+                metadata=MemoryMetadata(
+                    location=canonical_location,
+                    context_type=scene.event_type.value,
+                    emotion=tone.value
+                ).dict()
             )
         except Exception as e:
             logger.warning(f"memory_manager.add_memory failed: {e}")
@@ -1231,19 +1227,15 @@ async def generate_npc_dialogue(
     if memory_manager:
         try:
             await memory_manager.add_memory(
-                MemoryAddRequest(
-                    user_id=context.user_id,
-                    conversation_id=context.conversation_id,
-                    content=f"{npc['npc_name']}: {dialogue}",
-                    memory_type="dialogue",
-                    importance=0.6,
-                    tags=["dialogue", f"npc_{npc_id}", stage.name, f"tone_{tone}"],
-                    metadata=MemoryMetadata(
-                        npc_id=str(npc_id),
-                        emotion=tone,
-                        context_type=stage.name
-                    )
-                )
+                content=f"{npc['npc_name']}: {dialogue}",
+                memory_type="dialogue",
+                importance=0.6,
+                tags=["dialogue", f"npc_{npc_id}", stage.name, f"tone_{tone}"],
+                metadata=MemoryMetadata(
+                    npc_id=str(npc_id),
+                    emotion=tone,
+                    context_type=stage.name
+                ).dict()
             )
         except Exception as e:
             logger.warning("NPC_DIALOGUE[%s]: add_memory failed: %s", call_id, e)
@@ -1506,20 +1498,16 @@ async def narrate_power_exchange(
     # Store in memory as significant event
     if memory_manager:
         await memory_manager.add_memory(
-            MemoryAddRequest(
-                user_id=context.user_id,
-                conversation_id=context.conversation_id,
-                content=f"Power exchange with {npc['npc_name']}: {moment}",
-                memory_type="power_exchange",
-                importance=min(1.0, 0.7 + exchange.intensity * 0.3),
-                tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value,
-                      f"intensity_{int(exchange.intensity*10)}", f"significance_{significance}"],
-                metadata=MemoryMetadata(
-                    npc_id=str(exchange.initiator_npc_id),
-                    context_type=exchange.exchange_type.value,
-                    location=canonical_location if 'canonical_location' in locals() else None
-                )
-            )
+            content=f"Power exchange with {npc['npc_name']}: {moment}",
+            memory_type="power_exchange",
+            importance=min(1.0, 0.7 + exchange.intensity * 0.3),
+            tags=["power", f"npc_{exchange.initiator_npc_id}", exchange.exchange_type.value,
+                  f"intensity_{int(exchange.intensity*10)}", f"significance_{significance}"],
+            metadata=MemoryMetadata(
+                npc_id=str(exchange.initiator_npc_id),
+                context_type=exchange.exchange_type.value,
+                location=canonical_location if 'canonical_location' in locals() else None
+            ).dict()
         )
     
     # Return JSON string
@@ -2596,17 +2584,13 @@ class SliceOfLifeNarrator:
         if memory_manager:
             try:
                 await memory_manager.add_memory(
-                    MemoryAddRequest(
-                        user_id=context.user_id,
-                        conversation_id=context.conversation_id,
-                        content=f"Player action: {action}",
-                        memory_type="decision",
-                        importance=0.7,
-                        tags=["player_action"] + [f"npc_{npc_id}" for npc_id in (affected_npcs or [])[:3]],
-                        metadata=MemoryMetadata(
-                            context_type="player_action"
-                        )
-                    )
+                    content=f"Player action: {action}",
+                    memory_type="decision",
+                    importance=0.7,
+                    tags=["player_action"] + [f"npc_{npc_id}" for npc_id in (affected_npcs or [])[:3]],
+                    metadata=MemoryMetadata(
+                        context_type="player_action"
+                    ).dict()
                 )
             except Exception as e:
                 logger.warning(f"Failed to store player action in memory: {e}")
