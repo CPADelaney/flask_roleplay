@@ -1,22 +1,17 @@
 # logic/inventory_system_sdk.py
 """
-Inventory management system using OpenAI's Agents SDK with Nyx Governance integration.
-
-This module provides agent-based inventory management functionality, replacing the
-traditional function-based approach in inventory_logic.py with a more agentic system
-that integrates with Nyx governance.
+Optimized Inventory management system using OpenAI's Agents SDK with Nyx Governance integration.
+Includes caching, deduplication, and direct database access for improved performance.
 """
 
 import logging
 import json
 import asyncio
-import traceback  # ADD THIS
-import time  # ADD THIS
-from datetime import datetime
+import traceback
+import time
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union
-from collections import defaultdict  # ADD THIS
-
-
+from collections import defaultdict
 
 # OpenAI Agents SDK imports
 from agents import (
@@ -48,40 +43,74 @@ from nyx.integrate import get_central_governance
 
 logger = logging.getLogger(__name__)
 
-
 # -------------------------------------------------------------------------------
-# Pydantic Models for Structured Outputs
+# Caching Layer
 # -------------------------------------------------------------------------------
 
-class InventoryItem(BaseModel):
-    """Structure for an inventory item"""
-    item_name: str = Field(..., description="Name of the item")
-    player_name: str = Field(..., description="Name of the player who owns the item")
-    item_description: Optional[str] = Field(None, description="Description of the item")
-    item_effect: Optional[str] = Field(None, description="Effect of the item")
-    quantity: int = Field(1, description="Quantity of the item")
-    category: Optional[str] = Field(None, description="Category of the item")
-
-class InventoryOperation(BaseModel):
-    """Structure for an inventory operation result"""
-    success: bool = Field(..., description="Whether the operation was successful")
-    item_name: str = Field(..., description="Name of the item involved")
-    player_name: str = Field(..., description="Name of the player")
-    operation: str = Field(..., description="Type of operation performed")
-    quantity: int = Field(1, description="Quantity affected")
-    error: Optional[str] = Field(None, description="Error message if any")
-
-class InventoryList(BaseModel):
-    """Structure for a list of inventory items"""
-    items: List[InventoryItem] = Field(default_factory=list, description="List of inventory items")
-    player_name: str = Field(..., description="Name of the player")
-    total_items: int = Field(0, description="Total number of items")
+class InventoryCache:
+    """Simple cache for inventory queries to prevent redundant database calls"""
+    def __init__(self, ttl_seconds: int = 60):
+        self.cache = {}
+        self.ttl = ttl_seconds
+        
+    def get_key(self, user_id: int, conversation_id: int, player_name: str) -> str:
+        return f"{user_id}:{conversation_id}:{player_name}"
     
-class InventorySafety(BaseModel):
-    """Output for inventory operation safety guardrail"""
-    is_appropriate: bool = Field(..., description="Whether the operation is appropriate")
-    reasoning: str = Field(..., description="Reasoning for the decision")
-    suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
+    def get(self, user_id: int, conversation_id: int, player_name: str) -> Optional[Dict]:
+        key = self.get_key(user_id, conversation_id, player_name)
+        if key in self.cache:
+            entry, timestamp = self.cache[key]
+            if time.time() - timestamp < self.ttl:
+                logger.debug(f"Cache hit for {key}")
+                return entry
+            else:
+                del self.cache[key]  # Remove expired entry
+        return None
+    
+    def set(self, user_id: int, conversation_id: int, player_name: str, data: Dict):
+        key = self.get_key(user_id, conversation_id, player_name)
+        self.cache[key] = (data, time.time())
+        logger.debug(f"Cached inventory for {key}")
+    
+    def invalidate(self, user_id: int, conversation_id: int, player_name: str):
+        """Invalidate cache when inventory changes"""
+        key = self.get_key(user_id, conversation_id, player_name)
+        if key in self.cache:
+            del self.cache[key]
+            logger.debug(f"Invalidated cache for {key}")
+
+# Create global cache instance
+inventory_cache = InventoryCache(ttl_seconds=60)  # Cache for 1 minute
+
+# -------------------------------------------------------------------------------
+# Request Deduplication
+# -------------------------------------------------------------------------------
+
+class RequestDeduplicator:
+    """Prevent duplicate requests within a short time window"""
+    def __init__(self, window_seconds: float = 1.0):
+        self.recent_requests = {}
+        self.window = window_seconds
+        
+    def is_duplicate(self, request_key: str) -> bool:
+        now = time.time()
+        if request_key in self.recent_requests:
+            last_time = self.recent_requests[request_key]
+            if now - last_time < self.window:
+                return True
+        self.recent_requests[request_key] = now
+        # Clean old entries
+        self.recent_requests = {
+            k: v for k, v in self.recent_requests.items() 
+            if now - v < self.window * 10
+        }
+        return False
+
+deduplicator = RequestDeduplicator()
+
+# -------------------------------------------------------------------------------
+# Call Tracking for Debugging
+# -------------------------------------------------------------------------------
 
 class CallTracker:
     """Track function calls for debugging duplicate calls"""
@@ -168,6 +197,42 @@ class CallTracker:
 call_tracker = CallTracker()
 
 # -------------------------------------------------------------------------------
+# Pydantic Models for Structured Outputs
+# -------------------------------------------------------------------------------
+
+class InventoryItem(BaseModel):
+    """Structure for an inventory item"""
+    item_name: str = Field(..., description="Name of the item")
+    player_name: str = Field(..., description="Name of the player who owns the item")
+    item_description: Optional[str] = Field(None, description="Description of the item")
+    item_effect: Optional[str] = Field(None, description="Effect of the item")
+    quantity: int = Field(1, description="Quantity of the item")
+    category: Optional[str] = Field(None, description="Category of the item")
+
+class InventoryOperation(BaseModel):
+    """Structure for an inventory operation result"""
+    success: bool = Field(..., description="Whether the operation was successful")
+    item_name: str = Field(..., description="Name of the item involved")
+    player_name: str = Field(..., description="Name of the player")
+    operation: str = Field(..., description="Type of operation performed")
+    quantity: int = Field(1, description="Quantity affected")
+    error: Optional[str] = Field(None, description="Error message if any")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+class InventoryList(BaseModel):
+    """Structure for a list of inventory items"""
+    items: List[InventoryItem] = Field(default_factory=list, description="List of inventory items")
+    player_name: str = Field(..., description="Name of the player")
+    total_items: int = Field(0, description="Total number of items")
+    error: Optional[str] = Field(None, description="Error message if any")
+    
+class InventorySafety(BaseModel):
+    """Output for inventory operation safety guardrail"""
+    is_appropriate: bool = Field(..., description="Whether the operation is appropriate")
+    reasoning: str = Field(..., description="Reasoning for the decision")
+    suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
+
+# -------------------------------------------------------------------------------
 # Agent Context
 # -------------------------------------------------------------------------------
 
@@ -177,13 +242,192 @@ class InventoryContext:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.governor = None
+        self.request_id = None
         
     async def initialize(self):
         """Initialize context with governance integration"""
         self.governor = await get_central_governance(self.user_id, self.conversation_id)
 
 # -------------------------------------------------------------------------------
-# Function Tools
+# Optimized Direct Database Access Function
+# -------------------------------------------------------------------------------
+
+async def get_inventory_direct(
+    user_id: int,
+    conversation_id: int,
+    player_name: str = "Chase"
+) -> Dict[str, Any]:
+    """
+    Direct inventory retrieval without AI agent overhead.
+    This should be used for simple "get inventory" requests.
+    """
+    # Check cache first
+    cached_result = inventory_cache.get(user_id, conversation_id, player_name)
+    if cached_result is not None:
+        logger.info(f"✅ Returning cached inventory for {player_name}")
+        return cached_result
+    
+    # Log the call
+    logger.info(f"📦 Direct inventory query - User: {user_id}, Conv: {conversation_id}, Player: {player_name}")
+    
+    # Get governor for permission check
+    governor = await get_central_governance(user_id, conversation_id)
+    
+    # Check permission
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="inventory_system",
+        action_type="get_inventory",
+        action_details={"player": player_name}
+    )
+    
+    if not permission["approved"]:
+        logger.warning(f"Permission denied for get_inventory: {permission['reasoning']}")
+        return {
+            "items": [],
+            "player_name": player_name,
+            "total_items": 0,
+            "error": permission["reasoning"]
+        }
+    
+    # Query database directly
+    query = """
+        SELECT item_name, item_description, item_effect, category, quantity
+        FROM PlayerInventory
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+        ORDER BY item_name
+    """
+    
+    items = []
+    try:
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch(query, user_id, conversation_id, player_name)
+            
+            for row in rows:
+                items.append({
+                    "item_name": row["item_name"],
+                    "player_name": player_name,
+                    "item_description": row["item_description"],
+                    "item_effect": row["item_effect"],
+                    "category": row["category"],
+                    "quantity": row["quantity"]
+                })
+        
+        # Create result
+        result = {
+            "items": items,
+            "player_name": player_name,
+            "total_items": len(items)
+        }
+        
+        # Cache the result
+        inventory_cache.set(user_id, conversation_id, player_name, result)
+        
+        # Report to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action={"type": "get_inventory", "player": player_name},
+            result={"items_count": len(items)}
+        )
+        
+        logger.info(f"✅ Retrieved {len(items)} items for {player_name} (direct query)")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting inventory: {e}", exc_info=True)
+        return {
+            "items": [],
+            "player_name": player_name,
+            "total_items": 0,
+            "error": str(e)
+        }
+
+# -------------------------------------------------------------------------------
+# Batch Operations for Efficiency
+# -------------------------------------------------------------------------------
+
+async def get_multiple_inventories(
+    user_id: int,
+    conversation_id: int,
+    player_names: List[str]
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Efficiently get inventories for multiple players in one operation.
+    """
+    results = {}
+    
+    # Check cache for all players first
+    uncached_players = []
+    for player_name in player_names:
+        cached = inventory_cache.get(user_id, conversation_id, player_name)
+        if cached:
+            results[player_name] = cached
+        else:
+            uncached_players.append(player_name)
+    
+    if not uncached_players:
+        return results
+    
+    # Get governor for permission check
+    governor = await get_central_governance(user_id, conversation_id)
+    
+    # Get all uncached inventories in one query
+    query = """
+        SELECT player_name, item_name, item_description, item_effect, category, quantity
+        FROM PlayerInventory
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name = ANY($3)
+        ORDER BY player_name, item_name
+    """
+    
+    try:
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch(query, user_id, conversation_id, uncached_players)
+            
+            # Group by player
+            player_items = defaultdict(list)
+            for row in rows:
+                player_items[row["player_name"]].append({
+                    "item_name": row["item_name"],
+                    "item_description": row["item_description"],
+                    "item_effect": row["item_effect"],
+                    "category": row["category"],
+                    "quantity": row["quantity"]
+                })
+            
+            # Build results and cache
+            for player_name in uncached_players:
+                items = player_items.get(player_name, [])
+                result = {
+                    "items": items,
+                    "player_name": player_name,
+                    "total_items": len(items)
+                }
+                results[player_name] = result
+                inventory_cache.set(user_id, conversation_id, player_name, result)
+        
+        # Report to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action={"type": "get_multiple_inventories", "players": player_names},
+            result={"players_count": len(player_names)}
+        )
+                
+    except Exception as e:
+        logger.error(f"Error getting multiple inventories: {e}", exc_info=True)
+        for player_name in uncached_players:
+            results[player_name] = {
+                "items": [],
+                "player_name": player_name,
+                "total_items": 0,
+                "error": str(e)
+            }
+    
+    return results
+
+# -------------------------------------------------------------------------------
+# Function Tools (with Cache Invalidation)
 # -------------------------------------------------------------------------------
 
 @function_tool
@@ -199,7 +443,7 @@ async def fetch_inventory_item(
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
 
-    # Check permission (Keep as is)
+    # Check permission
     permission = await governor.check_action_permission(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         agent_id="inventory_system",
@@ -209,7 +453,7 @@ async def fetch_inventory_item(
     if not permission["approved"]:
         return {"error": permission["reasoning"], "success": False}
 
-    # --- Updated DB Access ---
+    # Query database
     query = """
         SELECT player_name, item_description, item_effect, quantity, category
         FROM PlayerInventory
@@ -220,22 +464,22 @@ async def fetch_inventory_item(
         LIMIT 1
     """
     try:
-        async with get_db_connection_context() as conn: # Use context manager
+        async with get_db_connection_context() as conn:
             row: Optional[asyncpg.Record] = await conn.fetchrow(
                 query, user_id, conversation_id, item_name, player_name
             )
 
         if not row:
-            # Report action to governance (Keep as is)
+            # Report action to governance
             await governor.process_agent_action_report(
                 agent_type=AgentType.UNIVERSAL_UPDATER,
                 agent_id="inventory_system",
                 action={"type": "fetch_item", "item": item_name, "player": player_name},
-                result={"found": True}
+                result={"found": False}
             )
             return {"error": f"No item named '{item_name}' found in {player_name}'s inventory", "success": False}
 
-        # Extract data (Keep as is)
+        # Extract data
         item_data = {
             "item_name": item_name,
             "player_name": row["player_name"],
@@ -246,12 +490,12 @@ async def fetch_inventory_item(
             "success": True
         }
 
-        # Report action to governance (Keep as is)
+        # Report action to governance
         await governor.process_agent_action_report(
             agent_type=AgentType.UNIVERSAL_UPDATER,
             agent_id="inventory_system",
-            action={"type": "add_item", "item": item_name, "player": player_name, "quantity": quantity},
-            result=result
+            action={"type": "fetch_item", "item": item_name, "player": player_name},
+            result={"found": True}
         )
         return item_data
 
@@ -261,7 +505,6 @@ async def fetch_inventory_item(
     except Exception as e:
         logger.error(f"Error fetching inventory item '{item_name}': {e}", exc_info=True)
         return {"error": str(e), "success": False}
-    # No finally block needed
 
 @function_tool
 async def add_item_to_inventory(
@@ -274,10 +517,14 @@ async def add_item_to_inventory(
     quantity: int = 1
 ) -> Dict[str, Any]:
     """
-    Add an item to a player's inventory.
+    Add an item to a player's inventory (with cache invalidation).
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
+    
+    # Invalidate cache since inventory is changing
+    inventory_cache.invalidate(user_id, conversation_id, player_name)
+    
     governor = ctx.context.governor
 
     # Check permission
@@ -296,9 +543,6 @@ async def add_item_to_inventory(
     # Get LoreSystem instance
     from lore.core.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
-    
-    # Use canon to find or create item
-    from lore.core import canon
     
     result = {}
     try:
@@ -354,9 +598,8 @@ async def add_item_to_inventory(
         await governor.process_agent_action_report(
             agent_type=AgentType.UNIVERSAL_UPDATER,
             agent_id="inventory_system",
-            action_type="add_item",
-            result=result,
-            context={"item": item_name, "player": player_name}
+            action={"type": "add_item", "item": item_name, "player": player_name, "quantity": quantity},
+            result=result
         )
         return result
 
@@ -375,10 +618,14 @@ async def remove_item_from_inventory(
     quantity: int = 1
 ) -> Dict[str, Any]:
     """
-    Remove an item from a player's inventory.
+    Remove an item from a player's inventory (with cache invalidation).
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
+    
+    # Invalidate cache since inventory is changing
+    inventory_cache.invalidate(user_id, conversation_id, player_name)
+    
     governor = ctx.context.governor
 
     # Check permission
@@ -475,39 +722,32 @@ async def get_player_inventory(
     player_name: str = "Chase"
 ) -> Dict[str, Any]:
     """
-    Get all items in a player's inventory.
+    Optimized get_player_inventory with deduplication and caching.
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-
-    # ADD THIS: Debug logging
-    logger.info("=" * 60)
-    logger.info(f"GET_PLAYER_INVENTORY CALLED")
-    logger.info(f"Time: {datetime.now().isoformat()}")
-    logger.info(f"User ID: {user_id}, Conv ID: {conversation_id}, Player: {player_name}")
     
-    # Track the call
+    # Check for duplicate requests
+    request_key = f"{user_id}:{conversation_id}:{player_name}:get_inventory"
+    if deduplicator.is_duplicate(request_key):
+        logger.warning(f"⚠️ Duplicate request detected for {player_name}'s inventory, returning cached result")
+        # Try to return cached result
+        cached = inventory_cache.get(user_id, conversation_id, player_name)
+        if cached:
+            return cached
+    
+    # Check cache first
+    cached_result = inventory_cache.get(user_id, conversation_id, player_name)
+    if cached_result is not None:
+        logger.info(f"✅ Returning cached inventory for {player_name}")
+        return cached_result
+    
+    governor = ctx.context.governor
+    
+    # Log the call
+    logger.info(f"📦 get_player_inventory called - User: {user_id}, Conv: {conversation_id}, Player: {player_name}")
     call_tracker.track_call("get_player_inventory", user_id, conversation_id, player_name)
     
-    # ADD THIS: Log the calling context
-    logger.info("Context info:")
-    if hasattr(ctx, 'context'):
-        for attr in ['agent_type', 'agent_id', 'request_id', 'trace_id']:
-            if hasattr(ctx.context, attr):
-                logger.info(f"  {attr}: {getattr(ctx.context, attr)}")
-    
-    # ADD THIS: Check who's calling via stack inspection
-    stack = traceback.extract_stack()
-    logger.info("Call stack (last 10 frames):")
-    for i, frame in enumerate(stack[-10:]):  # Last 10 frames
-        if any(keyword in frame.filename for keyword in ['nyx', 'agent', 'inventory', 'aggregator', 'logic']):
-            logger.info(f"  Frame {i}: {frame.filename}:{frame.lineno} in {frame.name}")
-            if frame.line:
-                logger.info(f"    Code: {frame.line.strip()}")
-    
-    logger.info("=" * 60)
-
     # Check permission
     logger.debug(f"Checking permission for get_inventory operation...")
     permission = await governor.check_action_permission(
@@ -577,6 +817,9 @@ async def get_player_inventory(
             total_items=len(inventory_items)
         ).model_dump()
         
+        # Cache the successful result
+        inventory_cache.set(user_id, conversation_id, player_name, result)
+        
         # Log summary
         logger.info(f"✅ Successfully retrieved {len(inventory_items)} items for {player_name}")
         logger.info(f"   Total execution time: {time.time() - start_time:.3f}s")
@@ -634,10 +877,14 @@ async def update_item_effect(
     new_effect: str
 ) -> Dict[str, Any]:
     """
-    Update the effect of an item in a player's inventory.
+    Update the effect of an item in a player's inventory (with cache invalidation).
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
+    
+    # Invalidate cache since inventory is changing
+    inventory_cache.invalidate(user_id, conversation_id, player_name)
+    
     governor = ctx.context.governor
 
     # Check permission
@@ -718,7 +965,7 @@ async def categorize_items(
     category_mapping_json: str
 ) -> Dict[str, Any]:
     """
-    Categorize multiple items in a player's inventory.
+    Categorize multiple items in a player's inventory (with cache invalidation).
     
     Args:
         ctx: The context wrapper
@@ -728,6 +975,12 @@ async def categorize_items(
     Returns:
         Dictionary with categorization results
     """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    # Invalidate cache since inventory is changing
+    inventory_cache.invalidate(user_id, conversation_id, player_name)
+    
     # Parse the JSON string
     try:
         category_mapping = json.loads(category_mapping_json)
@@ -739,8 +992,6 @@ async def categorize_items(
             "error": f"Invalid JSON: {str(e)}"
         }
     
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
 
     # Check permission
@@ -824,7 +1075,6 @@ async def categorize_items(
         results["success"] = False
         results["error"] = str(e)
         return results
-    # No finally block needed
 
 # -------------------------------------------------------------------------------
 # Guardrail Functions
@@ -951,7 +1201,7 @@ inventory_system_agent = Agent[InventoryContext](
 )
 
 # -------------------------------------------------------------------------------
-# Main Functions
+# Main Functions (Optimized)
 # -------------------------------------------------------------------------------
 
 async def add_item(
@@ -966,19 +1216,6 @@ async def add_item(
 ) -> Dict[str, Any]:
     """
     Add an item to player inventory with governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        player_name: Name of the player
-        item_name: Name of the item to add
-        description: Description of the item
-        effect: Effect of the item
-        category: Category of the item
-        quantity: Quantity to add (default: 1)
-        
-    Returns:
-        Operation result
     """
     # Create inventory context
     inventory_context = InventoryContext(user_id, conversation_id)
@@ -1050,16 +1287,6 @@ async def remove_item(
 ) -> Dict[str, Any]:
     """
     Remove an item from player inventory with governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        player_name: Name of the player
-        item_name: Name of the item to remove
-        quantity: Quantity to remove (default: 1)
-        
-    Returns:
-        Operation result
     """
     # Create inventory context
     inventory_context = InventoryContext(user_id, conversation_id)
@@ -1068,7 +1295,7 @@ async def remove_item(
     # Create trace for monitoring
     with trace(
         workflow_name="Inventory System",
-        trace_id=f"trace_trace_inventory-remove-{conversation_id}-{int(datetime.now().timestamp())}",
+        trace_id=f"trace_inventory-remove-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
         # Create prompt
@@ -1116,53 +1343,38 @@ async def remove_item(
     
     return operation_result
 
-async def get_call_report(user_id: int = None, conversation_id: int = None) -> Dict[str, Any]:
-    """Get a report of inventory call patterns for debugging"""
-    report = call_tracker.get_report()
-    
-    # Add current timestamp
-    report['timestamp'] = datetime.now().isoformat()
-    report['user_filter'] = user_id
-    report['conversation_filter'] = conversation_id
-    
-    # Log the report
-    logger.info("INVENTORY CALL REPORT:")
-    logger.info(json.dumps(report, indent=2))
-    
-    return report
-
 async def get_inventory(
     user_id: int,
     conversation_id: int,
-    player_name: str = "Chase"
+    player_name: str = "Chase",
+    use_agent: bool = False  # Add option to force agent use for complex queries
 ) -> Dict[str, Any]:
     """
-    Get player inventory with governance oversight.
-    """
-    # ADD THIS: Entry point logging
-    logger.info(f"🎯 MAIN get_inventory() called - User: {user_id}, Conv: {conversation_id}, Player: {player_name}")
-    call_tracker.track_call("get_inventory_main", user_id, conversation_id, player_name)
+    Optimized get player inventory function.
     
-    # Create inventory context
+    For simple inventory retrieval, uses direct database access.
+    Only uses AI agent when complex interpretation is needed.
+    """
+    logger.info(f"🎯 get_inventory() called - User: {user_id}, Conv: {conversation_id}, Player: {player_name}")
+    
+    # For simple get inventory requests, use direct access
+    if not use_agent:
+        return await get_inventory_direct(user_id, conversation_id, player_name)
+    
+    # Only use agent for complex queries that need interpretation
     inventory_context = InventoryContext(user_id, conversation_id)
     await inventory_context.initialize()
     
-    # ADD THIS: Add request tracking to context
+    # Add request tracking to context
     inventory_context.request_id = f"inv_{int(time.time()*1000)}_{user_id}_{conversation_id}"
     logger.info(f"Request ID: {inventory_context.request_id}")
     
-    # Create trace for monitoring
     with trace(
         workflow_name="Inventory System",
         trace_id=f"trace_inventory-get-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
-        # Create prompt
-        prompt = f"""
-        Get {player_name}'s current inventory.
-        """
-        
-        # Run the agent
+        prompt = f"Get {player_name}'s current inventory."
         result = await Runner.run(
             inventory_system_agent,
             prompt,
@@ -1200,14 +1412,25 @@ async def get_inventory(
     
     return inventory_data
 
+async def get_call_report(user_id: int = None, conversation_id: int = None) -> Dict[str, Any]:
+    """Get a report of inventory call patterns for debugging"""
+    report = call_tracker.get_report()
+    
+    # Add current timestamp
+    report['timestamp'] = datetime.now().isoformat()
+    report['user_filter'] = user_id
+    report['conversation_filter'] = conversation_id
+    
+    # Log the report
+    logger.info("INVENTORY CALL REPORT:")
+    logger.info(json.dumps(report, indent=2))
+    
+    return report
+
 # Register with Nyx governance
 async def register_with_governance(user_id: int, conversation_id: int):
     """
     Register inventory agents with Nyx governance system.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
     """
     # Get governor
     governor = await get_central_governance(user_id, conversation_id)
