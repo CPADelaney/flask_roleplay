@@ -84,10 +84,47 @@ function isNearBottom(element, threshold = 200) {
 
 // Debug logging helper
 function debugLog(...args) {
-  if (window.localStorage.getItem('debugSocket') === '1') {
-    console.log(...args);
+  if (window.localStorage.getItem('debugSocket') === '1' || window.DEBUG_MODE) {
+    console.log('[DEBUG]', ...args);
   }
 }
+
+// Enable debug mode programmatically
+window.enableDebugMode = function() {
+  window.DEBUG_MODE = true;
+  window.localStorage.setItem('debugSocket', '1');
+  console.log('Debug mode enabled. Socket and message logging activated.');
+};
+
+window.disableDebugMode = function() {
+  window.DEBUG_MODE = false;
+  window.localStorage.removeItem('debugSocket');
+  console.log('Debug mode disabled.');
+};
+
+// Get current connection status for debugging
+window.getConnectionStatus = function() {
+  return {
+    connected: AppState.isConnected,
+    status: AppState.connectionStatus,
+    currentRoom: AppState.currentRoomId,
+    currentConversation: AppState.currentConvId,
+    socketId: socketManager.socket ? socketManager.socket.id : null,
+    pendingRequests: AppState.pendingRequests.size,
+    isSending: AppState.isSendingMessage
+  };
+};
+
+// Force reconnect for debugging
+window.forceReconnect = function() {
+  console.log('Forcing reconnection...');
+  if (socketManager.socket) {
+    socketManager.socket.disconnect();
+    setTimeout(() => {
+      socketManager.socket.connect();
+    }, 1000);
+  }
+};
 
 // ===== Configuration =====
 const CONFIG = {
@@ -123,6 +160,7 @@ const AppState = {
   socket: null,
   isConnected: false,
   reconnectionInProgress: false,
+  connectionStatus: 'disconnected', // 'disconnected', 'connecting', 'connected'
   
   // Message streaming
   currentAssistantBubble: null,
@@ -133,32 +171,13 @@ const AppState = {
   heartbeatInterval: null,
   
   // Pending operations
-  pendingUniversalUpdates: null
-  // Add request tracking
+  pendingUniversalUpdates: null,
+  
+  // Request tracking
   pendingRequests: new Map(), // Track pending requests by ID
   lastRequestTime: 0,
-  REQUEST_COOLDOWN: 500, // Minimum ms between requests
+  REQUEST_COOLDOWN: 500 // Minimum ms between requests
 };
-
-// Add throttling check to sendMessage
-async function sendMessage() {
-  const userInput = $("userMsg");
-  if (!userInput) return;
-  
-  const userText = userInput.value.trim();
-  
-  if (!userText || !AppState.currentConvId) {
-    return;
-  }
-
-  // Throttle rapid requests
-  const now = Date.now();
-  if (now - AppState.lastRequestTime < AppState.REQUEST_COOLDOWN) {
-    console.warn("Request throttled - too fast");
-    return;
-  }
-  AppState.lastRequestTime = now;
-  
 
 // Universal updates object factory
 function createUniversalUpdates() {
@@ -198,7 +217,6 @@ function createRobustSocketConnection(handlers = {}) {
   // Get the user ID from the window object (set by the template)
   const userId = window.CURRENT_USER_ID;
   
-  // ADD DEBUGGING
   console.log('Creating socket with userId:', userId, 'type:', typeof userId);
   
   // Pass userId as query parameter since auth object isn't working
@@ -217,8 +235,8 @@ function createRobustSocketConnection(handlers = {}) {
     }
   });
 
-  // ADD MORE DEBUGGING
   console.log('Socket created with auth:', socket.auth);
+  
   // Connection events
   socket.on('connect', () => {
     console.log('Socket connected:', socket.id, 'with user_id:', userId);
@@ -345,28 +363,13 @@ async function startPresetGame(storyId) {
 
   closePresetStoryModal();
 
-  const newGameBtn = $("newGameBtn");
-  // Debug version - add this temporarily to chat_page.js
-  if (newGameBtn) {
-      newGameBtn.addEventListener("click", function(e) {
-          e.preventDefault();
-          e.stopPropagation();
-          
-          const dropdown = $('newGameDropdown');
-          if (dropdown) {
-              // Toggle display directly
-              if (dropdown.style.display === 'none' || !dropdown.style.display) {
-                  dropdown.style.display = 'block';
-              } else {
-                  dropdown.style.display = 'none';
-              }
-          } else {
-              console.error('Dropdown element not found!');
-          }
-      });
-  }
-
   AppState.isCreatingGame = true;
+
+  const newGameBtn = $("newGameBtn");
+  if (newGameBtn) {
+    newGameBtn.disabled = true;
+    newGameBtn.textContent = "Creating...";
+  }
 
   const chatWindow = $("chatWindow");
   const loadingDiv = document.createElement("div");
@@ -560,10 +563,11 @@ class SocketManager {
       return;
     }
   
-    // ADD THIS DEBUG
     console.log('About to create socket, window.CURRENT_USER_ID:', window.CURRENT_USER_ID);
     console.log('createRobustSocketConnection is:', typeof createRobustSocketConnection, typeof window.createRobustSocketConnection);
   
+    AppState.connectionStatus = 'connecting';
+    
     // Create socket with robust configuration
     this.socket = createRobustSocketConnection({
       onConnect: (socket, wasReconnect) => this.handleConnect(socket, wasReconnect),
@@ -606,6 +610,14 @@ class SocketManager {
   handleConnect(socket, wasReconnect) {
     console.log("Socket connected with ID:", socket.id);
     AppState.isConnected = true;
+    AppState.connectionStatus = 'connected';
+    
+    // Update UI connection indicator if it exists
+    const statusIndicator = document.querySelector('.connection-status');
+    if (statusIndicator) {
+      statusIndicator.textContent = '🟢 Connected';
+      statusIndicator.style.color = '#4caf50';
+    }
     
     if (wasReconnect) {
       appendMessage({ sender: "system", content: "Connection restored!" }, true);
@@ -623,8 +635,16 @@ class SocketManager {
   handleDisconnect(socket, reason) {
     console.error("Socket disconnected:", reason);
     AppState.isConnected = false;
+    AppState.connectionStatus = 'disconnected';
     AppState.currentRoomId = null;
     AppState.reconnectionInProgress = true;
+    
+    // Update UI connection indicator if it exists
+    const statusIndicator = document.querySelector('.connection-status');
+    if (statusIndicator) {
+      statusIndicator.textContent = '🔴 Disconnected';
+      statusIndicator.style.color = '#f44336';
+    }
     
     // Clear sending state to prevent stuck UI
     AppState.isSendingMessage = false;
@@ -647,7 +667,15 @@ class SocketManager {
   handleReconnect(socket, attemptNumber) {
     console.log(`Socket reconnected after ${attemptNumber} attempts`);
     AppState.isConnected = true;
+    AppState.connectionStatus = 'connected';
     AppState.reconnectionInProgress = false;
+    
+    // Update UI connection indicator if it exists
+    const statusIndicator = document.querySelector('.connection-status');
+    if (statusIndicator) {
+      statusIndicator.textContent = '🟢 Connected';
+      statusIndicator.style.color = '#4caf50';
+    }
     
     // Rejoin the conversation room if we had one
     if (AppState.currentConvId) {
@@ -660,6 +688,14 @@ class SocketManager {
   handleReconnectFailed() {
     console.error("Socket reconnection failed");
     AppState.isSendingMessage = false;
+    AppState.connectionStatus = 'disconnected';
+    
+    // Update UI connection indicator if it exists
+    const statusIndicator = document.querySelector('.connection-status');
+    if (statusIndicator) {
+      statusIndicator.textContent = '❌ Connection Failed';
+      statusIndicator.style.color = '#f44336';
+    }
     
     // Re-enable input
     const userInput = $("userMsg");
@@ -767,14 +803,56 @@ class SocketManager {
       }
     });
 
+    // Enhanced message handler for server's improved emission
+    this.socket.on("message", (payload) => {
+      // Log what we received (matching server-side logging)
+      const textLen = payload.full_text ? payload.full_text.length : 0;
+      const preview = payload.full_text ? payload.full_text.substring(0, 80) : '';
+      console.log(`Received message: len=${textLen} preview="${preview}" request_id=${payload.request_id}`);
+      
+      // Handle the full message
+      if (payload.full_text) {
+        // Ensure we have non-empty text
+        const messageText = payload.full_text.trim() || "…";
+        
+        // If we're currently streaming, finalize with this text
+        if (AppState.currentAssistantBubble) {
+          finalizeAssistantMessage(messageText);
+        } else {
+          // Otherwise append as new message
+          appendMessage({ sender: "Nyx", content: messageText }, true);
+        }
+      }
+      
+      // Clear request tracking if provided
+      if (payload.request_id && AppState.pendingRequests) {
+        console.log(`Clearing request ${payload.request_id} from tracking`);
+        AppState.pendingRequests.delete(payload.request_id);
+      }
+    });
+
     // Message streaming events
     this.socket.on("new_token", (payload) => {
+      debugLog(`Token received: "${payload.token}"`);
       handleNewToken(payload.token);
     });
 
     this.socket.on("done", (payload) => {
       console.log("Done streaming, request_id:", payload.request_id);
-      finalizeAssistantMessage(payload.full_text);
+      
+      // Enhanced logging for full_text
+      if (payload.full_text) {
+        const textLen = payload.full_text.length;
+        const preview = payload.full_text.substring(0, 80);
+        console.log(`Final text: len=${textLen} preview="${preview}"`);
+      } else {
+        console.warn("Done event received without full_text");
+      }
+      
+      // Ensure we never pass empty text to finalizer
+      const finalText = (payload.full_text || "").trim() || AppState.partialAssistantMarkdown || "…";
+      finalizeAssistantMessage(finalText);
+      
       AppState.isSendingMessage = false;
       
       // Clear the specific request from tracking
@@ -788,6 +866,8 @@ class SocketManager {
 
     this.socket.on("error", (payload) => {
       console.error("Server error:", payload.error);
+      console.error("Error payload details:", payload);
+      
       removeProcessingIndicator();
       appendMessage({ 
         sender: "system", 
@@ -797,6 +877,7 @@ class SocketManager {
       
       // Clear all pending requests on error
       if (AppState.pendingRequests) {
+        console.log(`Clearing ${AppState.pendingRequests.size} pending requests due to error`);
         AppState.pendingRequests.clear();
       }
       
@@ -860,6 +941,11 @@ class SocketManager {
       }
     }
 
+    // Enhanced logging to match server-side debugging
+    const textLen = data.user_input ? data.user_input.length : 0;
+    const preview = data.user_input ? data.user_input.substring(0, 80) : '';
+    console.log(`Emitting storybeat: len=${textLen} preview="${preview}" request_id=${data.request_id}`);
+    
     this.socket.emit("storybeat", data);
     return true;
   }
@@ -973,11 +1059,42 @@ function appendImageToChat(imageUrl, reason) {
   return MessageFactory.createImage(imageUrl, reason);
 }
 
+// Helper to extract meaningful text from various response formats
+function extractMeaningfulText(response) {
+  // Try various fields that might contain the actual message
+  if (response) {
+    // Direct text fields
+    if (response.full_text && response.full_text.trim()) return response.full_text.trim();
+    if (response.narrative && response.narrative.trim()) return response.narrative.trim();
+    if (response.message && response.message.trim()) return response.message.trim();
+    if (response.content && response.content.trim()) return response.content.trim();
+    
+    // Nested response structures
+    if (response.response_result) {
+      if (response.response_result.main_message) return response.response_result.main_message.trim();
+      if (response.response_result.message) return response.response_result.message.trim();
+    }
+    
+    if (response.processing_result) {
+      if (response.processing_result.message) return response.processing_result.message.trim();
+    }
+    
+    // Last resort - check for text property
+    if (response.text && response.text.trim()) return response.text.trim();
+  }
+  
+  // Fallback to ellipsis if nothing found
+  return "…";
+}
+
 // Optimized token handling with throttling
 function handleNewToken(token) {
   removeProcessingIndicator();
   const chatWindow = $("chatWindow");
   if (!chatWindow) return;
+
+  // Debug log token if in debug mode
+  debugLog(`Token received: "${token}"`);
 
   if (!AppState.currentAssistantBubble) {
     const row = document.createElement("div");
@@ -1003,6 +1120,11 @@ function handleNewToken(token) {
   // Accumulate markdown
   AppState.partialAssistantMarkdown += token;
   
+  // Debug log accumulated text length periodically
+  if (AppState.partialAssistantMarkdown.length % 100 === 0) {
+    debugLog(`Accumulated text length: ${AppState.partialAssistantMarkdown.length}`);
+  }
+  
   // Simplified throttled UI update
   if (!AppState._rafScheduled) {
     AppState._rafScheduled = true;
@@ -1022,28 +1144,40 @@ function handleNewToken(token) {
 }
 
 function finalizeAssistantMessage(finalText) {
-  // Use server text if valid, otherwise fall back to accumulated markdown
-  const text = (typeof finalText === 'string' && finalText.trim().length > 0)
-    ? finalText
-    : AppState.partialAssistantMarkdown;
+  // Enhanced validation matching server-side logic
+  let text = "";
+  
+  if (typeof finalText === 'string' && finalText.trim().length > 0) {
+    text = finalText.trim();
+  } else if (AppState.partialAssistantMarkdown && AppState.partialAssistantMarkdown.trim().length > 0) {
+    text = AppState.partialAssistantMarkdown.trim();
+  } else {
+    // Fallback to ellipsis if no text available (matching server behavior)
+    text = "…";
+  }
+  
+  // Log what we're finalizing (for debugging)
+  console.log(`Finalizing message: len=${text.length} preview="${text.substring(0, 80)}"`);
 
   if (!AppState.currentAssistantBubble) {
-    if (text && text.trim()) {
-      appendMessage({ sender: "Nyx", content: text }, true);
-    }
+    // No bubble exists, create a new message
+    appendMessage({ sender: "Nyx", content: text }, true);
   } else {
     // Parse markdown once at the end
     try {
       AppState.currentAssistantBubble.innerHTML = sanitizeAndRenderMarkdown(text);
     } catch (e) {
       console.error('Error finalizing message:', e);
+      // Fallback to plain text on error
       AppState.currentAssistantBubble.textContent = text;
     }
   }
   
+  // Clear streaming state
   AppState.currentAssistantBubble = null;
   AppState.partialAssistantMarkdown = "";
   
+  // Auto-scroll to bottom
   const chatWindow = $("chatWindow");
   if (chatWindow) {
     requestAnimationFrame(() => {
@@ -1089,6 +1223,14 @@ async function sendMessage() {
     return;
   }
 
+  // Throttle rapid requests
+  const now = Date.now();
+  if (now - AppState.lastRequestTime < AppState.REQUEST_COOLDOWN) {
+    console.warn("Request throttled - too fast");
+    return;
+  }
+  AppState.lastRequestTime = now;
+
   // Generate unique request ID for this message
   const requestId = generateRequestId();
   console.log(`Sending message with request_id: ${requestId}`);
@@ -1127,78 +1269,36 @@ async function sendMessage() {
       player_name: "Chase",
       advance_time: false,
       universal_update: AppState.pendingUniversalUpdates,
-      request_id: requestId  // ADD THIS
+      request_id: requestId
     };
+
+    // Track this request
+    AppState.pendingRequests.set(requestId, {
+      timestamp: now,
+      message: userText
+    });
 
     // Send message
     console.log(`Sending message for conversation ${AppState.currentConvId} with request_id ${requestId}`);
+    console.log(`Message preview: "${userText.substring(0, 80)}" (len=${userText.length})`);
     
     const sent = await socketManager.sendMessage(messageData);
     if (!sent) {
       throw new Error("Failed to send message");
     }
+    
+    console.log(`Message sent successfully with request_id ${requestId}`);
 
     // Set timeout for response with request ID tracking
     setTimeout(() => {
-      if (AppState.isSendingMessage) {
-        console.warn(`Request ${requestId} timed out`);
+      if (AppState.pendingRequests.has(requestId)) {
+        console.warn(`Request ${requestId} timed out after ${CONFIG.SEND_TIMEOUT}ms`);
         appendMessage({ 
           sender: "system", 
           content: "Server is taking longer than expected. Please wait..." 
         }, true);
-        // Clear stale data on timeout
-        resetPendingUniversalUpdates();
-        AppState.isSendingMessage = false;
-      }
-    }, CONFIG.SEND_TIMEOUT);
-    
-  } catch (err) {
-    console.error("Error sending message:", err);
-    appendMessage({ 
-      sender: "system", 
-      content: "Failed to send message. Please check your connection." 
-    }, true);
-    AppState.isSendingMessage = false;
-  } finally {
-    userInput.disabled = false;
-    // Ensure flag is cleared even if Nyx handler fails
-    if (AppState.currentConvId === CONFIG.NYX_SPACE_CONV_ID) {
-      AppState.isSendingMessage = false;
-    }
-  }
-}
-
-    // Display user message
-    appendMessage({ sender: "user", content: userText }, true);
-
-    // Reset streaming state
-    AppState.currentAssistantBubble = null;
-    AppState.partialAssistantMarkdown = "";
-
-    // Prepare message data
-    const messageData = {
-      user_input: userText,
-      conversation_id: safeConvertId(AppState.currentConvId),
-      player_name: "Chase",
-      advance_time: false,
-      universal_update: AppState.pendingUniversalUpdates
-    };
-
-    // Send message
-    console.log(`Sending message for conversation ${AppState.currentConvId}`);
-    
-    const sent = await socketManager.sendMessage(messageData);
-    if (!sent) {
-      throw new Error("Failed to send message");
-    }
-
-    // Set timeout for response
-    setTimeout(() => {
-      if (AppState.isSendingMessage) {
-        appendMessage({ 
-          sender: "system", 
-          content: "Server is taking longer than expected. Please wait..." 
-        }, true);
+        // Clear this specific request
+        AppState.pendingRequests.delete(requestId);
         // Clear stale data on timeout
         resetPendingUniversalUpdates();
         AppState.isSendingMessage = false;
@@ -1249,15 +1349,11 @@ async function handleNyxSpaceMessage(userText) {
 
     console.log("Admin Nyx response:", replyData);
 
-    // Extract response
-    let aiReply = "...";
-    if (replyData.response_result && replyData.response_result.main_message) {
-      aiReply = replyData.response_result.main_message;
-    } else if (replyData.processing_result && replyData.processing_result.message) {
-      aiReply = replyData.processing_result.message;
-    } else if (replyData.response_result && replyData.response_result.message) {
-      aiReply = replyData.response_result.message;
-    }
+    // Extract response using the enhanced helper
+    const aiReply = extractMeaningfulText(replyData);
+    
+    // Log what we extracted for debugging
+    console.log(`Extracted Nyx reply: len=${aiReply.length} preview="${aiReply.substring(0, 80)}"`);
 
     appendMessage({sender: "Nyx", content: aiReply}, true);
 
@@ -1294,7 +1390,7 @@ async function advanceTime() {
     return;
   }
 
-  const requestId = generateRequestId();  // ADD THIS
+  const requestId = generateRequestId();
   console.log(`Advancing time with request_id: ${requestId}`);
 
   AppState.isSendingMessage = true;
@@ -1314,7 +1410,7 @@ async function advanceTime() {
     player_name: "Chase",
     advance_time: true,
     universal_update: AppState.pendingUniversalUpdates,
-    request_id: requestId  // ADD THIS
+    request_id: requestId
   };
 
   try {
