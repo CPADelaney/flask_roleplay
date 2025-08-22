@@ -486,12 +486,17 @@ async def initialize_systems(app: Quart):
 # quart APP CREATION
 ###############################################################################
 
-async def mark_request_processing(request_id: str, timeout: int = 60) -> bool:
+async def mark_request_processing(request_id: str, redis_pool, timeout: int = 60) -> bool:
     """
     Mark request as processing. Returns True if this is a new request,
     False if it's already being processed.
+    
+    Args:
+        request_id: Unique identifier for the request
+        redis_pool: Redis connection pool to use for deduplication
+        timeout: How long to keep the processing flag (seconds)
     """
-    if not app.redis_rate_limit_pool:
+    if not redis_pool:
         # No Redis, can't deduplicate
         return True
     
@@ -499,7 +504,7 @@ async def mark_request_processing(request_id: str, timeout: int = 60) -> bool:
         key = f"processing:{request_id}"
         # Set with NX (only if not exists) and EX (expire after timeout)
         # Returns True if key was set, None if it already existed
-        result = await app.redis_rate_limit_pool.set(
+        result = await redis_pool.set(
             key, "1", nx=True, ex=timeout
         )
         return result is not None  # True if we set it, False if already existed
@@ -507,12 +512,18 @@ async def mark_request_processing(request_id: str, timeout: int = 60) -> bool:
         logger.error(f"Redis error checking request {request_id}: {e}")
         return True  # On error, allow processing to continue
 
-async def clear_request_processing(request_id: str):
-    """Clear the processing flag for a request"""
-    if app.redis_rate_limit_pool:
+async def clear_request_processing(request_id: str, redis_pool):
+    """
+    Clear the processing flag for a request
+    
+    Args:
+        request_id: Unique identifier for the request
+        redis_pool: Redis connection pool to use
+    """
+    if redis_pool:
         try:
             key = f"processing:{request_id}"
-            await app.redis_rate_limit_pool.delete(key)
+            await redis_pool.delete(key)
         except Exception as e:
             logger.error(f"Redis error clearing request {request_id}: {e}")
 
