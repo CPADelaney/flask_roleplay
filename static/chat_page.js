@@ -16,6 +16,10 @@ function sanitizeAndRenderMarkdown(markdownText) {
   }
 }
 
+function generateRequestId() {
+  return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
 // Dynamic DOM helper to avoid stale references
 function $(id) {
   return document.getElementById(id);
@@ -130,7 +134,31 @@ const AppState = {
   
   // Pending operations
   pendingUniversalUpdates: null
+  // Add request tracking
+  pendingRequests: new Map(), // Track pending requests by ID
+  lastRequestTime: 0,
+  REQUEST_COOLDOWN: 500, // Minimum ms between requests
 };
+
+// Add throttling check to sendMessage
+async function sendMessage() {
+  const userInput = $("userMsg");
+  if (!userInput) return;
+  
+  const userText = userInput.value.trim();
+  
+  if (!userText || !AppState.currentConvId) {
+    return;
+  }
+
+  // Throttle rapid requests
+  const now = Date.now();
+  if (now - AppState.lastRequestTime < AppState.REQUEST_COOLDOWN) {
+    console.warn("Request throttled - too fast");
+    return;
+  }
+  AppState.lastRequestTime = now;
+  
 
 // Universal updates object factory
 function createUniversalUpdates() {
@@ -745,9 +773,14 @@ class SocketManager {
     });
 
     this.socket.on("done", (payload) => {
-      console.log("Done streaming");
+      console.log("Done streaming, request_id:", payload.request_id);
       finalizeAssistantMessage(payload.full_text);
       AppState.isSendingMessage = false;
+      
+      // Clear the specific request from tracking
+      if (payload.request_id && AppState.pendingRequests) {
+        AppState.pendingRequests.delete(payload.request_id);
+      }
       
       // Reset universal updates only on success
       resetPendingUniversalUpdates();
@@ -761,6 +794,11 @@ class SocketManager {
         content: `Error: ${payload.error}` 
       }, true);
       AppState.isSendingMessage = false;
+      
+      // Clear all pending requests on error
+      if (AppState.pendingRequests) {
+        AppState.pendingRequests.clear();
+      }
       
       // Reset universal updates on error too
       resetPendingUniversalUpdates();
@@ -1051,10 +1089,14 @@ async function sendMessage() {
     return;
   }
 
+  // Generate unique request ID for this message
+  const requestId = generateRequestId();
+  console.log(`Sending message with request_id: ${requestId}`);
+
   // Set sending state immediately
   AppState.isSendingMessage = true;
   userInput.value = "";
-  userInput.disabled = true; // Prevent input during send
+  userInput.disabled = true;
 
   try {
     // Handle Nyx Space differently
@@ -1070,6 +1112,61 @@ async function sendMessage() {
       }
       return;
     }
+
+    // Display user message
+    appendMessage({ sender: "user", content: userText }, true);
+
+    // Reset streaming state
+    AppState.currentAssistantBubble = null;
+    AppState.partialAssistantMarkdown = "";
+
+    // Prepare message data WITH REQUEST ID
+    const messageData = {
+      user_input: userText,
+      conversation_id: safeConvertId(AppState.currentConvId),
+      player_name: "Chase",
+      advance_time: false,
+      universal_update: AppState.pendingUniversalUpdates,
+      request_id: requestId  // ADD THIS
+    };
+
+    // Send message
+    console.log(`Sending message for conversation ${AppState.currentConvId} with request_id ${requestId}`);
+    
+    const sent = await socketManager.sendMessage(messageData);
+    if (!sent) {
+      throw new Error("Failed to send message");
+    }
+
+    // Set timeout for response with request ID tracking
+    setTimeout(() => {
+      if (AppState.isSendingMessage) {
+        console.warn(`Request ${requestId} timed out`);
+        appendMessage({ 
+          sender: "system", 
+          content: "Server is taking longer than expected. Please wait..." 
+        }, true);
+        // Clear stale data on timeout
+        resetPendingUniversalUpdates();
+        AppState.isSendingMessage = false;
+      }
+    }, CONFIG.SEND_TIMEOUT);
+    
+  } catch (err) {
+    console.error("Error sending message:", err);
+    appendMessage({ 
+      sender: "system", 
+      content: "Failed to send message. Please check your connection." 
+    }, true);
+    AppState.isSendingMessage = false;
+  } finally {
+    userInput.disabled = false;
+    // Ensure flag is cleared even if Nyx handler fails
+    if (AppState.currentConvId === CONFIG.NYX_SPACE_CONV_ID) {
+      AppState.isSendingMessage = false;
+    }
+  }
+}
 
     // Display user message
     appendMessage({ sender: "user", content: userText }, true);
@@ -1197,6 +1294,9 @@ async function advanceTime() {
     return;
   }
 
+  const requestId = generateRequestId();  // ADD THIS
+  console.log(`Advancing time with request_id: ${requestId}`);
+
   AppState.isSendingMessage = true;
 
   appendMessage({ 
@@ -1213,7 +1313,8 @@ async function advanceTime() {
     conversation_id: safeConvertId(AppState.currentConvId),
     player_name: "Chase",
     advance_time: true,
-    universal_update: AppState.pendingUniversalUpdates
+    universal_update: AppState.pendingUniversalUpdates,
+    request_id: requestId  // ADD THIS
   };
 
   try {
