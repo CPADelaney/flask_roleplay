@@ -117,6 +117,8 @@ from logic.aggregator_sdk import init_singletons
 
 logger = logging.getLogger(__name__)
 
+app_is_ready = asyncio.Event()
+
 # Database DSN
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
