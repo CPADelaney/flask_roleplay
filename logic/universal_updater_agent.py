@@ -1334,6 +1334,21 @@ async def process_universal_update(
     """
     Process a universal update based on narrative text with governance oversight.
     """
+    # Safeguard against None IDs
+    user_id_str = str(user_id if user_id is not None else 0)
+    conversation_id_str = str(conversation_id if conversation_id is not None else 0)
+    
+    # Ensure narrative is never empty
+    if not narrative or not narrative.strip():
+        logger.warning("Empty narrative passed to universal updater, using fallback")
+        narrative = "The scene continues..."
+    
+    # Log what we're processing for debugging
+    logger.debug(
+        "Universal updater processing: user_id=%s, conversation_id=%s, narrative_len=%d, preview=%r",
+        user_id_str, conversation_id_str, len(narrative), narrative[:100]
+    )
+    
     # Create and initialize the updater context
     updater_context = UniversalUpdaterContext(user_id, conversation_id)
     await updater_context.initialize()
@@ -1341,17 +1356,24 @@ async def process_universal_update(
     # Create trace for monitoring
     with trace(
         workflow_name="Universal Update",
-        trace_id=f"trace_universal_update_{conversation_id}_{int(datetime.now().timestamp())}",
-        group_id=f"user-{user_id}"
+        trace_id=f"trace_universal_update_{conversation_id_str}_{int(datetime.now().timestamp())}",
+        group_id=f"user-{user_id_str}"
     ):
+        # Build prompt with actual narrative content
         prompt = f"""
 Analyze the narrative and return ONLY a single JSON object matching UniversalUpdateInput.
 Do not include any text before or after the JSON. No markdown fences.
 
+USER_ID: {user_id_str}
+CONVERSATION_ID: {conversation_id_str}
+
+NARRATIVE:
+{narrative}
+
 Example shape:
 {{
-  "user_id": {user_id},
-  "conversation_id": {conversation_id},
+  "user_id": {user_id_str},
+  "conversation_id": {conversation_id_str},
   "narrative": {json.dumps(narrative[:60] + ("..." if len(narrative) > 60 else ""))},
   "roleplay_updates": [],
   "ChaseSchedule": [],
@@ -1375,29 +1397,35 @@ Example shape:
         """
         
         try:
+            logger.debug("Running universal updater agent with prompt length: %d", len(prompt))
+            
             # Run the agent to extract updates
             result = await Runner.run(
                 universal_updater_agent,
                 prompt,
                 context=updater_context
             )
-
+            
             # Try several paths to get structured output
             update_data = None
             try:
                 update_data = result.final_output_as(UniversalUpdateInput)
-            except Exception:
+                logger.debug("Successfully extracted structured output from result")
+            except Exception as e:
+                logger.debug("Could not extract as UniversalUpdateInput: %s", e)
                 update_data = getattr(result, "final_output", None)
-
+            
             # Convert whatever we got into JSON; try multiple fallbacks
             update_json = None
             if update_data:
                 try:
                     update_json = _to_updates_json(update_data)
+                    logger.debug("Successfully converted update_data to JSON")
                 except Exception as e:
                     logger.error("Updater output could not be normalized to JSON: %s", e)
-
+            
             if not update_json:
+                # Try to extract raw text from various result attributes
                 raw_txt = (
                     getattr(result, "output_text", None)
                     or getattr(result, "completion_text", None)
@@ -1409,25 +1437,48 @@ Example shape:
                     try:
                         json.loads(raw_txt)
                         update_json = raw_txt
+                        logger.debug("Successfully parsed raw text as JSON")
                     except Exception:
                         logger.error("Invalid JSON from updater agent (preview): %r", raw_txt[:200])
-
+            
             if not update_json:
                 logger.error("Updater returned empty output. Using minimal skeleton to continue.")
-                skel = _build_min_skeleton(user_id, conversation_id, narrative)
+                skel = _build_min_skeleton(int(user_id_str), int(conversation_id_str), narrative)
                 update_json = json.dumps(skel, ensure_ascii=False, separators=(",", ":"))
-
+                logger.debug("Created skeleton update with %d keys", len(skel))
+            
+            # Log what we're about to apply
+            try:
+                update_preview = json.loads(update_json) if isinstance(update_json, str) else update_json
+                update_count = sum(
+                    len(v) if isinstance(v, list) else (1 if v else 0)
+                    for k, v in update_preview.items()
+                    if k not in ["user_id", "conversation_id", "narrative"]
+                )
+                logger.debug("Applying %d updates from universal updater", update_count)
+            except Exception:
+                logger.debug("Could not count updates in preview")
+            
             # Call the impl directly (no SDK tool invocation needed)
             wrapped_ctx = RunContextWrapper(updater_context)
             update_result = await _apply_universal_updates_impl(
                 wrapped_ctx, update_json
             )
-            return update_result.model_dump()
+            
+            # Log result
+            result_dict = update_result.model_dump() if hasattr(update_result, 'model_dump') else dict(update_result)
+            logger.info(
+                "Universal update complete: success=%s, updates_applied=%s",
+                result_dict.get("success"),
+                result_dict.get("updates_applied", 0)
+            )
+            
+            return result_dict
                 
         except Exception as e:
             logger.error("Error in universal updater agent execution: %s", str(e), exc_info=True)
             return {"success": False, "error": f"Agent execution error: {str(e)}"}
-
+            
 async def register_with_governance(user_id: int, conversation_id: int):
     """Register universal updater agents with Nyx governance system."""
     governor = await get_central_governance(user_id, conversation_id)
