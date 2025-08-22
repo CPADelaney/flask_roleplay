@@ -277,13 +277,26 @@ async def process_user_input(
                     }
                 ]
 
-        # ===== STEP 5: Post-run enforcement =====
+        # ===== STEP 5: Early Response Assembly for Narrative Extraction =====
+        async with _log_step("early_assembly", trace_id):
+            # Resolve any scene requests first
+            resp = await resolve_scene_requests(resp, nyx_context)
+            
+            # Do an early assembly to extract the narrative properly
+            assembled = assemble_nyx_response(resp)
+            
+            # Extract the actual narrative from the assembled response
+            narrative = assembled.get('narrative') or assembled.get('full_text') or ""
+            
+            logger.debug(f"[{trace_id}] Extracted narrative length: {len(narrative)}, preview: {narrative[:100] if narrative else 'EMPTY'}")
+
+        # ===== STEP 6: Post-run enforcement with proper narrative =====
         async with _log_step("post_run_enforcement", trace_id):
             # Check and inject generate_universal_updates if missing
             if not _did_call_tool(resp, "generate_universal_updates"):
-                narrative = _extract_last_assistant_text(resp)
                 if narrative and len(narrative) > 20:
                     try:
+                        logger.debug(f"[{trace_id}] Injecting universal updates with narrative: {narrative[:100]}...")
                         update_result = await generate_universal_updates_impl(nyx_context, narrative)
                         resp.append({
                             "type": "function_call_output",
@@ -294,12 +307,14 @@ async def process_user_input(
                                 "source": "post_run_injection"
                             })
                         })
+                        logger.debug(f"[{trace_id}] Universal updates injected successfully")
                     except Exception as e:
                         logger.exception(f"[{trace_id}] Post-run universal updates failed: {e}")
+                else:
+                    logger.debug(f"[{trace_id}] Skipping universal updates - narrative too short or empty")
             
             # Check and inject decide_image_generation if missing
             if not _did_call_tool(resp, "decide_image_generation"):
-                narrative = _extract_last_assistant_text(resp)
                 if narrative and len(narrative) > 20:
                     try:
                         from .nyx_agent.models import ImageGenerationDecision
@@ -309,15 +324,13 @@ async def process_user_input(
                             "name": "decide_image_generation",
                             "output": image_result
                         })
+                        logger.debug(f"[{trace_id}] Image decision injected successfully")
                     except Exception as e:
                         logger.exception(f"[{trace_id}] Post-run image decision failed: {e}")
 
-        # ===== STEP 6: Response assembly =====
-        async with _log_step("response_assembly", trace_id):
-            # Resolve any scene requests
-            resp = await resolve_scene_requests(resp, nyx_context)
-            
-            # Assemble final response
+        # ===== STEP 7: Final Response Assembly =====
+        async with _log_step("final_assembly", trace_id):
+            # Re-assemble to include any injected tool results
             assembled = assemble_nyx_response(resp)
             
             # Save state changes
