@@ -483,6 +483,58 @@ class MemoryOrchestrator:
                 npc["emotional_state"] = emotional_state
         
         return context
+
+    async def ensure_canon_synced(self) -> bool:
+        """
+        Ensure canon is synced to memory system, with proper error handling.
+        This is called by canon.py when needed.
+        
+        Returns:
+            True if sync successful or already synced
+        """
+        if hasattr(self, '_canon_synced') and self._canon_synced:
+            return True
+        
+        try:
+            from db.connection import get_db_connection_context
+            
+            # Check if canon tables exist
+            async with get_db_connection_context() as conn:
+                tables_exist = await conn.fetchval("""
+                    SELECT COUNT(*) FROM information_schema.tables 
+                    WHERE table_name IN ('npcstats', 'locations', 'events', 'playerjournal')
+                    AND table_schema = 'public'
+                """)
+                
+                if tables_exist == 0:
+                    logger.info("No canon tables found, skipping sync")
+                    self._canon_synced = True
+                    return True
+                
+                # Check if we have any data to sync
+                has_data = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM NPCStats 
+                        WHERE user_id = $1 AND conversation_id = $2
+                        LIMIT 1
+                    )
+                """, self.user_id, self.conversation_id)
+                
+                if has_data:
+                    logger.info("Starting canon to memory sync...")
+                    sync_result = await self.sync_canon_to_memory_safe()
+                    logger.info(f"Canon sync completed: {sync_result}")
+                else:
+                    logger.info("No canon data to sync")
+                
+                self._canon_synced = True
+                return True
+                
+        except Exception as e:
+            logger.warning(f"Canon sync check failed (non-critical): {e}")
+            # Don't fail initialization over this
+            self._canon_synced = False
+            return False
     
     async def validate_canonical_consistency(
         self,
@@ -674,6 +726,151 @@ class MemoryOrchestrator:
             logger.error(f"Error during canon sync: {e}")
             sync_stats["errors"].append(f"General sync error: {str(e)}")
             return sync_stats
+
+    async def sync_canon_to_memory_safe(self) -> Dict[str, Any]:
+        """
+        Safer version of canon sync that avoids circular imports.
+        
+        Returns:
+            Sync statistics
+        """
+        from db.connection import get_db_connection_context
+        
+        sync_stats = {
+            "npcs_synced": 0,
+            "locations_synced": 0,
+            "events_synced": 0,
+            "journal_entries_synced": 0,
+            "errors": []
+        }
+        
+        try:
+            async with get_db_connection_context() as conn:
+                # Sync NPCs
+                npcs = await conn.fetch("""
+                    SELECT npc_id, npc_name, role, affiliations, introduced
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                    LIMIT 100
+                """, self.user_id, self.conversation_id)
+                
+                for npc in npcs:
+                    try:
+                        # Check if already synced
+                        existing = await self.search_vector_store(
+                            query=f"npc:{npc['npc_id']}",
+                            entity_type="npc",
+                            top_k=1,
+                            filter_dict={
+                                "entity_id": npc["npc_id"],
+                                "canonical": True
+                            }
+                        )
+                        
+                        if not existing:
+                            await self.store_canonical_entity(
+                                entity_type="npc",
+                                entity_id=npc["npc_id"],
+                                entity_name=npc["npc_name"],
+                                entity_data={
+                                    "role": npc["role"],
+                                    "affiliations": npc["affiliations"],
+                                    "introduced": npc["introduced"]
+                                },
+                                significance=5
+                            )
+                            sync_stats["npcs_synced"] += 1
+                    except Exception as e:
+                        sync_stats["errors"].append(f"NPC {npc['npc_id']}: {str(e)[:100]}")
+                
+                # Sync Locations
+                locations = await conn.fetch("""
+                    SELECT id, location_name, location_type, description
+                    FROM Locations
+                    WHERE user_id = $1 AND conversation_id = $2
+                    LIMIT 100
+                """, self.user_id, self.conversation_id)
+                
+                for loc in locations:
+                    try:
+                        existing = await self.search_vector_store(
+                            query=f"location:{loc['id']}",
+                            entity_type="location",
+                            top_k=1,
+                            filter_dict={
+                                "entity_id": loc["id"],
+                                "canonical": True
+                            }
+                        )
+                        
+                        if not existing:
+                            await self.store_canonical_entity(
+                                entity_type="location",
+                                entity_id=loc["id"],
+                                entity_name=loc["location_name"],
+                                entity_data={
+                                    "type": loc["location_type"],
+                                    "description": loc["description"]
+                                },
+                                significance=5
+                            )
+                            sync_stats["locations_synced"] += 1
+                    except Exception as e:
+                        sync_stats["errors"].append(f"Location {loc['id']}: {str(e)[:100]}")
+                
+                # Sync recent journal entries
+                journal_entries = await conn.fetch("""
+                    SELECT id, entry_type, entry_text, importance, tags
+                    FROM PlayerJournal
+                    WHERE user_id = $1 AND conversation_id = $2
+                    ORDER BY created_at DESC
+                    LIMIT 50
+                """, self.user_id, self.conversation_id)
+                
+                for entry in journal_entries:
+                    try:
+                        # Check if already synced
+                        existing = await self.search_vector_store(
+                            query=f"journal:{entry['id']}",
+                            entity_type="player",
+                            top_k=1,
+                            filter_dict={
+                                "journal_id": entry["id"]
+                            }
+                        )
+                        
+                        if not existing:
+                            importance = "high" if entry["importance"] > 0.7 else "medium" if entry["importance"] > 0.3 else "low"
+                            tags = json.loads(entry["tags"]) if entry["tags"] else []
+                            
+                            await self.store_memory(
+                                entity_type=EntityType.PLAYER,
+                                entity_id=self.user_id,
+                                memory_text=entry["entry_text"],
+                                importance=importance,
+                                tags=tags + ["journal_sync"],
+                                metadata={
+                                    "journal_id": entry["id"],
+                                    "entry_type": entry["entry_type"]
+                                },
+                                add_to_vector_store=True
+                            )
+                            sync_stats["journal_entries_synced"] += 1
+                    except Exception as e:
+                        sync_stats["errors"].append(f"Journal {entry['id']}: {str(e)[:100]}")
+            
+            # Trim errors if too many
+            if len(sync_stats["errors"]) > 10:
+                error_count = len(sync_stats["errors"])
+                sync_stats["errors"] = sync_stats["errors"][:10]
+                sync_stats["errors"].append(f"... and {error_count - 10} more errors")
+            
+            return sync_stats
+            
+        except Exception as e:
+            logger.error(f"Error during canon sync: {e}")
+            sync_stats["errors"].append(f"General sync error: {str(e)}")
+            return sync_stats
     
     async def setup_entity(
         self,
@@ -739,10 +936,12 @@ class MemoryOrchestrator:
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
         use_governance: bool = False,
+        check_canon_consistency: bool = True,
+        enforce_canon: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Store a new memory for any entity type.
+        Store a new memory with optional canon consistency checking.
         
         Args:
             entity_type: Type of entity
@@ -752,11 +951,13 @@ class MemoryOrchestrator:
             emotional: Whether to analyze emotional content
             tags: Optional tags
             metadata: Optional metadata
-            use_governance: Whether to use Nyx governance for this operation
-            **kwargs: Additional parameters for specific memory types
+            use_governance: Whether to use Nyx governance
+            check_canon_consistency: Whether to check canon consistency
+            enforce_canon: If True, reject memories that violate canon
+            **kwargs: Additional parameters
             
         Returns:
-            Created memory information including ID and analysis results
+            Created memory information
         """
         if not self.initialized:
             await self.initialize()
@@ -766,6 +967,33 @@ class MemoryOrchestrator:
             entity_type = entity_type.lower()
         else:
             entity_type = entity_type.value
+        
+        # Check canon consistency if requested
+        if check_canon_consistency and entity_type in ['npc', 'player', 'location', 'event']:
+            consistency = await self.validate_canonical_consistency(
+                entity_type=entity_type,
+                entity_data={
+                    "memory": memory_text,
+                    "entity_id": entity_id,
+                    "tags": tags
+                }
+            )
+            
+            if not consistency["is_consistent"]:
+                logger.warning(
+                    f"Memory may conflict with canon for {entity_type} {entity_id}: "
+                    f"{consistency['conflicts']}"
+                )
+                
+                if enforce_canon:
+                    raise ValueError(
+                        f"Memory violates established canon: {consistency['conflicts']}"
+                    )
+                
+                # Add warning to metadata
+                if metadata is None:
+                    metadata = {}
+                metadata["canon_warnings"] = consistency["conflicts"]
         
         # Track telemetry
         start_time = asyncio.get_event_loop().time()
@@ -802,6 +1030,7 @@ class MemoryOrchestrator:
                         "entity_id": entity_id,
                         "importance": importance,
                         "timestamp": datetime.now().isoformat(),
+                        "canonical": False,  # Regular memories are not canonical
                         **(metadata or {})
                     },
                     entity_type=entity_type
@@ -816,7 +1045,11 @@ class MemoryOrchestrator:
                 success=True,
                 duration=duration,
                 data_size=len(memory_text),
-                metadata={"entity_type": entity_type, "entity_id": entity_id}
+                metadata={
+                    "entity_type": entity_type, 
+                    "entity_id": entity_id,
+                    "canon_checked": check_canon_consistency
+                }
             )
             
             return result
@@ -834,7 +1067,148 @@ class MemoryOrchestrator:
             )
             logger.error(f"Error storing memory: {e}")
             raise
+
+    async def get_canon_aware_narrative_context(
+        self,
+        include_canon: bool = True,
+        time_window_hours: int = 24
+    ) -> Dict[str, Any]:
+        """
+        Get narrative context that includes both memories and canonical facts.
+        
+        Args:
+            include_canon: Include canonical world state
+            time_window_hours: Time window for recent events
+            
+        Returns:
+            Combined narrative and canonical context
+        """
+        # Get memory-based narrative context
+        narrative_context = await self.get_narrative_context(
+            time_window=timedelta(hours=time_window_hours),
+            include_predictions=True
+        )
+        
+        if not include_canon:
+            return narrative_context
+        
+        # Enhance with canonical context
+        canonical_context = await self.get_canonical_context(
+            time_window_hours=time_window_hours
+        )
+        
+        # Merge contexts intelligently
+        merged_context = {
+            **narrative_context,
+            "canonical": {
+                "entities": canonical_context.get("canonical_entities", {}),
+                "events": canonical_context.get("recent_canonical_events", []),
+                "locations": canonical_context.get("active_locations", []),
+                "npcs": canonical_context.get("active_npcs", []),
+                "world_state": canonical_context.get("world_state", {})
+            }
+        }
+        
+        # Cross-reference memories with canon
+        for entity_key, entity_data in narrative_context.get("entities", {}).items():
+            # Find corresponding canonical data
+            canon_match = None
+            for npc in canonical_context.get("active_npcs", []):
+                if f"npc_{npc['id']}" == entity_key:
+                    canon_match = npc
+                    break
+            
+            if canon_match:
+                entity_data["canonical_info"] = canon_match
+                
+                # Check for discrepancies
+                if canon_match.get("location") != entity_data.get("last_known_location"):
+                    entity_data["location_discrepancy"] = {
+                        "canonical": canon_match.get("location"),
+                        "memory": entity_data.get("last_known_location")
+                    }
+        
+        return merged_context
+
+    async def validate_memory_canon_consistency(
+        self,
+        memory_text: str,
+        entity_type: str,
+        entity_id: int
+    ) -> Dict[str, Any]:
+        """
+        Validate that a memory is consistent with established canon.
+        
+        Args:
+            memory_text: Memory to validate
+            entity_type: Type of entity
+            entity_id: Entity ID
+            
+        Returns:
+            Validation results
+        """
+        from logic.chatgpt_integration import get_openai_client
+        
+        # Get canonical facts about the entity
+        canonical_facts = await self.search_canonical_entities(
+            query=f"{entity_type} {entity_id}",
+            entity_types=[entity_type],
+            similarity_threshold=0.5
+        )
+        
+        if not canonical_facts:
+            return {
+                "is_consistent": True,
+                "message": "No canonical facts to check against"
+            }
+        
+        # Use LLM to check consistency
+        try:
+            client = get_openai_client()
+            
+            facts_summary = "\n".join([
+                f"- {fact.get('text', '')}"
+                for fact in canonical_facts[:5]
+            ])
+            
+            prompt = f"""Check if this memory is consistent with established canon:
     
+    Memory: {memory_text}
+    
+    Established canonical facts:
+    {facts_summary}
+    
+    Identify any contradictions or inconsistencies.
+    
+    Return JSON:
+    {{
+        "is_consistent": true/false,
+        "conflicts": ["conflict1", ...],
+        "severity": "minor|moderate|severe"
+    }}
+    """
+            
+            response = client.chat.completions.create(
+                model="gpt-5-nano",
+                messages=[
+                    {"role": "system", "content": "You validate narrative consistency."},
+                    {"role": "user", "content": prompt}
+                ],
+            )
+            
+            result = json.loads(response.choices[0].message.content)
+            result["canonical_facts_checked"] = len(canonical_facts)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error validating memory consistency: {e}")
+            return {
+                "is_consistent": True,
+                "message": "Could not validate",
+                "error": str(e)
+            }
+        
     async def retrieve_memories(
         self,
         entity_type: Union[str, EntityType],
