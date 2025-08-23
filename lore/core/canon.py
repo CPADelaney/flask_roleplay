@@ -95,10 +95,406 @@ async def _find_semantically_similar_npc(conn, ctx, name: str, role: Optional[st
 
 async def get_canon_memory_orchestrator(user_id: int, conversation_id: int):
     """Get or create a memory orchestrator for canon operations."""
-    key = (user_id, conversation_id)
-    if key not in _memory_orchestrators:
-        _memory_orchestrators[key] = await get_memory_orchestrator(user_id, conversation_id)
-    return _memory_orchestrators[key]
+    # Use the memory orchestrator's own singleton pattern
+    from memory.memory_orchestrator import get_memory_orchestrator
+    orchestrator = await get_memory_orchestrator(user_id, conversation_id)
+    
+    # Ensure canon is synced on first use
+    if not hasattr(orchestrator, '_canon_synced') or not orchestrator._canon_synced:
+        try:
+            # Check if canon tables exist before syncing
+            from db.connection import get_db_connection_context
+            async with get_db_connection_context() as conn:
+                tables_exist = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables 
+                        WHERE table_name = 'npcstats'
+                    )
+                """)
+                
+                if tables_exist:
+                    await orchestrator.ensure_canon_synced()
+        except Exception as e:
+            logger.warning(f"Canon sync check failed: {e}")
+    
+    return orchestrator
+
+async def create_canonical_entity_transactional(
+    ctx, conn,
+    entity_type: str,
+    entity_data: Dict[str, Any],
+    table_name: str,
+    primary_key: str = "id"
+) -> Dict[str, Any]:
+    """
+    Create an entity in both canon and memory systems transactionally.
+    
+    Args:
+        ctx: Context
+        conn: Database connection
+        entity_type: Type of entity (npc, location, etc.)
+        entity_data: Data for creating the entity
+        table_name: Database table name
+        primary_key: Primary key column name
+        
+    Returns:
+        Dict with entity_id and success status
+    """
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
+    # Prepare embedding
+    entity_name = entity_data.get('name', entity_data.get('npc_name', 'Unknown'))
+    embedding_text = f"{entity_type}: {entity_name}"
+    for key, value in entity_data.items():
+        if key not in ['embedding', 'user_id', 'conversation_id'] and value:
+            embedding_text += f" {value}"
+    
+    embedding = await memory_orchestrator.generate_embedding(embedding_text[:1000])
+    entity_data['embedding'] = embedding
+    
+    # Ensure we're in a transaction
+    if conn.is_in_transaction():
+        # Already in transaction, just execute
+        return await _create_entity_internal(
+            ctx, conn, entity_type, entity_data, table_name, 
+            primary_key, memory_orchestrator, entity_name
+        )
+    else:
+        # Start new transaction
+        async with conn.transaction():
+            return await _create_entity_internal(
+                ctx, conn, entity_type, entity_data, table_name,
+                primary_key, memory_orchestrator, entity_name
+            )
+
+async def _create_entity_internal(
+    ctx, conn,
+    entity_type: str,
+    entity_data: Dict[str, Any],
+    table_name: str,
+    primary_key: str,
+    memory_orchestrator,
+    entity_name: str
+) -> Dict[str, Any]:
+    """Internal helper for transactional entity creation."""
+    # Build insert query
+    columns = list(entity_data.keys())
+    placeholders = [f"${i+1}" for i in range(len(columns))]
+    
+    insert_query = f"""
+        INSERT INTO {table_name} ({', '.join(columns)})
+        VALUES ({', '.join(placeholders)})
+        RETURNING {primary_key}
+    """
+    
+    try:
+        # Create in database
+        entity_id = await conn.fetchval(insert_query, *entity_data.values())
+        
+        # Store in memory system
+        await memory_orchestrator.store_canonical_entity(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_name=entity_name,
+            entity_data={k: v for k, v in entity_data.items() 
+                        if k not in ['embedding', 'user_id', 'conversation_id']},
+            significance=7
+        )
+        
+        # Add to vector store for searchability
+        await memory_orchestrator.add_to_vector_store(
+            text=f"{entity_type}: {entity_name}",
+            metadata={
+                "entity_type": entity_type.lower(),
+                "entity_id": entity_id,
+                "entity_name": entity_name,
+                "canonical": True,
+                "user_id": ctx.user_id,
+                "conversation_id": ctx.conversation_id
+            },
+            entity_type=entity_type.lower()
+        )
+        
+        # Log canonical event
+        await log_canonical_event(
+            ctx, conn,
+            f"Created {entity_type}: {entity_name}",
+            tags=[entity_type.lower(), 'creation', 'canon'],
+            significance=7
+        )
+        
+        return {
+            "success": True,
+            "entity_id": entity_id,
+            "entity_type": entity_type,
+            "entity_name": entity_name
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to create {entity_type}: {e}")
+        # Transaction will rollback automatically
+        raise
+
+async def get_entity_with_memories(
+    ctx, conn,
+    entity_type: str,
+    entity_id: int,
+    include_memories: bool = True,
+    include_beliefs: bool = True,
+    include_emotional_state: bool = True,
+    include_relationships: bool = True,
+    memory_limit: int = 5
+) -> Dict[str, Any]:
+    """
+    Get a canonical entity enriched with memory system data.
+    
+    Args:
+        ctx: Context
+        conn: Database connection
+        entity_type: Type of entity (NPCStats, Locations, etc.)
+        entity_id: Entity ID
+        include_memories: Include recent memories
+        include_beliefs: Include entity beliefs
+        include_emotional_state: Include emotional state
+        include_relationships: Include relationships
+        memory_limit: Max memories to retrieve
+        
+    Returns:
+        Enriched entity data or None if not found
+    """
+    ctx = ensure_canonical_context(ctx)
+    orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
+    # Get canonical data
+    entity = await get_entity_by_id(ctx, conn, entity_type, entity_id)
+    
+    if not entity:
+        return None
+    
+    # Map table name to entity type for memory system
+    type_mapping = {
+        'NPCStats': 'npc',
+        'Locations': 'location',
+        'Nations': 'nation',
+        'Events': 'event',
+        'Factions': 'faction'
+    }
+    
+    memory_entity_type = type_mapping.get(entity_type, entity_type.lower())
+    
+    # Enrich with memory data
+    if include_memories:
+        memory_result = await orchestrator.retrieve_memories(
+            entity_type=memory_entity_type,
+            entity_id=entity_id,
+            limit=memory_limit,
+            include_analysis=True
+        )
+        entity["memories"] = memory_result.get("memories", [])
+        entity["memory_analysis"] = memory_result.get("analysis", {})
+    
+    if include_beliefs and memory_entity_type in ['npc', 'player', 'nyx']:
+        entity["beliefs"] = await orchestrator.get_beliefs(
+            entity_type=memory_entity_type,
+            entity_id=entity_id,
+            min_confidence=0.3
+        )
+    
+    if include_emotional_state and memory_entity_type in ['npc', 'player']:
+        entity["emotional_state"] = await orchestrator.get_emotional_state(
+            entity_type=memory_entity_type,
+            entity_id=entity_id
+        )
+    
+    if include_relationships:
+        # Get relationships from SocialLinks
+        relationships = await conn.fetch("""
+            SELECT entity2_type, entity2_id, link_type, link_level, dynamics
+            FROM SocialLinks
+            WHERE user_id = $1 AND conversation_id = $2
+            AND entity1_type = $3 AND entity1_id = $4
+            
+            UNION
+            
+            SELECT entity1_type as entity2_type, entity1_id as entity2_id, 
+                   link_type, link_level, dynamics
+            FROM SocialLinks
+            WHERE user_id = $1 AND conversation_id = $2
+            AND entity2_type = $3 AND entity2_id = $4
+        """, ctx.user_id, ctx.conversation_id, memory_entity_type, entity_id)
+        
+        entity["relationships"] = [
+            {
+                "target_type": r["entity2_type"],
+                "target_id": r["entity2_id"],
+                "link_type": r["link_type"],
+                "strength": r["link_level"],
+                "dynamics": r["dynamics"]
+            }
+            for r in relationships
+        ]
+    
+    # Add narrative context
+    entity["narrative_context"] = await orchestrator.get_narrative_context(
+        focus_entities=[(memory_entity_type, entity_id)],
+        include_predictions=False
+    )
+    
+    return entity
+
+async def check_canon_consistency(
+    ctx, conn,
+    operation_type: str,
+    entity_type: str,
+    entity_data: Dict[str, Any],
+    enforce: bool = False
+) -> Dict[str, Any]:
+    """
+    Check if an operation would violate canon consistency.
+    
+    Args:
+        ctx: Context
+        conn: Database connection
+        operation_type: Type of operation (create, update, delete)
+        entity_type: Type of entity
+        entity_data: Data for the operation
+        enforce: If True, raise exception on conflicts
+        
+    Returns:
+        Consistency check results
+    """
+    ctx = ensure_canonical_context(ctx)
+    orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
+    # Check for conflicts
+    consistency = await orchestrator.validate_canonical_consistency(
+        entity_type=entity_type,
+        entity_data=entity_data
+    )
+    
+    if not consistency["is_consistent"] and enforce:
+        raise ValueError(
+            f"Operation '{operation_type}' violates canon: {consistency['conflicts']}"
+        )
+    
+    # Add operation context
+    consistency["operation_type"] = operation_type
+    consistency["entity_type"] = entity_type
+    consistency["checked_at"] = datetime.utcnow().isoformat()
+    
+    # Log warning if conflicts found
+    if not consistency["is_consistent"]:
+        logger.warning(
+            f"Canon consistency issues for {operation_type} on {entity_type}: "
+            f"{consistency['conflicts']}"
+        )
+        
+        # Store as a canonical event for tracking
+        await log_canonical_event(
+            ctx, conn,
+            f"Consistency conflict detected: {operation_type} on {entity_type}",
+            tags=['consistency', 'conflict', entity_type.lower()],
+            significance=5
+        )
+    
+    return consistency
+
+
+# ADD this function to sync a specific entity to memory:
+async def sync_entity_to_memory(
+    ctx, conn,
+    entity_type: str,
+    entity_id: int,
+    force: bool = False
+) -> Dict[str, Any]:
+    """
+    Sync a specific canonical entity to the memory system.
+    
+    Args:
+        ctx: Context
+        conn: Database connection
+        entity_type: Type of entity (NPCStats, Locations, etc.)
+        entity_id: Entity ID
+        force: Force resync even if already synced
+        
+    Returns:
+        Sync results
+    """
+    ctx = ensure_canonical_context(ctx)
+    orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
+    # Check if already synced (unless forced)
+    if not force:
+        existing = await orchestrator.search_canonical_entities(
+            query=f"{entity_type} id:{entity_id}",
+            entity_types=[entity_type.lower()]
+        )
+        if existing:
+            return {"status": "already_synced", "entity_id": entity_id}
+    
+    # Get entity data
+    entity = await get_entity_by_id(ctx, conn, entity_type, entity_id)
+    if not entity:
+        return {"status": "not_found", "entity_id": entity_id}
+    
+    # Map to memory entity type
+    type_mapping = {
+        'NPCStats': 'npc',
+        'Locations': 'location',
+        'Nations': 'nation',
+        'Events': 'event',
+        'Factions': 'faction'
+    }
+    memory_entity_type = type_mapping.get(entity_type, entity_type.lower())
+    
+    # Extract name
+    entity_name = (
+        entity.get('npc_name') or 
+        entity.get('location_name') or 
+        entity.get('name') or 
+        entity.get('event_name') or 
+        f"{entity_type}_{entity_id}"
+    )
+    
+    # Store in memory system
+    await orchestrator.store_canonical_entity(
+        entity_type=memory_entity_type,
+        entity_id=entity_id,
+        entity_name=entity_name,
+        entity_data={k: v for k, v in entity.items() 
+                    if k not in ['embedding', 'user_id', 'conversation_id']},
+        significance=5
+    )
+    
+    # Add to vector store
+    description = (
+        entity.get('description') or 
+        entity.get('role') or 
+        entity.get('event_text') or 
+        ""
+    )
+    
+    await orchestrator.add_to_vector_store(
+        text=f"{memory_entity_type}: {entity_name} - {description}",
+        metadata={
+            "entity_type": memory_entity_type,
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "canonical": True,
+            "user_id": ctx.user_id,
+            "conversation_id": ctx.conversation_id,
+            "synced_at": datetime.utcnow().isoformat()
+        },
+        entity_type=memory_entity_type
+    )
+    
+    return {
+        "status": "synced",
+        "entity_type": memory_entity_type,
+        "entity_id": entity_id,
+        "entity_name": entity_name
+    }
 
 
 # --- Upgraded NPC Canon Function ---
