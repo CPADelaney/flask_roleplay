@@ -24,6 +24,17 @@ from npcs.npc_memory import NPCMemoryManager
 from npcs.npc_perception import EnvironmentPerception, PerceptionContext
 from npcs.npc_relationship import NPCRelationshipManager
 
+# Import Nyx integration
+from npcs.nyx_integration import (
+    NyxNPCBridge,
+    NPCMemoryAccess,
+    enhance_npc_with_memory_access,
+    create_npc_with_memory_governance
+)
+
+# Import preset NPC handler
+from npcs.preset_npc_handler import PresetNPCHandler
+
 # Import belief systems
 from npcs.belief_system_integration import NPCBeliefSystemIntegration, enhance_npc_with_belief_system
 from npcs.npc_belief_formation import NPCBeliefFormation
@@ -86,6 +97,7 @@ class NPCStatus(Enum):
     UNCONSCIOUS = "unconscious"
     DECISION_MAKING = "decision_making"
     SCHEMING = "scheming"
+    UNDER_NYX_DIRECTIVE = "under_nyx_directive"
 
 
 @dataclass
@@ -108,6 +120,8 @@ class NPCSnapshot:
     paranoia_level: int = 0
     current_goals: List[Dict[str, Any]] = None
     decision_history: List[Dict[str, Any]] = None
+    nyx_directives: List[Dict[str, Any]] = None
+    special_mechanics: Dict[str, Any] = None
     
     def to_narrative_context(self) -> Dict[str, Any]:
         """Convert snapshot to narrative-ready context"""
@@ -132,7 +146,11 @@ class NPCSnapshot:
             },
             "traits": self.stats,
             "goals": self.current_goals or [],
-            "decision_patterns": self.decision_history or []
+            "decision_patterns": self.decision_history or [],
+            "governance": {
+                "nyx_directives": self.nyx_directives or [],
+                "special_mechanics": self.special_mechanics or {}
+            }
         }
 
 
@@ -152,9 +170,14 @@ class NPCOrchestrator:
         self._coordinator: Optional[NPCAgentCoordinator] = None
         self._handler: Optional[NPCHandler] = None
         self._creation_handler: Optional[NPCCreationHandler] = None
+        self._preset_handler: Optional[PresetNPCHandler] = None
         self._memory_system: Optional[MemorySystem] = None
         self._lore_system: Optional[LoreSystem] = None
         self._relationship_manager: Optional[OptimizedRelationshipManager] = None
+        
+        # Nyx integration
+        self._nyx_bridge: Optional[NyxNPCBridge] = None
+        self._nyx_memory_access: Dict[int, NPCMemoryAccess] = {}
         
         # Belief systems
         self._belief_integration: Optional[NPCBeliefSystemIntegration] = None
@@ -173,6 +196,15 @@ class NPCOrchestrator:
         # Learning systems
         self._learning_manager: Optional[NPCLearningManager] = None
         self._learning_adaptations: Dict[int, NPCLearningAdaptation] = {}
+        
+        # Memory managers for individual NPCs
+        self._memory_managers: Dict[int, NPCMemoryManager] = {}
+        
+        # Perception systems for individual NPCs
+        self._perception_systems: Dict[int, EnvironmentPerception] = {}
+        
+        # Relationship managers for individual NPCs
+        self._relationship_managers: Dict[int, NPCRelationshipManager] = {}
         
         # Caches
         self._npc_cache: Dict[int, NPCAgent] = {}
@@ -203,6 +235,9 @@ class NPCOrchestrator:
         
         # Initialize lore context cache
         self._lore_context_cache = LoreContextCache(ttl_seconds=300)
+        
+        # Initialize Nyx bridge
+        self._nyx_bridge = NyxNPCBridge(self.user_id, self.conversation_id)
         
         # Load active NPCs
         await self._load_active_npcs()
@@ -255,6 +290,50 @@ class NPCOrchestrator:
         if self._creation_handler is None:
             self._creation_handler = NPCCreationHandler()
         return self._creation_handler
+    
+    async def _get_preset_handler(self) -> PresetNPCHandler:
+        """Get or create preset handler."""
+        if self._preset_handler is None:
+            self._preset_handler = PresetNPCHandler()
+        return self._preset_handler
+    
+    async def _get_nyx_bridge(self) -> NyxNPCBridge:
+        """Get or create Nyx bridge."""
+        if self._nyx_bridge is None:
+            self._nyx_bridge = NyxNPCBridge(self.user_id, self.conversation_id)
+        return self._nyx_bridge
+    
+    async def _get_nyx_memory_access(self, npc_id: int) -> NPCMemoryAccess:
+        """Get or create Nyx memory access for an NPC."""
+        if npc_id not in self._nyx_memory_access:
+            self._nyx_memory_access[npc_id] = NPCMemoryAccess(
+                npc_id, self.user_id, self.conversation_id
+            )
+        return self._nyx_memory_access[npc_id]
+    
+    async def _get_memory_manager(self, npc_id: int) -> NPCMemoryManager:
+        """Get or create memory manager for a specific NPC."""
+        if npc_id not in self._memory_managers:
+            self._memory_managers[npc_id] = NPCMemoryManager(
+                npc_id, self.user_id, self.conversation_id
+            )
+        return self._memory_managers[npc_id]
+    
+    async def _get_perception_system(self, npc_id: int) -> EnvironmentPerception:
+        """Get or create perception system for a specific NPC."""
+        if npc_id not in self._perception_systems:
+            self._perception_systems[npc_id] = EnvironmentPerception(
+                npc_id, self.user_id, self.conversation_id
+            )
+        return self._perception_systems[npc_id]
+    
+    async def _get_relationship_manager(self, npc_id: int) -> NPCRelationshipManager:
+        """Get or create relationship manager for a specific NPC."""
+        if npc_id not in self._relationship_managers:
+            self._relationship_managers[npc_id] = NPCRelationshipManager(
+                npc_id, self.user_id, self.conversation_id
+            )
+        return self._relationship_managers[npc_id]
     
     async def _get_belief_integration(self) -> NPCBeliefSystemIntegration:
         """Get or create belief integration."""
@@ -314,6 +393,7 @@ class NPCOrchestrator:
         """Get or create learning manager."""
         if self._learning_manager is None:
             self._learning_manager = NPCLearningManager(self.user_id, self.conversation_id)
+            await self._learning_manager.initialize()
         return self._learning_manager
     
     async def _get_learning_adaptation(self, npc_id: int) -> NPCLearningAdaptation:
@@ -388,6 +468,31 @@ class NPCOrchestrator:
             
         return result
     
+    async def create_preset_npc(
+        self,
+        npc_data: Dict[str, Any],
+        story_context: Dict[str, Any]
+    ) -> int:
+        """Create a rich preset NPC with full features."""
+        handler = await self._get_preset_handler()
+        
+        ctx = RunContextWrapper(context={
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id
+        })
+        
+        npc_id = await handler.create_detailed_npc(ctx, npc_data, story_context)
+        
+        # Add to tracking
+        self._active_npcs.add(npc_id)
+        self._npc_status[npc_id] = NPCStatus.IDLE
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return npc_id
+    
     async def spawn_multiple_npcs(
         self,
         count: int = 3,
@@ -416,6 +521,291 @@ class NPCOrchestrator:
             
         return npc_ids
     
+    # ==================== NYX INTEGRATION ====================
+    
+    async def issue_nyx_directive_to_npc(
+        self,
+        npc_id: int,
+        directive_type: str,
+        directive_data: Dict[str, Any],
+        priority: str = "HIGH",
+        duration_minutes: int = 30
+    ) -> Dict[str, Any]:
+        """Issue a Nyx directive to an NPC."""
+        bridge = await self._get_nyx_bridge()
+        
+        from nyx.nyx_governance import DirectiveType, DirectivePriority
+        
+        # Convert string types to enums
+        directive_type_enum = DirectiveType[directive_type.upper()]
+        priority_enum = DirectivePriority[priority.upper()]
+        
+        directive_id = await bridge.governor.issue_directive(
+            npc_id=npc_id,
+            directive_type=directive_type_enum,
+            directive_data=directive_data,
+            priority=priority_enum,
+            duration_minutes=duration_minutes
+        )
+        
+        # Update NPC status
+        if directive_id > 0:
+            self._npc_status[npc_id] = NPCStatus.UNDER_NYX_DIRECTIVE
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return {
+            "directive_id": directive_id,
+            "status": "issued" if directive_id > 0 else "failed",
+            "npc_id": npc_id
+        }
+    
+    async def issue_nyx_scene_directives(
+        self,
+        scene_plan: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Issue Nyx directives to all NPCs in a scene."""
+        bridge = await self._get_nyx_bridge()
+        result = await bridge.issue_scene_directives(scene_plan)
+        
+        # Update status for affected NPCs
+        for npc_id, directive_result in result.get("results", {}).items():
+            if directive_result.get("status") == "issued":
+                self._npc_status[npc_id] = NPCStatus.UNDER_NYX_DIRECTIVE
+        
+        # Invalidate caches
+        for npc_id in result.get("results", {}).keys():
+            if npc_id in self._snapshot_cache:
+                del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    async def process_nyx_governed_event(
+        self,
+        event_type: str,
+        event_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Process an event through Nyx governance."""
+        bridge = await self._get_nyx_bridge()
+        result = await bridge.process_group_event(event_type, event_data)
+        
+        # Invalidate caches for affected NPCs
+        for npc_id in result.get("affected_npcs", []):
+            if npc_id in self._snapshot_cache:
+                del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    # ==================== MEMORY OPERATIONS ====================
+    
+    async def add_memory_for_npc(
+        self,
+        npc_id: int,
+        memory_text: str,
+        memory_type: str = "observation",
+        significance: int = 3,
+        emotional_valence: int = 0,
+        tags: Optional[List[str]] = None,
+        feminine_context: bool = False,
+        use_nyx_governance: bool = True
+    ) -> Optional[int]:
+        """Add a memory for an NPC."""
+        if use_nyx_governance:
+            # Use Nyx-governed memory access
+            memory_access = await self._get_nyx_memory_access(npc_id)
+            result = await memory_access.remember(
+                memory_text=memory_text,
+                importance="high" if significance >= 7 else "medium" if significance >= 4 else "low",
+                emotional=abs(emotional_valence) > 5,
+                tags=tags
+            )
+            return result.get("memory_id")
+        else:
+            # Use direct memory manager
+            memory_manager = await self._get_memory_manager(npc_id)
+            return await memory_manager.add_memory(
+                memory_text=memory_text,
+                memory_type=memory_type,
+                significance=significance,
+                emotional_valence=emotional_valence,
+                tags=tags,
+                feminine_context=feminine_context
+            )
+    
+    async def recall_memories_for_npc(
+        self,
+        npc_id: int,
+        query: str = "",
+        context: Optional[Dict[str, Any]] = None,
+        limit: int = 5,
+        femdom_focus: bool = False,
+        use_nyx_governance: bool = True
+    ) -> Dict[str, Any]:
+        """Recall memories for an NPC."""
+        if use_nyx_governance:
+            # Use Nyx-governed memory access
+            memory_access = await self._get_nyx_memory_access(npc_id)
+            return await memory_access.recall(
+                query=query,
+                context=str(context) if context else None,
+                limit=limit
+            )
+        else:
+            # Use direct memory manager
+            memory_manager = await self._get_memory_manager(npc_id)
+            return await memory_manager.retrieve_memories(
+                query=query,
+                context=context,
+                limit=limit,
+                femdom_focus=femdom_focus
+            )
+    
+    async def update_npc_emotional_state(
+        self,
+        npc_id: int,
+        primary_emotion: str,
+        intensity: float,
+        trigger: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Update an NPC's emotional state."""
+        memory_manager = await self._get_memory_manager(npc_id)
+        result = await memory_manager.update_emotional_state(
+            primary_emotion=primary_emotion,
+            intensity=intensity,
+            trigger=trigger
+        )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    async def trigger_npc_mask_slippage(
+        self,
+        npc_id: int,
+        trigger: str,
+        severity: Optional[int] = None,
+        femdom_context: bool = False
+    ) -> Dict[str, Any]:
+        """Trigger a mask slippage event for an NPC."""
+        memory_manager = await self._get_memory_manager(npc_id)
+        result = await memory_manager.generate_mask_slippage(
+            trigger=trigger,
+            severity=severity,
+            femdom_context=femdom_context
+        )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    async def run_memory_maintenance_for_npc(
+        self,
+        npc_id: int,
+        include_femdom_maintenance: bool = True
+    ) -> Dict[str, Any]:
+        """Run memory maintenance for an NPC."""
+        memory_manager = await self._get_memory_manager(npc_id)
+        result = await memory_manager.run_memory_maintenance(
+            include_femdom_maintenance=include_femdom_maintenance
+        )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    # ==================== PERCEPTION OPERATIONS ====================
+    
+    async def get_npc_perception(
+        self,
+        npc_id: int,
+        context: Optional[Dict[str, Any]] = None,
+        detail_level: str = "auto"
+    ) -> Dict[str, Any]:
+        """Get environment perception for an NPC."""
+        perception_system = await self._get_perception_system(npc_id)
+        
+        # Build perception context
+        if context:
+            perception_context = PerceptionContext(**context) if not isinstance(context, PerceptionContext) else context
+        else:
+            perception_context = await self._build_npc_perception_context(npc_id)
+        
+        # Get perception
+        result = await perception_system.perceive_environment(
+            perception_context,
+            detail_level=detail_level
+        )
+        
+        return result.dict() if hasattr(result, 'dict') else result
+    
+    async def _build_npc_perception_context(self, npc_id: int) -> PerceptionContext:
+        """Build perception context for an NPC."""
+        # Get current location
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT current_location FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, self.user_id, self.conversation_id)
+            
+            location = row['current_location'] if row else "Unknown"
+        
+        # Get time of day
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE key = 'TimeOfDay' AND user_id = $1 AND conversation_id = $2
+            """, self.user_id, self.conversation_id)
+            
+            time_of_day = row['value'] if row else "Unknown"
+        
+        # Get entities at location
+        entities = []
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch("""
+                SELECT npc_id, npc_name FROM NPCStats
+                WHERE current_location = $1 AND user_id = $2 AND conversation_id = $3
+                AND npc_id != $4
+            """, location, self.user_id, self.conversation_id, npc_id)
+            
+            for row in rows:
+                entities.append({
+                    "type": "npc",
+                    "id": row["npc_id"],
+                    "name": row["npc_name"]
+                })
+        
+        # Add player
+        entities.append({
+            "type": "player",
+            "id": self.user_id,
+            "name": "Player"
+        })
+        
+        return PerceptionContext(
+            location=location,
+            time_of_day=time_of_day,
+            entities_present=entities
+        )
+    
+    async def evaluate_action_significance_for_npc(
+        self,
+        npc_id: int,
+        action: Dict[str, Any],
+        result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Evaluate if an action is significant enough for an NPC to remember."""
+        perception_system = await self._get_perception_system(npc_id)
+        significance = await perception_system.evaluate_action_significance(action, result)
+        return significance.dict() if hasattr(significance, 'dict') else significance
+    
     # ==================== DECISION MAKING ====================
     
     async def make_npc_decision(
@@ -432,7 +822,7 @@ class NPCOrchestrator:
             
             # Get perception if not provided
             if perception is None:
-                perception = await self._build_npc_perception(npc_id)
+                perception = await self.get_npc_perception(npc_id)
             
             # Make decision
             decision = await decision_engine.decide(perception)
@@ -444,17 +834,6 @@ class NPCOrchestrator:
             return decision
         finally:
             self._npc_status[npc_id] = NPCStatus.IDLE
-    
-    async def _build_npc_perception(self, npc_id: int) -> Dict[str, Any]:
-        """Build perception context for an NPC."""
-        # Get environment perception
-        perception = EnvironmentPerception(npc_id, self.user_id, self.conversation_id)
-        context = PerceptionContext(npc_id=npc_id)
-        
-        # Perceive environment
-        env_data = await perception.perceive_environment(context)
-        
-        return env_data
     
     # ==================== BEHAVIOR EVOLUTION ====================
     
@@ -505,26 +884,34 @@ class NPCOrchestrator:
         self,
         npc_id: int,
         observation: str,
-        factuality: float = 1.0
+        factuality: float = 1.0,
+        use_nyx_governance: bool = True
     ) -> Dict[str, Any]:
         """Form a subjective belief for an NPC."""
-        belief_formation = await self._get_belief_formation(npc_id)
-        
-        ctx = RunContextWrapper(context={
-            'user_id': self.user_id,
-            'conversation_id': self.conversation_id,
-            'npc_id': npc_id
-        })
-        
-        result = await belief_formation.form_subjective_belief_from_observation(
-            ctx, observation, factuality
-        )
-        
-        # Invalidate cache
-        if npc_id in self._snapshot_cache:
-            del self._snapshot_cache[npc_id]
-        
-        return result
+        if use_nyx_governance:
+            memory_access = await self._get_nyx_memory_access(npc_id)
+            return await memory_access.create_belief(
+                belief_text=observation,
+                confidence=factuality
+            )
+        else:
+            belief_formation = await self._get_belief_formation(npc_id)
+            
+            ctx = RunContextWrapper(context={
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id,
+                'npc_id': npc_id
+            })
+            
+            result = await belief_formation.form_subjective_belief_from_observation(
+                ctx, observation, factuality
+            )
+            
+            # Invalidate cache
+            if npc_id in self._snapshot_cache:
+                del self._snapshot_cache[npc_id]
+            
+            return result
     
     async def form_narrative_belief(
         self,
@@ -569,6 +956,29 @@ class NPCOrchestrator:
             del self._snapshot_cache[npc_id]
         
         return result
+    
+    async def get_npc_beliefs(
+        self,
+        npc_id: int,
+        topic: Optional[str] = None,
+        use_nyx_governance: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Get beliefs for an NPC."""
+        if use_nyx_governance:
+            memory_access = await self._get_nyx_memory_access(npc_id)
+            return await memory_access.get_beliefs(topic=topic)
+        else:
+            memory_manager = await self._get_memory_manager(npc_id)
+            return await memory_manager.get_beliefs(topic=topic)
+    
+    async def get_npc_femdom_beliefs(
+        self,
+        npc_id: int,
+        min_confidence: float = 0.3
+    ) -> List[Dict[str, Any]]:
+        """Get femdom-related beliefs for an NPC."""
+        memory_manager = await self._get_memory_manager(npc_id)
+        return await memory_manager.get_femdom_beliefs(min_confidence=min_confidence)
     
     async def process_event_for_beliefs(
         self,
@@ -645,18 +1055,81 @@ class NPCOrchestrator:
     
     # ==================== LEARNING & ADAPTATION ====================
     
+    async def record_npc_learning_interaction(
+        self,
+        npc_id: int,
+        interaction_type: str,
+        interaction_details: Dict[str, Any],
+        player_response: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Record an interaction for NPC learning."""
+        learning_adaptation = await self._get_learning_adaptation(npc_id)
+        
+        ctx = RunContextWrapper(context={
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id,
+            'npc_id': npc_id
+        })
+        
+        result = await learning_adaptation.record_player_interaction(
+            ctx=ctx,
+            interaction_type=interaction_type,
+            interaction_details=interaction_details,
+            player_response=player_response
+        )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    async def respond_to_learning_trigger(
+        self,
+        npc_id: int,
+        trigger_type: str,
+        trigger_details: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Respond to a specific learning trigger for an NPC."""
+        learning_adaptation = await self._get_learning_adaptation(npc_id)
+        
+        ctx = RunContextWrapper(context={
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id,
+            'npc_id': npc_id
+        })
+        
+        result = await learning_adaptation.respond_to_trigger(
+            ctx=ctx,
+            trigger_type=trigger_type,
+            trigger_details=trigger_details
+        )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
+    
     async def process_npc_learning_cycle(
         self,
-        npc_id: int
+        npc_id: int,
+        days: int = 7
     ) -> Dict[str, Any]:
         """Process a learning cycle for an NPC."""
         learning_adaptation = await self._get_learning_adaptation(npc_id)
         
+        ctx = RunContextWrapper(context={
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id,
+            'npc_id': npc_id
+        })
+        
         # Process recent memories
-        memory_result = await learning_adaptation.process_recent_memories_for_learning()
+        memory_result = await learning_adaptation.process_recent_memories_for_learning(ctx, days)
         
         # Adapt to relationship changes
-        relationship_result = await learning_adaptation.adapt_to_relationship_changes()
+        relationship_result = await learning_adaptation.adapt_to_relationship_changes(ctx)
         
         # Invalidate cache
         if npc_id in self._snapshot_cache:
@@ -678,6 +1151,144 @@ class NPCOrchestrator:
                 logger.error(f"Error processing learning for NPC {npc_id}: {e}")
                 results[npc_id] = {"error": str(e)}
         return results
+    
+    async def process_event_for_learning(
+        self,
+        event_text: str,
+        event_type: str,
+        npc_ids: List[int],
+        player_response: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Process an event for learning by multiple NPCs."""
+        learning_manager = await self._get_learning_manager()
+        result = await learning_manager.process_event_for_learning(
+            event_text=event_text,
+            event_type=event_type,
+            npc_ids=npc_ids,
+            player_response=player_response
+        )
+        
+        # Invalidate caches
+        for npc_id in npc_ids:
+            if npc_id in self._snapshot_cache:
+                del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    async def run_learning_adaptation_cycle(
+        self,
+        npc_ids: List[int]
+    ) -> Dict[str, Any]:
+        """Run regular adaptation cycle for multiple NPCs."""
+        learning_manager = await self._get_learning_manager()
+        return await learning_manager.run_regular_adaptation_cycle(npc_ids)
+    
+    # ==================== RELATIONSHIP MANAGEMENT ====================
+    
+    async def update_npc_relationship(
+        self,
+        npc_id: int,
+        entity_type: str,
+        entity_id: int,
+        player_action: Dict[str, Any],
+        npc_action: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Update a relationship for an NPC."""
+        relationship_manager = await self._get_relationship_manager(npc_id)
+        result = await relationship_manager.update_relationship_from_interaction(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            player_action=player_action,
+            npc_action=npc_action,
+            context=context
+        )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    async def apply_relationship_decay_for_npc(
+        self,
+        npc_id: int,
+        days_since_interaction: int = 1
+    ) -> Dict[str, Any]:
+        """Apply relationship decay for an NPC."""
+        relationship_manager = await self._get_relationship_manager(npc_id)
+        result = await relationship_manager.apply_relationship_decay(days_since_interaction)
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    async def update_npc_narrative_progression(
+        self,
+        npc_id: int,
+        interaction_type: str,
+        interaction_intensity: float = 1.0
+    ) -> Dict[str, Any]:
+        """Update narrative progression for an NPC."""
+        relationship_manager = await self._get_relationship_manager(npc_id)
+        result = await relationship_manager.update_narrative_progression(
+            entity_id=self.user_id,
+            interaction_type=interaction_type,
+            interaction_intensity=interaction_intensity
+        )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
+    
+    async def get_npc_relationship_history(
+        self,
+        npc_id: int,
+        entity_type: str,
+        entity_id: int,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Get relationship history for an NPC."""
+        relationship_manager = await self._get_relationship_manager(npc_id)
+        return await relationship_manager.get_relationship_history(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            limit=limit
+        )
+    
+    async def get_npc_relationship_memories(
+        self,
+        npc_id: int,
+        entity_type: str,
+        entity_id: int,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Get relationship-related memories for an NPC."""
+        relationship_manager = await self._get_relationship_manager(npc_id)
+        return await relationship_manager.get_relationship_memories(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            limit=limit
+        )
+    
+    async def evaluate_npc_coalitions_and_rivalries(
+        self,
+        npc_id: int,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Evaluate coalitions and rivalries for an NPC."""
+        relationship_manager = await self._get_relationship_manager(npc_id)
+        result = await relationship_manager.evaluate_coalitions_and_rivalries(context)
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
     
     # ==================== NPC INFORMATION ====================
     
@@ -711,7 +1322,8 @@ class NPCOrchestrator:
             row = await conn.fetchrow("""
                 SELECT npc_name, current_location, dominance, cruelty, 
                        closeness, trust, respect, intensity, mask_integrity,
-                       personality_traits, schedule, scheming_level, betrayal_planning
+                       personality_traits, schedule, scheming_level, betrayal_planning,
+                       special_mechanics
                 FROM NPCStats
                 WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
             """, npc_id, self.user_id, self.conversation_id)
@@ -766,6 +1378,24 @@ class NPCOrchestrator:
         npc_data = await behavior_evolution._get_npc_data(npc_id)
         paranoia_level = 5 if npc_data and "paranoid" in npc_data.get("personality_traits", []) else 2
         
+        # Get Nyx directives if any
+        nyx_directives = []
+        if self._nyx_bridge:
+            try:
+                # This would need to be implemented in the NyxNPCBridge
+                # For now, we'll leave it empty
+                pass
+            except:
+                pass
+        
+        # Parse special mechanics if present
+        special_mechanics = {}
+        if row['special_mechanics']:
+            try:
+                special_mechanics = json.loads(row['special_mechanics'])
+            except:
+                special_mechanics = {}
+        
         return NPCSnapshot(
             npc_id=npc_id,
             name=row['npc_name'],
@@ -790,7 +1420,9 @@ class NPCOrchestrator:
             scheming_level=row['scheming_level'] or 0,
             paranoia_level=paranoia_level,
             current_goals=current_goals,
-            decision_history=decision_history
+            decision_history=decision_history,
+            nyx_directives=nyx_directives,
+            special_mechanics=special_mechanics
         )
     
     # ==================== TEMPLATE GENERATION ====================
@@ -1107,7 +1739,8 @@ class NPCOrchestrator:
         include_relationships: bool = True,
         include_beliefs: bool = True,
         include_decision_patterns: bool = True,
-        include_learning_data: bool = True
+        include_learning_data: bool = True,
+        include_nyx_governance: bool = True
     ) -> Dict[str, Any]:
         """
         Get comprehensive narrative context for the narrative generator.
@@ -1125,7 +1758,8 @@ class NPCOrchestrator:
             "belief_networks": {},
             "lore_context": {},
             "behavior_patterns": {},
-            "learning_insights": {}
+            "learning_insights": {},
+            "nyx_governance": {}
         }
         
         # Determine which NPCs to include
@@ -1177,6 +1811,11 @@ class NPCOrchestrator:
                         "pattern_count": len(adaptation.interaction_patterns) if hasattr(adaptation, 'interaction_patterns') else 0,
                         "preference_model": adaptation.preference_model if hasattr(adaptation, 'preference_model') else {}
                     }
+                
+                # Add Nyx governance data
+                if include_nyx_governance and self._nyx_bridge:
+                    # This would need to be implemented in the NyxNPCBridge
+                    context["nyx_governance"][npc_id] = snapshot.nyx_directives or []
                     
             except Exception as e:
                 logger.error(f"Error getting narrative context for NPC {npc_id}: {e}")
@@ -1345,18 +1984,25 @@ class NPCOrchestrator:
                 "agent_system": self._agent_system is not None,
                 "coordinator": self._coordinator is not None,
                 "handler": self._handler is not None,
+                "creation_handler": self._creation_handler is not None,
+                "preset_handler": self._preset_handler is not None,
                 "memory_system": self._memory_system is not None,
                 "lore_system": self._lore_system is not None,
                 "belief_integration": self._belief_integration is not None,
                 "lore_context_manager": self._lore_context_manager is not None,
                 "behavior_evolution": self._behavior_evolution is not None,
-                "learning_manager": self._learning_manager is not None
+                "learning_manager": self._learning_manager is not None,
+                "nyx_bridge": self._nyx_bridge is not None
             },
             "subsystem_counts": {
                 "belief_formations": len(self._belief_formations),
                 "npc_behaviors": len(self._npc_behaviors),
                 "decision_engines": len(self._decision_engines),
-                "learning_adaptations": len(self._learning_adaptations)
+                "learning_adaptations": len(self._learning_adaptations),
+                "memory_managers": len(self._memory_managers),
+                "perception_systems": len(self._perception_systems),
+                "relationship_managers": len(self._relationship_managers),
+                "nyx_memory_access": len(self._nyx_memory_access)
             }
         }
     
@@ -1373,6 +2019,10 @@ class NPCOrchestrator:
         self._npc_behaviors.clear()
         self._decision_engines.clear()
         self._learning_adaptations.clear()
+        self._memory_managers.clear()
+        self._perception_systems.clear()
+        self._relationship_managers.clear()
+        self._nyx_memory_access.clear()
 
 
 # ==================== CONVENIENCE FUNCTIONS ====================
@@ -1404,7 +2054,8 @@ async def get_npc_context_for_narrative(
             include_relationships=True,
             include_beliefs=True,
             include_decision_patterns=True,
-            include_learning_data=True
+            include_learning_data=True,
+            include_nyx_governance=True
         )
     finally:
         await orchestrator.shutdown()
