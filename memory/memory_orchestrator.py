@@ -225,6 +225,18 @@ class MemoryOrchestrator:
             base_agent = create_memory_agent(self.user_id, self.conversation_id)
             self.memory_agent = base_agent
             self.memory_agent_wrapper = MemoryAgentWrapper(base_agent, memory_context)
+
+            if not hasattr(self, '_canon_synced'):
+                self._canon_synced = False
+            
+            # Run canon sync on first initialization
+            if not self._canon_synced:
+                try:
+                    sync_result = await self.sync_canon_to_memory()
+                    logger.info(f"Initial canon sync completed: {sync_result}")
+                    self._canon_synced = True
+                except Exception as e:
+                    logger.warning(f"Canon sync failed during initialization: {e}")
             
             # Initialize integration layers
             self.nyx_bridge = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
@@ -244,6 +256,424 @@ class MemoryOrchestrator:
     # ========================================================================
     # Setup and Initialization Operations
     # ========================================================================
+
+    async def store_canonical_entity(
+        self,
+        entity_type: str,
+        entity_id: int,
+        entity_name: str,
+        entity_data: Dict[str, Any],
+        significance: int = 5
+    ) -> Dict[str, Any]:
+        """
+        Store a canonical entity creation as a memory.
+        This is called by canon.py when creating new entities.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        # Create descriptive text for the entity
+        description_parts = [f"Created {entity_type}: {entity_name}"]
+        for key, value in entity_data.items():
+            if key not in ['embedding', 'user_id', 'conversation_id']:
+                description_parts.append(f"{key}: {value}")
+        
+        memory_text = ". ".join(description_parts[:5])  # Limit to avoid too long text
+        
+        # Map significance to importance
+        importance_map = {
+            1: "trivial", 2: "trivial", 3: "low",
+            4: "low", 5: "medium", 6: "medium",
+            7: "high", 8: "high", 9: "critical", 10: "critical"
+        }
+        importance = importance_map.get(significance, "medium")
+        
+        # Store as a memory
+        result = await self.store_memory(
+            entity_type=EntityType.LORE,
+            entity_id=0,  # Use 0 for general lore
+            memory_text=memory_text,
+            importance=importance,
+            tags=[entity_type.lower(), "canon", "creation"],
+            metadata={
+                "canonical_entity_type": entity_type,
+                "canonical_entity_id": entity_id,
+                "canonical_entity_name": entity_name,
+                **entity_data
+            }
+        )
+        
+        # Also add to vector store for searchability
+        await self.add_to_vector_store(
+            text=f"{entity_type}: {entity_name} - {memory_text}",
+            metadata={
+                "entity_type": entity_type.lower(),
+                "entity_id": entity_id,
+                "entity_name": entity_name,
+                "canonical": True,
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            },
+            entity_type=entity_type.lower()
+        )
+        
+        return result
+    
+    async def search_canonical_entities(
+        self,
+        query: str,
+        entity_types: List[str] = None,
+        similarity_threshold: float = 0.85
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for canonical entities using the vector store.
+        Used by canon.py for duplicate detection.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        filter_dict = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "canonical": True
+        }
+        
+        results = []
+        
+        if entity_types:
+            # Search each entity type separately for better accuracy
+            for entity_type in entity_types:
+                type_results = await self.search_vector_store(
+                    query=query,
+                    entity_type=entity_type.lower(),
+                    top_k=3,
+                    filter_dict=filter_dict
+                )
+                
+                # Filter by similarity threshold
+                for result in type_results:
+                    if result.get("similarity", 0) >= similarity_threshold:
+                        result["entity_type"] = entity_type
+                        results.append(result)
+        else:
+            # Search all canonical entities
+            all_results = await self.search_vector_store(
+                query=query,
+                top_k=5,
+                filter_dict=filter_dict
+            )
+            
+            # Filter by similarity threshold
+            results = [r for r in all_results if r.get("similarity", 0) >= similarity_threshold]
+        
+        # Sort by similarity
+        results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
+        
+        return results
+    
+    async def get_canonical_context(
+        self,
+        entity_types: List[str] = None,
+        time_window_hours: int = 24
+    ) -> Dict[str, Any]:
+        """
+        Get canonical context for narrative generation.
+        Combines canonical entities with memories.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        context = {
+            "canonical_entities": {},
+            "recent_canonical_events": [],
+            "active_locations": [],
+            "active_npcs": [],
+            "world_state": {},
+            "narrative_context": await self.get_narrative_context()
+        }
+        
+        from logic.game_time_helper import get_game_datetime
+        from db.connection import get_db_connection_context
+        
+        current_time = await get_game_datetime(self.user_id, self.conversation_id)
+        cutoff_time = current_time - timedelta(hours=time_window_hours)
+        
+        async with get_db_connection_context() as conn:
+            # Get recent canonical events
+            events = await conn.fetch("""
+                SELECT event_text, tags, significance, timestamp
+                FROM CanonicalEvents
+                WHERE user_id = $1 AND conversation_id = $2
+                AND timestamp > $3
+                ORDER BY timestamp DESC
+                LIMIT 20
+            """, self.user_id, self.conversation_id, cutoff_time)
+            
+            context["recent_canonical_events"] = [
+                {
+                    "text": e["event_text"],
+                    "tags": json.loads(e["tags"]) if e["tags"] else [],
+                    "significance": e["significance"],
+                    "timestamp": e["timestamp"].isoformat()
+                }
+                for e in events
+            ]
+            
+            # Get active NPCs
+            npcs = await conn.fetch("""
+                SELECT npc_id, npc_name, role, current_location
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+                AND introduced = TRUE
+            """, self.user_id, self.conversation_id)
+            
+            context["active_npcs"] = [
+                {
+                    "id": npc["npc_id"],
+                    "name": npc["npc_name"],
+                    "role": npc["role"],
+                    "location": npc["current_location"]
+                }
+                for npc in npcs
+            ]
+            
+            # Get active locations
+            locations = await conn.fetch("""
+                SELECT location_name, location_type, description
+                FROM Locations
+                WHERE user_id = $1 AND conversation_id = $2
+                LIMIT 10
+            """, self.user_id, self.conversation_id)
+            
+            context["active_locations"] = [
+                {
+                    "name": loc["location_name"],
+                    "type": loc["location_type"],
+                    "description": loc["description"]
+                }
+                for loc in locations
+            ]
+            
+            # Get current roleplay state
+            roleplay_state = await conn.fetch("""
+                SELECT key, value
+                FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2
+            """, self.user_id, self.conversation_id)
+            
+            for state in roleplay_state:
+                context["world_state"][state["key"]] = state["value"]
+        
+        # Enhance with memory-based insights
+        if context["active_npcs"]:
+            for npc in context["active_npcs"]:
+                # Get NPC's recent memories
+                npc_memories = await self.retrieve_memories(
+                    entity_type="npc",
+                    entity_id=npc["id"],
+                    limit=3
+                )
+                npc["recent_memories"] = npc_memories.get("memories", [])
+                
+                # Get NPC's emotional state
+                emotional_state = await self.get_emotional_state(
+                    entity_type="npc",
+                    entity_id=npc["id"]
+                )
+                npc["emotional_state"] = emotional_state
+        
+        return context
+    
+    async def validate_canonical_consistency(
+        self,
+        entity_type: str,
+        entity_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Validate that a new entity is consistent with existing canon.
+        Uses memory analysis to detect conflicts.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        conflicts = []
+        warnings = []
+        
+        # Search for similar entities
+        search_text = f"{entity_type}: {entity_data.get('name', '')} {entity_data.get('description', '')}"
+        similar_entities = await self.search_canonical_entities(
+            query=search_text,
+            entity_types=[entity_type],
+            similarity_threshold=0.7
+        )
+        
+        if similar_entities:
+            # Use LLM to check for conflicts
+            from logic.chatgpt_integration import get_openai_client
+            client = get_openai_client()
+            
+            prompt = f"""
+            Check if this new {entity_type} conflicts with existing canon:
+            
+            New Entity:
+            {json.dumps(entity_data, indent=2)}
+            
+            Similar Existing Entities:
+            {json.dumps(similar_entities[:3], indent=2)}
+            
+            Identify:
+            1. Direct conflicts (contradictions)
+            2. Potential issues (inconsistencies)
+            3. Warnings (things to be careful about)
+            
+            Return JSON:
+            {{
+                "has_conflicts": true/false,
+                "conflicts": ["conflict1", ...],
+                "warnings": ["warning1", ...],
+                "suggestions": ["suggestion1", ...]
+            }}
+            """
+            
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": "You are a canon consistency validator."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=500
+                )
+                
+                result = json.loads(response.choices[0].message.content)
+                
+                if result.get("has_conflicts"):
+                    conflicts.extend(result.get("conflicts", []))
+                warnings.extend(result.get("warnings", []))
+                
+            except Exception as e:
+                logger.error(f"Error validating canonical consistency: {e}")
+        
+        # Check narrative consistency
+        narrative_context = await self.get_narrative_context()
+        if narrative_context.get("potential_conflicts"):
+            for conflict in narrative_context["potential_conflicts"]:
+                warnings.append(f"Potential narrative conflict: {conflict.get('conflict_type')}")
+        
+        return {
+            "is_consistent": len(conflicts) == 0,
+            "conflicts": conflicts,
+            "warnings": warnings,
+            "similar_entities": similar_entities
+        }
+    
+    async def sync_canon_to_memory(self) -> Dict[str, Any]:
+        """
+        Synchronize all canonical data to the memory system.
+        This ensures the memory system has full knowledge of the world state.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        from db.connection import get_db_connection_context
+        from lore.core.canon import ensure_canonical_context
+        
+        ctx = ensure_canonical_context({
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
+        
+        sync_stats = {
+            "npcs_synced": 0,
+            "locations_synced": 0,
+            "events_synced": 0,
+            "journal_entries_synced": 0,
+            "errors": []
+        }
+        
+        try:
+            async with get_db_connection_context() as conn:
+                # Sync NPCs
+                npcs = await conn.fetch("""
+                    SELECT npc_id, npc_name, role, affiliations, introduced
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                for npc in npcs:
+                    try:
+                        await self.store_canonical_entity(
+                            entity_type="npc",
+                            entity_id=npc["npc_id"],
+                            entity_name=npc["npc_name"],
+                            entity_data={
+                                "role": npc["role"],
+                                "affiliations": npc["affiliations"],
+                                "introduced": npc["introduced"]
+                            }
+                        )
+                        sync_stats["npcs_synced"] += 1
+                    except Exception as e:
+                        sync_stats["errors"].append(f"NPC {npc['npc_id']}: {str(e)}")
+                
+                # Sync Locations
+                locations = await conn.fetch("""
+                    SELECT id, location_name, location_type, description
+                    FROM Locations
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                for loc in locations:
+                    try:
+                        await self.store_canonical_entity(
+                            entity_type="location",
+                            entity_id=loc["id"],
+                            entity_name=loc["location_name"],
+                            entity_data={
+                                "type": loc["location_type"],
+                                "description": loc["description"]
+                            }
+                        )
+                        sync_stats["locations_synced"] += 1
+                    except Exception as e:
+                        sync_stats["errors"].append(f"Location {loc['id']}: {str(e)}")
+                
+                # Sync Journal Entries
+                journal_entries = await conn.fetch("""
+                    SELECT id, entry_type, entry_text, importance, tags
+                    FROM PlayerJournal
+                    WHERE user_id = $1 AND conversation_id = $2
+                    LIMIT 100
+                """, self.user_id, self.conversation_id)
+                
+                for entry in journal_entries:
+                    try:
+                        importance = "high" if entry["importance"] > 0.7 else "medium" if entry["importance"] > 0.3 else "low"
+                        tags = json.loads(entry["tags"]) if entry["tags"] else []
+                        
+                        await self.store_memory(
+                            entity_type=EntityType.PLAYER,
+                            entity_id=self.user_id,
+                            memory_text=entry["entry_text"],
+                            importance=importance,
+                            tags=tags + ["journal_sync"],
+                            metadata={
+                                "journal_id": entry["id"],
+                                "entry_type": entry["entry_type"]
+                            }
+                        )
+                        sync_stats["journal_entries_synced"] += 1
+                    except Exception as e:
+                        sync_stats["errors"].append(f"Journal {entry['id']}: {str(e)}")
+            
+            logger.info(f"Canon sync completed: {sync_stats}")
+            return sync_stats
+            
+        except Exception as e:
+            logger.error(f"Error during canon sync: {e}")
+            sync_stats["errors"].append(f"General sync error: {str(e)}")
+            return sync_stats
     
     async def setup_entity(
         self,
