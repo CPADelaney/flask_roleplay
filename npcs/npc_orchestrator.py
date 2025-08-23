@@ -1,10 +1,8 @@
 # npcs/npc_orchestrator.py
 
 """
-NPC System Orchestrator - Single Access Point for All NPC Operations
-
-This module provides a unified interface to all NPC systems, making it easy
-to integrate with narrative generators and other game systems.
+NPC System Orchestrator with Built-in Canon Integration
+Complete replacement for the original orchestrator with all functionality preserved
 """
 
 import logging
@@ -78,8 +76,14 @@ from logic.npc_narrative_progression import (
     progress_npc_narrative_stage,
     NPCNarrativeStage
 )
+
+# Import canon systems
+from lore.core import canon
+from lore.core.context import CanonicalContext
+from lore.core.validation import CanonValidationAgent
+
 from db.connection import get_db_connection_context
-from agents import RunContextWrapper
+from agents import RunContextWrapper, Runner
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +126,7 @@ class NPCSnapshot:
     decision_history: List[Dict[str, Any]] = None
     nyx_directives: List[Dict[str, Any]] = None
     special_mechanics: Dict[str, Any] = None
+    canonical_events: List[Dict[str, Any]] = None  # Added for canon
     
     def to_narrative_context(self) -> Dict[str, Any]:
         """Convert snapshot to narrative-ready context"""
@@ -150,20 +155,46 @@ class NPCSnapshot:
             "governance": {
                 "nyx_directives": self.nyx_directives or [],
                 "special_mechanics": self.special_mechanics or {}
+            },
+            "canon": {
+                "recent_events": self.canonical_events or []
             }
         }
 
 
+@dataclass
+class CanonCheckResult:
+    """Result of a canon consistency check"""
+    is_consistent: bool
+    conflicts: List[Dict[str, Any]]
+    warnings: List[str]
+    suggestions: List[Dict[str, Any]]
+    canon_references: List[Dict[str, Any]]
+
+
 class NPCOrchestrator:
     """
-    Master orchestrator for all NPC operations.
+    Master orchestrator for all NPC operations with built-in canon integration.
     Single access point for narrative generation and game systems.
     """
     
-    def __init__(self, user_id: int, conversation_id: int):
-        """Initialize the orchestrator with all subsystems."""
+    def __init__(self, user_id: int, conversation_id: int, enable_canon: bool = True):
+        """
+        Initialize the orchestrator with all subsystems.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            enable_canon: Whether to enable canon integration (default: True)
+        """
         self.user_id = user_id
         self.conversation_id = conversation_id
+        
+        # Canon configuration
+        self.enable_canon = enable_canon
+        self.auto_canonize = True
+        self.check_canon_consistency = True
+        self.canon_significance_threshold = 4  # Minimum significance to canonize
         
         # Core systems (lazy-loaded)
         self._agent_system: Optional[NPCAgentSystem] = None
@@ -174,6 +205,11 @@ class NPCOrchestrator:
         self._memory_system: Optional[MemorySystem] = None
         self._lore_system: Optional[LoreSystem] = None
         self._relationship_manager: Optional[OptimizedRelationshipManager] = None
+        
+        # Canon integration
+        self._validation_agent: Optional[CanonValidationAgent] = None
+        self._canon_cache: Dict[str, Tuple[Any, datetime]] = {}
+        self._canon_cache_ttl = timedelta(minutes=5)
         
         # Nyx integration
         self._nyx_bridge: Optional[NyxNPCBridge] = None
@@ -215,12 +251,194 @@ class NPCOrchestrator:
         # Tracking
         self._active_npcs: Set[int] = set()
         self._npc_status: Dict[int, NPCStatus] = {}
+    
+    # ==================== CANON HELPERS ====================
+    
+    def _get_canonical_context(self) -> CanonicalContext:
+        """Get canonical context for operations"""
+        return CanonicalContext(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id
+        )
+    
+    async def _get_validation_agent(self) -> CanonValidationAgent:
+        """Get or create validation agent for canon checking"""
+        if self._validation_agent is None:
+            self._validation_agent = CanonValidationAgent()
+        return self._validation_agent
+    
+    async def _check_npc_canon_consistency(
+        self,
+        npc_id: int,
+        action: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> CanonCheckResult:
+        """Check if an NPC action is consistent with established canon."""
+        if not self.enable_canon or not self.check_canon_consistency:
+            return CanonCheckResult(True, [], [], [], [])
         
+        conflicts = []
+        warnings = []
+        suggestions = []
+        canon_references = []
+        
+        async with get_db_connection_context() as conn:
+            # Get NPC's canonical data
+            npc_data = await conn.fetchrow("""
+                SELECT npc_name, role, personality_traits, current_location,
+                       backstory, goals, special_mechanics, mask_integrity,
+                       dominance, cruelty, betrayal_planning, scheming_level
+                FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, self.user_id, self.conversation_id)
+            
+            if not npc_data:
+                return CanonCheckResult(
+                    is_consistent=False,
+                    conflicts=[{"type": "npc_not_found", "npc_id": npc_id}],
+                    warnings=["NPC not found in canon"],
+                    suggestions=[{"action": "create_npc", "npc_id": npc_id}],
+                    canon_references=[]
+                )
+            
+            # Check location consistency
+            if "location" in action and action["location"] != npc_data["current_location"]:
+                location_exists = await conn.fetchrow("""
+                    SELECT id FROM Locations
+                    WHERE location_name = $1 AND user_id = $2 AND conversation_id = $3
+                """, action["location"], self.user_id, self.conversation_id)
+                
+                if not location_exists:
+                    conflicts.append({
+                        "type": "unknown_location",
+                        "location": action["location"]
+                    })
+                    suggestions.append({
+                        "action": "create_location",
+                        "location": action["location"]
+                    })
+            
+            # Check personality consistency
+            if "behavior" in action:
+                personality_traits = npc_data.get("personality_traits", [])
+                validation_agent = await self._get_validation_agent()
+                
+                prompt = f"""
+                NPC {npc_data['npc_name']} has these personality traits: {personality_traits}
+                Current mask integrity: {npc_data.get('mask_integrity', 100)}%
+                
+                They want to: {action['behavior']}
+                
+                Is this behavior consistent with their personality?
+                Reply with JSON: {{"consistent": true/false, "reason": "explanation"}}
+                """
+                
+                result = await Runner.run(validation_agent.agent, prompt)
+                try:
+                    check = json.loads(result.final_output)
+                    if not check["consistent"]:
+                        warnings.append(f"Behavior inconsistency: {check['reason']}")
+                except:
+                    pass
+        
+        return CanonCheckResult(
+            is_consistent=len(conflicts) == 0,
+            conflicts=conflicts,
+            warnings=warnings,
+            suggestions=suggestions,
+            canon_references=canon_references
+        )
+    
+    async def _canonize_npc_action(
+        self,
+        npc_id: int,
+        action: Dict[str, Any],
+        result: Dict[str, Any],
+        significance: int = 5
+    ) -> Dict[str, Any]:
+        """Make an NPC action canonical by updating all relevant canon systems."""
+        if not self.enable_canon or not self.auto_canonize:
+            return {"skipped": True}
+        
+        if significance < self.canon_significance_threshold:
+            return {"skipped": True, "reason": "below significance threshold"}
+        
+        ctx = self._get_canonical_context()
+        canonized = {
+            "success": True,
+            "updates": [],
+            "events_logged": []
+        }
+        
+        async with get_db_connection_context() as conn:
+            # Get NPC name
+            npc_data = await conn.fetchrow("""
+                SELECT npc_name FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, self.user_id, self.conversation_id)
+            
+            if not npc_data:
+                return {"success": False, "error": "NPC not found"}
+            
+            npc_name = npc_data["npc_name"]
+            
+            # Update location if changed
+            if "new_location" in result:
+                location_id = await canon.find_or_create_location(
+                    ctx, conn,
+                    location_name=result["new_location"],
+                    location_type="settlement"
+                )
+                
+                await conn.execute("""
+                    UPDATE NPCStats
+                    SET current_location = $1
+                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+                """, result["new_location"], npc_id, self.user_id, self.conversation_id)
+                
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"{npc_name} moved to {result['new_location']}",
+                    tags=["npc", "movement", "location"],
+                    significance=significance
+                )
+                canonized["events_logged"].append(f"Movement to {result['new_location']}")
+            
+            # Canonize significant statements
+            if "statement" in action and significance >= 6:
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f'{npc_name} declared: "{action["statement"][:200]}"',
+                    tags=["npc", "declaration", "dialogue"],
+                    significance=significance
+                )
+                canonized["events_logged"].append("Important declaration")
+            
+            # Update relationships if affected
+            if "relationship_changes" in result:
+                for rel_change in result["relationship_changes"]:
+                    link_id = await canon.find_or_create_social_link(
+                        ctx, conn,
+                        entity1_type="npc",
+                        entity1_id=npc_id,
+                        entity2_type=rel_change.get("target_type", "npc"),
+                        entity2_id=rel_change["target_id"],
+                        link_type=rel_change.get("new_type", "neutral")
+                    )
+                    
+                    canonized["updates"].append({
+                        "type": "relationship",
+                        "link_id": link_id
+                    })
+        
+        return canonized
+    
     # ==================== INITIALIZATION ====================
     
     async def initialize(self) -> None:
         """Initialize all core systems."""
         logger.info(f"Initializing NPC Orchestrator for user {self.user_id}, conversation {self.conversation_id}")
+        logger.info(f"Canon integration: {'ENABLED' if self.enable_canon else 'DISABLED'}")
         
         # Initialize agent system (manages all NPCs)
         self._agent_system = NPCAgentSystem(self.user_id, self.conversation_id, None)
@@ -241,7 +459,7 @@ class NPCOrchestrator:
         
         # Load active NPCs
         await self._load_active_npcs()
-        
+    
     async def _load_active_npcs(self) -> None:
         """Load all active NPCs from the database."""
         async with get_db_connection_context() as conn:
@@ -413,10 +631,28 @@ class NPCOrchestrator:
         specific_traits: Optional[Dict[str, Any]] = None,
         use_dynamic_templates: bool = True
     ) -> Dict[str, Any]:
-        """Create a new NPC with optional dynamic template generation."""
+        """Create a new NPC with optional dynamic template generation and canon checking."""
+        
+        # Check if similar NPC already exists in canon
+        if self.enable_canon and specific_traits and "name" in specific_traits:
+            ctx = self._get_canonical_context()
+            async with get_db_connection_context() as conn:
+                # Use canon's semantic matching to check for duplicates
+                existing_id = await conn.fetchrow("""
+                    SELECT npc_id FROM NPCStats
+                    WHERE LOWER(npc_name) = LOWER($1)
+                    AND user_id = $2 AND conversation_id = $3
+                """, specific_traits["name"], self.user_id, self.conversation_id)
+                
+                if existing_id:
+                    return {
+                        "success": False,
+                        "reason": "NPC with this name already exists",
+                        "existing_npc_id": existing_id["npc_id"]
+                    }
+        
         # Generate dynamic templates if requested
         if use_dynamic_templates and environment_desc:
-            # Generate core beliefs
             if not specific_traits:
                 specific_traits = {}
             
@@ -466,6 +702,17 @@ class NPCOrchestrator:
                         ctx, belief_text, factuality=0.9
                     )
             
+            # Canonize creation if enabled
+            if self.enable_canon and self.auto_canonize:
+                ctx = self._get_canonical_context()
+                async with get_db_connection_context() as conn:
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"New NPC created: {specific_traits.get('name', 'Unknown')} ({', '.join(archetype_names or ['no archetype'])})",
+                        tags=["npc", "creation", "canonical"],
+                        significance=8
+                    )
+        
         return result
     
     async def create_preset_npc(
@@ -473,7 +720,22 @@ class NPCOrchestrator:
         npc_data: Dict[str, Any],
         story_context: Dict[str, Any]
     ) -> int:
-        """Create a rich preset NPC with full features."""
+        """Create a rich preset NPC with full features and canon integration."""
+        
+        # Check for duplicates if canon enabled
+        if self.enable_canon and "name" in npc_data:
+            ctx = self._get_canonical_context()
+            async with get_db_connection_context() as conn:
+                existing = await conn.fetchrow("""
+                    SELECT npc_id FROM NPCStats
+                    WHERE LOWER(npc_name) = LOWER($1)
+                    AND user_id = $2 AND conversation_id = $3
+                """, npc_data["name"], self.user_id, self.conversation_id)
+                
+                if existing:
+                    logger.warning(f"NPC '{npc_data['name']}' already exists")
+                    return existing["npc_id"]
+        
         handler = await self._get_preset_handler()
         
         ctx = RunContextWrapper(context={
@@ -486,6 +748,17 @@ class NPCOrchestrator:
         # Add to tracking
         self._active_npcs.add(npc_id)
         self._npc_status[npc_id] = NPCStatus.IDLE
+        
+        # Canonize if enabled
+        if self.enable_canon and self.auto_canonize:
+            ctx = self._get_canonical_context()
+            async with get_db_connection_context() as conn:
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Preset NPC created: {npc_data.get('name', 'Unknown')} - {npc_data.get('role', 'no role')}",
+                    tags=["npc", "preset", "creation", "canonical"],
+                    significance=8
+                )
         
         # Invalidate cache
         if npc_id in self._snapshot_cache:
@@ -598,7 +871,7 @@ class NPCOrchestrator:
         
         return result
     
-    # ==================== MEMORY OPERATIONS ====================
+    # ==================== MEMORY OPERATIONS (CANON-ENHANCED) ====================
     
     async def add_memory_for_npc(
         self,
@@ -611,9 +884,43 @@ class NPCOrchestrator:
         feminine_context: bool = False,
         use_nyx_governance: bool = True
     ) -> Optional[int]:
-        """Add a memory for an NPC."""
+        """Add a memory for an NPC with canon consistency checking."""
+        
+        # Check memory consistency with canon if enabled
+        if self.enable_canon and self.check_canon_consistency:
+            async with get_db_connection_context() as conn:
+                # Check for contradictory memories
+                existing_memories = await conn.fetch("""
+                    SELECT memory_text FROM NPCMemories
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    AND memory_type = $4
+                    ORDER BY created_at DESC
+                    LIMIT 10
+                """, npc_id, self.user_id, self.conversation_id, memory_type)
+                
+                if existing_memories:
+                    validation_agent = await self._get_validation_agent()
+                    memory_texts = [m["memory_text"] for m in existing_memories]
+                    
+                    prompt = f"""
+                    Existing memories: {json.dumps(memory_texts, indent=2)}
+                    New memory: "{memory_text}"
+                    
+                    Does this contradict existing memories?
+                    Reply with JSON: {{"contradicts": true/false, "severity": "none/minor/major"}}
+                    """
+                    
+                    result = await Runner.run(validation_agent.agent, prompt)
+                    try:
+                        check = json.loads(result.final_output)
+                        if check["contradicts"] and check["severity"] == "major":
+                            logger.warning(f"Memory contradicts canon: {memory_text}")
+                            # You might want to handle this differently
+                    except:
+                        pass
+        
+        # Add memory through appropriate system
         if use_nyx_governance:
-            # Use Nyx-governed memory access
             memory_access = await self._get_nyx_memory_access(npc_id)
             result = await memory_access.remember(
                 memory_text=memory_text,
@@ -621,11 +928,10 @@ class NPCOrchestrator:
                 emotional=abs(emotional_valence) > 5,
                 tags=tags
             )
-            return result.get("memory_id")
+            memory_id = result.get("memory_id")
         else:
-            # Use direct memory manager
             memory_manager = await self._get_memory_manager(npc_id)
-            return await memory_manager.add_memory(
+            memory_id = await memory_manager.add_memory(
                 memory_text=memory_text,
                 memory_type=memory_type,
                 significance=significance,
@@ -633,6 +939,25 @@ class NPCOrchestrator:
                 tags=tags,
                 feminine_context=feminine_context
             )
+        
+        # Canonize significant memories
+        if self.enable_canon and self.auto_canonize and significance >= 7:
+            ctx = self._get_canonical_context()
+            async with get_db_connection_context() as conn:
+                npc_data = await conn.fetchrow("""
+                    SELECT npc_name FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                if npc_data:
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"{npc_data['npc_name']} formed significant memory: {memory_text[:100]}",
+                        tags=["npc", "memory", memory_type] + (tags or []),
+                        significance=significance
+                    )
+        
+        return memory_id
     
     async def recall_memories_for_npc(
         self,
@@ -806,14 +1131,14 @@ class NPCOrchestrator:
         significance = await perception_system.evaluate_action_significance(action, result)
         return significance.dict() if hasattr(significance, 'dict') else significance
     
-    # ==================== DECISION MAKING ====================
+    # ==================== DECISION MAKING (CANON-ENHANCED) ====================
     
     async def make_npc_decision(
         self,
         npc_id: int,
         perception: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Make a decision for an NPC using the decision engine."""
+        """Make a decision for an NPC using the decision engine with canon constraints."""
         self._npc_status[npc_id] = NPCStatus.DECISION_MAKING
         
         try:
@@ -824,8 +1149,44 @@ class NPCOrchestrator:
             if perception is None:
                 perception = await self.get_npc_perception(npc_id)
             
+            # Add canonical constraints if enabled
+            if self.enable_canon:
+                async with get_db_connection_context() as conn:
+                    # Get canonical events
+                    events = await conn.fetch("""
+                        SELECT event_text, tags, significance, timestamp
+                        FROM CanonicalEvents
+                        WHERE user_id = $1 AND conversation_id = $2
+                        ORDER BY timestamp DESC
+                        LIMIT 5
+                    """, self.user_id, self.conversation_id)
+                    
+                    perception["canonical_constraints"] = {
+                        "recent_events": [dict(e) for e in events]
+                    }
+            
             # Make decision
             decision = await decision_engine.decide(perception)
+            
+            # Check decision consistency with canon
+            if self.enable_canon and self.check_canon_consistency and "action" in decision:
+                consistency_check = await self._check_npc_canon_consistency(
+                    npc_id, decision["action"], perception
+                )
+                
+                if not consistency_check.is_consistent:
+                    decision["canon_warnings"] = consistency_check.warnings
+                    decision["canon_adjustments"] = consistency_check.suggestions
+            
+            # Canonize significant decisions
+            if self.enable_canon and self.auto_canonize and decision.get("significance", 0) >= self.canon_significance_threshold:
+                canon_result = await self._canonize_npc_action(
+                    npc_id=npc_id,
+                    action=decision.get("action", {}),
+                    result=decision,
+                    significance=decision.get("significance", 5)
+                )
+                decision["canonized"] = canon_result
             
             # Invalidate cache
             if npc_id in self._snapshot_cache:
@@ -878,7 +1239,7 @@ class NPCOrchestrator:
         behavior_evolution = await self._get_behavior_evolution()
         return await behavior_evolution.generate_scheming_opportunity(npc_id, trigger_event)
     
-    # ==================== BELIEF MANAGEMENT ====================
+    # ==================== BELIEF MANAGEMENT (CANON-ENHANCED) ====================
     
     async def form_npc_belief(
         self,
@@ -887,31 +1248,75 @@ class NPCOrchestrator:
         factuality: float = 1.0,
         use_nyx_governance: bool = True
     ) -> Dict[str, Any]:
-        """Form a subjective belief for an NPC."""
+        """Form a subjective belief for an NPC with canon consistency checking."""
+        
+        # Check belief consistency with canon if enabled
+        if self.enable_canon and self.check_canon_consistency:
+            async with get_db_connection_context() as conn:
+                existing_beliefs = await conn.fetch("""
+                    SELECT belief_text, confidence FROM NPCBeliefs
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    AND confidence > 0.5
+                    ORDER BY confidence DESC
+                    LIMIT 10
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                if existing_beliefs:
+                    validation_agent = await self._get_validation_agent()
+                    belief_texts = [b["belief_text"] for b in existing_beliefs]
+                    
+                    prompt = f"""
+                    Existing beliefs: {json.dumps(belief_texts, indent=2)}
+                    New belief: "{observation}"
+                    
+                    Does this contradict existing beliefs?
+                    Reply with JSON: {{"contradicts": true/false, "conflicting_beliefs": []}}
+                    """
+                    
+                    result = await Runner.run(validation_agent.agent, prompt)
+                    try:
+                        check = json.loads(result.final_output)
+                        if check["contradicts"]:
+                            logger.warning(f"Belief contradicts existing: {observation}")
+                            # Could reconcile or adjust factuality
+                            factuality *= 0.7  # Reduce confidence due to contradiction
+                    except:
+                        pass
+        
+        # Form belief through appropriate system
         if use_nyx_governance:
             memory_access = await self._get_nyx_memory_access(npc_id)
-            return await memory_access.create_belief(
+            result = await memory_access.create_belief(
                 belief_text=observation,
                 confidence=factuality
             )
         else:
             belief_formation = await self._get_belief_formation(npc_id)
-            
             ctx = RunContextWrapper(context={
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id,
                 'npc_id': npc_id
             })
-            
             result = await belief_formation.form_subjective_belief_from_observation(
                 ctx, observation, factuality
             )
-            
-            # Invalidate cache
-            if npc_id in self._snapshot_cache:
-                del self._snapshot_cache[npc_id]
-            
-            return result
+        
+        # Canonize significant beliefs
+        if self.enable_canon and self.auto_canonize and factuality >= 0.8:
+            ctx = self._get_canonical_context()
+            async with get_db_connection_context() as conn:
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"NPC {npc_id} formed strong belief: {observation[:100]}",
+                    tags=["npc", "belief", "canonical"],
+                    significance=5
+                )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return result
     
     async def form_narrative_belief(
         self,
@@ -1290,7 +1695,7 @@ class NPCOrchestrator:
         
         return result
     
-    # ==================== NPC INFORMATION ====================
+    # ==================== NPC INFORMATION (WITH CANON) ====================
     
     async def get_npc_snapshot(
         self,
@@ -1300,6 +1705,7 @@ class NPCOrchestrator:
         """
         Get a comprehensive snapshot of an NPC's current state.
         This is the primary method for narrative generators to get NPC context.
+        Now includes canonical events when canon is enabled.
         """
         # Check cache first
         if not force_refresh and npc_id in self._snapshot_cache:
@@ -1316,7 +1722,7 @@ class NPCOrchestrator:
         return snapshot
     
     async def _build_npc_snapshot(self, npc_id: int) -> NPCSnapshot:
-        """Build a comprehensive snapshot of an NPC."""
+        """Build a comprehensive snapshot of an NPC including canonical events."""
         # Get basic NPC data
         async with get_db_connection_context() as conn:
             row = await conn.fetchrow("""
@@ -1330,6 +1736,20 @@ class NPCOrchestrator:
             
             if not row:
                 raise ValueError(f"NPC {npc_id} not found")
+            
+            # Get canonical events if canon enabled
+            canonical_events = []
+            if self.enable_canon:
+                events = await conn.fetch("""
+                    SELECT event_text, tags, significance, timestamp
+                    FROM CanonicalEvents
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND event_text LIKE '%' || $3 || '%'
+                    ORDER BY timestamp DESC
+                    LIMIT 5
+                """, self.user_id, self.conversation_id, row["npc_name"])
+                
+                canonical_events = [dict(e) for e in events]
         
         # Get emotional state
         emotional_state = await self._memory_system.get_npc_emotion(npc_id)
@@ -1378,16 +1798,6 @@ class NPCOrchestrator:
         npc_data = await behavior_evolution._get_npc_data(npc_id)
         paranoia_level = 5 if npc_data and "paranoid" in npc_data.get("personality_traits", []) else 2
         
-        # Get Nyx directives if any
-        nyx_directives = []
-        if self._nyx_bridge:
-            try:
-                # This would need to be implemented in the NyxNPCBridge
-                # For now, we'll leave it empty
-                pass
-            except:
-                pass
-        
         # Parse special mechanics if present
         special_mechanics = {}
         if row['special_mechanics']:
@@ -1421,9 +1831,195 @@ class NPCOrchestrator:
             paranoia_level=paranoia_level,
             current_goals=current_goals,
             decision_history=decision_history,
-            nyx_directives=nyx_directives,
-            special_mechanics=special_mechanics
+            nyx_directives=[],  # Would need implementation
+            special_mechanics=special_mechanics,
+            canonical_events=canonical_events  # Added canon events
         )
+    
+    # ==================== CANON-SPECIFIC METHODS ====================
+    
+    async def get_npc_canonical_context(
+        self,
+        npc_id: int,
+        include_relationships: bool = True,
+        include_memories: bool = True,
+        include_beliefs: bool = True,
+        include_events: bool = True
+    ) -> Dict[str, Any]:
+        """Get comprehensive canonical context for an NPC."""
+        if not self.enable_canon:
+            return {"canon_disabled": True}
+        
+        context = {
+            "npc_id": npc_id,
+            "canonical_data": {},
+            "relationships": [],
+            "memories": [],
+            "beliefs": [],
+            "events": [],
+            "locations_visited": [],
+            "items_owned": []
+        }
+        
+        async with get_db_connection_context() as conn:
+            # Get core NPC data
+            npc_data = await conn.fetchrow("""
+                SELECT * FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, self.user_id, self.conversation_id)
+            
+            if not npc_data:
+                return context
+            
+            context["canonical_data"] = dict(npc_data)
+            
+            # Get relationships
+            if include_relationships:
+                relationships = await conn.fetch("""
+                    SELECT * FROM SocialLinks
+                    WHERE entity1_type = 'npc' AND entity1_id = $1
+                    AND user_id = $2 AND conversation_id = $3
+                    ORDER BY link_level DESC
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                context["relationships"] = [dict(r) for r in relationships]
+            
+            # Get canonical memories
+            if include_memories:
+                memories = await conn.fetch("""
+                    SELECT memory_text, memory_type, significance, tags, created_at
+                    FROM NPCMemories
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    ORDER BY significance DESC, created_at DESC
+                    LIMIT 20
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                context["memories"] = [dict(m) for m in memories]
+            
+            # Get beliefs
+            if include_beliefs:
+                beliefs = await conn.fetch("""
+                    SELECT belief_text, confidence, formed_at, last_reinforced
+                    FROM NPCBeliefs
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    AND confidence > 0.3
+                    ORDER BY confidence DESC
+                    LIMIT 15
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                context["beliefs"] = [dict(b) for b in beliefs]
+            
+            # Get canonical events
+            if include_events:
+                events = await conn.fetch("""
+                    SELECT ce.event_text, ce.tags, ce.significance, ce.timestamp
+                    FROM CanonicalEvents ce
+                    WHERE ce.user_id = $1 AND ce.conversation_id = $2
+                    AND ce.event_text LIKE '%' || $3 || '%'
+                    ORDER BY ce.timestamp DESC
+                    LIMIT 10
+                """, self.user_id, self.conversation_id, npc_data["npc_name"])
+                
+                context["events"] = [dict(e) for e in events]
+        
+        return context
+    
+    async def update_npc_location(
+        self,
+        npc_id: int,
+        new_location: str,
+        reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Update NPC location with automatic canonization."""
+        ctx = self._get_canonical_context()
+        
+        async with get_db_connection_context() as conn:
+            # Ensure location exists in canon if canon enabled
+            if self.enable_canon:
+                location_id = await canon.find_or_create_location(
+                    ctx, conn,
+                    location_name=new_location
+                )
+            
+            # Get NPC name and old location
+            npc_data = await conn.fetchrow("""
+                SELECT npc_name, current_location FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, self.user_id, self.conversation_id)
+            
+            if not npc_data:
+                return {"success": False, "error": "NPC not found"}
+            
+            old_location = npc_data["current_location"]
+            
+            # Update location
+            await conn.execute("""
+                UPDATE NPCStats
+                SET current_location = $1
+                WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+            """, new_location, npc_id, self.user_id, self.conversation_id)
+            
+            # Canonize if enabled
+            if self.enable_canon and self.auto_canonize:
+                event_text = f"{npc_data['npc_name']} moved from {old_location} to {new_location}"
+                if reason:
+                    event_text += f" ({reason})"
+                
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    event_text,
+                    tags=["npc", "movement", "location"],
+                    significance=4
+                )
+        
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+        
+        return {
+            "success": True,
+            "npc_id": npc_id,
+            "old_location": old_location,
+            "new_location": new_location
+        }
+    
+    async def set_canon_config(
+        self,
+        enable_canon: Optional[bool] = None,
+        auto_canonize: Optional[bool] = None,
+        check_consistency: Optional[bool] = None,
+        significance_threshold: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Configure canon integration settings."""
+        old_config = {
+            "enable_canon": self.enable_canon,
+            "auto_canonize": self.auto_canonize,
+            "check_canon_consistency": self.check_canon_consistency,
+            "canon_significance_threshold": self.canon_significance_threshold
+        }
+        
+        if enable_canon is not None:
+            self.enable_canon = enable_canon
+        if auto_canonize is not None:
+            self.auto_canonize = auto_canonize
+        if check_consistency is not None:
+            self.check_canon_consistency = check_consistency
+        if significance_threshold is not None:
+            self.canon_significance_threshold = significance_threshold
+        
+        new_config = {
+            "enable_canon": self.enable_canon,
+            "auto_canonize": self.auto_canonize,
+            "check_canon_consistency": self.check_canon_consistency,
+            "canon_significance_threshold": self.canon_significance_threshold
+        }
+        
+        logger.info(f"Canon configuration updated: {new_config}")
+        
+        return {
+            "old_config": old_config,
+            "new_config": new_config
+        }
     
     # ==================== TEMPLATE GENERATION ====================
     
@@ -1548,10 +2144,40 @@ class NPCOrchestrator:
         interaction_type: str = "standard",
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Process a player interaction with an NPC."""
+        """Process a player interaction with an NPC, with canon consistency checking."""
         self._npc_status[npc_id] = NPCStatus.IN_CONVERSATION
         
         try:
+            # Canon consistency check if enabled
+            if self.enable_canon and self.check_canon_consistency:
+                action = {
+                    "type": interaction_type,
+                    "player_input": player_input,
+                    "location": context.get("location") if context else None
+                }
+                
+                consistency_check = await self._check_npc_canon_consistency(
+                    npc_id, action, context
+                )
+                
+                if not consistency_check.is_consistent and consistency_check.conflicts:
+                    # Add warnings to context
+                    if context is None:
+                        context = {}
+                    context["canon_warnings"] = consistency_check.warnings
+                    context["canon_suggestions"] = consistency_check.suggestions
+                    
+                    # For critical conflicts, we might want to block
+                    critical_conflicts = [c for c in consistency_check.conflicts 
+                                         if c.get("severity") == "critical"]
+                    if critical_conflicts:
+                        return {
+                            "success": False,
+                            "reason": "Canon consistency violation",
+                            "conflicts": critical_conflicts
+                        }
+            
+            # Process interaction through handler
             handler = await self._get_handler()
             result = await handler.handle_interaction(
                 npc_id=npc_id,
@@ -1559,6 +2185,16 @@ class NPCOrchestrator:
                 player_input=player_input,
                 context=context
             )
+            
+            # Canonize significant results
+            if self.enable_canon and self.auto_canonize and result.get("significance", 0) >= self.canon_significance_threshold:
+                canon_result = await self._canonize_npc_action(
+                    npc_id=npc_id,
+                    action={"type": interaction_type, "input": player_input},
+                    result=result,
+                    significance=result.get("significance", 5)
+                )
+                result["canonization"] = canon_result
             
             # Invalidate snapshot cache for this NPC
             if npc_id in self._snapshot_cache:
@@ -1744,12 +2380,13 @@ class NPCOrchestrator:
     ) -> Dict[str, Any]:
         """
         Get comprehensive narrative context for the narrative generator.
-        Enhanced with all subsystem data.
+        Enhanced with all subsystem data and canon integration.
         """
         context = {
             "timestamp": datetime.now().isoformat(),
             "user_id": self.user_id,
             "conversation_id": self.conversation_id,
+            "canon_enabled": self.enable_canon,
             "npcs": {},
             "locations": {},
             "active_relationships": [],
@@ -1759,8 +2396,22 @@ class NPCOrchestrator:
             "lore_context": {},
             "behavior_patterns": {},
             "learning_insights": {},
-            "nyx_governance": {}
+            "nyx_governance": {},
+            "canonical_events": []
         }
+        
+        # Add recent canonical events if canon enabled
+        if self.enable_canon:
+            async with get_db_connection_context() as conn:
+                events = await conn.fetch("""
+                    SELECT event_text, tags, significance, timestamp
+                    FROM CanonicalEvents
+                    WHERE user_id = $1 AND conversation_id = $2
+                    ORDER BY timestamp DESC
+                    LIMIT 10
+                """, self.user_id, self.conversation_id)
+                
+                context["canonical_events"] = [dict(e) for e in events]
         
         # Determine which NPCs to include
         if focus_npc_ids:
@@ -1975,11 +2626,17 @@ class NPCOrchestrator:
         logger.info("All NPC caches refreshed")
     
     async def get_orchestrator_status(self) -> Dict[str, Any]:
-        """Get status information about the orchestrator."""
+        """Get status information about the orchestrator including canon status."""
         return {
             "active_npcs": len(self._active_npcs),
             "cached_snapshots": len(self._snapshot_cache),
             "npc_statuses": dict(self._npc_status),
+            "canon_config": {
+                "enabled": self.enable_canon,
+                "auto_canonize": self.auto_canonize,
+                "check_consistency": self.check_canon_consistency,
+                "significance_threshold": self.canon_significance_threshold
+            },
             "systems_initialized": {
                 "agent_system": self._agent_system is not None,
                 "coordinator": self._coordinator is not None,
@@ -2027,9 +2684,20 @@ class NPCOrchestrator:
 
 # ==================== CONVENIENCE FUNCTIONS ====================
 
-async def create_orchestrator(user_id: int, conversation_id: int) -> NPCOrchestrator:
-    """Create and initialize an NPC orchestrator."""
-    orchestrator = NPCOrchestrator(user_id, conversation_id)
+async def create_orchestrator(
+    user_id: int, 
+    conversation_id: int,
+    enable_canon: bool = True
+) -> NPCOrchestrator:
+    """
+    Create and initialize an NPC orchestrator with canon integration.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        enable_canon: Whether to enable canon integration (default: True)
+    """
+    orchestrator = NPCOrchestrator(user_id, conversation_id, enable_canon=enable_canon)
     await orchestrator.initialize()
     return orchestrator
 
@@ -2044,7 +2712,7 @@ async def get_npc_context_for_narrative(
     Quick function to get NPC context for narrative generation.
     Creates a temporary orchestrator if needed.
     """
-    orchestrator = NPCOrchestrator(user_id, conversation_id)
+    orchestrator = NPCOrchestrator(user_id, conversation_id, enable_canon=True)
     await orchestrator.initialize()
     
     try:
