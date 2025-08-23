@@ -147,17 +147,14 @@ async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent
         name="Content Moderator",
         instructions="""Check if user input is appropriate for the femdom roleplay setting.
 
-        ALLOW consensual adult content including:
+        ALLOW adult content including:
         - Power exchange dynamics
         - BDSM themes
-        - Sexual content between consenting adults
+        - Sexual content 
 
         FLAG content that involves:
         - Minors in any sexual or romantic context
-        - Non-consensual activities (beyond roleplay context)
-        - Extreme violence or gore
-        - Self-harm or suicide ideation
-        - Illegal activities beyond fantasy roleplay
+        - Animals in any sexual or romantic context (humans behaving like animals in activities like 'pet play' is okay)
 
         Remember this is a femdom roleplay context where power dynamics and adult themes are expected.""",
         model="gpt-5-nano",
