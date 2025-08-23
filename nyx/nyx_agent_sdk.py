@@ -214,11 +214,33 @@ async def process_user_input(
             nyx_context.current_context = (context_data or {}).copy()
             nyx_context.current_context["user_input"] = user_input
 
-        # ===== STEP 2: World state integration =====
-        async with _log_step("world_state", trace_id):
-            if nyx_context.world_director and nyx_context.world_director.context:
-                world_state = nyx_context.world_director.context.current_world_state
+        # ===== STEP 1.5: Initialize Story Systems =====
+        async with _log_step("story_systems_init", trace_id):
+            # Initialize world director
+            if nyx_context.world_director is None:
+                from story_agent.world_director_agent import CompleteWorldDirector
+                nyx_context._world_director = CompleteWorldDirector(user_id, conversation_id)
+                await nyx_context._world_director.initialize()
+            
+            # Initialize narrator
+            from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
+            nyx_context._slice_of_life_narrator = SliceOfLifeNarrator(user_id, conversation_id)
+            await nyx_context._slice_of_life_narrator.initialize()
+        
+        # ===== STEP 2: Gather Story Context =====
+        async with _log_step("gather_story_context", trace_id):
+            # Get world state
+            if nyx_context.world_director:
+                world_state = await nyx_context.world_director.get_world_state()
                 nyx_context.current_world_state = world_state
+                
+                # Add world state to context for the agent
+                nyx_context.current_context["world_state"] = world_state
+            
+            # Get current narrative context
+            if nyx_context._slice_of_life_narrator:
+                narrative_context = await nyx_context._slice_of_life_narrator.narrate_world_state()
+                nyx_context.current_context["narrative_context"] = narrative_context
 
         # ===== STEP 3: Tool sanitization =====
         async with _log_step("tool_sanitization", trace_id):
