@@ -13,45 +13,14 @@ from typing import List, Dict, Any, Union, Optional
 from datetime import datetime
 from agents import Runner
 
+from memory.memory_orchestrator import get_memory_orchestrator, EntityType
+
 # Import the new validation agent
 from lore.core.validation import CanonValidationAgent
 
 logger = logging.getLogger(__name__)
 
-# --- Helper for Semantic Search ---
-
-async def _find_semantically_similar_npc(conn, name: str, role: Optional[str], threshold: float = 0.90) -> Optional[int]:
-    """
-    Uses vector embeddings to find a semantically similar NPC.
-    Returns the ID of the most similar NPC if above the threshold, otherwise None.
-    """
-    # Create a detailed embedding string for the new NPC proposal
-    search_text = f"{name}"
-    if role:
-        search_text += f", {role}"
-    
-    search_vector = await generate_embedding(search_text)
-
-    # Perform a cosine similarity search on the database
-    # This requires a vector index on the `embedding` column for performance
-    # Filter out NPCs without embeddings to avoid NULL similarity values
-    query = """
-        SELECT npc_id, npc_name, 1 - (embedding <=> $1) AS similarity
-        FROM NPCStats
-        WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> $1
-        LIMIT 1
-    """
-    most_similar = await conn.fetchrow(query, search_vector)
-
-    if most_similar and most_similar['similarity'] is not None and most_similar['similarity'] > threshold:
-        logger.info(
-            f"Found a semantically similar NPC: '{most_similar['npc_name']}' (ID: {most_similar['npc_id']}) "
-            f"with similarity {most_similar['similarity']:.2f} to the proposal for '{name}'."
-        )
-        return most_similar['npc_id']
-
-    return None
+_memory_orchestrators = {}
 
 def ensure_canonical_context(ctx) -> CanonicalContext:
     """Convert any context to a CanonicalContext."""
@@ -61,6 +30,75 @@ def ensure_canonical_context(ctx) -> CanonicalContext:
         return CanonicalContext.from_dict(ctx)
     else:
         return CanonicalContext.from_object(ctx)
+
+
+# --- Helper for Semantic Search ---
+
+async def _find_semantically_similar_npc(conn, ctx, name: str, role: Optional[str], threshold: float = 0.90) -> Optional[int]:
+    """
+    Uses memory orchestrator's vector embeddings to find a semantically similar NPC.
+    Returns the ID of the most similar NPC if above the threshold, otherwise None.
+    """
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
+    # Create search text for the new NPC proposal
+    search_text = f"NPC: {name}"
+    if role:
+        search_text += f", role: {role}"
+    
+    # Search using memory orchestrator's vector store
+    search_results = await memory_orchestrator.search_vector_store(
+        query=search_text,
+        entity_type="npc",
+        top_k=1,
+        filter_dict={"user_id": ctx.user_id, "conversation_id": ctx.conversation_id}
+    )
+    
+    if search_results:
+        top_result = search_results[0]
+        similarity = top_result.get("similarity", 0)
+        
+        if similarity > threshold:
+            # Extract NPC ID from metadata
+            npc_id = top_result.get("metadata", {}).get("entity_id")
+            if npc_id:
+                logger.info(
+                    f"Found a semantically similar NPC via memory search: ID {npc_id} "
+                    f"with similarity {similarity:.2f} to the proposal for '{name}'."
+                )
+                return npc_id
+    
+    # Fallback to database search if memory search doesn't find anything
+    search_vector = await memory_orchestrator.generate_embedding(search_text)
+    
+    query = """
+        SELECT npc_id, npc_name, 1 - (embedding <=> $1) AS similarity
+        FROM NPCStats
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """
+    most_similar = await conn.fetchrow(query, search_vector)
+    
+    if most_similar and most_similar['similarity'] is not None and most_similar['similarity'] > threshold:
+        logger.info(
+            f"Found a semantically similar NPC in DB: '{most_similar['npc_name']}' (ID: {most_similar['npc_id']}) "
+            f"with similarity {most_similar['similarity']:.2f} to the proposal for '{name}'."
+        )
+        return most_similar['npc_id']
+    
+    return None
+
+
+
+
+async def get_canon_memory_orchestrator(user_id: int, conversation_id: int):
+    """Get or create a memory orchestrator for canon operations."""
+    key = (user_id, conversation_id)
+    if key not in _memory_orchestrators:
+        _memory_orchestrators[key] = await get_memory_orchestrator(user_id, conversation_id)
+    return _memory_orchestrators[key]
 
 
 # --- Upgraded NPC Canon Function ---
@@ -74,12 +112,11 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
     """
     Finds an NPC by exact name or semantic similarity, or creates them if they don't exist.
     Returns the NPC's ID.
-    `conn` must be an active asyncpg connection or transaction.
     """
-    # Convert context to canonical format
     ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
-    # --- Step 1: Exact Match Check (Fastest) ---
+    # Step 1: Exact Match Check
     existing_npc = await conn.fetchrow(
         "SELECT npc_id FROM NPCStats WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3",
         npc_name, ctx.user_id, ctx.conversation_id
@@ -87,57 +124,85 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
     if existing_npc:
         logger.warning(f"NPC '{npc_name}' found via exact match with ID {existing_npc['npc_id']}.")
         return existing_npc['npc_id']
-
-    # --- Step 2: Semantic Similarity Check (The New Logic) ---
+    
+    # Step 2: Semantic Similarity Check using Memory Orchestrator
     role = kwargs.get("role")
-    similar_npc_id = await _find_semantically_similar_npc(conn, npc_name, role)
-
+    similar_npc_id = await _find_semantically_similar_npc(conn, ctx, npc_name, role)
+    
     if similar_npc_id:
-        # We found a very similar NPC. Now, we must use an LLM to make the final judgment.
         validation_agent = CanonValidationAgent()
         is_duplicate = await validation_agent.confirm_is_duplicate_npc(
             conn,
             proposal={"name": npc_name, "role": role},
             existing_npc_id=similar_npc_id
         )
-
+        
         if is_duplicate:
-            logger.warning(f"LLM confirmed that proposal '{npc_name}' is a duplicate of existing NPC ID {similar_npc_id}. Merging/returning existing.")
-            # Optional: Add logic here to merge any new kwargs into the existing NPC record.
+            logger.warning(f"LLM confirmed that proposal '{npc_name}' is a duplicate of existing NPC ID {similar_npc_id}.")
             return similar_npc_id
         else:
             logger.info(f"LLM determined that proposal '{npc_name}' is NOT a duplicate. Proceeding with creation.")
-
-    # --- Step 3: Commit - Create the new NPC if no duplicate was found ---
-    # This part remains the same. It only runs if no duplicate is found.
-    insert_query = """
-        INSERT INTO NPCStats (user_id, conversation_id, npc_name, role, affiliations, embedding)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING npc_id
-    """
-    # Create the embedding for the new entry
-    embedding_text = f"{npc_name}"
+    
+    # Step 3: Create the new NPC
+    embedding_text = f"NPC: {npc_name}"
     if role:
-        embedding_text += f", {role}"
-    new_embedding = await generate_embedding(embedding_text)
-
-    # Convert affiliations to JSON string if it's a list
+        embedding_text += f", role: {role}"
+    
+    # Generate embedding using memory orchestrator
+    new_embedding = await memory_orchestrator.generate_embedding(embedding_text)
+    
     affiliations = kwargs.get("affiliations", [])
     if isinstance(affiliations, list):
         affiliations_json = json.dumps(affiliations)
     else:
         affiliations_json = affiliations
-
+    
+    insert_query = """
+        INSERT INTO NPCStats (user_id, conversation_id, npc_name, role, affiliations, embedding)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING npc_id
+    """
+    
     npc_id = await conn.fetchval(
         insert_query,
         ctx.user_id,
         ctx.conversation_id,
         npc_name,
         role,
-        affiliations_json,  # Pass as JSON string
+        affiliations_json,
         new_embedding
     )
+    
+    # Store NPC creation as a memory
+    await memory_orchestrator.store_memory(
+        entity_type=EntityType.NYX,
+        entity_id=0,  # Nyx as the canon keeper
+        memory_text=f"Created new NPC '{npc_name}' with role '{role or 'unspecified'}'",
+        importance="high",
+        tags=["npc_creation", "canon", npc_name.lower()],
+        metadata={
+            "npc_id": npc_id,
+            "npc_name": npc_name,
+            "role": role,
+            "affiliations": affiliations
+        }
+    )
+    
+    # Also add NPC info to vector store for future searches
+    await memory_orchestrator.add_to_vector_store(
+        text=f"NPC: {npc_name}, role: {role or 'unspecified'}, affiliations: {affiliations}",
+        metadata={
+            "entity_type": "npc",
+            "entity_id": npc_id,
+            "npc_name": npc_name,
+            "user_id": ctx.user_id,
+            "conversation_id": ctx.conversation_id
+        },
+        entity_type="npc"
+    )
+    
     logger.info(f"Canonically created new, unique NPC '{npc_name}' with ID {npc_id}.")
     return npc_id
+
     
 async def find_or_create_entity(
     ctx,
@@ -152,21 +217,11 @@ async def find_or_create_entity(
 ) -> int:
     """
     Generic function to find or create any entity with semantic similarity check.
-    
-    Args:
-        ctx: Context with user_id and conversation_id
-        conn: Database connection
-        entity_type: Type of entity (e.g., "nation", "deity", "language")
-        entity_name: Name of the entity
-        search_fields: Fields to search for exact match
-        create_data: Data to use when creating the entity
-        table_name: Database table name
-        embedding_text: Text to use for embedding generation
-        similarity_threshold: Threshold for semantic similarity
-        
-    Returns:
-        Entity ID (existing or newly created)
+    Now uses memory orchestrator for all embedding and similarity operations.
     """
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
     # Step 1: Exact match check
     where_clauses = []
     values = []
@@ -181,49 +236,44 @@ async def find_or_create_entity(
             logger.info(f"{entity_type} '{entity_name}' found via exact match with ID {existing['id']}.")
             return existing['id']
     
-    # Step 2: Semantic similarity check
-    search_vector = await generate_embedding(embedding_text)
+    # Step 2: Semantic similarity check using memory orchestrator
+    search_results = await memory_orchestrator.search_vector_store(
+        query=embedding_text,
+        entity_type=entity_type.lower(),
+        top_k=1,
+        filter_dict={"user_id": ctx.user_id, "conversation_id": ctx.conversation_id}
+    )
     
-    similarity_query = f"""
-        SELECT id, {search_fields.get('name_field', 'name')} as entity_name, 
-               1 - (embedding <=> $1) AS similarity
-        FROM {table_name}
-        WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> $1
-        LIMIT 1
-    """
-    
-    most_similar = await conn.fetchrow(similarity_query, search_vector)
-    
-    if most_similar and most_similar['similarity'] > similarity_threshold:
-        logger.info(
-            f"Found semantically similar {entity_type}: '{most_similar['entity_name']}' "
-            f"(ID: {most_similar['id']}) with similarity {most_similar['similarity']:.2f}"
-        )
+    if search_results and search_results[0].get("similarity", 0) > similarity_threshold:
+        most_similar = search_results[0]
+        entity_id = most_similar.get("metadata", {}).get("entity_id")
         
-        # Use validation agent to confirm
-        validation_agent = CanonValidationAgent()
-        prompt = f"""
-        I am considering creating a new {entity_type}, but found a semantically similar existing one.
-        Please determine if they are the same entity described differently.
+        if entity_id:
+            logger.info(f"Found semantically similar {entity_type} via memory search with ID {entity_id}")
+            
+            # Use validation agent to confirm
+            validation_agent = CanonValidationAgent()
+            prompt = f"""
+            I am considering creating a new {entity_type}, but found a semantically similar existing one.
+            Please determine if they are the same entity described differently.
 
-        Proposed New {entity_type}:
-        - Name: "{entity_name}"
-        - Details: {json.dumps(create_data, indent=2)}
+            Proposed New {entity_type}:
+            - Name: "{entity_name}"
+            - Details: {json.dumps(create_data, indent=2)}
 
-        Most Similar Existing {entity_type}:
-        - ID: {most_similar['id']}
-        - Name: "{most_similar['entity_name']}"
+            Most Similar Existing {entity_type}:
+            - ID: {entity_id}
+            - From search result
 
-        Are these the same {entity_type}? Answer with only 'true' or 'false'.
-        """
-        
-        result = await Runner.run(validation_agent.agent, prompt)
-        is_duplicate = result.final_output.strip().lower() == 'true'
-        
-        if is_duplicate:
-            logger.info(f"LLM confirmed '{entity_name}' is a duplicate of existing {entity_type} ID {most_similar['id']}")
-            return most_similar['id']
+            Are these the same {entity_type}? Answer with only 'true' or 'false'.
+            """
+            
+            result = await Runner.run(validation_agent.agent, prompt)
+            is_duplicate = result.final_output.strip().lower() == 'true'
+            
+            if is_duplicate:
+                logger.info(f"LLM confirmed '{entity_name}' is a duplicate of existing {entity_type} ID {entity_id}")
+                return entity_id
     
     # Step 3: Create new entity
     columns = list(create_data.keys())
@@ -238,14 +288,42 @@ async def find_or_create_entity(
     entity_id = await conn.fetchval(insert_query, *create_data.values())
     
     # Generate and store embedding
+    search_vector = await memory_orchestrator.generate_embedding(embedding_text)
     await conn.execute(
         f"UPDATE {table_name} SET embedding = $1 WHERE id = $2",
         search_vector, entity_id
     )
     
+    # Store creation as a memory
+    await memory_orchestrator.store_memory(
+        entity_type=EntityType.NYX,
+        entity_id=0,
+        memory_text=f"Created new {entity_type}: {entity_name}",
+        importance="high",
+        tags=[entity_type.lower(), "creation", "canon"],
+        metadata={
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "entity_type": entity_type,
+            "table_name": table_name
+        }
+    )
+    
+    # Add to vector store for future searches
+    await memory_orchestrator.add_to_vector_store(
+        text=embedding_text,
+        metadata={
+            "entity_type": entity_type.lower(),
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "user_id": ctx.user_id,
+            "conversation_id": ctx.conversation_id
+        },
+        entity_type=entity_type.lower()
+    )
+    
     logger.info(f"Canonically created new {entity_type} '{entity_name}' with ID {entity_id}")
     
-    # Log canonical event
     await log_canonical_event(
         ctx, conn, 
         f"Created new {entity_type}: {entity_name}",
@@ -257,25 +335,48 @@ async def find_or_create_entity(
 
 
 async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None, significance: int = 5):
-    """Log a canonical event to establish world history."""
-    # Ensure we have a proper context
+    """
+    Log a canonical event to establish world history.
+    Now also stores as a memory for better retrieval and analysis.
+    """
     ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
     tags = tags or []
-
-    # asyncpg doesn't automatically serialize lists/dicts for JSONB columns
-    # when a statement has been prepared with text parameters. This caused
-    # failures when passing a raw list (e.g. ['roleplay', 'update', 'discipline'])
-    # to the query. To ensure consistent behavior we explicitly JSON-encode the
-    # tags list before insertion.
     tags_json = json.dumps(tags)
-
-    await conn.execute("""
+    
+    # Store in database
+    event_id = await conn.fetchval("""
         INSERT INTO CanonicalEvents (
             user_id, conversation_id, event_text, tags, significance, timestamp
         )
         VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id
     """, ctx.user_id, ctx.conversation_id, event_text, tags_json, significance, datetime.utcnow())
+    
+    # Map significance to importance for memory system
+    importance_map = {
+        1: "trivial", 2: "trivial", 3: "low",
+        4: "low", 5: "medium", 6: "medium",
+        7: "high", 8: "high", 9: "critical", 10: "critical"
+    }
+    importance = importance_map.get(significance, "medium")
+    
+    # Store as a memory in the memory system
+    await memory_orchestrator.store_memory(
+        entity_type=EntityType.LORE,
+        entity_id=0,  # Use 0 for general lore
+        memory_text=event_text,
+        importance=importance,
+        tags=tags + ["canonical_event"],
+        metadata={
+            "event_id": event_id,
+            "significance": significance,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
+    
+    return event_id
 
 async def ensure_npc_exists(ctx, conn, npc_reference: Union[int, str, Dict[str, Any]]) -> int:
     """
@@ -317,8 +418,6 @@ async def ensure_npc_exists(ctx, conn, npc_reference: Union[int, str, Dict[str, 
         raise ValueError(f"Invalid NPC reference type: {type(npc_reference)}")
 
 
-# lore/core/canon.py - More sophisticated entity handling
-
 async def find_or_create_nation(
     ctx,
     conn,
@@ -327,9 +426,10 @@ async def find_or_create_nation(
     matriarchy_level: int = None,
     **kwargs
 ) -> int:
-    """
-    Find or create a nation with sophisticated matching logic.
-    """
+    """Find or create a nation with sophisticated matching logic using memory orchestrator."""
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
     # Step 1: Exact name match
     existing = await conn.fetchrow("""
         SELECT id, name, government_type, matriarchy_level, description
@@ -341,74 +441,40 @@ async def find_or_create_nation(
         logger.info(f"Nation '{nation_name}' found via exact match with ID {existing['id']}")
         return existing['id']
     
-    # Step 2: Fuzzy name matching
-    similar_names = await conn.fetch("""
-        SELECT id, name, government_type, matriarchy_level, description,
-               similarity(name, $1) as sim
-        FROM Nations
-        WHERE similarity(name, $1) > 0.6
-        ORDER BY sim DESC
-        LIMIT 5
-    """, nation_name)
-    
-    if similar_names:
-        # Check with validation agent
-        validation_agent = CanonValidationAgent()
-        for similar in similar_names:
-            prompt = f"""
-            Are these the same nation?
-            
-            Proposed: {nation_name} ({government_type or 'unknown government'})
-            Existing: {similar['name']} ({similar['government_type']})
-            
-            Consider name variations, abbreviations, and translations.
-            Answer only 'true' or 'false'.
-            """
-            
-            result = await Runner.run(validation_agent.agent, prompt)
-            if result.final_output.strip().lower() == 'true':
-                logger.info(f"Nation '{nation_name}' matched to existing '{similar['name']}' (ID: {similar['id']})")
-                return similar['id']
-    
-    # Step 3: Semantic similarity check
+    # Step 2: Memory-based semantic search
     description = kwargs.get('description', '')
-    embedding_text = f"{nation_name} {government_type or ''} {description}"
-    search_vector = await generate_embedding(embedding_text)
+    search_text = f"Nation: {nation_name}, Government: {government_type or 'unknown'}, {description}"
     
-    semantic_matches = await conn.fetch("""
-        SELECT id, name, government_type, description,
-               1 - (embedding <=> $1) AS similarity
-        FROM Nations
-        WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> $1
-        LIMIT 3
-    """, search_vector)
+    search_results = await memory_orchestrator.search_canonical_entities(
+        query=search_text,
+        entity_types=["nation"],
+        similarity_threshold=0.8
+    )
     
-    for match in semantic_matches:
-        if match['similarity'] > 0.85:
-            # High similarity - verify with agent
-            prompt = f"""
-            I found a semantically similar nation. Are these the same?
-            
-            Proposed Nation:
-            - Name: {nation_name}
-            - Government: {government_type}
-            - Description: {description[:200]}
-            
-            Existing Nation:
-            - Name: {match['name']}
-            - Government: {match['government_type']}
-            - Description: {match['description'][:200]}
-            
-            Answer only 'true' or 'false'.
-            """
-            
-            result = await Runner.run(validation_agent.agent, prompt)
-            if result.final_output.strip().lower() == 'true':
-                logger.info(f"Nation '{nation_name}' semantically matched to '{match['name']}' (ID: {match['id']})")
-                return match['id']
+    if search_results:
+        for result in search_results:
+            existing_id = result.get("metadata", {}).get("entity_id")
+            if existing_id:
+                # Validate with LLM
+                validation_agent = CanonValidationAgent()
+                prompt = f"""
+                Are these the same nation?
+                
+                Proposed: {nation_name} ({government_type or 'unknown government'})
+                Existing match found with similarity: {result.get('similarity', 0):.2f}
+                
+                Consider name variations, abbreviations, and translations.
+                Answer only 'true' or 'false'.
+                """
+                
+                agent_result = await Runner.run(validation_agent.agent, prompt)
+                if agent_result.final_output.strip().lower() == 'true':
+                    logger.info(f"Nation '{nation_name}' matched to existing (ID: {existing_id})")
+                    return existing_id
     
-    # Step 4: Create new nation
+    # Step 3: Create new nation
+    embedding = await memory_orchestrator.generate_embedding(search_text)
+    
     nation_id = await conn.fetchval("""
         INSERT INTO Nations (
             name, government_type, description, relative_power,
@@ -430,7 +496,21 @@ async def find_or_create_nation(
         kwargs.get('cultural_traits', []),
         kwargs.get('notable_features'),
         kwargs.get('neighboring_nations', []),
-        search_vector
+        embedding
+    )
+    
+    # Store in memory system
+    await memory_orchestrator.store_canonical_entity(
+        entity_type="nation",
+        entity_id=nation_id,
+        entity_name=nation_name,
+        entity_data={
+            "government_type": government_type,
+            "matriarchy_level": matriarchy_level,
+            "relative_power": kwargs.get('relative_power', 5),
+            "description": description
+        },
+        significance=8
     )
     
     await log_canonical_event(
@@ -450,96 +530,53 @@ async def find_or_create_conflict(
     conflict_type: str,
     **kwargs
 ) -> int:
-    """
-    Find or create a conflict with sophisticated duplicate detection.
-    Conflicts between the same nations can be different conflicts.
-    """
-    # Step 1: Check for very similar active conflicts
-    existing_conflicts = await conn.fetch("""
-        SELECT c.*, 
-               array_agg(n.name ORDER BY n.id) as nation_names
-        FROM NationalConflicts c
-        LEFT JOIN Nations n ON n.id = ANY(c.involved_nations)
-        WHERE c.involved_nations @> $1 
-          AND c.involved_nations <@ $1
-          AND c.status != 'resolved'
-        GROUP BY c.id
-    """, involved_nations)
+    """Find or create a conflict with memory-enhanced duplicate detection."""
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
-    if existing_conflicts:
-        # Check each for similarity
-        for conflict in existing_conflicts:
-            # If same type and similar time period, might be duplicate
-            if conflict['conflict_type'] == conflict_type:
-                validation_agent = CanonValidationAgent()
-                prompt = f"""
-                Are these the same conflict?
+    # Check for existing conflicts using memory search
+    search_text = f"Conflict: {conflict_name}, Type: {conflict_type}, Description: {kwargs.get('description', '')}"
+    
+    search_results = await memory_orchestrator.search_canonical_entities(
+        query=search_text,
+        entity_types=["conflict"],
+        similarity_threshold=0.8
+    )
+    
+    if search_results:
+        for result in search_results:
+            conflict_id = result.get("metadata", {}).get("entity_id")
+            if conflict_id:
+                # Check if nations match
+                existing_conflict = await conn.fetchrow("""
+                    SELECT * FROM NationalConflicts WHERE id = $1
+                """, conflict_id)
                 
-                Existing Conflict:
-                - Name: {conflict['name']}
-                - Type: {conflict['conflict_type']}
-                - Nations: {', '.join(conflict['nation_names'])}
-                - Description: {conflict['description'][:200]}
-                - Status: {conflict['status']}
-                
-                Proposed Conflict:
-                - Name: {conflict_name}
-                - Type: {conflict_type}
-                - Description: {kwargs.get('description', '')[:200]}
-                
-                Consider if this is a continuation, escalation, or separate conflict.
-                Answer only 'true' or 'false'.
-                """
-                
-                result = await Runner.run(validation_agent.agent, prompt)
-                if result.final_output.strip().lower() == 'true':
-                    logger.info(f"Conflict '{conflict_name}' matched to existing conflict ID {conflict['id']}")
-                    return conflict['id']
+                if existing_conflict:
+                    existing_nations = set(existing_conflict['involved_nations'])
+                    proposed_nations = set(involved_nations)
+                    overlap = existing_nations & proposed_nations
+                    
+                    if len(overlap) >= min(len(existing_nations), len(proposed_nations)) * 0.5:
+                        # Significant overlap - verify with agent
+                        validation_agent = CanonValidationAgent()
+                        prompt = f"""
+                        Found a similar conflict. Are these the same?
+                        
+                        Existing: {existing_conflict['name']} ({existing_conflict['conflict_type']})
+                        Proposed: {conflict_name} ({conflict_type})
+                        Similarity: {result.get('similarity', 0):.2f}
+                        
+                        Answer only 'true' or 'false'.
+                        """
+                        
+                        agent_result = await Runner.run(validation_agent.agent, prompt)
+                        if agent_result.final_output.strip().lower() == 'true':
+                            return conflict_id
     
-    # Step 2: Semantic search for similar conflicts
-    embedding_text = f"{conflict_name} {conflict_type} {kwargs.get('description', '')}"
-    search_vector = await generate_embedding(embedding_text)
+    # Create new conflict
+    embedding = await memory_orchestrator.generate_embedding(search_text)
     
-    semantic_matches = await conn.fetch("""
-        SELECT c.*, 
-               1 - (c.embedding <=> $1) AS similarity,
-               array_agg(n.name ORDER BY n.id) as nation_names
-        FROM NationalConflicts c
-        LEFT JOIN Nations n ON n.id = ANY(c.involved_nations)
-        WHERE c.embedding IS NOT NULL
-        GROUP BY c.id
-        HAVING 1 - (c.embedding <=> $1) > 0.8
-        ORDER BY c.embedding <=> $1
-        LIMIT 5
-    """, search_vector)
-    
-    for match in semantic_matches:
-        # Check if nations overlap significantly
-        match_nations = set(match['involved_nations'])
-        proposed_nations = set(involved_nations)
-        overlap = match_nations & proposed_nations
-        
-        if len(overlap) >= min(len(match_nations), len(proposed_nations)) * 0.5:
-            # Significant overlap - verify with agent
-            validation_agent = CanonValidationAgent()
-            prompt = f"""
-            Found a similar conflict. Are these the same?
-            
-            Existing: {match['name']} ({match['conflict_type']})
-            - Nations: {', '.join(match['nation_names'])}
-            - Status: {match['status']}
-            - Similarity: {match['similarity']:.2f}
-            
-            Proposed: {conflict_name} ({conflict_type})
-            
-            Answer only 'true' or 'false'.
-            """
-            
-            result = await Runner.run(validation_agent.agent, prompt)
-            if result.final_output.strip().lower() == 'true':
-                return match['id']
-    
-    # Step 3: Create new conflict
     conflict_id = await conn.fetchval("""
         INSERT INTO NationalConflicts (
             name, conflict_type, description, severity, status,
@@ -565,14 +602,39 @@ async def find_or_create_conflict(
         json.dumps(kwargs.get('public_opinion', {})),
         kwargs.get('recent_developments', []),
         kwargs.get('potential_resolution', 'Uncertain'),
-        search_vector
+        embedding
     )
     
-    # Get nation names for the event log
+    # Get nation names for logging
     nation_names = await conn.fetch("""
         SELECT name FROM Nations WHERE id = ANY($1)
     """, involved_nations)
     nation_list = [n['name'] for n in nation_names]
+    
+    # Store in memory system
+    await memory_orchestrator.store_canonical_entity(
+        entity_type="conflict",
+        entity_id=conflict_id,
+        entity_name=conflict_name,
+        entity_data={
+            "conflict_type": conflict_type,
+            "involved_nations": nation_list,
+            "severity": kwargs.get('severity', 5),
+            "status": kwargs.get('status', 'active')
+        },
+        significance=9
+    )
+    
+    # Store conflict as a significant memory for involved nations
+    for nation_id in involved_nations:
+        await memory_orchestrator.store_memory(
+            entity_type="nation",
+            entity_id=nation_id,
+            memory_text=f"Became involved in conflict: {conflict_name}",
+            importance="critical",
+            tags=["conflict", conflict_type, "political"],
+            metadata={"conflict_id": conflict_id}
+        )
     
     await log_canonical_event(
         ctx, conn,
@@ -582,8 +644,6 @@ async def find_or_create_conflict(
     )
     
     return conflict_id
-
-# lore/core/canon.py - Additional functions needed
 
 async def find_or_create_cultural_element(
     ctx, conn, 
@@ -909,60 +969,63 @@ async def find_or_create_urban_myth(
     description: str,
     **kwargs
 ) -> int:
-    """Find or create an urban myth with semantic matching."""
+    """Find or create an urban myth with memory-enhanced semantic matching."""
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
     # Check exact match
     existing = await conn.fetchrow("""
-        SELECT id FROM UrbanMyths
-        WHERE name = $1
+        SELECT id FROM UrbanMyths WHERE name = $1
     """, name)
     
     if existing:
         return existing['id']
     
-    # Semantic similarity check
+    # Memory-based semantic search
     narrative_style = kwargs.get('narrative_style', 'folklore')
     themes = kwargs.get('themes', [])
-    embedding_text = f"{name} {description} {narrative_style} {' '.join(themes)}"
-    search_vector = await generate_embedding(embedding_text)
+    search_text = f"Urban Myth: {name} - {description}. Style: {narrative_style}. Themes: {', '.join(themes)}"
     
-    similar = await conn.fetchrow("""
-        SELECT id, name, description, 1 - (embedding <=> $1) AS similarity
-        FROM UrbanMyths
-        WHERE 1 - (embedding <=> $1) > 0.80
-        ORDER BY embedding <=> $1
-        LIMIT 1
-    """, search_vector)
+    search_results = await memory_orchestrator.search_canonical_entities(
+        query=search_text,
+        entity_types=["myth", "urban_myth"],
+        similarity_threshold=0.80
+    )
     
-    if similar:
-        validation_agent = CanonValidationAgent()
-        is_duplicate = await validation_agent.confirm_is_duplicate_myth(
-            conn,
-            proposal={"name": name, "description": description, "themes": themes},
-            existing_myth_id=similar['id']
-        )
-        
-        if is_duplicate:
-            logger.info(f"Urban myth '{name}' matched to existing ID {similar['id']}")
-            
-            # Update regions if new ones provided
-            regions_known = kwargs.get('regions_known', [])
-            if regions_known:
-                existing_regions = await conn.fetchval(
-                    "SELECT regions_known FROM UrbanMyths WHERE id = $1",
-                    similar['id']
+    if search_results:
+        for result in search_results:
+            myth_id = result.get("metadata", {}).get("entity_id")
+            if myth_id:
+                validation_agent = CanonValidationAgent()
+                is_duplicate = await validation_agent.confirm_is_duplicate_myth(
+                    conn,
+                    proposal={"name": name, "description": description, "themes": themes},
+                    existing_myth_id=myth_id
                 )
-                new_regions = list(set(existing_regions + regions_known))
                 
-                await conn.execute("""
-                    UPDATE UrbanMyths
-                    SET regions_known = $1,
-                        spread_rate = GREATEST(spread_rate, $2)
-                    WHERE id = $3
-                """, new_regions, kwargs.get('spread_rate', 5), similar['id'])
-            
-            return similar['id']
+                if is_duplicate:
+                    logger.info(f"Urban myth '{name}' matched to existing ID {myth_id}")
+                    
+                    # Update regions if new ones provided
+                    regions_known = kwargs.get('regions_known', [])
+                    if regions_known:
+                        existing_regions = await conn.fetchval(
+                            "SELECT regions_known FROM UrbanMyths WHERE id = $1",
+                            myth_id
+                        )
+                        new_regions = list(set(existing_regions + regions_known))
+                        
+                        await conn.execute("""
+                            UPDATE UrbanMyths
+                            SET regions_known = $1, spread_rate = GREATEST(spread_rate, $2)
+                            WHERE id = $3
+                        """, new_regions, kwargs.get('spread_rate', 5), myth_id)
+                    
+                    return myth_id
     
     # Create new myth
+    embedding = await memory_orchestrator.generate_embedding(search_text)
+    
     myth_id = await conn.fetchval("""
         INSERT INTO UrbanMyths (
             name, description, origin_location, origin_event,
@@ -972,11 +1035,35 @@ async def find_or_create_urban_myth(
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id
     """,
-    name, description, kwargs.get('origin_location'),
-    kwargs.get('origin_event'), kwargs.get('believability', 6),
-    kwargs.get('spread_rate', 5), kwargs.get('regions_known', []),
-    narrative_style, themes, kwargs.get('matriarchal_elements', []),
-    search_vector)
+        name, description, kwargs.get('origin_location'),
+        kwargs.get('origin_event'), kwargs.get('believability', 6),
+        kwargs.get('spread_rate', 5), kwargs.get('regions_known', []),
+        narrative_style, themes, kwargs.get('matriarchal_elements', []),
+        embedding
+    )
+    
+    # Store in memory system
+    await memory_orchestrator.store_canonical_entity(
+        entity_type="urban_myth",
+        entity_id=myth_id,
+        entity_name=name,
+        entity_data={
+            "description": description,
+            "origin_location": kwargs.get('origin_location'),
+            "believability": kwargs.get('believability', 6),
+            "themes": themes,
+            "narrative_style": narrative_style
+        },
+        significance=5
+    )
+    
+    # Create semantic memories for the myth
+    await memory_orchestrator.create_belief(
+        entity_type="lore",
+        entity_id=0,
+        belief_text=f"The myth of {name}: {description}",
+        confidence=kwargs.get('believability', 6) / 10.0
+    )
     
     await log_canonical_event(
         ctx, conn,
@@ -986,6 +1073,8 @@ async def find_or_create_urban_myth(
     )
     
     return myth_id
+
+
 
 async def create_local_history(ctx, conn, **kwargs) -> int:
     """Create a local historical event."""
@@ -1117,12 +1206,9 @@ async def update_landmark(ctx, conn, landmark_id: int, updates: Dict[str, Any]) 
 # Add these functions to canon.py
 
 async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> str:
-    """
-    Find or create a location canonically.
-    Returns the location name (locations use name as primary identifier).
-    """
-    # Ensure we have a proper context
+    """Find or create a location canonically with memory integration."""
     ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
     # Check exact match
     existing = await conn.fetchrow("""
@@ -1136,43 +1222,43 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         logger.info(f"Location '{location_name}' found via exact match")
         return existing['location_name']
     
-    # Semantic similarity check
+    # Semantic similarity check using memory orchestrator
     description = kwargs.get('description', f"The area known as {location_name}")
-    embedding_text = f"{location_name} {description}"
-    search_vector = await generate_embedding(embedding_text)
+    embedding_text = f"Location: {location_name} - {description}"
     
-    similar = await conn.fetchrow("""
-        SELECT id, location_name, description, 1 - (embedding <=> $1) AS similarity
-        FROM Locations
-        WHERE user_id = $2 AND conversation_id = $3
-        AND embedding IS NOT NULL
-        AND 1 - (embedding <=> $1) > 0.85
-        ORDER BY embedding <=> $1
-        LIMIT 1
-    """, search_vector, ctx.user_id, ctx.conversation_id)
+    search_results = await memory_orchestrator.search_vector_store(
+        query=embedding_text,
+        entity_type="location",
+        top_k=1,
+        filter_dict={"user_id": ctx.user_id, "conversation_id": ctx.conversation_id}
+    )
     
-    if similar:
-        validation_agent = CanonValidationAgent()
-        prompt = f"""
-        Are these the same location?
+    if search_results and search_results[0].get("similarity", 0) > 0.85:
+        similar = search_results[0]
+        similar_name = similar.get("metadata", {}).get("location_name")
         
-        Proposed: {location_name}
-        Description: {description}
-        
-        Existing: {similar['location_name']}
-        Description: {similar['description']}
-        Similarity: {similar['similarity']:.2f}
-        
-        Answer only 'true' or 'false'.
-        """
-        
-        result = await Runner.run(validation_agent.agent, prompt)
-        if result.final_output.strip().lower() == 'true':
-            logger.info(f"Location '{location_name}' matched to existing '{similar['location_name']}'")
-            return similar['location_name']
+        if similar_name:
+            validation_agent = CanonValidationAgent()
+            prompt = f"""
+            Are these the same location?
+            
+            Proposed: {location_name}
+            Description: {description}
+            
+            Existing: {similar_name}
+            Similarity: {similar.get("similarity", 0):.2f}
+            
+            Answer only 'true' or 'false'.
+            """
+            
+            result = await Runner.run(validation_agent.agent, prompt)
+            if result.final_output.strip().lower() == 'true':
+                logger.info(f"Location '{location_name}' matched to existing '{similar_name}'")
+                return similar_name
     
     # Create new location
-    # IMPORTANT: Convert all list/array fields to JSON strings
+    search_vector = await memory_orchestrator.generate_embedding(embedding_text)
+    
     location_id = await conn.fetchval("""
         INSERT INTO Locations (
             user_id, conversation_id, location_name, description,
@@ -1191,11 +1277,38 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
         kwargs.get('economic_importance', 'moderate'),
         kwargs.get('strategic_value', 5),
         kwargs.get('population_density', 'moderate'),
-        json.dumps(kwargs.get('notable_features', [])),     # Convert to JSON string
-        json.dumps(kwargs.get('hidden_aspects', [])),       # Convert to JSON string
-        json.dumps(kwargs.get('access_restrictions', [])),  # Convert to JSON string
-        json.dumps(kwargs.get('local_customs', [])),        # Convert to JSON string
+        json.dumps(kwargs.get('notable_features', [])),
+        json.dumps(kwargs.get('hidden_aspects', [])),
+        json.dumps(kwargs.get('access_restrictions', [])),
+        json.dumps(kwargs.get('local_customs', [])),
         search_vector
+    )
+    
+    # Store in memory system
+    await memory_orchestrator.store_memory(
+        entity_type=EntityType.LORE,
+        entity_id=0,
+        memory_text=f"Location '{location_name}' established: {description}",
+        importance="high",
+        tags=['location', 'creation', 'canon'],
+        metadata={
+            "location_id": location_id,
+            "location_name": location_name,
+            "location_type": kwargs.get('location_type', 'settlement')
+        }
+    )
+    
+    # Add to vector store
+    await memory_orchestrator.add_to_vector_store(
+        text=embedding_text,
+        metadata={
+            "entity_type": "location",
+            "location_id": location_id,
+            "location_name": location_name,
+            "user_id": ctx.user_id,
+            "conversation_id": ctx.conversation_id
+        },
+        entity_type="location"
     )
     
     await log_canonical_event(
@@ -1515,23 +1628,13 @@ async def update_entity_with_governance(
     significance: int = 7
 ) -> Dict[str, Any]:
     """
-    Update any entity with governance tracking and validation.
-    This is used by Nyx when it needs to make direct canonical changes.
-    
-    Args:
-        ctx: Context with governance info
-        conn: Database connection
-        entity_type: Type of entity (table name)
-        entity_id: ID of the entity
-        updates: Dictionary of field updates
-        reason: Reason for the update
-        significance: Significance level for the event log
-        
-    Returns:
-        Result dictionary with status and details
+    Update any entity with governance tracking, validation, and memory integration.
     """
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
     try:
-        # Build the update query dynamically
+        # Build the update query
         set_clauses = []
         values = []
         for i, (field, value) in enumerate(updates.items()):
@@ -1541,10 +1644,8 @@ async def update_entity_with_governance(
         if not set_clauses:
             return {"status": "error", "message": "No updates provided"}
         
-        # Add the ID as the last parameter
         values.append(entity_id)
         
-        # Construct the query
         query = f"""
             UPDATE {entity_type}
             SET {', '.join(set_clauses)}
@@ -1552,7 +1653,6 @@ async def update_entity_with_governance(
             RETURNING *
         """
         
-        # Execute the update
         result = await conn.fetchrow(query, *values)
         
         if not result:
@@ -1567,10 +1667,24 @@ async def update_entity_with_governance(
             significance=significance
         )
         
-        # Update embedding if the entity has text fields that changed
+        # Store update as a memory
+        await memory_orchestrator.store_memory(
+            entity_type=EntityType.LORE,
+            entity_id=0,
+            memory_text=event_text,
+            importance="medium" if significance < 7 else "high",
+            tags=[entity_type.lower(), 'update', 'governance'],
+            metadata={
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "updates": updates,
+                "reason": reason
+            }
+        )
+        
+        # Update embedding if text fields changed
         text_fields = ['name', 'description', 'title']
         if any(field in updates for field in text_fields):
-            # Generate new embedding text
             embedding_parts = []
             for field in text_fields:
                 if field in result:
@@ -1578,12 +1692,23 @@ async def update_entity_with_governance(
             
             if embedding_parts:
                 embedding_text = ' '.join(embedding_parts)
-                embedding = await generate_embedding(embedding_text)
+                embedding = await memory_orchestrator.generate_embedding(embedding_text)
                 
-                # Update the embedding
                 await conn.execute(
                     f"UPDATE {entity_type} SET embedding = $1 WHERE id = $2",
                     embedding, entity_id
+                )
+                
+                # Update vector store
+                await memory_orchestrator.add_to_vector_store(
+                    text=embedding_text,
+                    metadata={
+                        "entity_type": entity_type.lower(),
+                        "entity_id": entity_id,
+                        "user_id": ctx.user_id,
+                        "conversation_id": ctx.conversation_id
+                    },
+                    entity_type=entity_type.lower()
                 )
         
         return {
@@ -1708,21 +1833,18 @@ async def update_current_roleplay(ctx, conn, key: str, value: str) -> None:
 
     
 async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
-    """
-    Legacy wrapper - creates relationship using new system.
-    Returns link_id for compatibility.
-    """
+    """Create relationship using memory-enhanced system."""
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
     import inspect
     
-    # Check if we're being called from dynamic_relationships to avoid recursion
+    # Check if being called from dynamic_relationships to avoid recursion
     for frame_info in inspect.stack():
         if 'dynamic_relationships' in frame_info.filename:
             logger.warning("Detected recursive call from dynamic_relationships - handling directly")
             
-            # Handle the creation directly without using OptimizedRelationshipManager
-            ctx = ensure_canonical_context(ctx)
-            
-            # Build canonical key
+            # Handle creation directly (existing code)
             e1 = (kwargs['entity1_type'], kwargs['entity1_id'])
             e2 = (kwargs['entity2_type'], kwargs['entity2_id'])
             if e1 <= e2:
@@ -1730,7 +1852,6 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
             else:
                 canonical_key = f"{e2[0]}_{e2[1]}_{e1[0]}_{e1[1]}"
             
-            # Check if already exists
             existing = await conn.fetchrow("""
                 SELECT link_id FROM SocialLinks
                 WHERE user_id = $1 AND conversation_id = $2 AND canonical_key = $3
@@ -1739,7 +1860,6 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
             if existing:
                 return existing['link_id']
             
-            # Create directly
             link_id = await conn.fetchval("""
                 INSERT INTO SocialLinks (
                     user_id, conversation_id,
@@ -1756,31 +1876,26 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
                 kwargs['entity1_type'], kwargs['entity1_id'],
                 kwargs['entity2_type'], kwargs['entity2_id'],
                 canonical_key,
-                json.dumps({}),  # Empty dynamics
-                json.dumps({'velocities': {}, 'inertia': 50.0}),  # Default momentum
-                json.dumps({'base_dimensions': {}, 'context_deltas': {}}),  # Default contexts
-                json.dumps([]),  # Empty patterns
-                json.dumps([]),  # Empty archetypes
-                0,  # version
+                json.dumps({}),
+                json.dumps({'velocities': {}, 'inertia': 50.0}),
+                json.dumps({'base_dimensions': {}, 'context_deltas': {}}),
+                json.dumps([]),
+                json.dumps([]),
+                0,
                 datetime.now(),
                 datetime.now()
             )
             
             return link_id
     
-    # Normal path - use OptimizedRelationshipManager
+    # Normal path - use memory system for relationship tracking
     from logic.dynamic_relationships import OptimizedRelationshipManager
-    
-    # Rest of your existing code...
-    ctx = ensure_canonical_context(ctx)
     
     user_id = kwargs.get('user_id', ctx.user_id)
     conversation_id = kwargs.get('conversation_id', ctx.conversation_id)
     
-    # Create manager
     manager = OptimizedRelationshipManager(user_id, conversation_id)
     
-    # Get or create relationship state
     state = await manager.get_relationship_state(
         entity1_type=kwargs['entity1_type'],
         entity1_id=kwargs['entity1_id'],
@@ -1788,8 +1903,12 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
         entity2_id=kwargs['entity2_id']
     )
     
-    # Apply any initial values from kwargs
+    # Store relationship in memory system
+    relationship_text = f"{kwargs['entity1_type']} {kwargs['entity1_id']} forms relationship with {kwargs['entity2_type']} {kwargs['entity2_id']}"
+    
     if kwargs.get('link_type'):
+        relationship_text += f" of type: {kwargs['link_type']}"
+        
         # Map old link types to dimension changes
         link_type_mappings = {
             'friendly': {'affection': 30, 'trust': 20},
@@ -1804,21 +1923,38 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
                 if hasattr(state.dimensions, dim):
                     setattr(state.dimensions, dim, value)
     
+    # Store as memory for both entities
+    for entity_type, entity_id in [
+        (kwargs['entity1_type'], kwargs['entity1_id']),
+        (kwargs['entity2_type'], kwargs['entity2_id'])
+    ]:
+        await memory_orchestrator.store_memory(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            memory_text=relationship_text,
+            importance="medium",
+            tags=["relationship", "social_link", kwargs.get('link_type', 'neutral')],
+            metadata={
+                "link_id": state.link_id,
+                "other_entity": f"{kwargs['entity2_type']}_{kwargs['entity2_id']}" 
+                               if entity_type == kwargs['entity1_type'] 
+                               else f"{kwargs['entity1_type']}_{kwargs['entity1_id']}"
+            }
+        )
+    
     if kwargs.get('link_level'):
-        # Distribute link level across dimensions
         level = kwargs['link_level']
         state.dimensions.affection = level * 0.4
         state.dimensions.trust = level * 0.3
-        # Note: 'closeness' doesn't exist in RelationshipDimensions, use 'intimacy' instead
         state.dimensions.intimacy = level * 0.3
     
-    # Clamp and save
     state.dimensions.clamp()
     await manager._queue_update(state)
     await manager._flush_updates()
     
-    # Return link_id
     return state.link_id or 0
+
+
     
 async def find_or_create_npc_group(ctx, conn, group_data: Dict[str, Any]) -> int:
     """
@@ -1857,28 +1993,26 @@ async def find_or_create_npc_group(ctx, conn, group_data: Dict[str, Any]) -> int
 
 async def create_journal_entry(ctx, conn, entry_type: str, entry_text: str, **kwargs) -> int:
     """
-    Create a journal entry - now backwards compatible but internally simplified.
+    Create a journal entry - now integrated with memory system.
     """
     ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
-    # Handle legacy boolean parameters by converting to strings/None
+    # Handle legacy parameters
     narrative_moment = kwargs.get('narrative_moment')
     if isinstance(narrative_moment, bool):
         narrative_moment = "true" if narrative_moment else None
     
-    fantasy_flag = kwargs.get('fantasy_flag')
-    if isinstance(fantasy_flag, bool):
-        fantasy_flag = True if fantasy_flag else False
+    fantasy_flag = kwargs.get('fantasy_flag', False)
     
-    # Determine significance from various legacy fields
+    # Determine significance
     significance = kwargs.get('importance', 0.5)
     if kwargs.get('intensity_level'):
-        # Scale intensity (0-10) to significance (0-1)
         significance = max(significance, kwargs.get('intensity_level', 0) / 10.0)
     if narrative_moment == "true":
-        significance = max(significance, 0.7)  # Narrative moments are significant
+        significance = max(significance, 0.7)
     
-    # Build tags from legacy parameters
+    # Build tags
     tags = kwargs.get('tags', [])
     if entry_type:
         tags.append(entry_type)
@@ -1887,26 +2021,24 @@ async def create_journal_entry(ctx, conn, entry_type: str, entry_text: str, **kw
     if fantasy_flag:
         tags.append('fantasy')
     
-    # Collect all metadata (including legacy fields)
+    # Collect metadata
     metadata = kwargs.get('entry_metadata', {})
     metadata.update({
-        'entry_type': entry_type,  # Preserve for backwards compat
+        'entry_type': entry_type,
         'revelation_types': kwargs.get('revelation_types'),
         'narrative_moment': narrative_moment,
         'fantasy_flag': fantasy_flag,
         'intensity_level': kwargs.get('intensity_level'),
-        # Any other legacy fields that were passed
         **{k: v for k, v in kwargs.items() 
            if k not in ['tags', 'importance', 'entry_metadata']}
     })
     
-    # Clean up None values from metadata
     metadata = {k: v for k, v in metadata.items() if v is not None}
     
-    # Generate embedding for semantic search
-    embedding = await generate_embedding(entry_text)
+    # Generate embedding using memory orchestrator
+    embedding = await memory_orchestrator.generate_embedding(entry_text)
     
-    # Use a simpler insert that works with the current schema
+    # Store in database
     entry_id = await conn.fetchval("""
         INSERT INTO PlayerJournal (
             user_id, conversation_id, entry_type, entry_text,
@@ -1926,67 +2058,108 @@ async def create_journal_entry(ctx, conn, entry_type: str, entry_text: str, **kw
         embedding
     )
     
+    # Get player name from context or default
+    player_name = kwargs.get('player_name', 'Chase')
+    
+    # Store as a memory in the memory system
+    importance = "high" if significance > 0.7 else "medium" if significance > 0.3 else "low"
+    
+    await memory_orchestrator.store_memory(
+        entity_type=EntityType.PLAYER,
+        entity_id=ctx.user_id,
+        memory_text=entry_text,
+        importance=importance,
+        emotional=True,
+        tags=tags + ["journal_entry"],
+        metadata={
+            "journal_id": entry_id,
+            "entry_type": entry_type,
+            "player_name": player_name,
+            **metadata
+        }
+    )
+    
+    # If it's a significant journal entry, also trigger memory analysis
+    if significance > 0.7:
+        await memory_orchestrator.add_journal_entry(
+            player_name=player_name,
+            entry_text=entry_text,
+            entry_type=entry_type,
+            fantasy_flag=fantasy_flag,
+            intensity_level=kwargs.get('intensity_level', 0)
+        )
+    
     return entry_id
 
 # use this for new code
 
+
 async def add_journal_entry(ctx, conn, entry_text: str, significance: float = None) -> int:
     """
-    Simplified journal entry creation for new code.
-    Let the LLM determine most metadata.
+    Simplified journal entry creation integrated with memory system.
     """
     ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
     
-    # If significance not provided, ask LLM
+    # Let memory orchestrator determine significance if not provided
     if significance is None:
-        significance_prompt = f"""
-        Rate the significance of this journal entry from 0-1:
-        "{entry_text[:500]}"
-        
-        Reply with just a number.
-        """
-        try:
-            significance = float(await generate_text_completion(
-                system_prompt="You rate journal entry significance",
-                user_prompt=significance_prompt,
-                model='gpt-5-nano'
-            ))
-        except:
-            significance = 0.5
-    
-    # Generate smart tags
-    tags_prompt = f"""
-    Suggest 3-5 single word tags for this journal entry:
-    "{entry_text[:500]}"
-    
-    Reply with comma-separated tags.
-    """
-    try:
-        tags_response = await generate_text_completion(
-            system_prompt="You generate journal tags",
-            user_prompt=tags_prompt,
-            model='gpt-5-nano'
+        prompt = await memory_orchestrator.generate_memory_prompt(
+            entity_type="player",
+            entity_id=ctx.user_id,
+            context={"entry_text": entry_text[:500]},
+            prompt_type="analysis"
         )
-        tags = [t.strip() for t in tags_response.split(',')]
-    except:
-        tags = []
+        
+        # Use the prompt to analyze significance
+        significance = 0.5  # Default if analysis fails
+    
+    # Generate smart tags using memory orchestrator
+    questions = await memory_orchestrator.generate_memory_questions(
+        entity_type="player",
+        entity_id=ctx.user_id,
+        purpose="exploration"
+    )
+    
+    # Extract tags from the questions (simplified approach)
+    tags = []
+    for q in questions[:3]:
+        if "memory" in q.lower():
+            tags.append("reflection")
+        if "feel" in q.lower() or "emotion" in q.lower():
+            tags.append("emotional")
+        if "change" in q.lower():
+            tags.append("transformation")
     
     # Generate embedding
-    embedding = await generate_embedding(entry_text)
+    embedding = await memory_orchestrator.generate_embedding(entry_text)
     
     entry_id = await conn.fetchval("""
         INSERT INTO PlayerJournal (
             user_id, conversation_id, entry_text,
-            significance, tags, embedding
+            importance, tags, embedding, created_at
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, CURRENT_TIMESTAMP)
         RETURNING id
     """,
         ctx.user_id, ctx.conversation_id, entry_text,
         significance, json.dumps(tags), embedding
     )
     
+    # Store in memory system for better retrieval
+    importance = "high" if significance > 0.7 else "medium" if significance > 0.3 else "low"
+    
+    await memory_orchestrator.store_memory(
+        entity_type=EntityType.PLAYER,
+        entity_id=ctx.user_id,
+        memory_text=entry_text,
+        importance=importance,
+        emotional=True,
+        tags=tags,
+        metadata={"journal_id": entry_id}
+    )
+    
     return entry_id
+
 
 async def ensure_addiction_table_exists(ctx, conn):
     """Ensure the PlayerAddictions table exists."""
@@ -2054,16 +2227,11 @@ async def find_or_create_addiction(
     
     return addiction_id
 
-async def find_or_create_player_stats(
-    ctx, conn, 
-    player_name: str, 
-    **initial_stats
-) -> None:
-    """
-    Find or create player stats entry with initial values.
-    Does not update existing stats, only creates if missing.
-    """
+async def find_or_create_player_stats(ctx, conn, player_name: str, **initial_stats) -> None:
+    """Find or create player stats with memory integration."""
     ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
     # Check if player stats exist
     exists = await conn.fetchval("""
         SELECT COUNT(*) FROM PlayerStats
@@ -2071,7 +2239,7 @@ async def find_or_create_player_stats(
     """, ctx.user_id, ctx.conversation_id, player_name)
     
     if not exists:
-        # Set defaults for any missing stats
+        # Set defaults
         stats = {
             'corruption': 0,
             'confidence': 0,
@@ -2098,7 +2266,25 @@ async def find_or_create_player_stats(
             stats['mental_resilience'], stats['physical_endurance']
         )
         
-        # Log canonical event
+        # Initialize player in memory system
+        await memory_orchestrator.setup_entity(
+            entity_type="player",
+            entity_data={
+                "player_name": player_name,
+                "initial_stats": stats
+            }
+        )
+        
+        # Store initialization as a memory
+        await memory_orchestrator.store_memory(
+            entity_type=EntityType.PLAYER,
+            entity_id=ctx.user_id,
+            memory_text=f"Character {player_name} begins their journey",
+            importance="high",
+            tags=['player', 'initialization', 'stats'],
+            metadata={"player_name": player_name, "initial_stats": stats}
+        )
+        
         await log_canonical_event(
             ctx, conn,
             f"Player character '{player_name}' initialized with stats",
@@ -2158,7 +2344,10 @@ async def update_player_stat_canonically(
     new_value: int,
     reason: str
 ) -> None:
-    """Update a player's stat while logging the change canonically."""
+    """Update a player's stat with memory integration."""
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
     current_value = await conn.fetchval(
         f"SELECT {stat_name} FROM PlayerStats "
         "WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3",
@@ -2175,6 +2364,7 @@ async def update_player_stat_canonically(
         new_value, ctx.user_id, ctx.conversation_id, player_name
     )
 
+    # Log the change
     await log_stat_change(
         ctx, conn,
         player_name,
@@ -2183,6 +2373,48 @@ async def update_player_stat_canonically(
         new_value,
         reason
     )
+    
+    # Store as a memory with emotional analysis
+    change = new_value - current_value
+    emotion_map = {
+        'corruption': 'concern' if change > 0 else 'relief',
+        'confidence': 'pride' if change > 0 else 'doubt',
+        'willpower': 'determination' if change > 0 else 'weakness',
+        'lust': 'desire' if change > 0 else 'restraint'
+    }
+    
+    memory_text = f"{player_name}'s {stat_name} {'increased' if change > 0 else 'decreased'} from {current_value} to {new_value} ({reason})"
+    
+    # Store memory with emotional context
+    await memory_orchestrator.store_memory(
+        entity_type=EntityType.PLAYER,
+        entity_id=ctx.user_id,
+        memory_text=memory_text,
+        importance="high" if abs(change) >= 20 else "medium",
+        emotional=True,
+        tags=['stat_change', stat_name, emotion_map.get(stat_name, 'neutral')],
+        metadata={
+            "player_name": player_name,
+            "stat_name": stat_name,
+            "old_value": current_value,
+            "new_value": new_value,
+            "change": change,
+            "reason": reason
+        }
+    )
+    
+    # Update emotional state if significant change
+    if abs(change) >= 10:
+        emotion = emotion_map.get(stat_name, 'neutral')
+        intensity = min(abs(change) / 50.0, 1.0)
+        
+        await memory_orchestrator.update_emotional_state(
+            entity_type="player",
+            entity_id=ctx.user_id,
+            emotion=emotion,
+            intensity=intensity
+        )
+
 
 async def find_or_create_currency(
     ctx, conn,
@@ -3007,6 +3239,58 @@ async def store_player_schedule(ctx, conn, player_name: str, schedule: Dict[str,
         significance=4
     )
 
+async def sync_embeddings_to_memory_system(ctx, conn):
+    """
+    One-time sync of existing database embeddings to memory orchestrator's vector store.
+    This ensures all existing canonical data is searchable through the memory system.
+    """
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
+    # Sync NPCs
+    npcs = await conn.fetch("""
+        SELECT npc_id, npc_name, role, affiliations
+        FROM NPCStats
+        WHERE user_id = $1 AND conversation_id = $2
+    """, ctx.user_id, ctx.conversation_id)
+    
+    for npc in npcs:
+        text = f"NPC: {npc['npc_name']}, role: {npc.get('role', 'unspecified')}"
+        await memory_orchestrator.add_to_vector_store(
+            text=text,
+            metadata={
+                "entity_type": "npc",
+                "entity_id": npc['npc_id'],
+                "npc_name": npc['npc_name'],
+                "user_id": ctx.user_id,
+                "conversation_id": ctx.conversation_id
+            },
+            entity_type="npc"
+        )
+    
+    # Sync Locations
+    locations = await conn.fetch("""
+        SELECT id, location_name, description, location_type
+        FROM Locations
+        WHERE user_id = $1 AND conversation_id = $2
+    """, ctx.user_id, ctx.conversation_id)
+    
+    for loc in locations:
+        text = f"Location: {loc['location_name']} - {loc.get('description', '')}"
+        await memory_orchestrator.add_to_vector_store(
+            text=text,
+            metadata={
+                "entity_type": "location",
+                "location_id": loc['id'],
+                "location_name": loc['location_name'],
+                "user_id": ctx.user_id,
+                "conversation_id": ctx.conversation_id
+            },
+            entity_type="location"
+        )
+    
+    logger.info(f"Synced {len(npcs)} NPCs and {len(locations)} locations to memory system")
+
 async def create_opening_message(ctx, conn, sender: str, content: str) -> int:
     """
     Create the opening message canonically.
@@ -3058,3 +3342,73 @@ async def ensure_embedding_columns(conn):
                 ON {table}
                 USING hnsw (embedding vector_cosine_ops)
             """)
+
+
+async def initialize_canon_memory_integration(user_id: int, conversation_id: int):
+    """Initialize the canon-memory integration for a conversation."""
+    orchestrator = await get_canon_memory_orchestrator(user_id, conversation_id)
+    
+    # Run maintenance to ensure consistency
+    await orchestrator.run_maintenance(operations=["consolidation"])
+    
+    # Sync any existing embeddings
+    async with get_db_connection_context() as conn:
+        ctx = CanonicalContext(user_id=user_id, conversation_id=conversation_id)
+        await sync_embeddings_to_memory_system(ctx, conn)
+    
+    logger.info(f"Canon-Memory integration initialized for user {user_id}, conversation {conversation_id}")
+    return orchestrator
+
+async def process_canonical_update(
+    ctx, conn,
+    update_type: str,
+    entity_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Central processor for all canonical updates.
+    Routes through memory orchestrator for consistency.
+    """
+    ctx = ensure_canonical_context(ctx)
+    memory_orchestrator = await get_canon_memory_orchestrator(ctx.user_id, ctx.conversation_id)
+    
+    # Validate consistency before update
+    validation_result = await memory_orchestrator.validate_canonical_consistency(
+        entity_type=update_type,
+        entity_data=entity_data
+    )
+    
+    if not validation_result["is_consistent"]:
+        logger.warning(f"Canonical consistency issues detected: {validation_result['conflicts']}")
+        # Could throw exception or handle conflicts here
+    
+    # Process the update based on type
+    result = {}
+    
+    if update_type == "npc":
+        result["id"] = await find_or_create_npc(ctx, conn, **entity_data)
+    elif update_type == "location":
+        result["name"] = await find_or_create_location(ctx, conn, **entity_data)
+    elif update_type == "nation":
+        result["id"] = await find_or_create_nation(ctx, conn, **entity_data)
+    elif update_type == "conflict":
+        result["id"] = await find_or_create_conflict(ctx, conn, **entity_data)
+    elif update_type == "myth":
+        result["id"] = await find_or_create_urban_myth(ctx, conn, **entity_data)
+    else:
+        result = await find_or_create_entity(
+            ctx, conn,
+            entity_type=update_type,
+            entity_name=entity_data.get("name", "Unknown"),
+            search_fields={"name": entity_data.get("name")},
+            create_data=entity_data,
+            table_name=update_type.title() + "s",  # Simple pluralization
+            embedding_text=f"{update_type}: {entity_data}",
+            similarity_threshold=0.85
+        )
+    
+    # Get narrative context after update
+    result["narrative_context"] = await memory_orchestrator.get_canonical_context(
+        entity_types=[update_type]
+    )
+    
+    return result
