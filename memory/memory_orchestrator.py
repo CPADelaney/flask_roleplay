@@ -82,7 +82,8 @@ from memory.telemetry import MemoryTelemetry
 from memory.maintenance import MemoryMaintenance
 
 # Utilities
-from logic.game_time_helper import get_game_datetime, get_game_iso_string
+# Game time helpers are imported lazily to avoid circular dependencies
+_game_time_helper_module = None
 
 logger = logging.getLogger("memory_orchestrator")
 
@@ -110,6 +111,14 @@ def _lazy_import_core():
         _MemoryCache = _memory_core.MemoryCache
     
     return _UnifiedMemoryManager, _Memory, _MemoryType, _MemoryStatus, _MemorySignificance, _MemoryCache
+
+
+def _lazy_import_game_time_helper():
+    """Lazy import for game time helper functions."""
+    global _game_time_helper_module
+    if _game_time_helper_module is None:
+        from logic import game_time_helper as _game_time_helper_module
+    return _game_time_helper_module
 
 
 class EntityType(str, Enum):
@@ -423,10 +432,10 @@ class MemoryOrchestrator:
             "narrative_context": await self.get_narrative_context()
         }
         
-        from logic.game_time_helper import get_game_datetime
+        game_time_helper = _lazy_import_game_time_helper()
         from db.connection import get_db_connection_context
-        
-        current_time = await get_game_datetime(self.user_id, self.conversation_id)
+
+        current_time = await game_time_helper.get_game_datetime(self.user_id, self.conversation_id)
         cutoff_time = current_time - timedelta(hours=time_window_hours)
         
         async with get_db_connection_context() as conn:
@@ -1850,8 +1859,9 @@ class MemoryOrchestrator:
         if not self.initialized:
             await self.initialize()
         
+        game_time_helper = _lazy_import_game_time_helper()
         context = {
-            "timestamp": await get_game_iso_string(self.user_id, self.conversation_id),
+            "timestamp": await game_time_helper.get_game_iso_string(self.user_id, self.conversation_id),
             "entities": {},
             "relationships": {},
             "active_schemas": [],
@@ -2632,7 +2642,8 @@ Return as JSON array of strings.
         if not time_window:
             time_window = timedelta(hours=24)
         
-        cutoff = await get_game_datetime(self.user_id, self.conversation_id) - time_window
+        game_time_helper = _lazy_import_game_time_helper()
+        cutoff = await game_time_helper.get_game_datetime(self.user_id, self.conversation_id) - time_window
         events = []
         
         async with get_connection_context() as conn:
