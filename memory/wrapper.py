@@ -4,8 +4,6 @@ import logging
 import asyncio
 from typing import Dict, Any, List, Optional, Union, TYPE_CHECKING
 
-from logic.game_time_helper import get_game_datetime, get_game_iso_string
-
 # Type checking imports (don't cause circular imports)
 if TYPE_CHECKING:
     from .integrated import IntegratedMemorySystem
@@ -24,6 +22,7 @@ _managers_module = None
 _masks_module = None
 _emotional_module = None
 _flashbacks_module = None
+_game_time_helper_module = None
 
 
 def _lazy_import_integrated():
@@ -72,6 +71,14 @@ def _lazy_import_flashbacks():
     if _flashbacks_module is None:
         from . import flashbacks as _flashbacks_module
     return _flashbacks_module
+
+
+def _lazy_import_game_time_helper():
+    """Lazy import for game time helper to avoid circular imports."""
+    global _game_time_helper_module
+    if _game_time_helper_module is None:
+        from logic import game_time_helper as _game_time_helper_module
+    return _game_time_helper_module
 
 
 class MemorySystem:
