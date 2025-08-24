@@ -9,7 +9,7 @@ managing initialization, resource allocation, and coordination between subsystem
 
 import logging
 import asyncio
-from typing import Dict, List, Any, Optional, Union, Tuple, Set
+from typing import Dict, List, Any, Optional, Union, Tuple, Set, AsyncGenerator
 from datetime import datetime
 import json
 from enum import Enum
@@ -88,6 +88,11 @@ class LoreOrchestrator:
         
         # Framework components
         self._matriarchal_framework = None
+        self._matriarchal_power_framework = None  # NEW
+        
+        # System components
+        self._lore_dynamics_system = None  # NEW
+        self._regional_culture_system = None  # NEW
         
         # Management components
         self._config_manager = None
@@ -105,7 +110,6 @@ class LoreOrchestrator:
         self._faction_agent = None
         
         # Extended systems (lazy loaded)
-        self._regional_culture_system = None
         self._national_conflict_system = None
         self._religious_distribution_system = None
         self._lore_update_system = None
@@ -285,6 +289,268 @@ class LoreOrchestrator:
             generator = await self._get_dynamic_generator()
             evolution = await generator.lore_evolution.evolve_lore_with_event(event_description)
             return evolution
+    
+    # ===== MATRIARCHAL POWER FRAMEWORK OPERATIONS (NEW) =====
+    
+    async def generate_matriarchal_core_principles(self) -> Dict[str, Any]:
+        """
+        Generate core principles for a matriarchal world.
+        
+        Returns:
+            Core principles structure
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        framework = await self._get_matriarchal_power_framework()
+        return await framework.generate_core_principles()
+    
+    async def generate_hierarchical_constraints(self) -> Dict[str, Any]:
+        """
+        Generate hierarchical constraints for matriarchal society.
+        
+        Returns:
+            Hierarchical constraints structure
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        framework = await self._get_matriarchal_power_framework()
+        return await framework.generate_hierarchical_constraints()
+    
+    async def apply_matriarchal_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply matriarchal power lens to foundation lore.
+        
+        Args:
+            foundation_data: Foundation lore to transform
+            
+        Returns:
+            Transformed lore with matriarchal themes
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        framework = await self._get_matriarchal_power_framework()
+        return await framework.apply_power_lens(foundation_data)
+    
+    async def generate_power_expressions(self) -> List[Dict[str, Any]]:
+        """
+        Generate power expressions for matriarchal society.
+        
+        Returns:
+            List of power expressions
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        framework = await self._get_matriarchal_power_framework()
+        return await framework.generate_power_expressions()
+    
+    async def develop_matriarchal_narrative(self, narrative_theme: str, initial_scene: str) -> AsyncGenerator[str, None]:
+        """
+        Develop a narrative through iterative dialogue with matriarchal themes.
+        
+        Args:
+            narrative_theme: Theme of the narrative
+            initial_scene: Starting scene
+            
+        Yields:
+            Narrative segments as they develop
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        framework = await self._get_matriarchal_power_framework()
+        async for segment in framework.develop_narrative_through_dialogue(narrative_theme, initial_scene):
+            yield segment
+    
+    # ===== LORE DYNAMICS OPERATIONS (NEW) =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="evolve_lore_with_event",
+        action_description="Evolving lore based on event",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def evolve_lore_with_event(self, ctx, event_description: str) -> Dict[str, Any]:
+        """
+        Evolve world lore based on a narrative event using the dynamics system.
+        
+        Args:
+            event_description: Description of the event
+            
+        Returns:
+            Evolution results with affected elements and updates
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        dynamics = await self._get_lore_dynamics_system()
+        return await dynamics.evolve_lore_with_event(ctx, event_description)
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_emergent_event",
+        action_description="Generating emergent world event",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def generate_emergent_event(self, ctx) -> Dict[str, Any]:
+        """
+        Generate a random emergent event in the world.
+        
+        Returns:
+            Generated event data with lore updates
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        dynamics = await self._get_lore_dynamics_system()
+        return await dynamics.generate_emergent_event(ctx)
+    
+    async def mature_lore_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
+        """
+        Natural evolution of lore over time.
+        
+        Args:
+            days_passed: Number of days to simulate
+            
+        Returns:
+            Maturation summary with changes
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        dynamics = await self._get_lore_dynamics_system()
+        
+        # Create mock context for governance
+        ctx = self._create_mock_context()
+        
+        return await dynamics.mature_lore_over_time(days_passed)
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="evolve_world_over_time",
+        action_description="Evolving world over time period",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def evolve_world_over_time(self, ctx, days_passed: int = 30) -> Dict[str, Any]:
+        """
+        Evolve the entire world across a specified time period.
+        
+        Args:
+            days_passed: Number of days to simulate
+            
+        Returns:
+            Complete evolution results
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        dynamics = await self._get_lore_dynamics_system()
+        return await dynamics.evolve_world_over_time(ctx, days_passed)
+    
+    # ===== REGIONAL CULTURE OPERATIONS (NEW - Additional methods) =====
+    # These are new methods that weren't in the original orchestrator
+    
+    async def summarize_culture(self, nation_id: int, format_type: str = "brief") -> str:
+        """
+        Generate a textual summary of a nation's culture.
+        
+        Args:
+            nation_id: ID of the nation
+            format_type: Format type (brief, detailed, narrative)
+            
+        Returns:
+            Cultural summary text
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        return await culture_system.summarize_culture(nation_id, format_type)
+    
+    async def detect_cultural_conflicts(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
+        """
+        Analyze potential cultural conflicts between two nations.
+        
+        Args:
+            nation_id1: First nation ID
+            nation_id2: Second nation ID
+            
+        Returns:
+            Cultural conflict analysis
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        return await culture_system.detect_cultural_conflicts(nation_id1, nation_id2)
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="simulate_cultural_diffusion",
+        action_description="Simulating cultural diffusion",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def simulate_cultural_diffusion(self, ctx, nation1_id: int, nation2_id: int, years: int = 50) -> Dict[str, Any]:
+        """
+        Simulate cultural diffusion between two nations over time.
+        
+        Args:
+            nation1_id: First nation ID
+            nation2_id: Second nation ID
+            years: Years to simulate
+            
+        Returns:
+            Cultural diffusion results
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        return await culture_system.simulate_cultural_diffusion(ctx, nation1_id, nation2_id, years)
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="evolve_dialect",
+        action_description="Evolving regional dialect",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def evolve_dialect(self, ctx, language_id: int, region_id: int, years: int = 100) -> Dict[str, Any]:
+        """
+        Evolve a regional dialect of a language.
+        
+        Args:
+            language_id: ID of the language
+            region_id: ID of the region
+            years: Years to simulate
+            
+        Returns:
+            Dialect evolution results
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        return await culture_system.evolve_dialect(ctx, language_id, region_id, years)
+    
+    async def generate_diplomatic_protocol(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
+        """
+        Generate diplomatic protocol guide for interactions between two nations.
+        
+        Args:
+            nation_id1: First nation ID
+            nation_id2: Second nation ID
+            
+        Returns:
+            Diplomatic protocol guide
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        return await culture_system.generate_diplomatic_protocol(nation_id1, nation_id2)
     
     # ===== NPC INTEGRATION =====
     
@@ -529,7 +795,7 @@ class LoreOrchestrator:
         integration = await self._get_conflict_integration()
         return await integration.get_faction_conflicts(faction_id)
     
-    # ===== CULTURAL SYSTEMS =====
+    # ===== CULTURAL SYSTEMS (Original signatures preserved for backwards compatibility) =====
     
     async def generate_languages(self, count: int = 5) -> List[Dict[str, Any]]:
         """
@@ -1136,7 +1402,9 @@ class LoreOrchestrator:
             self._regional_culture_system,
             self._national_conflict_system,
             self._religious_distribution_system,
-            self._lore_update_system
+            self._lore_update_system,
+            self._matriarchal_power_framework,
+            self._lore_dynamics_system
         ]:
             if component and hasattr(component, 'cleanup'):
                 await component.cleanup()
@@ -1253,9 +1521,9 @@ class LoreOrchestrator:
         return self._context_enhancer
     
     async def _get_regional_culture_system(self):
-        """Get or initialize regional culture system."""
+        """Get or initialize regional culture system (NEW)."""
         if not self._regional_culture_system:
-            from lore.matriarchal_lore_system import RegionalCultureSystem
+            from lore.systems.regional_culture import RegionalCultureSystem
             self._regional_culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
             await self._regional_culture_system.initialize_tables()
             await self._regional_culture_system.initialize_governance()
@@ -1286,6 +1554,30 @@ class LoreOrchestrator:
             self._lore_update_system = LoreUpdateSystem(self.user_id, self.conversation_id)
             await self._lore_update_system.initialize_governance()
         return self._lore_update_system
+    
+    async def _get_matriarchal_power_framework(self):
+        """Get or initialize matriarchal power framework (NEW)."""
+        if not self._matriarchal_power_framework:
+            from lore.frameworks.matriarchal import MatriarchalPowerStructureFramework
+            self._matriarchal_power_framework = MatriarchalPowerStructureFramework(
+                self.user_id, 
+                self.conversation_id
+            )
+            # Framework doesn't have an explicit initialize, but ensure base is initialized
+            await self._matriarchal_power_framework.ensure_initialized()
+        return self._matriarchal_power_framework
+    
+    async def _get_lore_dynamics_system(self):
+        """Get or initialize lore dynamics system (NEW)."""
+        if not self._lore_dynamics_system:
+            from lore.systems.dynamics import LoreDynamicsSystem
+            self._lore_dynamics_system = LoreDynamicsSystem(self.user_id, self.conversation_id)
+            await self._lore_dynamics_system.ensure_initialized()
+            # Set governor if available
+            if self._governor:
+                self._lore_dynamics_system.governor = self._governor
+                await self._lore_dynamics_system.register_with_governance()
+        return self._lore_dynamics_system
     
     async def _get_agent_context(self):
         """Get or initialize agent context."""
