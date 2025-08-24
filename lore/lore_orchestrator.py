@@ -1,10 +1,12 @@
-# lore/lore_orchestrator.py
+# lore/lore_orchestrator.py - ENHANCED VERSION WITH CORE MODULE INTEGRATION
 
 """
 Lore Orchestrator - Unified Entry Point for All Lore Functionality
 
 This module provides a single, comprehensive interface to all lore system components,
 managing initialization, resource allocation, and coordination between subsystems.
+
+ENHANCED: Now includes direct access to canon, cache, registry, and validation systems.
 """
 
 import logging
@@ -36,7 +38,9 @@ class OrchestratorConfig:
     enable_governance: bool = True
     enable_metrics: bool = True
     enable_validation: bool = True
+    enable_cache: bool = True  # NEW: Cache system enablement
     cache_ttl: int = 3600
+    cache_max_size: int = 1000  # NEW: Cache size limit
     max_parallel_operations: int = 10
     auto_initialize: bool = True
     resource_limits: Dict[str, Any] = None
@@ -46,6 +50,12 @@ class LoreOrchestrator:
     """
     Master orchestrator that provides unified access to all lore functionality.
     Acts as the single entry point for external systems to interact with lore.
+    
+    ENHANCED: Now includes direct access to core systems:
+    - Canon system for canonical state management
+    - Cache system for performance optimization
+    - Registry system for manager coordination
+    - Validation system for data integrity
     """
     
     @classmethod
@@ -81,6 +91,13 @@ class LoreOrchestrator:
         self._dynamic_generator = None
         self._setting_analyzer = None
         
+        # === NEW CORE SYSTEMS (LAZY LOADED) ===
+        self._canon_module = None  # CRITICAL: Must be lazy loaded
+        self._cache_system = None
+        self._registry_system = None
+        self._canon_validation = None
+        self._canonical_context_class = None
+        
         # Integration components
         self._npc_integration = None
         self._conflict_integration = None
@@ -88,11 +105,11 @@ class LoreOrchestrator:
         
         # Framework components
         self._matriarchal_framework = None
-        self._matriarchal_power_framework = None  # NEW
+        self._matriarchal_power_framework = None
         
         # System components
-        self._lore_dynamics_system = None  # NEW
-        self._regional_culture_system = None  # NEW
+        self._lore_dynamics_system = None
+        self._regional_culture_system = None
         
         # Management components
         self._config_manager = None
@@ -142,6 +159,10 @@ class LoreOrchestrator:
                 if self.config.enable_governance:
                     await self._initialize_governance()
                 
+                # Initialize cache if enabled (NEW)
+                if self.config.enable_cache:
+                    await self._initialize_cache()
+                
                 # Initialize core configuration
                 await self._initialize_config()
                 
@@ -173,6 +194,12 @@ class LoreOrchestrator:
         self._governor = await get_central_governance(self.user_id, self.conversation_id)
         self._component_init_status['governance'] = True
         logger.info("Governance system initialized")
+    
+    async def _initialize_cache(self):
+        """Initialize cache system (NEW)."""
+        cache = await self._get_cache_system()
+        self._component_init_status['cache'] = True
+        logger.info("Cache system initialized")
     
     async def _initialize_config(self):
         """Initialize configuration management."""
@@ -212,10 +239,363 @@ class LoreOrchestrator:
     
     async def _initialize_metrics(self):
         """Initialize metrics collection."""
-        # Metrics manager is already a singleton
         from lore.metrics import metrics_manager
         self._component_init_status['metrics'] = True
         logger.info("Metrics collection initialized")
+    
+    # ===== CANON OPERATIONS (NEW SECTION) =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="canonical_operation",
+        action_description="Performing canonical operation",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def find_or_create_npc(self, ctx, npc_name: str, **kwargs) -> int:
+        """
+        Find or create an NPC canonically with semantic similarity checking.
+        
+        Args:
+            npc_name: Name of the NPC
+            **kwargs: Additional NPC attributes (role, affiliations, etc.)
+            
+        Returns:
+            NPC ID
+        """
+        canon = await self._get_canon_module()
+        async with get_db_connection_context() as conn:
+            return await canon.find_or_create_npc(ctx, conn, npc_name, **kwargs)
+    
+    async def find_or_create_location(self, location_name: str, **kwargs) -> str:
+        """
+        Find or create a location canonically.
+        
+        Args:
+            location_name: Name of the location
+            **kwargs: Additional location attributes
+            
+        Returns:
+            Location name (canonical)
+        """
+        canon = await self._get_canon_module()
+        ctx = self._create_canonical_context()
+        async with get_db_connection_context() as conn:
+            return await canon.find_or_create_location(ctx, conn, location_name, **kwargs)
+    
+    async def find_or_create_faction(self, faction_name: str, **kwargs) -> int:
+        """
+        Find or create a faction canonically.
+        
+        Args:
+            faction_name: Name of the faction
+            **kwargs: Additional faction attributes
+            
+        Returns:
+            Faction ID
+        """
+        canon = await self._get_canon_module()
+        ctx = self._create_canonical_context()
+        async with get_db_connection_context() as conn:
+            return await canon.find_or_create_faction(ctx, conn, faction_name, **kwargs)
+    
+    async def log_canonical_event(self, event_text: str, tags: List[str] = None, significance: int = 5):
+        """
+        Log a canonical event to establish world history.
+        
+        Args:
+            event_text: Description of the event
+            tags: Event tags
+            significance: Significance level (1-10)
+        """
+        canon = await self._get_canon_module()
+        ctx = self._create_canonical_context()
+        async with get_db_connection_context() as conn:
+            await canon.log_canonical_event(ctx, conn, event_text, tags, significance)
+    
+    async def create_journal_entry(self, entry_text: str, **kwargs) -> int:
+        """
+        Create a journal entry integrated with memory system.
+        
+        Args:
+            entry_text: Journal entry text
+            **kwargs: Additional metadata
+            
+        Returns:
+            Journal entry ID
+        """
+        canon = await self._get_canon_module()
+        ctx = self._create_canonical_context()
+        async with get_db_connection_context() as conn:
+            return await canon.add_journal_entry(ctx, conn, entry_text, **kwargs)
+    
+    async def update_player_stat(self, player_name: str, stat_name: str, new_value: int, reason: str):
+        """
+        Update a player stat canonically with memory integration.
+        
+        Args:
+            player_name: Name of the player
+            stat_name: Name of the stat
+            new_value: New stat value
+            reason: Reason for the change
+        """
+        canon = await self._get_canon_module()
+        ctx = self._create_canonical_context()
+        async with get_db_connection_context() as conn:
+            await canon.update_player_stat_canonically(ctx, conn, player_name, stat_name, new_value, reason)
+    
+    async def find_or_create_social_link(self, **kwargs) -> int:
+        """
+        Create or find a social relationship between entities.
+        
+        Args:
+            **kwargs: Relationship parameters
+            
+        Returns:
+            Link ID
+        """
+        canon = await self._get_canon_module()
+        ctx = self._create_canonical_context()
+        async with get_db_connection_context() as conn:
+            return await canon.find_or_create_social_link(ctx, conn, **kwargs)
+    
+    async def propose_and_enact_change(self, entity_type: str, entity_identifier: Dict[str, Any], 
+                                       updates: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        """
+        Propose and enact a canonical change through the lore system.
+        
+        Args:
+            entity_type: Type of entity to change
+            entity_identifier: How to identify the entity
+            updates: Changes to make
+            reason: Reason for the change
+            
+        Returns:
+            Change results
+        """
+        lore_system = await self._get_lore_system()
+        ctx = self._create_canonical_context()
+        return await lore_system.propose_and_enact_change(ctx, entity_type, entity_identifier, updates, reason)
+    
+    # ===== CACHE OPERATIONS (NEW SECTION) =====
+    
+    async def cache_get(self, namespace: str, key: str, user_id: Optional[int] = None, 
+                       conversation_id: Optional[int] = None) -> Any:
+        """
+        Get an item from cache.
+        
+        Args:
+            namespace: Cache namespace
+            key: Cache key
+            user_id: Optional user ID for scoping
+            conversation_id: Optional conversation ID for scoping
+            
+        Returns:
+            Cached value or None
+        """
+        if not self.config.enable_cache:
+            return None
+            
+        cache = await self._get_cache_system()
+        return await cache.get(namespace, key, user_id or self.user_id, 
+                              conversation_id or self.conversation_id)
+    
+    async def cache_set(self, namespace: str, key: str, value: Any, ttl: Optional[int] = None,
+                       user_id: Optional[int] = None, conversation_id: Optional[int] = None, 
+                       priority: int = 0):
+        """
+        Set an item in cache.
+        
+        Args:
+            namespace: Cache namespace
+            key: Cache key
+            value: Value to cache
+            ttl: Time to live in seconds
+            user_id: Optional user ID for scoping
+            conversation_id: Optional conversation ID for scoping
+            priority: Cache priority (0-10)
+        """
+        if not self.config.enable_cache:
+            return
+            
+        cache = await self._get_cache_system()
+        await cache.set(namespace, key, value, ttl or self.config.cache_ttl,
+                       user_id or self.user_id, conversation_id or self.conversation_id,
+                       priority)
+    
+    async def cache_invalidate(self, namespace: str, key: str, user_id: Optional[int] = None,
+                              conversation_id: Optional[int] = None):
+        """
+        Invalidate a cache entry.
+        
+        Args:
+            namespace: Cache namespace
+            key: Cache key
+            user_id: Optional user ID for scoping
+            conversation_id: Optional conversation ID for scoping
+        """
+        if not self.config.enable_cache:
+            return
+            
+        cache = await self._get_cache_system()
+        await cache.invalidate(namespace, key, user_id or self.user_id,
+                              conversation_id or self.conversation_id)
+    
+    async def cache_invalidate_pattern(self, namespace: str, pattern: str):
+        """
+        Invalidate cache entries matching a pattern.
+        
+        Args:
+            namespace: Cache namespace
+            pattern: Regex pattern to match keys
+        """
+        if not self.config.enable_cache:
+            return
+            
+        cache = await self._get_cache_system()
+        await cache.invalidate_pattern(namespace, pattern, self.user_id, self.conversation_id)
+    
+    async def get_cache_analytics(self) -> Dict[str, Any]:
+        """
+        Get cache performance analytics.
+        
+        Returns:
+            Cache analytics data
+        """
+        if not self.config.enable_cache:
+            return {}
+            
+        cache = await self._get_cache_system()
+        return await cache.get_cache_analytics()
+    
+    async def optimize_cache(self) -> Dict[str, Any]:
+        """
+        Optimize cache using AI-driven analysis.
+        
+        Returns:
+            Optimization recommendations and results
+        """
+        if not self.config.enable_cache:
+            return {"status": "cache disabled"}
+            
+        cache = await self._get_cache_system()
+        return await cache.optimize_cache()
+    
+    # ===== REGISTRY OPERATIONS (NEW SECTION) =====
+    
+    async def get_manager(self, manager_key: str) -> Any:
+        """
+        Get a specialized manager by key.
+        
+        Args:
+            manager_key: Manager identifier
+            
+        Returns:
+            Manager instance
+        """
+        registry = await self._get_registry_system()
+        result = await registry.get_manager(manager_key)
+        return await registry._get_or_init_manager(manager_key)
+    
+    async def get_available_manager_tools(self) -> List[Dict[str, Any]]:
+        """
+        Get all available tools across all managers.
+        
+        Returns:
+            List of available tools with metadata
+        """
+        registry = await self._get_registry_system()
+        tools = await registry.get_available_tools()
+        return [tool.dict() for tool in tools]
+    
+    async def discover_manager_relationships(self) -> Dict[str, List[str]]:
+        """
+        Get the relationship map between managers.
+        
+        Returns:
+            Manager relationship map
+        """
+        registry = await self._get_registry_system()
+        result = await registry.discover_manager_relationships()
+        return result.relationships
+    
+    async def execute_cross_manager_operation(self, starting_manager: str, target_manager: str,
+                                             operation: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute an operation requiring coordination between managers.
+        
+        Args:
+            starting_manager: Starting manager key
+            target_manager: Target manager key
+            operation: Operation to perform
+            params: Operation parameters
+            
+        Returns:
+            Operation results
+        """
+        registry = await self._get_registry_system()
+        from lore.core.registry import CrossManagerHandoffParams
+        
+        handoff_params = CrossManagerHandoffParams(
+            starting_manager=starting_manager,
+            target_manager=target_manager,
+            operation=operation,
+            params=params
+        )
+        
+        result = await registry.execute_cross_manager_handoff(handoff_params)
+        return result.dict()
+    
+    # ===== VALIDATION OPERATIONS (NEW SECTION) =====
+    
+    async def validate_canon_duplicate(self, entity_type: str, proposal: Dict[str, Any], 
+                                      existing_id: int) -> bool:
+        """
+        Validate if a proposed entity is a duplicate of an existing one.
+        
+        Args:
+            entity_type: Type of entity
+            proposal: Proposed entity data
+            existing_id: ID of potentially duplicate entity
+            
+        Returns:
+            True if duplicate, False otherwise
+        """
+        validator = await self._get_canon_validation()
+        
+        async with get_db_connection_context() as conn:
+            if entity_type.lower() == "npc":
+                return await validator.confirm_is_duplicate_npc(conn, proposal, existing_id)
+            else:
+                # Generic validation for other entity types
+                logger.warning(f"No specific duplicate validator for entity type: {entity_type}")
+                return False
+    
+    # ===== CONTEXT OPERATIONS (NEW SECTION) =====
+    
+    def create_canonical_context(self, **kwargs) -> Any:
+        """
+        Create a canonical context object for operations.
+        
+        Args:
+            **kwargs: Additional context attributes
+            
+        Returns:
+            CanonicalContext instance
+        """
+        context_class = self._get_canonical_context_class()
+        return context_class(self.user_id, self.conversation_id, **kwargs)
+    
+    def _create_canonical_context(self, **kwargs) -> Any:
+        """
+        Internal method to create canonical context.
+        
+        Args:
+            **kwargs: Additional context attributes
+            
+        Returns:
+            CanonicalContext instance
+        """
+        return self.create_canonical_context(**kwargs)
     
     # ===== CORE LORE OPERATIONS =====
     
@@ -290,7 +670,7 @@ class LoreOrchestrator:
             evolution = await generator.lore_evolution.evolve_lore_with_event(event_description)
             return evolution
     
-    # ===== MATRIARCHAL POWER FRAMEWORK OPERATIONS (NEW) =====
+    # ===== MATRIARCHAL POWER FRAMEWORK OPERATIONS =====
     
     async def generate_matriarchal_core_principles(self) -> Dict[str, Any]:
         """
@@ -365,7 +745,7 @@ class LoreOrchestrator:
         async for segment in framework.develop_narrative_through_dialogue(narrative_theme, initial_scene):
             yield segment
     
-    # ===== LORE DYNAMICS OPERATIONS (NEW) =====
+    # ===== LORE DYNAMICS OPERATIONS =====
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -422,10 +802,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         dynamics = await self._get_lore_dynamics_system()
-        
-        # Create mock context for governance
         ctx = self._create_mock_context()
-        
         return await dynamics.mature_lore_over_time(days_passed)
     
     @with_governance(
@@ -450,8 +827,7 @@ class LoreOrchestrator:
         dynamics = await self._get_lore_dynamics_system()
         return await dynamics.evolve_world_over_time(ctx, days_passed)
     
-    # ===== REGIONAL CULTURE OPERATIONS (NEW - Additional methods) =====
-    # These are new methods that weren't in the original orchestrator
+    # ===== REGIONAL CULTURE OPERATIONS =====
     
     async def summarize_culture(self, nation_id: int, format_type: str = "brief") -> str:
         """
@@ -552,6 +928,74 @@ class LoreOrchestrator:
         culture_system = await self._get_regional_culture_system()
         return await culture_system.generate_diplomatic_protocol(nation_id1, nation_id2)
     
+    async def generate_languages(self, count: int = 5) -> List[Dict[str, Any]]:
+        """
+        Generate languages for the world.
+        
+        Args:
+            count: Number of languages to generate
+            
+        Returns:
+            List of generated languages
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        ctx = self._create_mock_context()
+        return await culture_system.generate_languages(ctx, count)
+    
+    async def generate_cultural_norms(self, nation_id: int) -> List[Dict[str, Any]]:
+        """
+        Generate cultural norms for a specific nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            List of generated cultural norms
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        ctx = self._create_mock_context(nation_id=nation_id)
+        return await culture_system.generate_cultural_norms(ctx, nation_id)
+    
+    async def generate_etiquette(self, nation_id: int) -> List[Dict[str, Any]]:
+        """
+        Generate etiquette systems for a specific nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            List of generated etiquette systems
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        ctx = self._create_mock_context(nation_id=nation_id)
+        return await culture_system.generate_etiquette(ctx, nation_id)
+    
+    async def get_nation_culture(self, nation_id: int) -> Dict[str, Any]:
+        """
+        Get comprehensive cultural information about a nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            Dictionary with nation's cultural information
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        ctx = self._create_mock_context(nation_id=nation_id)
+        return await culture_system.get_nation_culture(ctx, nation_id)
+    
     # ===== NPC INTEGRATION =====
     
     async def integrate_lore_with_npc(self, npc_id: int, cultural_background: str, faction_affiliations: List[str]) -> Dict[str, Any]:
@@ -570,10 +1014,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         integration = await self._get_npc_integration(npc_id)
-        
-        # Create a mock context for governance
         ctx = self._create_mock_context(npc_id=npc_id)
-        
         return await integration.initialize_npc_lore_knowledge(
             ctx,
             npc_id,
@@ -596,10 +1037,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         integration = await self._get_npc_integration(npc_id)
-        
-        # Create a mock context for governance
         ctx = self._create_mock_context(npc_id=npc_id)
-        
         return await integration.process_npc_lore_interaction(ctx, npc_id, player_input)
     
     async def apply_dialect_to_npc_text(self, text: str, dialect_id: int, intensity: str = 'medium', npc_id: Optional[int] = None) -> str:
@@ -795,88 +1233,6 @@ class LoreOrchestrator:
         integration = await self._get_conflict_integration()
         return await integration.get_faction_conflicts(faction_id)
     
-    # ===== CULTURAL SYSTEMS (Original signatures preserved for backwards compatibility) =====
-    
-    async def generate_languages(self, count: int = 5) -> List[Dict[str, Any]]:
-        """
-        Generate languages for the world.
-        
-        Args:
-            count: Number of languages to generate
-            
-        Returns:
-            List of generated languages
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        
-        # Create a mock context for governance
-        ctx = self._create_mock_context()
-        
-        return await culture_system.generate_languages(ctx, count)
-    
-    async def generate_cultural_norms(self, nation_id: int) -> List[Dict[str, Any]]:
-        """
-        Generate cultural norms for a specific nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            List of generated cultural norms
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        
-        # Create a mock context for governance
-        ctx = self._create_mock_context(nation_id=nation_id)
-        
-        return await culture_system.generate_cultural_norms(ctx, nation_id)
-    
-    async def generate_etiquette(self, nation_id: int) -> List[Dict[str, Any]]:
-        """
-        Generate etiquette systems for a specific nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            List of generated etiquette systems
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        
-        # Create a mock context for governance
-        ctx = self._create_mock_context(nation_id=nation_id)
-        
-        return await culture_system.generate_etiquette(ctx, nation_id)
-    
-    async def get_nation_culture(self, nation_id: int) -> Dict[str, Any]:
-        """
-        Get comprehensive cultural information about a nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            Dictionary with nation's cultural information
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        
-        # Create a mock context for governance
-        ctx = self._create_mock_context(nation_id=nation_id)
-        
-        return await culture_system.get_nation_culture(ctx, nation_id)
-    
     # ===== NATIONAL CONFLICTS AND DOMESTIC ISSUES =====
     
     async def generate_domestic_issues(self, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
@@ -894,10 +1250,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         conflict_system = await self._get_national_conflict_system()
-        
-        # Create a mock context for governance
         ctx = self._create_mock_context(nation_id=nation_id, count=count)
-        
         return await conflict_system.generate_domestic_issues(ctx, nation_id, count)
     
     async def generate_initial_conflicts(self, count: int = 3) -> List[Dict[str, Any]]:
@@ -914,10 +1267,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         conflict_system = await self._get_national_conflict_system()
-        
-        # Create a mock context for governance
         ctx = self._create_mock_context(count=count)
-        
         return await conflict_system.generate_initial_conflicts(ctx, count)
     
     async def get_nation_issues(self, nation_id: int) -> List[Dict[str, Any]]:
@@ -934,10 +1284,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         conflict_system = await self._get_national_conflict_system()
-        
-        # Create a mock context for governance
         ctx = self._create_mock_context(nation_id=nation_id)
-        
         return await conflict_system.get_nation_issues(ctx, nation_id)
     
     async def evolve_all_conflicts(self, days_passed: int = 7) -> Dict[str, Any]:
@@ -954,19 +1301,14 @@ class LoreOrchestrator:
             await self.initialize()
         
         conflict_system = await self._get_national_conflict_system()
-        
-        # Create mock context with the expected structure for governance
         ctx = self._create_mock_context(
             action='evolve_conflicts',
             days_passed=days_passed
         )
         
-        # Note: If evolve_all_conflicts is not implemented in NationalConflictSystem,
-        # this will need to be implemented or use an alternative method
         if hasattr(conflict_system, 'evolve_all_conflicts'):
             return await conflict_system.evolve_all_conflicts(ctx, days_passed)
         else:
-            # Fallback: Get active conflicts and return them as-is
             logger.warning("evolve_all_conflicts not implemented, returning current conflicts")
             return {
                 'conflicts': await conflict_system.get_active_conflicts(ctx),
@@ -985,10 +1327,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         conflict_system = await self._get_national_conflict_system()
-        
-        # Create mock context for governance
         ctx = self._create_mock_context()
-        
         return await conflict_system.get_active_conflicts(ctx)
     
     # ===== RELIGIOUS SYSTEMS =====
@@ -1004,10 +1343,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         religious_system = await self._get_religious_distribution_system()
-        
-        # Create a mock context for governance
         ctx = self._create_mock_context()
-        
         return await religious_system.distribute_religions(ctx)
     
     async def get_nation_religion(self, nation_id: int) -> Dict[str, Any]:
@@ -1024,10 +1360,7 @@ class LoreOrchestrator:
             await self.initialize()
         
         religious_system = await self._get_religious_distribution_system()
-        
-        # Create a mock context for governance
         ctx = self._create_mock_context(nation_id=nation_id)
-        
         return await religious_system.get_nation_religion(ctx, nation_id)
     
     # ===== LORE UPDATE SYSTEM =====
@@ -1057,10 +1390,8 @@ class LoreOrchestrator:
             await self.initialize()
         
         update_system = await self._get_lore_update_system()
-        
-        # Create a mock context for governance with event details
         ctx = self._create_mock_context(
-            event_description=event_description[:100],  # Truncate for context
+            event_description=event_description[:100],
             affected_count=len(affected_elements)
         )
         
@@ -1242,8 +1573,6 @@ class LoreOrchestrator:
             await self.initialize()
         
         analyzer = await self._get_setting_analyzer()
-        
-        # Create a mock context for governance
         ctx = self._create_mock_context()
         
         demographics = await analyzer.analyze_setting_demographics(ctx)
@@ -1391,6 +1720,11 @@ class LoreOrchestrator:
         if self._validation_manager:
             await self._validation_manager.cleanup()
         
+        # Cleanup cache if it exists
+        if self._cache_system:
+            # Cache doesn't have explicit cleanup but we can clear it
+            await self._cache_system.clear_namespace("*")
+        
         # Cleanup components
         for component in [
             self._lore_system,
@@ -1432,18 +1766,6 @@ class LoreOrchestrator:
             
         Returns:
             Mock object with specified attributes
-            
-        Examples:
-            # Simple context
-            ctx = self._create_mock_context()
-            
-            # Context with NPC ID
-            ctx = self._create_mock_context(npc_id=123)
-            
-            # Context with nested structure
-            ctx = self._create_mock_context(
-                context={'user_id': 1, 'conversation_id': 2}
-            )
         """
         # Default context structure many governance decorators expect
         if 'context' not in attributes:
@@ -1455,14 +1777,64 @@ class LoreOrchestrator:
         # Create and return mock object with attributes
         return type('MockContext', (object,), attributes)()
     
-    # ===== COMPONENT GETTERS (Lazy Initialization) =====
+    # ===== COMPONENT GETTERS (LAZY INITIALIZATION) =====
+    
+    async def _get_canon_module(self):
+        """
+        Get or initialize the canon module.
+        CRITICAL: This is lazy loaded as many other modules depend on it.
+        """
+        if not self._canon_module:
+            # Import here to avoid circular dependencies
+            from lore.core import canon
+            self._canon_module = canon
+            logger.info("Canon module loaded")
+        return self._canon_module
+    
+    async def _get_cache_system(self):
+        """Get or initialize the cache system."""
+        if not self._cache_system:
+            from lore.core.cache import LoreCache
+            self._cache_system = LoreCache(
+                max_size=self.config.cache_max_size,
+                ttl=self.config.cache_ttl
+            )
+            logger.info("Cache system initialized")
+        return self._cache_system
+    
+    async def _get_registry_system(self):
+        """Get or initialize the manager registry."""
+        if not self._registry_system:
+            from lore.core.registry import ManagerRegistry
+            self._registry_system = ManagerRegistry(self.user_id, self.conversation_id)
+            logger.info("Registry system initialized")
+        return self._registry_system
+    
+    async def _get_canon_validation(self):
+        """Get or initialize the canon validation agent."""
+        if not self._canon_validation:
+            from lore.core.validation import CanonValidationAgent
+            self._canon_validation = CanonValidationAgent()
+            logger.info("Canon validation agent initialized")
+        return self._canon_validation
+    
+    def _get_canonical_context_class(self):
+        """Get the CanonicalContext class (lazy loaded)."""
+        if not self._canonical_context_class:
+            from lore.core.context import CanonicalContext
+            self._canonical_context_class = CanonicalContext
+            logger.info("CanonicalContext class loaded")
+        return self._canonical_context_class
     
     async def _get_lore_system(self):
         """Get or initialize the core lore system."""
         if not self._lore_system:
-            from lore.lore_system import LoreSystem
-            self._lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
-            await self._lore_system.initialize()
+            from lore.core.lore_system import LoreSystem
+            self._lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+            # Set governor if available
+            if self._governor:
+                self._lore_system.set_governor(self._governor)
+            await self._lore_system.ensure_initialized()
         return self._lore_system
     
     async def _get_matriarchal_system(self):
@@ -1521,7 +1893,7 @@ class LoreOrchestrator:
         return self._context_enhancer
     
     async def _get_regional_culture_system(self):
-        """Get or initialize regional culture system (NEW)."""
+        """Get or initialize regional culture system."""
         if not self._regional_culture_system:
             from lore.systems.regional_culture import RegionalCultureSystem
             self._regional_culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
@@ -1556,7 +1928,7 @@ class LoreOrchestrator:
         return self._lore_update_system
     
     async def _get_matriarchal_power_framework(self):
-        """Get or initialize matriarchal power framework (NEW)."""
+        """Get or initialize matriarchal power framework."""
         if not self._matriarchal_power_framework:
             from lore.frameworks.matriarchal import MatriarchalPowerStructureFramework
             self._matriarchal_power_framework = MatriarchalPowerStructureFramework(
@@ -1568,7 +1940,7 @@ class LoreOrchestrator:
         return self._matriarchal_power_framework
     
     async def _get_lore_dynamics_system(self):
-        """Get or initialize lore dynamics system (NEW)."""
+        """Get or initialize lore dynamics system."""
         if not self._lore_dynamics_system:
             from lore.systems.dynamics import LoreDynamicsSystem
             self._lore_dynamics_system = LoreDynamicsSystem(self.user_id, self.conversation_id)
@@ -1687,10 +2059,7 @@ async def generate_world(user_id: int, conversation_id: int, environment_desc: s
         Complete world lore
     """
     orchestrator = await get_lore_orchestrator(user_id, conversation_id)
-    
-    # Create a mock context for governance
     ctx = orchestrator._create_mock_context()
-    
     return await orchestrator.generate_complete_world(ctx, environment_desc, **kwargs)
 
 
@@ -1708,10 +2077,7 @@ async def evolve_world(user_id: int, conversation_id: int, event_description: st
         Evolution results
     """
     orchestrator = await get_lore_orchestrator(user_id, conversation_id)
-    
-    # Create a mock context for governance
     ctx = orchestrator._create_mock_context()
-    
     return await orchestrator.evolve_world_with_event(ctx, event_description, **kwargs)
 
 
@@ -1720,7 +2086,7 @@ async def evolve_world(user_id: int, conversation_id: int, event_description: st
 def setup_lore_orchestrator():
     """Setup function for module initialization."""
     logging.basicConfig(level=logging.INFO)
-    logger.info("Lore Orchestrator module loaded")
+    logger.info("Enhanced Lore Orchestrator module loaded with core integrations")
 
 
 # Run setup on module import
