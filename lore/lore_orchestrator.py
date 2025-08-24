@@ -1,4 +1,4 @@
-# lore/lore_orchestrator.py - ENHANCED VERSION WITH CORE MODULE INTEGRATION
+# lore/lore_orchestrator.py - FULLY INTEGRATED VERSION WITH ALL SPECIALIZED MANAGERS
 
 """
 Lore Orchestrator - Unified Entry Point for All Lore Functionality
@@ -6,7 +6,8 @@ Lore Orchestrator - Unified Entry Point for All Lore Functionality
 This module provides a single, comprehensive interface to all lore system components,
 managing initialization, resource allocation, and coordination between subsystems.
 
-ENHANCED: Now includes direct access to canon, cache, registry, and validation systems.
+FULLY INTEGRATED: Now includes education, geopolitical, and local lore managers
+with all their specialized functionality accessible through this single orchestrator.
 """
 
 import logging
@@ -25,6 +26,23 @@ from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance, with_governance_permission
 
+# Import the specialized manager input/output models
+from lore.managers.education import (
+    EducationalSystem, KnowledgeTradition, TeachingContent,
+    KnowledgeExchangeResult, StreamingPhaseUpdate
+)
+from lore.managers.geopolitical import (
+    GeographicRegion, PoliticalEntity, BorderDispute, ConflictSimulation,
+    EconomicTradeSimulation, ClimateGeographyEffect, CovertOperation
+)
+from lore.managers.local_lore import (
+    LocationDataInput, MythCreationInput, HistoryCreationInput, LandmarkCreationInput,
+    UrbanMyth, LocalHistory, Landmark, NarrativeEvolution, MythTransmissionResult,
+    NarrativeConnection, ConsistencyCheckResult, TouristDevelopment, TraditionDynamics,
+    LegendVariant, LocationLoreResult, LoreEvolutionResult,
+    NarrativeStyle, EvolutionType, ConnectionType
+)
+
 logger = logging.getLogger(__name__)
 
 # Singleton instance storage
@@ -38,9 +56,9 @@ class OrchestratorConfig:
     enable_governance: bool = True
     enable_metrics: bool = True
     enable_validation: bool = True
-    enable_cache: bool = True  # NEW: Cache system enablement
+    enable_cache: bool = True
     cache_ttl: int = 3600
-    cache_max_size: int = 1000  # NEW: Cache size limit
+    cache_max_size: int = 1000
     max_parallel_operations: int = 10
     auto_initialize: bool = True
     resource_limits: Dict[str, Any] = None
@@ -51,7 +69,10 @@ class LoreOrchestrator:
     Master orchestrator that provides unified access to all lore functionality.
     Acts as the single entry point for external systems to interact with lore.
     
-    ENHANCED: Now includes direct access to core systems:
+    FULLY INTEGRATED with:
+    - Educational system management
+    - Geopolitical system management  
+    - Local lore and urban myth management
     - Canon system for canonical state management
     - Cache system for performance optimization
     - Registry system for manager coordination
@@ -91,12 +112,17 @@ class LoreOrchestrator:
         self._dynamic_generator = None
         self._setting_analyzer = None
         
-        # === NEW CORE SYSTEMS (LAZY LOADED) ===
-        self._canon_module = None  # CRITICAL: Must be lazy loaded
+        # Core systems
+        self._canon_module = None
         self._cache_system = None
         self._registry_system = None
         self._canon_validation = None
         self._canonical_context_class = None
+        
+        # Specialized managers (NEW - lazy loaded)
+        self._education_manager = None
+        self._geopolitical_manager = None
+        self._local_lore_manager = None
         
         # Integration components
         self._npc_integration = None
@@ -159,7 +185,7 @@ class LoreOrchestrator:
                 if self.config.enable_governance:
                     await self._initialize_governance()
                 
-                # Initialize cache if enabled (NEW)
+                # Initialize cache if enabled
                 if self.config.enable_cache:
                     await self._initialize_cache()
                 
@@ -196,7 +222,7 @@ class LoreOrchestrator:
         logger.info("Governance system initialized")
     
     async def _initialize_cache(self):
-        """Initialize cache system (NEW)."""
+        """Initialize cache system."""
         cache = await self._get_cache_system()
         self._component_init_status['cache'] = True
         logger.info("Cache system initialized")
@@ -243,7 +269,873 @@ class LoreOrchestrator:
         self._component_init_status['metrics'] = True
         logger.info("Metrics collection initialized")
     
-    # ===== CANON OPERATIONS (NEW SECTION) =====
+    # ===== EDUCATIONAL SYSTEM OPERATIONS (NEW SECTION) =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="educational_operation",
+        action_description="Performing educational system operation",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def add_educational_system(
+        self, ctx,
+        name: str,
+        system_type: str,
+        description: str,
+        target_demographics: List[str],
+        controlled_by: str,
+        core_teachings: List[str],
+        teaching_methods: List[str],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Add an educational system.
+        
+        Args:
+            name: Name of the educational system
+            system_type: Type of system
+            description: Description
+            target_demographics: Target demographics
+            controlled_by: Controlling faction
+            core_teachings: Core teachings
+            teaching_methods: Teaching methods
+            **kwargs: Additional parameters
+            
+        Returns:
+            Dictionary with system ID and status
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import add_educational_system as add_edu_system
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await add_edu_system(
+            run_ctx, name, system_type, description, target_demographics,
+            controlled_by, core_teachings, teaching_methods, **kwargs
+        )
+    
+    async def add_knowledge_tradition(
+        self, ctx,
+        name: str,
+        tradition_type: str,
+        description: str,
+        knowledge_domain: str,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Add a knowledge tradition.
+        
+        Args:
+            name: Name of the tradition
+            tradition_type: Type of tradition
+            description: Description
+            knowledge_domain: Domain of knowledge
+            **kwargs: Additional parameters
+            
+        Returns:
+            Dictionary with tradition ID and status
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import add_knowledge_tradition as add_tradition
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await add_tradition(
+            run_ctx, name, tradition_type, description, knowledge_domain, **kwargs
+        )
+    
+    async def add_teaching_content(
+        self, ctx,
+        system_id: int,
+        title: str,
+        content_type: str,
+        subject_area: str,
+        description: str,
+        target_age_group: str,
+        key_points: List[str],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Add teaching content to an educational system.
+        
+        Args:
+            system_id: ID of the educational system
+            title: Content title
+            content_type: Type of content
+            subject_area: Subject area
+            description: Description
+            target_age_group: Target age group
+            key_points: Key points
+            **kwargs: Additional parameters
+            
+        Returns:
+            Dictionary with content ID and status
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import add_teaching_content as add_content
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await add_content(
+            run_ctx, system_id, title, content_type, subject_area,
+            description, target_age_group, key_points, **kwargs
+        )
+    
+    async def generate_educational_systems(self, ctx=None) -> List[Dict[str, Any]]:
+        """
+        Generate educational systems.
+        
+        Returns:
+            List of generated educational systems
+        """
+        manager = await self._get_education_manager()
+        return await manager.generate_educational_systems(ctx)
+    
+    async def generate_knowledge_traditions(self, ctx=None) -> List[Dict[str, Any]]:
+        """
+        Generate knowledge traditions.
+        
+        Returns:
+            List of generated knowledge traditions
+        """
+        manager = await self._get_education_manager()
+        return await manager.generate_knowledge_traditions(ctx)
+    
+    async def stream_educational_development(
+        self, ctx,
+        system_name: str,
+        system_type: str,
+        matriarchy_level: int = 8
+    ) -> AsyncGenerator[StreamingPhaseUpdate, None]:
+        """
+        Stream the development of a complete educational system.
+        
+        Args:
+            system_name: Name of the system
+            system_type: Type of system
+            matriarchy_level: Level of matriarchy (1-10)
+            
+        Yields:
+            StreamingPhaseUpdate objects for each phase
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import stream_educational_development as stream_edu
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        async for update in stream_edu(run_ctx, system_name, system_type, matriarchy_level):
+            yield update
+    
+    async def exchange_knowledge_between_systems(
+        self, ctx,
+        source_system_id: int,
+        target_system_id: int,
+        knowledge_domain: str
+    ) -> Dict[str, Any]:
+        """
+        Facilitate knowledge exchange between two educational systems.
+        
+        Args:
+            source_system_id: Source system ID
+            target_system_id: Target system ID
+            knowledge_domain: Domain of knowledge to exchange
+            
+        Returns:
+            Dictionary with exchange results
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import exchange_knowledge_between_systems as exchange_knowledge
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await exchange_knowledge(run_ctx, source_system_id, target_system_id, knowledge_domain)
+    
+    async def search_educational_systems(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search educational systems by semantic similarity.
+        
+        Args:
+            query: Search query
+            limit: Maximum results
+            
+        Returns:
+            List of matching systems
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import search_educational_systems as search_edu
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await search_edu(run_ctx, query, limit)
+    
+    async def get_teaching_contents(
+        self,
+        system_id: int,
+        subject_area: Optional[str] = None,
+        include_restricted: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Get teaching contents for an educational system.
+        
+        Args:
+            system_id: System ID
+            subject_area: Optional subject area filter
+            include_restricted: Whether to include restricted content
+            
+        Returns:
+            List of teaching contents
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import get_teaching_contents
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await get_teaching_contents(run_ctx, system_id, subject_area, include_restricted)
+    
+    # ===== GEOPOLITICAL OPERATIONS (NEW SECTION) =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="geopolitical_operation",
+        action_description="Performing geopolitical operation",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def add_geographic_region(
+        self, ctx,
+        name: str,
+        region_type: str,
+        description: str,
+        **kwargs
+    ) -> int:
+        """
+        Add a geographic region.
+        
+        Args:
+            name: Region name
+            region_type: Type of region
+            description: Description
+            **kwargs: Additional parameters (climate, resources, governing_faction, etc.)
+            
+        Returns:
+            Region ID
+        """
+        manager = await self._get_geopolitical_manager()
+        from lore.managers.geopolitical import GeopoliticalSystemManager
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        # Call the static function tool which properly handles all the parameters
+        return await GeopoliticalSystemManager.add_geographic_region(
+            run_ctx, name, region_type, description, **kwargs
+        )
+    
+    async def generate_world_nations(self, count: int = 5) -> List[Dict[str, Any]]:
+        """
+        Generate world nations.
+        
+        Args:
+            count: Number of nations to generate
+            
+        Returns:
+            List of generated nations with all their properties
+        """
+        manager = await self._get_geopolitical_manager()
+        from lore.managers.geopolitical import GeopoliticalSystemManager
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        # Call the static function tool
+        return await GeopoliticalSystemManager.generate_world_nations(run_ctx, count)
+    
+    async def simulate_conflict(
+        self,
+        entity_ids: List[int],
+        conflict_type: str,
+        alliances: Optional[Dict[str, List[int]]] = None,
+        duration_months: int = 12
+    ) -> Dict[str, Any]:
+        """
+        Simulate conflict between entities (supports multi-party conflicts).
+        
+        Args:
+            entity_ids: List of entity IDs involved (minimum 2)
+            conflict_type: Type of conflict (war, trade_war, diplomatic, etc.)
+            alliances: Optional alliance structure {alliance_name: [member_ids]}
+            duration_months: Duration of conflict simulation in months
+            
+        Returns:
+            Comprehensive conflict simulation results including outcomes
+        """
+        manager = await self._get_geopolitical_manager()
+        from lore.managers.geopolitical import GeopoliticalSystemManager
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        # Call the static function tool
+        return await GeopoliticalSystemManager.simulate_conflict(
+            run_ctx, entity_ids, conflict_type, alliances, duration_months
+        )
+    
+    async def resolve_border_dispute(
+        self,
+        dispute_id: int,
+        resolution_approach: str
+    ) -> Dict[str, Any]:
+        """
+        Resolve a border dispute.
+        
+        Args:
+            dispute_id: ID of the dispute
+            resolution_approach: Approach to use (diplomatic, military, arbitration, etc.)
+            
+        Returns:
+            Resolution results with stability rating
+        """
+        manager = await self._get_geopolitical_manager()
+        from lore.managers.geopolitical import GeopoliticalSystemManager
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        # Call the static function tool
+        return await GeopoliticalSystemManager.resolve_border_dispute(
+            run_ctx, dispute_id, resolution_approach
+        )
+    
+    async def predict_geopolitical_evolution(
+        self,
+        entity_id: int,
+        years_forward: int = 5,
+        include_events: bool = True
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Predict geopolitical evolution of an entity.
+        
+        Args:
+            entity_id: Entity ID
+            years_forward: Years to predict forward
+            include_events: Whether to include events
+            
+        Yields:
+            Evolution updates as they are generated
+        """
+        manager = await self._get_geopolitical_manager()
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        # This is a generator function, so we need to properly yield from it
+        async for update in manager.predict_geopolitical_evolution(
+            run_ctx, entity_id, years_forward, include_events
+        ):
+            yield update
+    
+    async def simulate_trade(
+        self,
+        nation1: str,
+        nation2: str,
+        trade_goods: List[str],
+        trade_route: str
+    ) -> Dict[str, Any]:
+        """
+        Simulate economic trade between nations.
+        
+        Args:
+            nation1: First nation name
+            nation2: Second nation name
+            trade_goods: List of goods being traded
+            trade_route: Trade route description
+            
+        Returns:
+            Trade simulation results with economic impacts
+        """
+        manager = await self._get_geopolitical_manager()
+        from lore.managers.geopolitical import GeopoliticalSystemManager
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        # Call the static function tool
+        return await GeopoliticalSystemManager.simulate_trade(
+            run_ctx, nation1, nation2, trade_goods, trade_route
+        )
+    
+    async def simulate_geography_impact(
+        self,
+        region_name: str,
+        terrain_features: List[str],
+        climate_type: str
+    ) -> Dict[str, Any]:
+        """
+        Simulate geography impact on political development.
+        
+        Args:
+            region_name: Name of region
+            terrain_features: List of terrain features (mountains, rivers, etc.)
+            climate_type: Climate type (temperate, arid, tropical, etc.)
+            
+        Returns:
+            Impact simulation results with political stability effects
+        """
+        manager = await self._get_geopolitical_manager()
+        from lore.managers.geopolitical import GeopoliticalSystemManager
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        # Call the static function tool
+        return await GeopoliticalSystemManager.simulate_geography_impact(
+            run_ctx, region_name, terrain_features, climate_type
+        )
+    
+    async def simulate_espionage(
+        self,
+        agent_name: str,
+        target_nation: str,
+        operation_type: str,
+        secrecy_level: int
+    ) -> Dict[str, Any]:
+        """
+        Simulate covert operations between nations.
+        
+        Args:
+            agent_name: Name of the agent conducting the operation
+            target_nation: Target nation name
+            operation_type: Type of operation (intelligence_gathering, sabotage, etc.)
+            secrecy_level: Secrecy level (1-10, higher = more secret)
+            
+        Returns:
+            Espionage simulation results with mission outcome
+        """
+        manager = await self._get_geopolitical_manager()
+        from lore.managers.geopolitical import GeopoliticalSystemManager
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        # Call the static function tool
+        return await GeopoliticalSystemManager.simulate_espionage(
+            run_ctx, agent_name, target_nation, operation_type, secrecy_level
+        )
+    
+    # ===== LOCAL LORE OPERATIONS (NEW SECTION) =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="local_lore_operation",
+        action_description="Performing local lore operation",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def add_urban_myth(self, ctx, input: MythCreationInput) -> int:
+        """
+        Add an urban myth.
+        
+        Args:
+            input: MythCreationInput with myth details
+            
+        Returns:
+            Myth ID
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import add_urban_myth
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await add_urban_myth(run_ctx, input)
+    
+    async def add_local_history(self, ctx, input: HistoryCreationInput) -> int:
+        """
+        Add a local historical event.
+        
+        Args:
+            input: HistoryCreationInput with event details
+            
+        Returns:
+            History ID
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import add_local_history
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await add_local_history(run_ctx, input)
+    
+    async def add_landmark(self, ctx, input: LandmarkCreationInput) -> int:
+        """
+        Add a landmark.
+        
+        Args:
+            input: LandmarkCreationInput with landmark details
+            
+        Returns:
+            Landmark ID
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import add_landmark
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await add_landmark(run_ctx, input)
+    
+    async def evolve_myth(
+        self, ctx,
+        myth_id: int,
+        evolution_type: EvolutionType,
+        causal_factors: Optional[List[str]] = None
+    ) -> NarrativeEvolution:
+        """
+        Evolve an urban myth.
+        
+        Args:
+            myth_id: ID of the myth
+            evolution_type: Type of evolution
+            causal_factors: Causal factors
+            
+        Returns:
+            NarrativeEvolution results
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import evolve_myth
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await evolve_myth(run_ctx, myth_id, evolution_type, causal_factors)
+    
+    async def connect_myth_history(self, ctx, myth_id: int, history_id: int) -> NarrativeConnection:
+        """
+        Connect a myth to a historical event.
+        
+        Args:
+            myth_id: Myth ID
+            history_id: History ID
+            
+        Returns:
+            NarrativeConnection
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import connect_myth_history
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await connect_myth_history(run_ctx, myth_id, history_id)
+    
+    async def connect_history_landmark(self, ctx, history_id: int, landmark_id: int) -> NarrativeConnection:
+        """
+        Connect a historical event to a landmark.
+        
+        Args:
+            history_id: History ID
+            landmark_id: Landmark ID
+            
+        Returns:
+            NarrativeConnection
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import connect_history_landmark
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await connect_history_landmark(run_ctx, history_id, landmark_id)
+    
+    async def ensure_narrative_consistency(
+        self, ctx,
+        location_id: int,
+        auto_fix: bool = True
+    ) -> ConsistencyCheckResult:
+        """
+        Ensure narrative consistency for a location.
+        
+        Args:
+            location_id: Location ID
+            auto_fix: Whether to auto-fix issues
+            
+        Returns:
+            ConsistencyCheckResult
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import ensure_narrative_consistency
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await ensure_narrative_consistency(run_ctx, location_id, auto_fix)
+    
+    async def get_location_lore(self, ctx, location_id: int) -> LocationLoreResult:
+        """
+        Get all lore for a location.
+        
+        Args:
+            location_id: Location ID
+            
+        Returns:
+            LocationLoreResult
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import get_location_lore
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await get_location_lore(run_ctx, location_id)
+    
+    async def generate_location_lore(self, ctx, location_data: LocationDataInput) -> Dict[str, Any]:
+        """
+        Generate comprehensive lore for a location.
+        
+        Args:
+            location_data: LocationDataInput
+            
+        Returns:
+            Generation statistics
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import generate_location_lore
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await generate_location_lore(run_ctx, location_data)
+    
+    async def evolve_location_lore(
+        self, ctx,
+        location_id: int,
+        event_description: str
+    ) -> LoreEvolutionResult:
+        """
+        Evolve location lore based on an event.
+        
+        Args:
+            location_id: Location ID
+            event_description: Event description
+            
+        Returns:
+            LoreEvolutionResult
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import evolve_location_lore
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await evolve_location_lore(run_ctx, location_id, event_description)
+    
+    async def generate_legend_variants(
+        self, ctx,
+        myth_id: int,
+        variant_count: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Generate contradictory legend variants.
+        
+        Args:
+            myth_id: Myth ID
+            variant_count: Number of variants
+            
+        Returns:
+            Generated variants
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import generate_legend_variants
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await generate_legend_variants(run_ctx, myth_id, variant_count)
+    
+    async def develop_tourist_attraction(self, ctx, myth_id: int) -> TouristDevelopment:
+        """
+        Develop a tourist attraction from a myth.
+        
+        Args:
+            myth_id: Myth ID
+            
+        Returns:
+            TouristDevelopment plan
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import develop_tourist_attraction
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await develop_tourist_attraction(run_ctx, myth_id)
+    
+    async def simulate_tradition_dynamics(self, ctx, myth_id: int) -> TraditionDynamics:
+        """
+        Simulate oral vs written tradition dynamics.
+        
+        Args:
+            myth_id: Myth ID
+            
+        Returns:
+            TraditionDynamics
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import simulate_tradition_dynamics
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await simulate_tradition_dynamics(run_ctx, myth_id)
+    
+    async def simulate_myth_transmission(
+        self, ctx,
+        myth_id: int,
+        target_regions: List[str],
+        transmission_steps: int = 3
+    ) -> MythTransmissionResult:
+        """
+        Simulate myth transmission across regions.
+        
+        Args:
+            myth_id: Myth ID
+            target_regions: Target regions
+            transmission_steps: Number of steps
+            
+        Returns:
+            MythTransmissionResult
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import simulate_myth_transmission
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await simulate_myth_transmission(run_ctx, myth_id, target_regions, transmission_steps)
+    
+    # ===== CANON OPERATIONS =====
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -376,7 +1268,7 @@ class LoreOrchestrator:
         ctx = self._create_canonical_context()
         return await lore_system.propose_and_enact_change(ctx, entity_type, entity_identifier, updates, reason)
     
-    # ===== CACHE OPERATIONS (NEW SECTION) =====
+    # ===== CACHE OPERATIONS =====
     
     async def cache_get(self, namespace: str, key: str, user_id: Optional[int] = None, 
                        conversation_id: Optional[int] = None) -> Any:
@@ -480,7 +1372,7 @@ class LoreOrchestrator:
         cache = await self._get_cache_system()
         return await cache.optimize_cache()
     
-    # ===== REGISTRY OPERATIONS (NEW SECTION) =====
+    # ===== REGISTRY OPERATIONS =====
     
     async def get_manager(self, manager_key: str) -> Any:
         """
@@ -545,7 +1437,7 @@ class LoreOrchestrator:
         result = await registry.execute_cross_manager_handoff(handoff_params)
         return result.dict()
     
-    # ===== VALIDATION OPERATIONS (NEW SECTION) =====
+    # ===== VALIDATION OPERATIONS =====
     
     async def validate_canon_duplicate(self, entity_type: str, proposal: Dict[str, Any], 
                                       existing_id: int) -> bool:
@@ -570,7 +1462,7 @@ class LoreOrchestrator:
                 logger.warning(f"No specific duplicate validator for entity type: {entity_type}")
                 return False
     
-    # ===== CONTEXT OPERATIONS (NEW SECTION) =====
+    # ===== CONTEXT OPERATIONS =====
     
     def create_canonical_context(self, **kwargs) -> Any:
         """
@@ -1725,6 +2617,21 @@ class LoreOrchestrator:
             # Cache doesn't have explicit cleanup but we can clear it
             await self._cache_system.clear_namespace("*")
         
+        # Cleanup specialized managers (IMPORTANT: Handle all three)
+        for manager in [self._education_manager, self._geopolitical_manager, self._local_lore_manager]:
+            if manager:
+                if hasattr(manager, 'cleanup'):
+                    await manager.cleanup()
+                elif hasattr(manager, 'close'):
+                    await manager.close()
+                # Also clear any agent tasks if they exist
+                if hasattr(manager, 'maintenance_task') and manager.maintenance_task:
+                    manager.maintenance_task.cancel()
+                    try:
+                        await manager.maintenance_task
+                    except asyncio.CancelledError:
+                        pass
+        
         # Cleanup components
         for component in [
             self._lore_system,
@@ -1825,6 +2732,54 @@ class LoreOrchestrator:
             self._canonical_context_class = CanonicalContext
             logger.info("CanonicalContext class loaded")
         return self._canonical_context_class
+    
+    async def _get_education_manager(self):
+        """Get or initialize the education manager."""
+        if not self._education_manager:
+            from lore.managers.education import EducationalSystemManager
+            self._education_manager = EducationalSystemManager(self.user_id, self.conversation_id)
+            await self._education_manager.ensure_initialized()
+            if self._governor:
+                self._education_manager.set_governor(self._governor)
+                await self._education_manager.register_with_governance(
+                    AgentType.NARRATIVE_CRAFTER,
+                    "education_manager",
+                    "Manages educational systems and knowledge traditions",
+                    "education",
+                    DirectivePriority.MEDIUM
+                )
+            logger.info("Education manager initialized")
+        return self._education_manager
+    
+    async def _get_geopolitical_manager(self):
+        """Get or initialize the geopolitical manager."""
+        if not self._geopolitical_manager:
+            from lore.managers.geopolitical import GeopoliticalSystemManager
+            self._geopolitical_manager = GeopoliticalSystemManager(self.user_id, self.conversation_id)
+            await self._geopolitical_manager.ensure_initialized()
+            if self._governor:
+                self._geopolitical_manager.set_governor(self._governor)
+                await self._geopolitical_manager.register_with_governance(
+                    AgentType.NARRATIVE_CRAFTER,
+                    "geopolitical_manager",
+                    "Manages geopolitical systems and conflicts",
+                    "geopolitics",
+                    DirectivePriority.MEDIUM
+                )
+            logger.info("Geopolitical manager initialized")
+        return self._geopolitical_manager
+    
+    async def _get_local_lore_manager(self):
+        """Get or initialize the local lore manager."""
+        if not self._local_lore_manager:
+            from lore.managers.local_lore import LocalLoreManager
+            self._local_lore_manager = LocalLoreManager(self.user_id, self.conversation_id)
+            await self._local_lore_manager.ensure_initialized()
+            if self._governor:
+                self._local_lore_manager.set_governor(self._governor)
+                await self._local_lore_manager.register_with_governance()
+            logger.info("Local lore manager initialized")
+        return self._local_lore_manager
     
     async def _get_lore_system(self):
         """Get or initialize the core lore system."""
@@ -2086,7 +3041,7 @@ async def evolve_world(user_id: int, conversation_id: int, event_description: st
 def setup_lore_orchestrator():
     """Setup function for module initialization."""
     logging.basicConfig(level=logging.INFO)
-    logger.info("Enhanced Lore Orchestrator module loaded with core integrations")
+    logger.info("FULLY INTEGRATED Lore Orchestrator loaded with all specialized managers")
 
 
 # Run setup on module import
