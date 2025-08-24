@@ -1,5 +1,5 @@
 # nyx/nyx_agent/context.py
-"""NyxContext and state management for Nyx Agent SDK with full NPC, Memory, World Director and Narrator integration"""
+"""NyxContext and state management for Nyx Agent SDK with full NPC, Memory, World Director, Narrator and Lore integration"""
 
 import json
 import time
@@ -35,6 +35,13 @@ from logic.conflict_system.conflict_synthesizer import (
     SubsystemType,
     EventType,
     SystemEvent
+)
+
+# Import Lore Orchestrator
+from lore.lore_orchestrator import (
+    LoreOrchestrator,
+    OrchestratorConfig,
+    get_lore_orchestrator
 )
 
 from .config import Config
@@ -83,6 +90,7 @@ class NyxContext:
     # ────────── ORCHESTRATOR INTEGRATION ──────────
     npc_orchestrator:   Optional[NPCOrchestrator]   = None
     conflict_synthesizer: Optional[ConflictSynthesizer] = None
+    lore_orchestrator:  Optional[LoreOrchestrator]  = None  # NEW: Lore Orchestrator
     
     # Legacy memory compatibility (will use orchestrator internally)
     memory_system:      Optional[Any]               = None  # Legacy interface
@@ -122,12 +130,27 @@ class NyxContext:
     scene_conflicts:     List[int]                   = field(default_factory=list)  # Conflicts in current scene
     conflict_subsystems: Set[str]                    = field(default_factory=set)   # Active subsystems
     conflict_manifestations: List[str]               = field(default_factory=list)  # From narrator
-
+    
+    # ────────── LORE-SPECIFIC STATE (NEW) ──────────
+    world_lore:          Dict[str, Any]              = field(default_factory=dict)  # Current world lore
+    active_religions:    Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # pantheon_id -> religion data
+    active_nations:      Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # nation_id -> nation data
+    educational_systems: Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # system_id -> education data
+    local_myths:         Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # myth_id -> myth data
+    current_location_lore: Dict[str, Any]            = field(default_factory=dict)  # Lore for current location
+    geopolitical_state:  Dict[str, Any]              = field(default_factory=dict)  # Current geopolitical situation
+    cultural_context:    Dict[str, Any]              = field(default_factory=dict)  # Cultural context
+    lore_events:         List[Dict[str, Any]]        = field(default_factory=list)  # Recent lore events
+    lore_consistency:    Dict[str, Any]              = field(default_factory=dict)  # Consistency status
+    faction_relationships: Dict[str, Any]            = field(default_factory=dict)  # Faction relationship matrix
+    active_political_conflicts: List[Dict[str, Any]] = field(default_factory=list)  # Active political conflicts
+    
     # ────────── WORLD DIRECTOR & NARRATOR SYNC STATE ──────────
     world_state_cache:   Optional[Dict[str, Any]]    = None
     narrative_cache:     Optional[Dict[str, Any]]    = None
     last_world_sync:     float                       = 0.0
     last_narrative_sync: float                       = 0.0
+    last_lore_sync:      float                       = 0.0  # NEW: Track lore sync timing
     sync_interval:       float                       = 30.0  # Sync every 30 seconds
     
     # World-specific extracted data
@@ -230,6 +253,18 @@ class NyxContext:
         "conflict_health_checks": 0,
         "subsystem_events_processed": 0,
         
+        # Lore system metrics (NEW)
+        "lore_queries": 0,
+        "lore_updates": 0,
+        "world_evolutions": 0,
+        "cultural_diffusions": 0,
+        "political_simulations": 0,
+        "religious_events": 0,
+        "myth_transmissions": 0,
+        "geopolitical_conflicts": 0,
+        "educational_exchanges": 0,
+        "lore_consistency_checks": 0,
+        
         # World/Story metrics
         "world_state_updates": 0,
         "emergent_events_generated": 0,
@@ -237,6 +272,7 @@ class NyxContext:
         "narrative_beats_processed": 0,
         "world_director_syncs": 0,
         "narrator_syncs": 0,
+        "lore_syncs": 0,  # NEW
         
         # System health metrics
         "cache_hits": 0,
@@ -277,6 +313,9 @@ class NyxContext:
     enable_npc_canon: bool = True  # Enable canon integration for NPCs
     enable_world_sync: bool = True  # Enable world director sync
     enable_narrator_sync: bool = True  # Enable narrator sync
+    enable_lore_sync: bool = True  # Enable lore orchestrator sync (NEW)
+    enable_matriarchal_theme: bool = True  # Enable matriarchal theme in lore (NEW)
+    lore_cache_enabled: bool = True  # Enable lore caching (NEW)
 
     # ────────── TASK SCHEDULING ──────────
     last_task_runs: Dict[str, datetime] = field(default_factory=dict)
@@ -300,6 +339,10 @@ class NyxContext:
         "conflict_resolution_check": 600,  # Check for resolution opportunities every 10 minutes
         "world_director_sync": 30,     # Sync world state every 30 seconds
         "narrator_sync": 30,           # Sync narrative context every 30 seconds
+        "lore_sync": 60,               # Sync lore data every minute (NEW)
+        "lore_evolution": 1800,        # Check for lore evolution every 30 minutes (NEW)
+        "cultural_update": 3600,       # Update cultural context every hour (NEW)
+        "geopolitical_check": 900,     # Check geopolitical state every 15 minutes (NEW)
         "game_time_sync": 60,          # Sync game time every minute
         "inventory_sync": 300,         # Sync inventory every 5 minutes
         "player_stats_sync": 120,      # Sync player stats every 2 minutes
@@ -318,7 +361,7 @@ class NyxContext:
     _cpu_usage_update_interval:  float = field(init=False, default=10.0)
     
     async def initialize(self):
-        """Initialize all systems including NPC, Memory, World Director and Narrator orchestrators"""
+        """Initialize all systems including NPC, Memory, World Director, Narrator and Lore orchestrators"""
         # Initialize Memory Orchestrator first (other systems may depend on it)
         try:
             self.memory_orchestrator = await get_memory_orchestrator(
@@ -333,6 +376,32 @@ class NyxContext:
             logger.error(f"Failed to initialize Memory Orchestrator: {e}", exc_info=True)
             self.memory_orchestrator = None
             self.memory_system = None
+        
+        # Initialize Lore Orchestrator (NEW)
+        try:
+            # Create config for lore orchestrator
+            lore_config = OrchestratorConfig(
+                enable_matriarchal_theme=self.enable_matriarchal_theme,
+                enable_governance=True,
+                enable_metrics=True,
+                enable_validation=True,
+                enable_cache=self.lore_cache_enabled,
+                auto_initialize=True
+            )
+            
+            self.lore_orchestrator = await get_lore_orchestrator(
+                self.user_id,
+                self.conversation_id,
+                lore_config
+            )
+            
+            # Do initial lore sync
+            await self.sync_lore_data(force=True)
+            
+            logger.info(f"Lore Orchestrator initialized for user {self.user_id}, conversation {self.conversation_id}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Lore Orchestrator: {e}", exc_info=True)
+            self.lore_orchestrator = None
         
         # Initialize other core systems
         self.user_model = await UserModelManager.get_instance(self.user_id, self.conversation_id)
@@ -516,7 +585,293 @@ class NyxContext:
         await self.sync_addiction_status(force=True)
         await self.sync_activity_data(force=True)
     
-    # ────────── WORLD DIRECTOR & NARRATOR SYNCHRONIZATION ──────────
+    # ────────── LORE SYNCHRONIZATION (NEW) ──────────
+    
+    async def sync_lore_data(self, force: bool = False):
+        """Pull latest lore data from Lore Orchestrator into context"""
+        if not self.enable_lore_sync:
+            return
+            
+        current_time = time.time()
+        
+        # Check if we need to sync
+        if not force and not self.should_run_task("lore_sync"):
+            return
+        
+        if not self.lore_orchestrator:
+            logger.warning("Lore orchestrator not initialized for sync")
+            return
+            
+        try:
+            # Get world lore for current world
+            world_id = self.current_context.get("world_id", 1)  # Default to world 1
+            self.world_lore = await self.lore_orchestrator.get_world_lore(world_id)
+            
+            # Get nations
+            nations = await self.lore_orchestrator.get_all_nations(
+                self.lore_orchestrator.create_run_context()
+            )
+            for nation in nations:
+                self.active_nations[nation['id']] = nation
+            
+            # Get religions/pantheons
+            pantheons = await self.lore_orchestrator.get_all_pantheons()
+            for pantheon in pantheons:
+                self.active_religions[pantheon['id']] = pantheon
+            
+            # Get location-specific lore if we have a location
+            if self.current_location:
+                # Try to get location ID from context or search for it
+                location_id = self.current_context.get('location_id')
+                if location_id:
+                    location_lore = await self.lore_orchestrator.get_location_lore(
+                        self.lore_orchestrator.create_run_context(),
+                        location_id
+                    )
+                    self.current_location_lore = location_lore
+                    
+                    # Update context with rich location lore
+                    self.current_context['location_myths'] = location_lore.get('myths', [])
+                    self.current_context['location_history'] = location_lore.get('history', [])
+                    self.current_context['location_landmarks'] = location_lore.get('landmarks', [])
+            
+            # Get active political conflicts
+            political_conflicts = await self.lore_orchestrator.get_active_conflicts(
+                self.lore_orchestrator.create_run_context()
+            )
+            self.active_political_conflicts = political_conflicts
+            
+            # Get geopolitical state
+            if nations:
+                # Get tensions between major nations
+                geopolitical = {
+                    'nations': len(nations),
+                    'major_powers': [n for n in nations if n.get('relative_power', 0) > 7],
+                    'conflicts': political_conflicts
+                }
+                self.geopolitical_state = geopolitical
+            
+            # Get cultural context for player's current nation
+            if self.current_context.get('nation_id'):
+                cultural_context = await self.lore_orchestrator.get_cultural_context(
+                    self.current_context['nation_id']
+                )
+                self.cultural_context = cultural_context
+            
+            # Get faction relationships
+            faction_data = {}
+            for faction_id in self.current_context.get('active_factions', []):
+                faction_religion = await self.lore_orchestrator.get_faction_religion(faction_id)
+                if faction_religion:
+                    faction_data[faction_id] = faction_religion
+            self.faction_relationships = faction_data
+            
+            # Update metrics
+            self.performance_metrics["lore_syncs"] += 1
+            self.performance_metrics["lore_queries"] += 1
+            
+            # Record task run
+            self.record_task_run("lore_sync")
+            self.last_lore_sync = current_time
+            
+            logger.debug(f"Synced lore data for conversation {self.conversation_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to sync lore data: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_lore"})
+    
+    async def evolve_world_lore(self, event_description: str):
+        """Evolve the world lore based on an event"""
+        if not self.lore_orchestrator:
+            return {"error": "Lore orchestrator not initialized"}
+        
+        try:
+            ctx = self.lore_orchestrator.create_run_context()
+            result = await self.lore_orchestrator.evolve_world_with_event(
+                ctx,
+                event_description,
+                self.current_context.get('location_id')
+            )
+            
+            # Update metrics
+            self.performance_metrics["world_evolutions"] += 1
+            
+            # Log as lore event
+            self.lore_events.append({
+                'type': 'world_evolution',
+                'description': event_description,
+                'result': result,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            # Keep events bounded
+            if len(self.lore_events) > 50:
+                self.lore_events = self.lore_events[-50:]
+            
+            # Force sync to get updated state
+            await self.sync_lore_data(force=True)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to evolve world lore: {e}", exc_info=True)
+            self.log_error(e, {"event": event_description})
+            return {"error": str(e)}
+    
+    async def check_lore_evolution(self):
+        """Check if lore should evolve based on time/events"""
+        if not self.lore_orchestrator:
+            return
+        
+        if not self.should_run_task("lore_evolution"):
+            return
+        
+        try:
+            # Check if enough events have happened to trigger evolution
+            recent_events_count = len([e for e in self.lore_events 
+                                      if time.time() - e.get('timestamp', 0) < 3600])
+            
+            if recent_events_count > 5:
+                # Generate emergent lore event
+                ctx = self.lore_orchestrator.create_run_context()
+                emergent = await self.lore_orchestrator.generate_emergent_event(ctx)
+                
+                if emergent:
+                    self.lore_events.append({
+                        'type': 'emergent_lore',
+                        'event': emergent,
+                        'timestamp': time.time()
+                    })
+                    
+                    # Apply the emergent event
+                    await self.evolve_world_lore(emergent.get('description', ''))
+            
+            # Mature lore over time
+            days_passed = self.current_context.get('days_since_last_evolution', 7)
+            if days_passed > 0:
+                maturation = await self.lore_orchestrator.mature_lore_over_time(days_passed)
+                if maturation:
+                    self.lore_events.append({
+                        'type': 'lore_maturation',
+                        'changes': maturation,
+                        'timestamp': time.time()
+                    })
+            
+            self.record_task_run("lore_evolution")
+            
+        except Exception as e:
+            logger.error(f"Failed to check lore evolution: {e}", exc_info=True)
+            self.log_error(e, {})
+    
+    async def update_cultural_context(self):
+        """Update cultural context based on current situation"""
+        if not self.lore_orchestrator:
+            return
+        
+        if not self.should_run_task("cultural_update"):
+            return
+        
+        try:
+            # Get cultural context for all active nations
+            for nation_id in list(self.active_nations.keys())[:5]:  # Limit to 5 for performance
+                culture = await self.lore_orchestrator.get_nation_culture(nation_id)
+                if culture:
+                    self.active_nations[nation_id]['culture'] = culture
+            
+            # Check for cultural diffusion between interacting nations
+            if len(self.active_nations) >= 2:
+                nation_ids = list(self.active_nations.keys())[:2]
+                ctx = self.lore_orchestrator.create_run_context()
+                diffusion = await self.lore_orchestrator.simulate_cultural_diffusion(
+                    ctx,
+                    nation_ids[0],
+                    nation_ids[1],
+                    years=1
+                )
+                
+                if diffusion:
+                    self.lore_events.append({
+                        'type': 'cultural_diffusion',
+                        'nations': nation_ids,
+                        'result': diffusion,
+                        'timestamp': time.time()
+                    })
+                    
+                    self.performance_metrics["cultural_diffusions"] += 1
+            
+            self.record_task_run("cultural_update")
+            
+        except Exception as e:
+            logger.error(f"Failed to update cultural context: {e}", exc_info=True)
+            self.log_error(e, {})
+    
+    async def check_geopolitical_state(self):
+        """Check and update geopolitical state"""
+        if not self.lore_orchestrator:
+            return
+        
+        if not self.should_run_task("geopolitical_check"):
+            return
+        
+        try:
+            # Check for new political conflicts
+            ctx = self.lore_orchestrator.create_run_context()
+            new_conflicts = await self.lore_orchestrator.generate_initial_conflicts(ctx, count=1)
+            
+            if new_conflicts:
+                self.active_political_conflicts.extend(new_conflicts)
+                self.performance_metrics["geopolitical_conflicts"] += len(new_conflicts)
+                
+                # Log as event
+                for conflict in new_conflicts:
+                    self.lore_events.append({
+                        'type': 'political_conflict',
+                        'conflict': conflict,
+                        'timestamp': time.time()
+                    })
+            
+            # Evolve existing conflicts
+            if self.active_political_conflicts:
+                evolution = await self.lore_orchestrator.evolve_all_conflicts(ctx, days_passed=1)
+                if evolution:
+                    self.performance_metrics["political_simulations"] += 1
+            
+            self.record_task_run("geopolitical_check")
+            
+        except Exception as e:
+            logger.error(f"Failed to check geopolitical state: {e}", exc_info=True)
+            self.log_error(e, {})
+    
+    def get_lore_context_for_response(self) -> Dict[str, Any]:
+        """Get lore context formatted for response generation"""
+        context = {
+            "world_lore": self.world_lore.get('summary', '') if self.world_lore else '',
+            "location_lore": self.current_location_lore,
+            "active_religions": [r.get('name', 'Unknown') for r in self.active_religions.values()],
+            "active_nations": [n.get('name', 'Unknown') for n in self.active_nations.values()],
+            "cultural_context": self.cultural_context,
+            "geopolitical_tensions": self.geopolitical_state.get('conflicts', []),
+            "local_myths": list(self.local_myths.values())[:3] if self.local_myths else [],
+            "recent_lore_events": self.lore_events[-5:] if self.lore_events else [],
+            "faction_beliefs": self.faction_relationships
+        }
+        
+        # Add specific lore for NPCs if present
+        if self.current_scene_npcs and self.lore_orchestrator:
+            npc_cultural_backgrounds = {}
+            for npc_id in self.current_scene_npcs[:3]:  # Limit for performance
+                if npc_id in self.npc_snapshots:
+                    snapshot = self.npc_snapshots[npc_id]
+                    # Get cultural background from snapshot
+                    cultural = snapshot.get('cultural_background') if isinstance(snapshot, dict) else None
+                    if cultural:
+                        npc_cultural_backgrounds[npc_id] = cultural
+            
+            context["npc_cultures"] = npc_cultural_backgrounds
+        
+        return context
+    
+    # ────────── WORLD DIRECTOR & NARRATOR SYNCHRONIZATION (preserved) ──────────
     
     async def sync_world_director_data(self, force: bool = False):
         """Pull latest data from world director into context"""
@@ -572,6 +927,8 @@ class NyxContext:
                     location = world_state.location_data
                     if isinstance(location, dict):
                         self.current_location = location.get('current_location', 'unknown')
+                        # Try to extract location ID for lore
+                        self.current_context['location_id'] = location.get('location_id')
                     elif isinstance(location, str):
                         self.current_location = location
                     else:
@@ -597,7 +954,8 @@ class NyxContext:
                                 'relationship': npc.get('relationship', {}),
                                 'location': npc.get('current_location', self.current_location),
                                 'pending_revelation': npc.get('pending_revelation'),
-                                'canonical_id': npc.get('canonical_id', npc_id)
+                                'canonical_id': npc.get('canonical_id', npc_id),
+                                'cultural_background': npc.get('cultural_background')  # NEW: Add for lore
                             }
                 
                 # Extract relationship dynamics
@@ -794,6 +1152,9 @@ class NyxContext:
         # Sync narrator
         await self.sync_narrator_data(force=True)
         
+        # Sync lore (NEW)
+        await self.sync_lore_data(force=True)
+        
         # Update NPC context
         await self._load_npc_context()
         
@@ -818,8 +1179,122 @@ class NyxContext:
 
         # Check for narrative moments
         await self.check_narrative_moments()
+        
+        # Check for lore evolution (NEW)
+        await self.check_lore_evolution()
+        
+        # Update cultural context (NEW)
+        await self.update_cultural_context()
+        
+        # Check geopolitical state (NEW)
+        await self.check_geopolitical_state()
 
         logger.info(f"Context refresh complete: {reason}")
+    
+    def get_comprehensive_context_for_response(self) -> Dict[str, Any]:
+        """Get comprehensive context for response generation combining all systems"""
+        context = {
+            # Basic context
+            "user_input": self.current_context.get("user_input", ""),
+            "location": self.current_location,
+            "time_of_day": self.time_of_day,
+            "world_mood": self.world_mood,
+
+            # Game Time
+            "game_time": self.game_time,
+            "game_time_string": self.current_context.get("game_time_string", ""),
+
+            # Player Resources & Stats
+            "player_vitals": self.player_vitals,
+            "emotional_state": self.emotional_state,
+            "resources": self.resource_state,
+            "player_stats": self.player_stats,
+            "inventory_count": len(self.player_inventory),
+            "inventory_preview": [item["item_name"] for item in self.player_inventory[:5]],
+            "hidden_stats": self.current_context.get("hidden_stats", {}),
+            "visible_stats": self.current_context.get("visible_stats", {}),
+            "stat_combinations": self.current_context.get("stat_combinations", []),
+
+            # World tensions
+            "tensions": self.world_tensions,
+
+            # NPCs
+            "npcs_present": list(self.current_scene_npcs),
+            "npc_states": {
+                npc_id: self.npc_snapshots.get(npc_id, {})
+                for npc_id in self.current_scene_npcs
+            },
+            "npc_narrative_context": self.npc_narrative_context,
+            "npc_narrative_stages": self.narrative_stage_info,
+
+            # Relationships
+            "relationship_states": self.relationship_states,
+            "relationship_overview": self.current_context.get("relationship_overview", {}),
+
+            # Conflicts
+            "active_conflicts": list(self.active_conflicts.values()),
+            "scene_conflicts": self.scene_conflicts,
+            "conflict_choices": self.conflict_choices,
+            "conflict_manifestations": self.conflict_manifestations,
+
+            # Lore (NEW)
+            "lore": self.get_lore_context_for_response(),
+            "world_lore_summary": self.world_lore.get('summary', ''),
+            "cultural_context": self.cultural_context,
+            "geopolitical_state": self.geopolitical_state,
+            "location_lore": self.current_location_lore,
+            
+            # Activities
+            "current_activity": self.current_activity,
+            "recent_activities": self.recent_activities[-3:],
+            "available_game_activities": self.current_context.get("available_game_activities", []),
+
+            # Addictions
+            "addictions": self.active_addictions,
+            "player_addictions": self.player_addictions,
+            "active_cravings": self.current_context.get("active_cravings", []),
+
+            # Calendar
+            "todays_events": self.current_context.get("todays_events", []),
+            "upcoming_events": self.calendar_events[:5],
+
+            # Narrative
+            "recent_narrations": self.recent_narrations[-3:],
+            "scene_atmosphere": self.scene_atmosphere,
+            "emergent_narrative": self.emergent_narratives[-1] if self.emergent_narratives else None,
+            "system_intersections": self.system_intersections,
+            "power_dynamic_hints": self.power_dynamic_hints,
+            "narrative_moment": self.current_context.get("narrative_moment"),
+            "personal_revelation": self.current_context.get("personal_revelation"),
+
+            # Memories
+            "recent_memories": {
+                key: memories[:5]
+                for key, memories in self.recent_memories.items()
+            },
+            "memory_predictions": self.memory_predictions,
+
+            # Events & Currency
+            "ongoing_events": self.current_context.get("ongoing_events", []),
+            "pending_reveals": self.current_context.get("pending_reveals", []),
+            "currency_system": self.currency_info,
+            "active_game_events": len(self.event_system.active_events) if self.event_system else 0,
+
+            # Performance hints
+            "response_time_target": Config.MAX_RESPONSE_TIME if hasattr(Config, 'MAX_RESPONSE_TIME') else 5.0,
+            "sync_status": {
+                "world_synced": time.time() - self.last_world_sync < self.sync_interval,
+                "narrator_synced": time.time() - self.last_narrative_sync < self.sync_interval,
+                "lore_synced": time.time() - self.last_lore_sync < self.sync_interval * 2  # Lore syncs less frequently
+            }
+        }
+
+        return context
+    
+    # ────────── PRESERVE ALL EXISTING METHODS ──────────
+    # Note: All existing methods from the original file are preserved below
+    # including _load_npc_context, update_conflict_context, process_npc_interaction, etc.
+    # The complete original functionality is maintained with lore enhancements added
     
     def _update_emotional_from_mood(self, mood: str):
         """Update emotional state based on world mood"""
@@ -1167,97 +1642,6 @@ class NyxContext:
         self.emotional_state["arousal"] = 0.5 + (dependency * 0.3)
         self.emotional_state["dominance"] = willpower * 0.8
 
-    def get_comprehensive_context_for_response(self) -> Dict[str, Any]:
-        """Get comprehensive context for response generation combining all systems"""
-        context = {
-            # Basic context
-            "user_input": self.current_context.get("user_input", ""),
-            "location": self.current_location,
-            "time_of_day": self.time_of_day,
-            "world_mood": self.world_mood,
-
-            # Game Time
-            "game_time": self.game_time,
-            "game_time_string": self.current_context.get("game_time_string", ""),
-
-            # Player Resources & Stats
-            "player_vitals": self.player_vitals,
-            "emotional_state": self.emotional_state,
-            "resources": self.resource_state,
-            "player_stats": self.player_stats,
-            "inventory_count": len(self.player_inventory),
-            "inventory_preview": [item["item_name"] for item in self.player_inventory[:5]],
-            "hidden_stats": self.current_context.get("hidden_stats", {}),
-            "visible_stats": self.current_context.get("visible_stats", {}),
-            "stat_combinations": self.current_context.get("stat_combinations", []),
-
-            # World tensions
-            "tensions": self.world_tensions,
-
-            # NPCs
-            "npcs_present": list(self.current_scene_npcs),
-            "npc_states": {
-                npc_id: self.npc_snapshots.get(npc_id, {})
-                for npc_id in self.current_scene_npcs
-            },
-            "npc_narrative_context": self.npc_narrative_context,
-            "npc_narrative_stages": self.narrative_stage_info,
-
-            # Relationships
-            "relationship_states": self.relationship_states,
-            "relationship_overview": self.current_context.get("relationship_overview", {}),
-
-            # Conflicts
-            "active_conflicts": list(self.active_conflicts.values()),
-            "scene_conflicts": self.scene_conflicts,
-            "conflict_choices": self.conflict_choices,
-            "conflict_manifestations": self.conflict_manifestations,
-
-            # Activities
-            "current_activity": self.current_activity,
-            "recent_activities": self.recent_activities[-3:],
-            "available_game_activities": self.current_context.get("available_game_activities", []),
-
-            # Addictions
-            "addictions": self.active_addictions,
-            "player_addictions": self.player_addictions,
-            "active_cravings": self.current_context.get("active_cravings", []),
-
-            # Calendar
-            "todays_events": self.current_context.get("todays_events", []),
-            "upcoming_events": self.calendar_events[:5],
-
-            # Narrative
-            "recent_narrations": self.recent_narrations[-3:],
-            "scene_atmosphere": self.scene_atmosphere,
-            "emergent_narrative": self.emergent_narratives[-1] if self.emergent_narratives else None,
-            "system_intersections": self.system_intersections,
-            "power_dynamic_hints": self.power_dynamic_hints,
-            "narrative_moment": self.current_context.get("narrative_moment"),
-            "personal_revelation": self.current_context.get("personal_revelation"),
-
-            # Memories
-            "recent_memories": {
-                key: memories[:5]
-                for key, memories in self.recent_memories.items()
-            },
-            "memory_predictions": self.memory_predictions,
-
-            # Events & Currency
-            "ongoing_events": self.current_context.get("ongoing_events", []),
-            "pending_reveals": self.current_context.get("pending_reveals", []),
-            "currency_system": self.currency_info,
-            "active_game_events": len(self.event_system.active_events) if self.event_system else 0,
-
-            # Performance hints
-            "response_time_target": Config.MAX_RESPONSE_TIME if hasattr(Config, 'MAX_RESPONSE_TIME') else 5.0,
-            "sync_status": {
-                "world_synced": time.time() - self.last_world_sync < self.sync_interval,
-                "narrator_synced": time.time() - self.last_narrative_sync < self.sync_interval
-            }
-        }
-
-        return context
     
     # ────────── EXISTING METHODS (preserved) ──────────
     
