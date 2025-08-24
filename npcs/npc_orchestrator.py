@@ -1155,27 +1155,23 @@ class NPCOrchestrator:
         """Check what events an NPC should be participating in right now."""
         # Get current game time
         async with get_db_connection_context() as conn:
-            time_row = await conn.fetchrow(
-                """
-            SELECT value FROM CurrentRoleplay
-            WHERE key IN ('Year', 'Month', 'Day', 'TimeOfDay')
-            AND user_id = $1 AND conversation_id = $2
-        """,
-                self.user_id,
-                self.conversation_id
-            )
-
-        if not time_row:
+            rows = await conn.fetch("""
+                SELECT key, value FROM CurrentRoleplay
+                WHERE key IN ('Year','Month','Day','TimeOfDay')
+                  AND user_id = $1 AND conversation_id = $2
+            """, self.user_id, self.conversation_id)
+        
+        time_vals = {r['key']: r['value'] for r in rows} if rows else {}
+        if not time_vals:
             return []
-
-        calendar = await self._get_calendar_system()
+        
         current_events = await calendar['check_current'](
             user_id=self.user_id,
             conversation_id=self.conversation_id,
-            year=time_row.get('Year', 1),
-            month=time_row.get('Month', 1),
-            day=time_row.get('Day', 1),
-            time_of_day=time_row.get('TimeOfDay', 'Morning')
+            year=int(time_vals.get('Year', 1)),
+            month=int(time_vals.get('Month', 1)),
+            day=int(time_vals.get('Day', 1)),
+            time_of_day=time_vals.get('TimeOfDay', 'Morning')
         )
 
         # Filter for this NPC
@@ -1197,47 +1193,82 @@ class NPCOrchestrator:
             "missed_events": [],
             "npc_statuses": {}
         }
-
+    
         calendar = await self._get_calendar_system()
-
-        # Auto-process missed events
-        await calendar['auto_process'](
-            self.user_id,
-            self.conversation_id,
-            1, 1, 1, "Morning"  # These would be actual game time values
-        )
-
+    
+        # Fetch real in-game time once
+        try:
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT key, value FROM CurrentRoleplay
+                    WHERE key IN ('Year','Month','Day','TimeOfDay')
+                      AND user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+            time_map = {r["key"]: r["value"] for r in rows} if rows else {}
+        except Exception as e:
+            logger.exception(f"Failed to read CurrentRoleplay time: {e}")
+            time_map = {}
+    
+        year = int(time_map.get("Year", 1))
+        month = int(time_map.get("Month", 1))
+        day = int(time_map.get("Day", 1))
+        time_of_day = time_map.get("TimeOfDay", "Morning")
+    
+        # Auto-process missed events using real game time
+        try:
+            await calendar["auto_process"](
+                self.user_id,
+                self.conversation_id,
+                year, month, day, time_of_day
+            )
+        except Exception as e:
+            logger.exception(f"Auto-process missed events failed: {e}")
+    
         # Check current events for each NPC
-        for npc_id in self._active_npcs:
-            events = await self.check_npc_current_events(npc_id)
+        for npc_id in list(self._active_npcs):
+            try:
+                events = await self.check_npc_current_events(npc_id)
+            except Exception as e:
+                logger.exception(f"check_npc_current_events failed for NPC {npc_id}: {e}")
+                continue
+    
             if events:
                 results["npc_statuses"][npc_id] = "has_events"
                 for event in events:
-                    # Process the event
-                    if event.get('can_participate'):
-                        await calendar['mark_completed'](
-                            self.user_id,
-                            self.conversation_id,
-                            event['event_id'],
-                            {"npc_id": npc_id}
+                    try:
+                        if event.get("can_participate"):
+                            await calendar["mark_completed"](
+                                self.user_id,
+                                self.conversation_id,
+                                event["event_id"],
+                                {"npc_id": npc_id}
+                            )
+                            results["processed_events"].append({
+                                "npc_id": npc_id,
+                                "event_id": event.get("event_id"),
+                                "event_name": event.get("event_name"),
+                                "time_of_day": event.get("time_of_day"),
+                            })
+                        else:
+                            await calendar["mark_missed"](
+                                self.user_id,
+                                self.conversation_id,
+                                event["event_id"]
+                            )
+                            results["missed_events"].append({
+                                "npc_id": npc_id,
+                                "event_id": event.get("event_id"),
+                                "event_name": event.get("event_name"),
+                                "time_of_day": event.get("time_of_day"),
+                                "reason": event.get("missing_requirements", []),
+                            })
+                    except Exception as e:
+                        logger.exception(
+                            f"Failed to process calendar event {event.get('event_id')} for NPC {npc_id}: {e}"
                         )
-                        results["processed_events"].append({
-                            "npc_id": npc_id,
-                            "event": event
-                        })
-                    else:
-                        await calendar['mark_missed'](
-                            self.user_id,
-                            self.conversation_id,
-                            event['event_id']
-                        )
-                        results["missed_events"].append({
-                            "npc_id": npc_id,
-                            "event": event,
-                            "reason": event.get('missing_requirements', [])
-                        })
-
+    
         return results
+
 
     # ==================== ENHANCED RELATIONSHIP INTEGRATION ====================
 
