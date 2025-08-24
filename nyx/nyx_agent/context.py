@@ -1,5 +1,5 @@
 # nyx/nyx_agent/context.py
-"""NyxContext and state management for Nyx Agent SDK with full NPC and Memory integration"""
+"""NyxContext and state management for Nyx Agent SDK with full NPC, Memory, World Director and Narrator integration"""
 
 import json
 import time
@@ -121,6 +121,29 @@ class NyxContext:
     conflict_context:    Optional[ConflictContext]   = None
     scene_conflicts:     List[int]                   = field(default_factory=list)  # Conflicts in current scene
     conflict_subsystems: Set[str]                    = field(default_factory=set)   # Active subsystems
+    conflict_manifestations: List[str]               = field(default_factory=list)  # From narrator
+
+    # ────────── WORLD DIRECTOR & NARRATOR SYNC STATE ──────────
+    world_state_cache:   Optional[Dict[str, Any]]    = None
+    narrative_cache:     Optional[Dict[str, Any]]    = None
+    last_world_sync:     float                       = 0.0
+    last_narrative_sync: float                       = 0.0
+    sync_interval:       float                       = 30.0  # Sync every 30 seconds
+    
+    # World-specific extracted data
+    world_mood:          Optional[str]               = None
+    world_tensions:      Dict[str, float]            = field(default_factory=dict)
+    player_vitals:       Dict[str, Any]              = field(default_factory=dict)
+    active_addictions:   Dict[str, Any]              = field(default_factory=dict)
+    current_location:    Optional[str]               = None
+    time_of_day:         Optional[str]               = None
+    
+    # Narrator-specific extracted data
+    recent_narrations:   List[str]                   = field(default_factory=list)
+    narrative_tone:      Optional[str]               = None
+    scene_atmosphere:    Optional[str]               = None
+    power_dynamic_hints: List[str]                   = field(default_factory=list)
+    system_intersections: List[str]                  = field(default_factory=list)
 
     # ────────── PERFORMANCE & EMOTION ──────────
     performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
@@ -175,6 +198,8 @@ class NyxContext:
         "emergent_events_generated": 0,
         "slice_scenes_orchestrated": 0,
         "narrative_beats_processed": 0,
+        "world_director_syncs": 0,
+        "narrator_syncs": 0,
         
         # System health metrics
         "cache_hits": 0,
@@ -213,6 +238,8 @@ class NyxContext:
     # ────────── FEATURE FLAGS ──────────
     _tables_available: Dict[str, bool] = field(default_factory=dict)
     enable_npc_canon: bool = True  # Enable canon integration for NPCs
+    enable_world_sync: bool = True  # Enable world director sync
+    enable_narrator_sync: bool = True  # Enable narrator sync
 
     # ────────── TASK SCHEDULING ──────────
     last_task_runs: Dict[str, datetime] = field(default_factory=dict)
@@ -233,7 +260,9 @@ class NyxContext:
         "conflict_health_check": 300,  # Conflict system health check every 5 minutes
         "tension_calculation": 120,    # Recalculate tensions every 2 minutes
         "conflict_scene_check": 60,    # Check for scene conflicts every minute
-        "conflict_resolution_check": 600  # Check for resolution opportunities every 10 minutes
+        "conflict_resolution_check": 600,  # Check for resolution opportunities every 10 minutes
+        "world_director_sync": 30,     # Sync world state every 30 seconds
+        "narrator_sync": 30,           # Sync narrative context every 30 seconds
     })
 
     # ────────── PRIVATE CACHES (init=False) ──────────
@@ -245,7 +274,7 @@ class NyxContext:
     _cpu_usage_update_interval:  float = field(init=False, default=10.0)
     
     async def initialize(self):
-        """Initialize all systems including NPC and Memory orchestrators"""
+        """Initialize all systems including NPC, Memory, World Director and Narrator orchestrators"""
         # Initialize Memory Orchestrator first (other systems may depend on it)
         try:
             self.memory_orchestrator = await get_memory_orchestrator(
@@ -334,7 +363,10 @@ class NyxContext:
             self.slice_of_life_narrator = SliceOfLifeNarrator(self.user_id, self.conversation_id)
             await self.slice_of_life_narrator.initialize()
 
-            self.current_world_state = self.world_director.context.current_world_state
+            # Do initial sync
+            await self.sync_world_director_data(force=True)
+            await self.sync_narrator_data(force=True)
+
         except Exception as e:
             logger.warning(f"World systems initialization failed: {e}", exc_info=True)
 
@@ -351,6 +383,399 @@ class NyxContext:
         # Load NPC context for current scene
         await self._load_npc_context()
     
+    # ────────── WORLD DIRECTOR & NARRATOR SYNCHRONIZATION ──────────
+    
+    async def sync_world_director_data(self, force: bool = False):
+        """Pull latest data from world director into context"""
+        if not self.enable_world_sync:
+            return
+            
+        current_time = time.time()
+        
+        # Check if we need to sync
+        if not force and not self.should_run_task("world_director_sync"):
+            return
+        
+        if not self.world_director:
+            logger.warning("World director not initialized for sync")
+            return
+            
+        try:
+            # Get complete world state
+            world_state = await self.world_director.get_world_state()
+            
+            if world_state:
+                # Update current world state
+                self.current_world_state = world_state
+                
+                # Extract vitals
+                if hasattr(world_state, 'player_vitals'):
+                    vitals = world_state.player_vitals
+                    self.player_vitals = {
+                        'fatigue': getattr(vitals, 'fatigue', 0),
+                        'hunger': getattr(vitals, 'hunger', 100),
+                        'thirst': getattr(vitals, 'thirst', 100),
+                        'arousal': getattr(vitals, 'arousal', 0)
+                    }
+                    # Add to current context
+                    self.current_context.update(self.player_vitals)
+                
+                # Extract world mood
+                if hasattr(world_state, 'world_mood'):
+                    mood = world_state.world_mood
+                    self.world_mood = mood.value if hasattr(mood, 'value') else str(mood)
+                    self.current_context['world_mood'] = self.world_mood
+                    self._update_emotional_from_mood(self.world_mood)
+                
+                # Extract time information
+                if hasattr(world_state, 'current_time'):
+                    current_time_obj = world_state.current_time
+                    if hasattr(current_time_obj, 'time_of_day'):
+                        self.time_of_day = str(current_time_obj.time_of_day)
+                        self.current_context['time_of_day'] = self.time_of_day
+                
+                # Extract location
+                if hasattr(world_state, 'location_data'):
+                    location = world_state.location_data
+                    if isinstance(location, dict):
+                        self.current_location = location.get('current_location', 'unknown')
+                    elif isinstance(location, str):
+                        self.current_location = location
+                    else:
+                        self.current_location = 'unknown'
+                    self.current_context['location'] = self.current_location
+                
+                # Extract active NPCs
+                if hasattr(world_state, 'active_npcs'):
+                    active_npcs = world_state.active_npcs
+                    self.active_npc_ids = {npc.get('npc_id') for npc in active_npcs if 'npc_id' in npc}
+                    
+                    # Update snapshots with richer data
+                    for npc in active_npcs:
+                        if 'npc_id' in npc:
+                            npc_id = npc['npc_id']
+                            # Create a snapshot-like structure
+                            self.npc_snapshots[npc_id] = {
+                                'npc_id': npc_id,
+                                'name': npc.get('npc_name', f'NPC_{npc_id}'),
+                                'dominance': npc.get('dominance', 0),
+                                'narrative_stage': npc.get('narrative_stage', 'unknown'),
+                                'mask': npc.get('mask', {}),
+                                'relationship': npc.get('relationship', {}),
+                                'location': npc.get('current_location', self.current_location),
+                                'pending_revelation': npc.get('pending_revelation'),
+                                'canonical_id': npc.get('canonical_id', npc_id)
+                            }
+                
+                # Extract relationship dynamics
+                if hasattr(world_state, 'relationship_dynamics'):
+                    dynamics = world_state.relationship_dynamics
+                    self.current_context['player_submission'] = getattr(dynamics, 'player_submission_level', 0)
+                    self.current_context['player_resistance'] = getattr(dynamics, 'player_resistance_level', 50)
+                    self.current_context['player_corruption'] = getattr(dynamics, 'player_corruption_level', 0)
+                    self.current_context['acceptance_level'] = getattr(dynamics, 'acceptance_level', 0)
+                
+                # Extract addictions
+                if hasattr(world_state, 'addiction_status'):
+                    self.active_addictions = world_state.addiction_status
+                    self.current_context['addictions'] = self.active_addictions
+                
+                # Extract active cravings
+                if hasattr(world_state, 'active_cravings'):
+                    self.current_context['active_cravings'] = world_state.active_cravings
+                
+                # Extract tensions
+                if hasattr(world_state, 'world_tension'):
+                    tension = world_state.world_tension
+                    self.world_tensions = {
+                        'overall': getattr(tension, 'overall_tension', 0),
+                        'power': getattr(tension, 'power_tension', 0),
+                        'social': getattr(tension, 'social_tension', 0),
+                        'sexual': getattr(tension, 'sexual_tension', 0),
+                        'emotional': getattr(tension, 'emotional_tension', 0),
+                        'addiction': getattr(tension, 'addiction_tension', 0),
+                        'vital': getattr(tension, 'vital_tension', 0),
+                        'conflicts': getattr(tension, 'unresolved_conflicts', 0)
+                    }
+                    self.current_context['tensions'] = self.world_tensions
+                
+                # Extract stat information
+                if hasattr(world_state, 'hidden_stats'):
+                    self.current_context['hidden_stats'] = world_state.hidden_stats
+                if hasattr(world_state, 'visible_stats'):
+                    self.current_context['visible_stats'] = world_state.visible_stats
+                if hasattr(world_state, 'active_stat_combinations'):
+                    self.current_context['stat_combinations'] = world_state.active_stat_combinations
+                
+                # Extract pending reveals
+                if hasattr(world_state, 'pending_reveals'):
+                    self.current_context['pending_reveals'] = world_state.pending_reveals
+                
+                # Extract memories from world state
+                if hasattr(world_state, 'recent_memories'):
+                    self.recent_memories['world'] = world_state.recent_memories[:10]
+                
+                # Extract emergent elements
+                if hasattr(world_state, 'ongoing_events'):
+                    self.current_context['ongoing_events'] = world_state.ongoing_events
+                if hasattr(world_state, 'available_activities'):
+                    self.current_context['available_activities'] = world_state.available_activities
+                
+                # Cache the world state
+                self.world_state_cache = world_state.model_dump() if hasattr(world_state, 'model_dump') else {}
+                
+                # Update metrics
+                self.performance_metrics["world_director_syncs"] += 1
+                self.performance_metrics["world_state_updates"] += 1
+                
+                # Record task run
+                self.record_task_run("world_director_sync")
+                self.last_world_sync = current_time
+                
+                logger.debug(f"Synced world director data for conversation {self.conversation_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to sync world director data: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_world_director"})
+    
+    async def sync_narrator_data(self, force: bool = False):
+        """Pull latest narrative context from slice of life narrator"""
+        if not self.enable_narrator_sync:
+            return
+            
+        current_time = time.time()
+        
+        # Check if we need to sync
+        if not force and not self.should_run_task("narrator_sync"):
+            return
+            
+        if not self.slice_of_life_narrator:
+            logger.warning("Slice of life narrator not initialized for sync")
+            return
+            
+        try:
+            narrator = self.slice_of_life_narrator
+            
+            # Access the narrator's context
+            if hasattr(narrator, 'context'):
+                narrator_ctx = narrator.context
+                
+                # Sync memories
+                if hasattr(narrator_ctx, 'active_memories'):
+                    self.recent_memories['narrator'] = narrator_ctx.active_memories[:10]
+                
+                # Sync recent narrations
+                if hasattr(narrator_ctx, 'recent_narrations'):
+                    self.recent_narrations = narrator_ctx.recent_narrations[-5:]
+                    self.current_context['recent_narrations'] = self.recent_narrations
+                
+                # Sync system intersections
+                if hasattr(narrator_ctx, 'system_intersections'):
+                    self.system_intersections = narrator_ctx.system_intersections
+                    self.current_context['system_intersections'] = self.system_intersections
+                
+                # Sync conflict manifestations
+                if hasattr(narrator_ctx, 'conflict_manifestations'):
+                    self.conflict_manifestations = narrator_ctx.conflict_manifestations
+                    self.current_context['conflict_manifestations'] = self.conflict_manifestations
+                
+                # Sync current context from narrator
+                if hasattr(narrator_ctx, 'current_context'):
+                    narrator_current = narrator_ctx.current_context
+                    if narrator_current:
+                        # Merge specific fields
+                        if 'npcs' in narrator_current:
+                            self.current_context['narrator_npcs'] = narrator_current['npcs']
+                        if 'relationship_overview' in narrator_current:
+                            self.current_context['relationship_overview'] = narrator_current['relationship_overview']
+            
+            # Get emergent narratives
+            try:
+                emergent = await narrator.generate_emergent_narrative()
+                if emergent and emergent.get('has_emergent_narrative'):
+                    self.emergent_narratives.append({
+                        'timestamp': current_time,
+                        'narrative': emergent.get('narrative'),
+                        'primary_thread': emergent.get('primary_thread'),
+                        'all_threads': emergent.get('all_threads', [])
+                    })
+                    # Keep bounded
+                    if len(self.emergent_narratives) > 10:
+                        self.emergent_narratives = self.emergent_narratives[-10:]
+                    
+                    self.current_context['latest_emergent_narrative'] = emergent.get('narrative')
+            except Exception as e:
+                logger.warning(f"Could not generate emergent narrative: {e}")
+            
+            # Get current narration of world state
+            try:
+                current_narration = await narrator.narrate_world_state()
+                if current_narration:
+                    self.scene_atmosphere = current_narration
+                    self.current_context['scene_atmosphere'] = current_narration
+                    self.recent_narrations.append(current_narration)
+                    # Keep bounded
+                    if len(self.recent_narrations) > 10:
+                        self.recent_narrations = self.recent_narrations[-10:]
+            except Exception as e:
+                logger.warning(f"Could not get world narration: {e}")
+            
+            # Get performance metrics from narrator
+            try:
+                narrator_metrics = await narrator.get_performance_metrics()
+                if narrator_metrics:
+                    self.current_context['narrator_performance'] = narrator_metrics
+            except Exception as e:
+                logger.warning(f"Could not get narrator metrics: {e}")
+            
+            # Cache the narrative context
+            self.narrative_cache = {
+                'recent_narrations': self.recent_narrations,
+                'emergent_narratives': self.emergent_narratives,
+                'system_intersections': self.system_intersections,
+                'conflict_manifestations': self.conflict_manifestations,
+                'scene_atmosphere': self.scene_atmosphere
+            }
+            
+            # Update metrics
+            self.performance_metrics["narrator_syncs"] += 1
+            self.performance_metrics["slice_scenes_orchestrated"] += 1
+            
+            # Record task run
+            self.record_task_run("narrator_sync")
+            self.last_narrative_sync = current_time
+            
+            logger.debug(f"Synced narrator data for conversation {self.conversation_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to sync narrator data: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_narrator"})
+    
+    async def refresh_all_context(self, reason: str = "periodic"):
+        """Refresh context from all systems"""
+        logger.debug(f"Refreshing all context: {reason}")
+        
+        # Sync world director
+        await self.sync_world_director_data(force=True)
+        
+        # Sync narrator
+        await self.sync_narrator_data(force=True)
+        
+        # Update NPC context
+        await self._load_npc_context()
+        
+        # Update conflict context if location changed
+        if self.current_location:
+            await self.update_conflict_context(
+                location=self.current_location,
+                scene_type=self.current_context.get('scene_type', 'interaction')
+            )
+        
+        # Enrich with memories
+        await self.enrich_context_with_memories()
+        
+        logger.info(f"Context refresh complete: {reason}")
+    
+    def _update_emotional_from_mood(self, mood: str):
+        """Update emotional state based on world mood"""
+        mood_lower = mood.lower() if mood else ""
+        
+        mood_emotions = {
+            'relaxed': {'valence': 0.3, 'arousal': 0.3, 'dominance': 0.5},
+            'playful': {'valence': 0.6, 'arousal': 0.6, 'dominance': 0.6},
+            'intimate': {'valence': 0.7, 'arousal': 0.7, 'dominance': 0.4},
+            'mysterious': {'valence': 0.0, 'arousal': 0.5, 'dominance': 0.5},
+            'oppressive': {'valence': -0.3, 'arousal': 0.4, 'dominance': 0.2},
+            'tense': {'valence': -0.2, 'arousal': 0.7, 'dominance': 0.4},
+            'corrupted': {'valence': 0.2, 'arousal': 0.8, 'dominance': 0.3},
+            'dreamlike': {'valence': 0.1, 'arousal': 0.4, 'dominance': 0.5},
+            'chaotic': {'valence': -0.4, 'arousal': 0.9, 'dominance': 0.3},
+            'desperate': {'valence': -0.6, 'arousal': 0.8, 'dominance': 0.1},
+            'craving': {'valence': -0.3, 'arousal': 0.9, 'dominance': 0.2},
+            'exhausted': {'valence': -0.5, 'arousal': 0.2, 'dominance': 0.1}
+        }
+        
+        if mood_lower in mood_emotions:
+            mood_emotion = mood_emotions[mood_lower]
+            # Blend with current emotional state (70% mood, 30% current)
+            for key in ['valence', 'arousal', 'dominance']:
+                self.emotional_state[key] = (
+                    0.7 * mood_emotion[key] + 
+                    0.3 * self.emotional_state[key]
+                )
+    
+    def get_comprehensive_context_for_response(self) -> Dict[str, Any]:
+        """Get comprehensive context for response generation combining all systems"""
+        context = {
+            # Basic context
+            "user_input": self.current_context.get("user_input", ""),
+            "location": self.current_location,
+            "time_of_day": self.time_of_day,
+            "world_mood": self.world_mood,
+            
+            # Player state
+            "player_vitals": self.player_vitals,
+            "emotional_state": self.emotional_state,
+            "hidden_stats": self.current_context.get("hidden_stats", {}),
+            "visible_stats": self.current_context.get("visible_stats", {}),
+            "stat_combinations": self.current_context.get("stat_combinations", []),
+            
+            # World tensions
+            "tensions": self.world_tensions,
+            
+            # NPCs
+            "npcs_present": list(self.current_scene_npcs),
+            "npc_states": {
+                npc_id: self.npc_snapshots.get(npc_id, {})
+                for npc_id in self.current_scene_npcs
+            },
+            "npc_narrative_context": self.npc_narrative_context,
+            
+            # Relationships
+            "relationship_states": self.relationship_states,
+            "relationship_overview": self.current_context.get("relationship_overview", {}),
+            
+            # Conflicts
+            "active_conflicts": list(self.active_conflicts.values()),
+            "scene_conflicts": self.scene_conflicts,
+            "conflict_choices": self.conflict_choices,
+            "conflict_manifestations": self.conflict_manifestations,
+            
+            # Addictions
+            "addictions": self.active_addictions,
+            "active_cravings": self.current_context.get("active_cravings", []),
+            
+            # Narrative
+            "recent_narrations": self.recent_narrations[-3:],
+            "scene_atmosphere": self.scene_atmosphere,
+            "emergent_narrative": self.emergent_narratives[-1] if self.emergent_narratives else None,
+            "system_intersections": self.system_intersections,
+            "power_dynamic_hints": self.power_dynamic_hints,
+            
+            # Memories
+            "recent_memories": {
+                key: memories[:5] 
+                for key, memories in self.recent_memories.items()
+            },
+            "memory_predictions": self.memory_predictions,
+            
+            # Activities and events
+            "available_activities": self.current_context.get("available_activities", []),
+            "ongoing_events": self.current_context.get("ongoing_events", []),
+            "pending_reveals": self.current_context.get("pending_reveals", []),
+            
+            # Performance hints
+            "response_time_target": Config.MAX_RESPONSE_TIME if hasattr(Config, 'MAX_RESPONSE_TIME') else 5.0,
+            "sync_status": {
+                "world_synced": time.time() - self.last_world_sync < self.sync_interval,
+                "narrator_synced": time.time() - self.last_narrative_sync < self.sync_interval
+            }
+        }
+        
+        return context
+    
+    # ────────── EXISTING METHODS (preserved) ──────────
+    
     async def _load_npc_context(self):
         """Load NPC context for the current scene with enhanced memory integration"""
         if not self.npc_orchestrator:
@@ -358,11 +783,12 @@ class NyxContext:
         
         try:
             # Get current location from context or world state
-            current_location = None
-            if self.current_context.get("location"):
-                current_location = self.current_context["location"]
-            elif self.current_world_state and hasattr(self.current_world_state, 'player_location'):
-                current_location = self.current_world_state.player_location
+            current_location = self.current_location
+            if not current_location:
+                if self.current_context.get("location"):
+                    current_location = self.current_context["location"]
+                elif self.current_world_state and hasattr(self.current_world_state, 'player_location'):
+                    current_location = self.current_world_state.player_location
             
             # Get NPCs at current location if known
             if current_location:
@@ -440,7 +866,6 @@ class NyxContext:
         npc_ids: Optional[List[int]] = None
     ):
         """Update conflict context for a new scene or interaction"""
-        # Update NPCs first
         if self.npc_orchestrator:
             try:
                 # Update location-based NPCs
@@ -1431,21 +1856,21 @@ class NyxContext:
                 
                 context["npcs_present"].append({
                     "id": npc_id,
-                    "name": snapshot.name,
-                    "status": snapshot.status.value if hasattr(snapshot.status, 'value') else str(snapshot.status),
-                    "activity": snapshot.current_activity,
-                    "location": snapshot.location
+                    "name": snapshot.name if hasattr(snapshot, 'name') else snapshot.get('name', 'Unknown'),
+                    "status": snapshot.status.value if hasattr(snapshot, 'status') and hasattr(snapshot.status, 'value') else str(snapshot.get('status', 'active')),
+                    "activity": snapshot.current_activity if hasattr(snapshot, 'current_activity') else snapshot.get('current_activity'),
+                    "location": snapshot.location if hasattr(snapshot, 'location') else snapshot.get('location')
                 })
                 
                 context["npc_states"][npc_id] = {
-                    "emotional": snapshot.emotional_state,
-                    "mask_integrity": snapshot.mask_integrity,
-                    "stats": snapshot.stats,
-                    "scheming_level": snapshot.scheming_level,
-                    "current_goals": snapshot.current_goals or []
+                    "emotional": snapshot.emotional_state if hasattr(snapshot, 'emotional_state') else snapshot.get('emotional_state'),
+                    "mask_integrity": snapshot.mask_integrity if hasattr(snapshot, 'mask_integrity') else snapshot.get('mask', {}).get('integrity'),
+                    "stats": snapshot.stats if hasattr(snapshot, 'stats') else snapshot.get('stats'),
+                    "scheming_level": snapshot.scheming_level if hasattr(snapshot, 'scheming_level') else snapshot.get('scheming_level'),
+                    "current_goals": snapshot.current_goals if hasattr(snapshot, 'current_goals') else snapshot.get('current_goals', [])
                 }
                 
-                context["relationships"][npc_id] = snapshot.active_relationships
+                context["relationships"][npc_id] = snapshot.active_relationships if hasattr(snapshot, 'active_relationships') else snapshot.get('relationship', {})
                 
                 # Add memory data if available
                 if entity_key in self.recent_memories:
@@ -1474,7 +1899,7 @@ class NyxContext:
         
         return context
     
-    # ────────── EXISTING METHODS (unchanged) ──────────
+    # ────────── EXISTING METHODS (continued) ──────────
     
     async def get_active_strategies_cached(self):
         """Get active strategies with caching and lock to prevent thundering herd"""
@@ -1545,43 +1970,6 @@ class NyxContext:
                     self.performance_metrics[metric] = self.performance_metrics[metric][-Config.MAX_RESPONSE_TIMES:]
             else:
                 self.performance_metrics[metric] = value
-    
-    def should_run_task(self, task_id: str) -> bool:
-        """Check if enough time has passed to run task again"""
-        if task_id not in self.last_task_runs:
-            return True
-        
-        time_since_run = (datetime.now(timezone.utc) - self.last_task_runs[task_id]).total_seconds()
-        return time_since_run >= self.task_intervals.get(task_id, 300)
-    
-    def record_task_run(self, task_id: str):
-        """Record that a task has been run"""
-        self.last_task_runs[task_id] = datetime.now(timezone.utc)
-    
-    def log_error(self, error: Exception, context: Dict[str, Any] = None):
-        """Log an error with context and aggregate by type"""
-        error_type = type(error).__name__
-        error_entry = {
-            "timestamp": time.time(),
-            "error": str(error),
-            "type": error_type,
-            "context": context or {}
-        }
-        self.error_log.append(error_entry)
-        
-        # Track error counts by type
-        self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
-        
-        # Update error metrics
-        self.performance_metrics["error_rates"]["total"] += 1
-        
-        # Keep error log bounded
-        if len(self.error_log) > Config.MAX_ERROR_LOG_ENTRIES * 2:
-            _prune_list(self.error_log, Config.MAX_ERROR_LOG_ENTRIES)
-            
-        # Log warning if we see repeated errors
-        if self.error_counts[error_type] > 10:
-            logger.warning(f"Repeated error type {error_type}: {self.error_counts[error_type]} occurrences")
     
     async def learn_from_interaction(self, action: str, outcome: str, success: bool):
         """Learn from an interaction outcome"""
@@ -1768,3 +2156,57 @@ class NyxContext:
                 self.learning_metrics["npc_behavior_prediction_accuracy"] = (
                     successful_outcomes / len(recent_interactions)
                 )
+    
+    # ────────── DEPRECATED COMPATIBILITY METHODS ──────────
+    
+    def db_connection_ctx(self):
+        """Get a database connection context manager"""
+        return get_db_connection_context()
+    
+    # Legacy compatibility
+    async def get_db_connection(self):
+        """DEPRECATED: Use db_connection_ctx() instead"""
+        logger.warning("get_db_connection is deprecated, use db_connection_ctx() instead")
+        return self.db_connection_ctx()
+
+    async def close_db_connection(self, conn=None):
+        """No-op compatibility wrapper"""
+        if conn is not None:
+            await conn.__aexit__(None, None, None)
+    
+    def should_run_task(self, task_id: str) -> bool:
+        """Check if enough time has passed to run task again"""
+        if task_id not in self.last_task_runs:
+            return True
+        
+        time_since_run = (datetime.now(timezone.utc) - self.last_task_runs[task_id]).total_seconds()
+        return time_since_run >= self.task_intervals.get(task_id, 300)
+    
+    def record_task_run(self, task_id: str):
+        """Record that a task has been run"""
+        self.last_task_runs[task_id] = datetime.now(timezone.utc)
+    
+    def log_error(self, error: Exception, context: Dict[str, Any] = None):
+        """Log an error with context and aggregate by type"""
+        error_type = type(error).__name__
+        error_entry = {
+            "timestamp": time.time(),
+            "error": str(error),
+            "type": error_type,
+            "context": context or {}
+        }
+        self.error_log.append(error_entry)
+        
+        # Track error counts by type
+        self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
+        
+        # Update error metrics
+        self.performance_metrics["error_rates"]["total"] += 1
+        
+        # Keep error log bounded
+        if len(self.error_log) > Config.MAX_ERROR_LOG_ENTRIES * 2:
+            _prune_list(self.error_log, Config.MAX_ERROR_LOG_ENTRIES)
+            
+        # Log warning if we see repeated errors
+        if self.error_counts[error_type] > 10:
+            logger.warning(f"Repeated error type {error_type}: {self.error_counts[error_type]} occurrences")
