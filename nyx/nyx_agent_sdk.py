@@ -1,3 +1,4 @@
+# nyx/nyx_agent_sdk.py
 """
 Nyx Agent SDK - Refactored for Scene-Scoped Context Assembly
 Main changes:
