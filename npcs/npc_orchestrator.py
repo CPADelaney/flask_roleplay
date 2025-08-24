@@ -40,7 +40,7 @@ from npcs.npc_decisions import NPCDecisionEngine
 from npcs.new_npc_creation import NPCCreationHandler
 
 # Import database utilities
-from utils.db_utils import get_db_connection_context
+from db.connection import get_db_connection_context
 
 # Import canon system for logging canonical events
 from lore.canon_integration import log_canonical_event
