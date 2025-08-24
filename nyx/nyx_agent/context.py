@@ -145,6 +145,43 @@ class NyxContext:
     power_dynamic_hints: List[str]                   = field(default_factory=list)
     system_intersections: List[str]                  = field(default_factory=list)
 
+    # ────────── GAME LOGIC SYSTEMS ──────────
+    event_system: Optional[Any] = None  # Event system from event_system.py
+    activity_analyzer: Optional[Any] = None  # Activity analyzer
+    addiction_context: Optional[Any] = None  # Addiction system
+    currency_generator: Optional[Any] = None  # Currency system
+    inventory_context: Optional[Any] = None  # Inventory system
+    relationship_manager: Optional[Any] = None  # Already exists but ensure it's there
+    calendar_system: Optional[Any] = None  # Calendar system
+    npc_bridge: Optional[Any] = None  # NPC agent bridge
+
+    # ────────── GAME STATE ──────────
+    game_time: Dict[str, Any] = field(default_factory=lambda: {
+        "year": 1,
+        "month": 1,
+        "day": 1,
+        "time_of_day": "Morning"
+    })
+    player_inventory: List[Dict[str, Any]] = field(default_factory=list)
+    player_activities: List[Dict[str, Any]] = field(default_factory=list)
+    player_addictions: Dict[str, Any] = field(default_factory=dict)
+    player_stats: Dict[str, Any] = field(default_factory=dict)
+    currency_info: Dict[str, Any] = field(default_factory=dict)
+    calendar_events: List[Dict[str, Any]] = field(default_factory=list)
+    narrative_stage_info: Dict[int, str] = field(default_factory=dict)  # npc_id -> stage
+
+    # ────────── ACTIVITY & RESOURCE STATE ──────────
+    current_activity: Optional[Dict[str, Any]] = None
+    recent_activities: List[Dict[str, Any]] = field(default_factory=list)
+    resource_state: Dict[str, Any] = field(default_factory=lambda: {
+        "hunger": 100,
+        "energy": 100,
+        "money": 100,
+        "supplies": 10,
+        "influence": 0
+    })
+    activity_effects: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Cache of activity effects
+
     # ────────── PERFORMANCE & EMOTION ──────────
     performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
         # Core action metrics
@@ -263,6 +300,13 @@ class NyxContext:
         "conflict_resolution_check": 600,  # Check for resolution opportunities every 10 minutes
         "world_director_sync": 30,     # Sync world state every 30 seconds
         "narrator_sync": 30,           # Sync narrative context every 30 seconds
+        "game_time_sync": 60,          # Sync game time every minute
+        "inventory_sync": 300,         # Sync inventory every 5 minutes
+        "player_stats_sync": 120,      # Sync player stats every 2 minutes
+        "addiction_sync": 300,         # Sync addictions every 5 minutes
+        "calendar_sync": 600,          # Sync calendar every 10 minutes
+        "narrative_progression_sync": 300,  # Sync narrative progression every 5 minutes
+        "activity_sync": 180,          # Sync activities every 3 minutes
     })
 
     # ────────── PRIVATE CACHES (init=False) ──────────
@@ -369,6 +413,87 @@ class NyxContext:
 
         except Exception as e:
             logger.warning(f"World systems initialization failed: {e}", exc_info=True)
+        
+        # ────────── Initialize Game Logic Systems ──────────
+
+        # Initialize Event System
+        try:
+            from logic.event_system import EventSystem
+            self.event_system = EventSystem(self.user_id, self.conversation_id)
+            await self.event_system.initialize()
+            logger.info(f"Event System initialized with {len(self.event_system.active_events)} active events")
+        except Exception as e:
+            logger.error(f"Failed to initialize Event System: {e}", exc_info=True)
+            self.event_system = None
+
+        # Initialize Activity Analyzer
+        try:
+            from logic.activity_analyzer import ActivityAnalyzer
+            self.activity_analyzer = ActivityAnalyzer(self.user_id, self.conversation_id)
+            logger.info("Activity Analyzer initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Activity Analyzer: {e}", exc_info=True)
+            self.activity_analyzer = None
+
+        # Initialize Addiction System
+        try:
+            from logic.addiction_system_sdk import AddictionContext
+            self.addiction_context = AddictionContext(self.user_id, self.conversation_id)
+            await self.addiction_context.initialize()
+            logger.info("Addiction System initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Addiction System: {e}", exc_info=True)
+            self.addiction_context = None
+
+        # Initialize Currency System
+        try:
+            from logic.currency_generator import CurrencyGenerator
+            self.currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
+            self.currency_info = await self.currency_generator.get_currency_system()
+            logger.info(f"Currency System initialized: {self.currency_info.get('currency_name', 'unknown')}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Currency System: {e}", exc_info=True)
+            self.currency_generator = None
+
+        # Initialize Inventory System
+        try:
+            from logic.inventory_system_sdk import InventoryContext
+            self.inventory_context = InventoryContext(self.user_id, self.conversation_id)
+            await self.inventory_context.initialize()
+            # Load initial inventory
+            await self.sync_inventory_data(force=True)
+            logger.info("Inventory System initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Inventory System: {e}", exc_info=True)
+            self.inventory_context = None
+
+        # Initialize Calendar System
+        try:
+            from logic.calendar import ensure_calendar_tables, load_calendar_names
+            await ensure_calendar_tables(self.user_id, self.conversation_id)
+            self.calendar_system = await load_calendar_names(self.user_id, self.conversation_id)
+            logger.info("Calendar System initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Calendar System: {e}", exc_info=True)
+            self.calendar_system = None
+
+        # Initialize NPC Bridge
+        try:
+            from logic.npc_agent_bridge import NPCSystemBridge
+            self.npc_bridge = NPCSystemBridge(self.user_id, self.conversation_id)
+            logger.info("NPC Bridge initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize NPC Bridge: {e}", exc_info=True)
+            self.npc_bridge = None
+
+        # Initialize Relationship Manager (if not already)
+        if not self.relationship_manager:
+            try:
+                from logic.dynamic_relationships import OptimizedRelationshipManager
+                self.relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+                logger.info("Relationship Manager initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Relationship Manager: {e}", exc_info=True)
 
         # Initialize CPU usage monitoring
         try:
@@ -376,12 +501,20 @@ class NyxContext:
         except Exception as e:
             logger.debug(f"Failed to initialize CPU monitoring: {e}")
             self._cpu_usage_cache = 0.0
-        
+
         # Load existing state from database
         await self._load_state()
-        
+
         # Load NPC context for current scene
         await self._load_npc_context()
+
+        # Sync initial game state
+        await self.sync_game_time(force=True)
+        await self.sync_player_stats(force=True)
+        await self.sync_narrative_progression(force=True)
+        await self.sync_calendar_events(force=True)
+        await self.sync_addiction_status(force=True)
+        await self.sync_activity_data(force=True)
     
     # ────────── WORLD DIRECTOR & NARRATOR SYNCHRONIZATION ──────────
     
@@ -673,7 +806,19 @@ class NyxContext:
         
         # Enrich with memories
         await self.enrich_context_with_memories()
-        
+
+        # Sync game logic systems
+        await self.sync_game_time(force=True)
+        await self.sync_player_stats(force=True)
+        await self.sync_inventory_data(force=True)
+        await self.sync_addiction_status(force=True)
+        await self.sync_calendar_events(force=True)
+        await self.sync_narrative_progression(force=True)
+        await self.sync_activity_data(force=True)
+
+        # Check for narrative moments
+        await self.check_narrative_moments()
+
         logger.info(f"Context refresh complete: {reason}")
     
     def _update_emotional_from_mood(self, mood: str):
@@ -700,10 +845,328 @@ class NyxContext:
             # Blend with current emotional state (70% mood, 30% current)
             for key in ['valence', 'arousal', 'dominance']:
                 self.emotional_state[key] = (
-                    0.7 * mood_emotion[key] + 
+                    0.7 * mood_emotion[key] +
                     0.3 * self.emotional_state[key]
                 )
-    
+
+    # ────────── GAME LOGIC SYNCHRONIZATION ──────────
+
+    async def sync_game_time(self, force: bool = False):
+        """Sync game time from time system"""
+        if not force and not self.should_run_task("game_time_sync"):
+            return
+        try:
+            from logic.game_time_helper import get_current_time
+            year, month, day, time_of_day = await get_current_time(self.user_id, self.conversation_id)
+            self.game_time = {
+                "year": year,
+                "month": month,
+                "day": day,
+                "time_of_day": time_of_day
+            }
+            self.current_context.update(self.game_time)
+            from logic.game_time_helper import get_game_time_string
+            self.current_context["game_time_string"] = await get_game_time_string(
+                self.user_id, self.conversation_id
+            )
+            self.record_task_run("game_time_sync")
+            logger.debug(f"Synced game time: {self.game_time}")
+        except Exception as e:
+            logger.error(f"Failed to sync game time: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_game_time"})
+
+    async def sync_inventory_data(self, force: bool = False):
+        """Sync inventory data"""
+        if not force and not self.should_run_task("inventory_sync"):
+            return
+        try:
+            from logic.inventory_system_sdk import get_inventory_direct
+            inventory_data = await get_inventory_direct(
+                self.user_id,
+                self.conversation_id,
+                "Chase"
+            )
+            self.player_inventory = inventory_data.get("items", [])
+            self.current_context["inventory_count"] = len(self.player_inventory)
+            self.current_context["inventory_items"] = [
+                item["item_name"] for item in self.player_inventory[:10]
+            ]
+            self.record_task_run("inventory_sync")
+            logger.debug(f"Synced inventory: {len(self.player_inventory)} items")
+        except Exception as e:
+            logger.error(f"Failed to sync inventory: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_inventory"})
+
+    async def sync_player_stats(self, force: bool = False):
+        """Sync player stats from database"""
+        if not force and not self.should_run_task("player_stats_sync"):
+            return
+        try:
+            async with get_db_connection_context() as conn:
+                stats = await conn.fetchrow(
+                    """
+                    SELECT corruption, dependency, confidence, willpower, 
+                           obedience, lust, shame, submission
+                    FROM PlayerStats
+                    WHERE user_id = $1 AND conversation_id = $2 
+                    AND player_name = 'Chase'
+                    LIMIT 1
+                    """,
+                    self.user_id,
+                    self.conversation_id
+                )
+                if stats:
+                    self.player_stats = dict(stats)
+                    self.current_context["player_stats"] = self.player_stats
+                    self._update_emotional_from_stats()
+            self.record_task_run("player_stats_sync")
+            logger.debug(f"Synced player stats: {self.player_stats}")
+        except Exception as e:
+            logger.error(f"Failed to sync player stats: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_player_stats"})
+
+    async def sync_addiction_status(self, force: bool = False):
+        """Sync addiction status"""
+        if not force and not self.should_run_task("addiction_sync"):
+            return
+        if not self.addiction_context:
+            return
+        try:
+            from logic.addiction_system_sdk import get_addiction_status
+            addiction_status = await get_addiction_status(
+                self.user_id,
+                self.conversation_id,
+                "Chase"
+            )
+            self.player_addictions = addiction_status
+            self.current_context["has_addictions"] = addiction_status.get("has_addictions", False)
+            self.current_context["addiction_types"] = list(addiction_status.get("addictions", {}).keys())
+            if addiction_status.get("has_addictions"):
+                addiction_count = len(addiction_status.get("addictions", {}))
+                self.world_tensions["addiction"] = min(1.0, addiction_count * 0.2)
+            self.record_task_run("addiction_sync")
+            logger.debug(f"Synced addictions: {addiction_status.get('has_addictions')}")
+        except Exception as e:
+            logger.error(f"Failed to sync addiction status: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_addictions"})
+
+    async def sync_calendar_events(self, force: bool = False):
+        """Sync upcoming calendar events"""
+        if not force and not self.should_run_task("calendar_sync"):
+            return
+        try:
+            from logic.calendar import get_events_for_display
+            events = await get_events_for_display(
+                self.user_id,
+                self.conversation_id,
+                self.game_time["year"],
+                self.game_time["month"],
+                self.game_time["day"],
+                lookahead_days=7
+            )
+            self.calendar_events = []
+            for date_key, date_events in events.items():
+                for event in date_events:
+                    event["date"] = date_key
+                    self.calendar_events.append(event)
+            today_key = f"{self.game_time['year']}-{self.game_time['month']:02d}-{self.game_time['day']:02d}"
+            self.current_context["todays_events"] = events.get(today_key, [])
+            self.current_context["upcoming_events_count"] = len(self.calendar_events)
+            self.record_task_run("calendar_sync")
+            logger.debug(f"Synced calendar: {len(self.calendar_events)} upcoming events")
+        except Exception as e:
+            logger.error(f"Failed to sync calendar events: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_calendar"})
+
+    async def sync_narrative_progression(self, force: bool = False):
+        """Sync NPC narrative progression stages"""
+        if not force and not self.should_run_task("narrative_progression_sync"):
+            return
+        try:
+            from logic.npc_narrative_progression import get_npc_narrative_stage
+            for npc_id in self.current_scene_npcs:
+                stage = await get_npc_narrative_stage(
+                    self.user_id,
+                    self.conversation_id,
+                    npc_id
+                )
+                self.narrative_stage_info[npc_id] = stage.name
+            self.current_context["npc_narrative_stages"] = self.narrative_stage_info
+            self.record_task_run("narrative_progression_sync")
+            logger.debug(f"Synced narrative progression for {len(self.narrative_stage_info)} NPCs")
+        except Exception as e:
+            logger.error(f"Failed to sync narrative progression: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_narrative_progression"})
+
+    async def sync_activity_data(self, force: bool = False):
+        """Sync activity and resource data"""
+        if not force and not self.should_run_task("activity_sync"):
+            return
+        try:
+            from logic.resource_management import ResourceManager
+            resource_manager = ResourceManager(self.user_id, self.conversation_id)
+            resources = await resource_manager.get_all_resources("Chase")
+            if resources:
+                self.resource_state = resources
+                self.current_context["resources"] = resources
+            from logic.activities_logic import filter_activities_for_npc
+            if self.current_scene_npcs:
+                npc_archetypes = []
+                for npc_id in self.current_scene_npcs[:3]:
+                    if npc_id in self.npc_snapshots:
+                        snapshot = self.npc_snapshots[npc_id]
+                        if hasattr(snapshot, 'archetype'):
+                            npc_archetypes.append(snapshot.archetype)
+                activities = await filter_activities_for_npc(
+                    npc_archetypes=npc_archetypes,
+                    meltdown_level=self.player_stats.get("corruption", 0) // 20,
+                    user_stats=self.player_stats,
+                    setting=self.current_location
+                )
+                self.player_activities = activities
+                self.current_context["available_game_activities"] = [
+                    activity["name"] for activity in activities
+                ]
+            self.record_task_run("activity_sync")
+            logger.debug(f"Synced activities and resources")
+        except Exception as e:
+            logger.error(f"Failed to sync activity data: {e}", exc_info=True)
+            self.log_error(e, {"operation": "sync_activities"})
+
+    # ────────── GAME LOGIC INTERACTIONS ──────────
+
+    async def process_activity(self, activity_text: str, context: Dict[str, Any] = None):
+        """Process a player activity and apply effects"""
+        if not self.activity_analyzer:
+            return {"error": "Activity system not initialized"}
+        try:
+            result = await self.activity_analyzer.analyze_activity(
+                activity_text,
+                setting_context=self.current_location,
+                apply_effects=True
+            )
+            self.current_activity = result
+            self.recent_activities.append({
+                "timestamp": time.time(),
+                "activity": activity_text,
+                "effects": result.get("effects", {}),
+                "type": result.get("activity_type")
+            })
+            if len(self.recent_activities) > 20:
+                self.recent_activities = self.recent_activities[-20:]
+            await self.sync_activity_data(force=True)
+            self.performance_metrics["activities_processed"] = \
+                self.performance_metrics.get("activities_processed", 0) + 1
+            return result
+        except Exception as e:
+            logger.error(f"Failed to process activity: {e}", exc_info=True)
+            self.log_error(e, {"activity": activity_text})
+            return {"error": str(e)}
+
+    async def add_inventory_item(self, item_name: str, description: str = None,
+                                 effect: str = None, quantity: int = 1):
+        """Add an item to inventory"""
+        try:
+            from logic.inventory_system_sdk import add_item
+            result = await add_item(
+                self.user_id,
+                self.conversation_id,
+                "Chase",
+                item_name,
+                description,
+                effect,
+                quantity=quantity
+            )
+            await self.sync_inventory_data(force=True)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to add inventory item: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    async def remove_inventory_item(self, item_name: str, quantity: int = 1):
+        """Remove an item from inventory"""
+        try:
+            from logic.inventory_system_sdk import remove_item
+            result = await remove_item(
+                self.user_id,
+                self.conversation_id,
+                "Chase",
+                item_name,
+                quantity
+            )
+            await self.sync_inventory_data(force=True)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to remove inventory item: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    async def create_game_event(self, event_type: str, event_data: Dict[str, Any], 
+                               priority: int = 0):
+        """Create a game event"""
+        if not self.event_system:
+            return {"error": "Event system not initialized"}
+        try:
+            return await self.event_system.create_event(
+                event_type,
+                event_data,
+                priority
+            )
+        except Exception as e:
+            logger.error(f"Failed to create game event: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    async def check_narrative_moments(self):
+        """Check for narrative moments and revelations"""
+        try:
+            from logic.narrative_events import (
+                check_for_narrative_moments,
+                check_for_personal_revelations
+            )
+            moment = await check_for_narrative_moments(self.user_id, self.conversation_id)
+            if moment:
+                self.current_context["narrative_moment"] = moment
+                if self.event_system:
+                    await self.event_system.create_event(
+                        "narrative_moment",
+                        moment,
+                        priority=5
+                    )
+            revelation = await check_for_personal_revelations(self.user_id, self.conversation_id)
+            if revelation:
+                self.current_context["personal_revelation"] = revelation
+                if self.event_system:
+                    await self.event_system.create_event(
+                        "personal_revelation",
+                        revelation,
+                        priority=7
+                    )
+            return {"moment": moment, "revelation": revelation}
+        except Exception as e:
+            logger.error(f"Failed to check narrative moments: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    async def format_currency(self, amount: int) -> str:
+        """Format currency amount according to game's currency system"""
+        if not self.currency_generator:
+            return f"{amount} money"
+        try:
+            return await self.currency_generator.format_currency(amount)
+        except Exception as e:
+            logger.error(f"Failed to format currency: {e}", exc_info=True)
+            return f"{amount} money"
+
+    def _update_emotional_from_stats(self):
+        """Update emotional state based on player stats"""
+        if not self.player_stats:
+            return
+        corruption = self.player_stats.get("corruption", 0) / 100
+        dependency = self.player_stats.get("dependency", 0) / 100
+        confidence = self.player_stats.get("confidence", 50) / 100
+        willpower = self.player_stats.get("willpower", 50) / 100
+        self.emotional_state["valence"] = 0.5 - (corruption * 0.5)
+        self.emotional_state["arousal"] = 0.5 + (dependency * 0.3)
+        self.emotional_state["dominance"] = willpower * 0.8
+
     def get_comprehensive_context_for_response(self) -> Dict[str, Any]:
         """Get comprehensive context for response generation combining all systems"""
         context = {
@@ -712,17 +1175,25 @@ class NyxContext:
             "location": self.current_location,
             "time_of_day": self.time_of_day,
             "world_mood": self.world_mood,
-            
-            # Player state
+
+            # Game Time
+            "game_time": self.game_time,
+            "game_time_string": self.current_context.get("game_time_string", ""),
+
+            # Player Resources & Stats
             "player_vitals": self.player_vitals,
             "emotional_state": self.emotional_state,
+            "resources": self.resource_state,
+            "player_stats": self.player_stats,
+            "inventory_count": len(self.player_inventory),
+            "inventory_preview": [item["item_name"] for item in self.player_inventory[:5]],
             "hidden_stats": self.current_context.get("hidden_stats", {}),
             "visible_stats": self.current_context.get("visible_stats", {}),
             "stat_combinations": self.current_context.get("stat_combinations", []),
-            
+
             # World tensions
             "tensions": self.world_tensions,
-            
+
             # NPCs
             "npcs_present": list(self.current_scene_npcs),
             "npc_states": {
@@ -730,40 +1201,54 @@ class NyxContext:
                 for npc_id in self.current_scene_npcs
             },
             "npc_narrative_context": self.npc_narrative_context,
-            
+            "npc_narrative_stages": self.narrative_stage_info,
+
             # Relationships
             "relationship_states": self.relationship_states,
             "relationship_overview": self.current_context.get("relationship_overview", {}),
-            
+
             # Conflicts
             "active_conflicts": list(self.active_conflicts.values()),
             "scene_conflicts": self.scene_conflicts,
             "conflict_choices": self.conflict_choices,
             "conflict_manifestations": self.conflict_manifestations,
-            
+
+            # Activities
+            "current_activity": self.current_activity,
+            "recent_activities": self.recent_activities[-3:],
+            "available_game_activities": self.current_context.get("available_game_activities", []),
+
             # Addictions
             "addictions": self.active_addictions,
+            "player_addictions": self.player_addictions,
             "active_cravings": self.current_context.get("active_cravings", []),
-            
+
+            # Calendar
+            "todays_events": self.current_context.get("todays_events", []),
+            "upcoming_events": self.calendar_events[:5],
+
             # Narrative
             "recent_narrations": self.recent_narrations[-3:],
             "scene_atmosphere": self.scene_atmosphere,
             "emergent_narrative": self.emergent_narratives[-1] if self.emergent_narratives else None,
             "system_intersections": self.system_intersections,
             "power_dynamic_hints": self.power_dynamic_hints,
-            
+            "narrative_moment": self.current_context.get("narrative_moment"),
+            "personal_revelation": self.current_context.get("personal_revelation"),
+
             # Memories
             "recent_memories": {
-                key: memories[:5] 
+                key: memories[:5]
                 for key, memories in self.recent_memories.items()
             },
             "memory_predictions": self.memory_predictions,
-            
-            # Activities and events
-            "available_activities": self.current_context.get("available_activities", []),
+
+            # Events & Currency
             "ongoing_events": self.current_context.get("ongoing_events", []),
             "pending_reveals": self.current_context.get("pending_reveals", []),
-            
+            "currency_system": self.currency_info,
+            "active_game_events": len(self.event_system.active_events) if self.event_system else 0,
+
             # Performance hints
             "response_time_target": Config.MAX_RESPONSE_TIME if hasattr(Config, 'MAX_RESPONSE_TIME') else 5.0,
             "sync_status": {
@@ -771,7 +1256,7 @@ class NyxContext:
                 "narrator_synced": time.time() - self.last_narrative_sync < self.sync_interval
             }
         }
-        
+
         return context
     
     # ────────── EXISTING METHODS (preserved) ──────────
