@@ -7,7 +7,7 @@ from datetime import datetime
 
 from npcs.npc_agent import NPCAgent
 from npcs.npc_agent_system import NPCAgentSystem
-from nyx.nyx_governance import NyxGovernor, DirectiveType, DirectivePriority
+from nyx.nyx_governance import NyxUnifiedGovernor, DirectiveType, DirectivePriority  # Changed from NyxGovernor
 from memory.memory_nyx_integration import get_memory_nyx_bridge
 from db.connection import get_db_connection_context
 
@@ -22,7 +22,7 @@ class NyxNPCBridge:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.governor = NyxGovernor(user_id, conversation_id)
+        self.governor = NyxUnifiedGovernor(user_id, conversation_id)  # Changed from NyxGovernor
         self.npc_system = None
         self.memory_bridge = None
         
