@@ -3,16 +3,28 @@
 import time
 import logging
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 import json
 from datetime import datetime, timedelta
 
-from logic.game_time_helper import get_game_datetime, get_game_iso_string
+# Lazy import game time functions to avoid circular imports
+if TYPE_CHECKING:
+    from logic.game_time_helper import get_game_datetime, get_game_iso_string
 
-from .connection import DBConnectionManager
 from memory.connection import get_connection_context
 
 logger = logging.getLogger("memory_telemetry")
+
+# Global lazy import cache
+_game_time_module = None
+
+def _lazy_import_game_time():
+    """Lazy import game_time_helper to avoid circular dependencies."""
+    global _game_time_module
+    if _game_time_module is None:
+        from logic import game_time_helper as _game_time_module
+    return _game_time_module
+
 
 class MemoryTelemetry:
     """
@@ -48,8 +60,9 @@ class MemoryTelemetry:
         Record a telemetry event for a memory operation.
         Queues the event for background processing.
         """
-        # Get game time as datetime object, not string
-        timestamp = await get_game_datetime(user_id, conversation_id)
+        # Lazy import and get game time
+        game_time = _lazy_import_game_time()
+        timestamp = await game_time.get_game_datetime(user_id, conversation_id)
         
         record = {
             "timestamp": timestamp,  # Store as datetime object
@@ -159,7 +172,7 @@ class MemoryTelemetry:
             
         try:
             # Get database connection using the proper context manager
-            async with await get_connection_context() as conn:
+            async with get_connection_context() as conn:
                 # Insert records in batch
                 await conn.executemany("""
                     INSERT INTO memory_telemetry 
@@ -189,9 +202,12 @@ class MemoryTelemetry:
         Get metrics for recent operations.
         """
         try:
+            # Lazy import game time
+            game_time = _lazy_import_game_time()
+            
             # Get database connection using the proper context manager
-            async with await get_connection_context() as conn:
-                cutoff = await get_game_datetime(user_id, conversation_id) - timedelta(minutes=time_window_minutes)
+            async with get_connection_context() as conn:
+                cutoff = await game_time.get_game_datetime(user_id, conversation_id) - timedelta(minutes=time_window_minutes)
                 
                 # Get operation counts
                 operation_rows = await conn.fetch("""
@@ -278,7 +294,7 @@ class MemoryTelemetry:
         Get recent slow operations exceeding the threshold.
         """
         try:
-            async with await get_connection_context() as conn:
+            async with get_connection_context() as conn:
                 rows = await conn.fetch(
                     """
                     SELECT timestamp, operation, duration, data_size, metadata
@@ -318,8 +334,11 @@ class MemoryTelemetry:
         Clean up old telemetry data.
         """
         try:
-            async with await get_connection_context() as conn:
-                cutoff = await get_game_datetime(user_id, conversation_id) - timedelta(days=days_to_keep)
+            # Lazy import game time
+            game_time = _lazy_import_game_time()
+            
+            async with get_connection_context() as conn:
+                cutoff = await game_time.get_game_datetime(user_id, conversation_id) - timedelta(days=days_to_keep)
                 result = await conn.execute(
                     """
                     DELETE FROM memory_telemetry
