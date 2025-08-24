@@ -77,7 +77,8 @@ from memory.init import (
 
 # Database and configuration
 from memory.connection import get_connection_context
-from memory.config import load_config, get_memory_config
+from memory.config import load_config
+from memory.memory_config import get_memory_config
 from memory.telemetry import MemoryTelemetry
 from memory.maintenance import MemoryMaintenance
 
