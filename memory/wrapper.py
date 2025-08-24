@@ -2,18 +2,77 @@
 
 import logging
 import asyncio
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, TYPE_CHECKING
 
 from logic.game_time_helper import get_game_datetime, get_game_iso_string
 
-from .integrated import IntegratedMemorySystem, init_memory_system
-from .core import Memory, MemoryType, MemorySignificance
-from .managers import NPCMemoryManager, NyxMemoryManager, PlayerMemoryManager
-from .masks import ProgressiveRevealManager, RevealType, RevealSeverity
-from .emotional import EmotionalMemoryManager
-from .flashbacks import FlashbackManager
+# Type checking imports (don't cause circular imports)
+if TYPE_CHECKING:
+    from .integrated import IntegratedMemorySystem
+    from .core import Memory, MemoryType, MemorySignificance
+    from .managers import NPCMemoryManager, NyxMemoryManager, PlayerMemoryManager
+    from .masks import ProgressiveRevealManager
+    from .emotional import EmotionalMemoryManager
+    from .flashbacks import FlashbackManager
 
 logger = logging.getLogger("memory_wrapper")
+
+# Lazy-loaded module references
+_integrated_module = None
+_core_module = None
+_managers_module = None
+_masks_module = None
+_emotional_module = None
+_flashbacks_module = None
+
+
+def _lazy_import_integrated():
+    """Lazy import of integrated module."""
+    global _integrated_module
+    if _integrated_module is None:
+        from . import integrated as _integrated_module
+    return _integrated_module
+
+
+def _lazy_import_core():
+    """Lazy import of core module."""
+    global _core_module
+    if _core_module is None:
+        from . import core as _core_module
+    return _core_module
+
+
+def _lazy_import_managers():
+    """Lazy import of managers module."""
+    global _managers_module
+    if _managers_module is None:
+        from . import managers as _managers_module
+    return _managers_module
+
+
+def _lazy_import_masks():
+    """Lazy import of masks module."""
+    global _masks_module
+    if _masks_module is None:
+        from . import masks as _masks_module
+    return _masks_module
+
+
+def _lazy_import_emotional():
+    """Lazy import of emotional module."""
+    global _emotional_module
+    if _emotional_module is None:
+        from . import emotional as _emotional_module
+    return _emotional_module
+
+
+def _lazy_import_flashbacks():
+    """Lazy import of flashbacks module."""
+    global _flashbacks_module
+    if _flashbacks_module is None:
+        from . import flashbacks as _flashbacks_module
+    return _flashbacks_module
+
 
 class MemorySystem:
     """
@@ -40,16 +99,54 @@ class MemorySystem:
         self.conversation_id = conversation_id
         self.integrated = None
         self.initialized = False
+        
+        # Cached module references (will be loaded on demand)
+        self._integrated_system_class = None
+        self._memory_significance = None
+        self._npc_manager_class = None
+        self._nyx_manager_class = None
+        self._player_manager_class = None
+        self._mask_manager_class = None
+        self._emotional_manager_class = None
+        self._flashback_manager_class = None
     
     async def initialize(self):
         """Initialize the memory system and its components."""
         if self.initialized:
             return
+        
+        try:
+            # Lazy import and initialize the integrated memory system
+            integrated_module = _lazy_import_integrated()
+            init_memory_system = integrated_module.init_memory_system
             
-        # Initialize the integrated memory system
-        self.integrated = await init_memory_system(self.user_id, self.conversation_id)
-        self.initialized = True
-        logger.info(f"Memory system initialized for user {self.user_id}, conversation {self.conversation_id}")
+            # Initialize the integrated memory system
+            self.integrated = await init_memory_system(self.user_id, self.conversation_id)
+            self.initialized = True
+            logger.info(f"Memory system initialized for user {self.user_id}, conversation {self.conversation_id}")
+        except Exception as e:
+            logger.error(f"Failed to initialize memory system: {e}")
+            raise
+    
+    def _get_memory_significance(self):
+        """Get MemorySignificance enum lazily."""
+        if self._memory_significance is None:
+            core_module = _lazy_import_core()
+            self._memory_significance = core_module.MemorySignificance
+        return self._memory_significance
+    
+    def _parse_importance(self, importance: str):
+        """Parse importance string to MemorySignificance value."""
+        MemorySignificance = self._get_memory_significance()
+        
+        significance_map = {
+            "trivial": MemorySignificance.TRIVIAL,
+            "low": MemorySignificance.LOW,
+            "medium": MemorySignificance.MEDIUM,
+            "high": MemorySignificance.HIGH,
+            "critical": MemorySignificance.CRITICAL
+        }
+        return significance_map.get(importance.lower(), MemorySignificance.MEDIUM)
     
     # =========================================================================
     # High-level memory operations (simplified for common use)
@@ -75,15 +172,8 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        # Map importance string to MemorySignificance enum
-        significance_map = {
-            "trivial": MemorySignificance.TRIVIAL,
-            "low": MemorySignificance.LOW,
-            "medium": MemorySignificance.MEDIUM,
-            "high": MemorySignificance.HIGH,
-            "critical": MemorySignificance.CRITICAL
-        }
-        significance = significance_map.get(importance.lower(), MemorySignificance.MEDIUM)
+        # Parse importance
+        significance = self._parse_importance(importance)
         
         # Add memory with integrated processing
         result = await self.integrated.add_memory(
@@ -164,9 +254,13 @@ class MemorySystem:
     # Specialized NPC memory functions
     # =========================================================================
     
-    async def npc_memory(self, npc_id: int) -> NPCMemoryManager:
+    async def npc_memory(self, npc_id: int):
         """Get a specialized memory manager for an NPC."""
-        return NPCMemoryManager(npc_id, self.user_id, self.conversation_id)
+        if self._npc_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._npc_manager_class = managers_module.NPCMemoryManager
+        
+        return self._npc_manager_class(npc_id, self.user_id, self.conversation_id)
     
     async def reveal_npc_trait(self, npc_id: int, trigger: str = None, 
                               severity: int = None) -> Dict[str, Any]:
@@ -184,7 +278,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        mask_manager = ProgressiveRevealManager(self.user_id, self.conversation_id)
+        if self._mask_manager_class is None:
+            masks_module = _lazy_import_masks()
+            self._mask_manager_class = masks_module.ProgressiveRevealManager
+        
+        mask_manager = self._mask_manager_class(self.user_id, self.conversation_id)
         return await mask_manager.generate_mask_slippage(
             npc_id=npc_id,
             trigger=trigger,
@@ -204,7 +302,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        mask_manager = ProgressiveRevealManager(self.user_id, self.conversation_id)
+        if self._mask_manager_class is None:
+            masks_module = _lazy_import_masks()
+            self._mask_manager_class = masks_module.ProgressiveRevealManager
+        
+        mask_manager = self._mask_manager_class(self.user_id, self.conversation_id)
         return await mask_manager.get_npc_mask(npc_id)
     
     async def npc_flashback(self, npc_id: int, context: str) -> Optional[Dict[str, Any]]:
@@ -221,7 +323,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        flashback_manager = FlashbackManager(ctx.context["user_id"], ctx.context["conversation_id"])
+        if self._flashback_manager_class is None:
+            flashbacks_module = _lazy_import_flashbacks()
+            self._flashback_manager_class = flashbacks_module.FlashbackManager
+        
+        flashback_manager = self._flashback_manager_class(self.user_id, self.conversation_id)
         return await flashback_manager.generate_flashback(
             entity_type="npc",
             entity_id=npc_id,
@@ -244,7 +350,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        emotional_manager = EmotionalMemoryManager(self.user_id, self.conversation_id)
+        if self._emotional_manager_class is None:
+            emotional_module = _lazy_import_emotional()
+            self._emotional_manager_class = emotional_module.EmotionalMemoryManager
+        
+        emotional_manager = self._emotional_manager_class(self.user_id, self.conversation_id)
         
         current_emotion = {
             "primary_emotion": emotion,
@@ -273,7 +383,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        emotional_manager = EmotionalMemoryManager(self.user_id, self.conversation_id)
+        if self._emotional_manager_class is None:
+            emotional_module = _lazy_import_emotional()
+            self._emotional_manager_class = emotional_module.EmotionalMemoryManager
+        
+        emotional_manager = self._emotional_manager_class(self.user_id, self.conversation_id)
         return await emotional_manager.get_entity_emotional_state(
             entity_type="npc",
             entity_id=npc_id
@@ -283,9 +397,13 @@ class MemorySystem:
     # Specialized DM (Nyx) memory functions
     # =========================================================================
     
-    async def dm_memory(self) -> NyxMemoryManager:
+    async def dm_memory(self):
         """Get a specialized memory manager for the DM (Nyx)."""
-        return NyxMemoryManager(self.user_id, self.conversation_id)
+        if self._nyx_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._nyx_manager_class = managers_module.NyxMemoryManager
+        
+        return self._nyx_manager_class(self.user_id, self.conversation_id)
     
     async def add_narrative_reflection(self, reflection: str, 
                                      reflection_type: str = "general",
@@ -304,17 +422,14 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        # Map importance string to MemorySignificance enum
-        significance_map = {
-            "trivial": MemorySignificance.TRIVIAL,
-            "low": MemorySignificance.LOW,
-            "medium": MemorySignificance.MEDIUM,
-            "high": MemorySignificance.HIGH,
-            "critical": MemorySignificance.CRITICAL
-        }
-        significance = significance_map.get(importance.lower(), MemorySignificance.MEDIUM)
+        # Parse importance
+        significance = self._parse_importance(importance)
         
-        nyx_manager = NyxMemoryManager(self.user_id, self.conversation_id)
+        if self._nyx_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._nyx_manager_class = managers_module.NyxMemoryManager
+        
+        nyx_manager = self._nyx_manager_class(self.user_id, self.conversation_id)
         return await nyx_manager.add_reflection(
             reflection=reflection,
             reflection_type=reflection_type,
@@ -331,7 +446,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        nyx_manager = NyxMemoryManager(self.user_id, self.conversation_id)
+        if self._nyx_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._nyx_manager_class = managers_module.NyxMemoryManager
+        
+        nyx_manager = self._nyx_manager_class(self.user_id, self.conversation_id)
         return await nyx_manager.get_narrative_state()
     
     async def generate_plot_hooks(self, count: int = 3) -> List[Dict[str, Any]]:
@@ -347,16 +466,24 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        nyx_manager = NyxMemoryManager(self.user_id, self.conversation_id)
+        if self._nyx_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._nyx_manager_class = managers_module.NyxMemoryManager
+        
+        nyx_manager = self._nyx_manager_class(self.user_id, self.conversation_id)
         return await nyx_manager.generate_plot_hooks(count=count)
     
     # =========================================================================
     # Specialized player memory functions
     # =========================================================================
     
-    async def player_memory(self, player_name: str) -> PlayerMemoryManager:
+    async def player_memory(self, player_name: str):
         """Get a specialized memory manager for a player."""
-        return PlayerMemoryManager(player_name, self.user_id, self.conversation_id)
+        if self._player_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._player_manager_class = managers_module.PlayerMemoryManager
+        
+        return self._player_manager_class(player_name, self.user_id, self.conversation_id)
     
     async def add_journal_entry(self, player_name: str, entry_text: str,
                               entry_type: str = "observation",
@@ -378,7 +505,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        player_manager = PlayerMemoryManager(player_name, self.user_id, self.conversation_id)
+        if self._player_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._player_manager_class = managers_module.PlayerMemoryManager
+        
+        player_manager = self._player_manager_class(player_name, self.user_id, self.conversation_id)
         return await player_manager.add_journal_entry(
             entry_text=entry_text,
             entry_type=entry_type,
@@ -402,7 +533,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        player_manager = PlayerMemoryManager(player_name, self.user_id, self.conversation_id)
+        if self._player_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._player_manager_class = managers_module.PlayerMemoryManager
+        
+        player_manager = self._player_manager_class(player_name, self.user_id, self.conversation_id)
         return await player_manager.get_journal_history(
             entry_type=entry_type,
             limit=limit
@@ -421,7 +556,11 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        player_manager = PlayerMemoryManager(player_name, self.user_id, self.conversation_id)
+        if self._player_manager_class is None:
+            managers_module = _lazy_import_managers()
+            self._player_manager_class = managers_module.PlayerMemoryManager
+        
+        player_manager = self._player_manager_class(player_name, self.user_id, self.conversation_id)
         return await player_manager.compile_player_profile()
     
     # =========================================================================
@@ -484,6 +623,7 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
+        # Access interference manager through integrated system
         interference_manager = self.integrated.interference_manager
         return await interference_manager.create_false_memory(
             entity_type=entity_type,
@@ -510,6 +650,7 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
+        # Access semantic manager through integrated system
         semantic_manager = self.integrated.semantic_manager
         return await semantic_manager.create_belief(
             entity_type=entity_type,
@@ -534,6 +675,7 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
+        # Access semantic manager through integrated system
         semantic_manager = self.integrated.semantic_manager
         return await semantic_manager.get_beliefs(
             entity_type=entity_type,
