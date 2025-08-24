@@ -23,69 +23,6 @@ from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance, with_governance_permission
 
-# Core lore components
-from lore.lore_generator import (
-    DynamicLoreGenerator,
-    WorldBuilder,
-    FactionGenerator,
-    LoreEvolution,
-    ComponentGeneratorFactory,
-    ComponentConfig
-)
-from lore.lore_system import LoreSystem
-from lore.main import MatriarchalLoreSystem
-from lore.setting_analyzer import SettingAnalyzer
-
-# Integration components
-from lore.integration import (
-    NPCLoreIntegration,
-    ConflictIntegration,
-    ContextEnhancer
-)
-
-# Framework components
-from lore.frameworks.matriarchal import MatriarchalPowerStructureFramework
-
-# Management components
-from lore.config import ConfigManager, LoreConfig
-from lore.error_manager import ErrorHandler, LoreError, ErrorType
-from lore.resource_manager import ResourceManager
-from lore.metrics import MetricsManager, metrics_manager
-from lore.validation import ValidationManager, validation_manager
-
-# Data access layer
-from lore.data_access import (
-    NPCDataAccess,
-    LocationDataAccess,
-    FactionDataAccess,
-    LoreKnowledgeAccess
-)
-
-# Agent components
-from lore.lore_agents import (
-    LoreAgentContext,
-    LoreDirectiveHandler,
-    BaseLoreAgent,
-    QuestAgent,
-    NarrativeAgent,
-    EnvironmentAgent,
-    FoundationAgent,
-    FactionAgent,
-    create_complete_lore_with_governance,
-    integrate_lore_with_npcs_with_governance,
-    generate_scene_description_with_lore_and_governance
-)
-
-# Schemas
-from lore.unified_schemas import (
-    FoundationLoreOutput,
-    FactionsOutput,
-    CulturalElementsOutput,
-    HistoricalEventsOutput,
-    LocationsOutput,
-    QuestsOutput
-)
-
 logger = logging.getLogger(__name__)
 
 # Singleton instance storage
@@ -139,39 +76,45 @@ class LoreOrchestrator:
         self.initialized = False
         
         # Core components (initialized on demand)
-        self._lore_system: Optional[LoreSystem] = None
-        self._matriarchal_system: Optional[MatriarchalLoreSystem] = None
-        self._dynamic_generator: Optional[DynamicLoreGenerator] = None
-        self._setting_analyzer: Optional[SettingAnalyzer] = None
+        self._lore_system = None
+        self._matriarchal_system = None
+        self._dynamic_generator = None
+        self._setting_analyzer = None
         
         # Integration components
-        self._npc_integration: Optional[NPCLoreIntegration] = None
-        self._conflict_integration: Optional[ConflictIntegration] = None
-        self._context_enhancer: Optional[ContextEnhancer] = None
+        self._npc_integration = None
+        self._conflict_integration = None
+        self._context_enhancer = None
         
         # Framework components
-        self._matriarchal_framework: Optional[MatriarchalPowerStructureFramework] = None
+        self._matriarchal_framework = None
         
         # Management components
-        self._config_manager: Optional[ConfigManager] = None
-        self._error_handler: Optional[ErrorHandler] = None
-        self._resource_manager: Optional[ResourceManager] = None
-        self._validation_manager: Optional[ValidationManager] = None
+        self._config_manager = None
+        self._error_handler = None
+        self._resource_manager = None
+        self._validation_manager = None
         
         # Agent components
-        self._agent_context: Optional[LoreAgentContext] = None
-        self._directive_handler: Optional[LoreDirectiveHandler] = None
-        self._quest_agent: Optional[QuestAgent] = None
-        self._narrative_agent: Optional[NarrativeAgent] = None
-        self._environment_agent: Optional[EnvironmentAgent] = None
-        self._foundation_agent: Optional[FoundationAgent] = None
-        self._faction_agent: Optional[FactionAgent] = None
+        self._agent_context = None
+        self._directive_handler = None
+        self._quest_agent = None
+        self._narrative_agent = None
+        self._environment_agent = None
+        self._foundation_agent = None
+        self._faction_agent = None
+        
+        # Extended systems (lazy loaded)
+        self._regional_culture_system = None
+        self._national_conflict_system = None
+        self._religious_distribution_system = None
+        self._lore_update_system = None
         
         # Governance
         self._governor = None
         
         # Component factory
-        self._component_factory: Optional[ComponentGeneratorFactory] = None
+        self._component_factory = None
         
         # Initialization tracking
         self._init_lock = asyncio.Lock()
@@ -229,6 +172,7 @@ class LoreOrchestrator:
     
     async def _initialize_config(self):
         """Initialize configuration management."""
+        from lore.config import ConfigManager
         self._config_manager = ConfigManager()
         await self._config_manager.load_config()
         self._component_init_status['config'] = True
@@ -236,6 +180,7 @@ class LoreOrchestrator:
     
     async def _initialize_error_handling(self):
         """Initialize error handling."""
+        from lore.error_manager import ErrorHandler
         self._error_handler = ErrorHandler(self.user_id, self.conversation_id, self._config_manager.config)
         await self._error_handler.start_monitoring()
         self._component_init_status['error_handling'] = True
@@ -243,6 +188,7 @@ class LoreOrchestrator:
     
     async def _initialize_resource_management(self):
         """Initialize resource management."""
+        from lore.resource_manager import ResourceManager
         self._resource_manager = ResourceManager(
             self.user_id, 
             self.conversation_id,
@@ -254,6 +200,7 @@ class LoreOrchestrator:
     
     async def _initialize_validation(self):
         """Initialize validation system."""
+        from lore.validation import validation_manager
         self._validation_manager = validation_manager
         await self._validation_manager.initialize()
         self._component_init_status['validation'] = True
@@ -262,6 +209,7 @@ class LoreOrchestrator:
     async def _initialize_metrics(self):
         """Initialize metrics collection."""
         # Metrics manager is already a singleton
+        from lore.metrics import metrics_manager
         self._component_init_status['metrics'] = True
         logger.info("Metrics collection initialized")
     
@@ -301,6 +249,7 @@ class LoreOrchestrator:
                 
         except Exception as e:
             if self._error_handler:
+                from lore.error_manager import LoreError, ErrorType
                 error = LoreError(f"Failed to generate world: {str(e)}", ErrorType.UNKNOWN)
                 await self._error_handler.handle_error(error)
             raise
@@ -357,7 +306,7 @@ class LoreOrchestrator:
         integration = await self._get_npc_integration(npc_id)
         
         # Create a mock context for governance
-        ctx = type('obj', (object,), {'npc_id': npc_id})()
+        ctx = self._create_mock_context(npc_id=npc_id)
         
         return await integration.initialize_npc_lore_knowledge(
             ctx,
@@ -383,9 +332,84 @@ class LoreOrchestrator:
         integration = await self._get_npc_integration(npc_id)
         
         # Create a mock context for governance
-        ctx = type('obj', (object,), {'npc_id': npc_id})()
+        ctx = self._create_mock_context(npc_id=npc_id)
         
         return await integration.process_npc_lore_interaction(ctx, npc_id, player_input)
+    
+    async def apply_dialect_to_npc_text(self, text: str, dialect_id: int, intensity: str = 'medium', npc_id: Optional[int] = None) -> str:
+        """
+        Apply dialect features to NPC text.
+        
+        Args:
+            text: Original text
+            dialect_id: ID of the dialect to apply
+            intensity: Intensity of dialect application ('light', 'medium', 'strong')
+            npc_id: Optional NPC ID for personalized dialect features
+            
+        Returns:
+            Modified text with dialect features applied
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        integration = await self._get_npc_integration(npc_id)
+        return await integration.apply_dialect_to_text(text, dialect_id, intensity, npc_id)
+    
+    async def get_npc_data(self, npc_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """
+        Get NPC data for a list of NPC IDs.
+        
+        Args:
+            npc_ids: List of NPC IDs
+            
+        Returns:
+            Dictionary mapping NPC IDs to their data
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        from lore.lore_agents import get_npc_data
+        return await get_npc_data(npc_ids)
+    
+    async def determine_relevant_lore_for_npc(self, npc_id: int, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Determine which lore elements are relevant to a specific NPC.
+        
+        Args:
+            npc_id: The ID of the NPC
+            context: Optional context dictionary
+            
+        Returns:
+            Dict containing relevant lore elements and their relevance scores
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        from lore.lore_agents import determine_relevant_lore
+        return await determine_relevant_lore(npc_id, context)
+    
+    async def integrate_npc_lore(
+        self, 
+        npc_id: int, 
+        relevant_lore: Dict[str, Any], 
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Integrate relevant lore with an NPC, updating their knowledge and beliefs.
+        
+        Args:
+            npc_id: The ID of the NPC
+            relevant_lore: Dictionary of relevant lore elements
+            context: Optional context dictionary
+            
+        Returns:
+            Dict containing integration results
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        from lore.lore_agents import integrate_npc_lore
+        return await integrate_npc_lore(npc_id, relevant_lore, context)
     
     # ===== LOCATION OPERATIONS =====
     
@@ -421,6 +445,23 @@ class LoreOrchestrator:
         
         enhancer = await self._get_context_enhancer()
         return await enhancer.generate_scene_description(location_name)
+    
+    async def get_location_data(self, location_name: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Retrieve location-specific data including environment, NPCs, and lore.
+        
+        Args:
+            location_name: Name of the location
+            context: Optional context dictionary
+            
+        Returns:
+            Dict containing location data
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        from lore.lore_agents import get_location_data
+        return await get_location_data(location_name, context)
     
     # ===== CONFLICT MANAGEMENT =====
     
@@ -471,6 +512,300 @@ class LoreOrchestrator:
         
         integration = await self._get_conflict_integration()
         return await integration.generate_faction_conflict(faction_a_id, faction_b_id)
+    
+    async def get_faction_conflicts(self, faction_id: int) -> List[Dict[str, Any]]:
+        """
+        Get conflicts involving a specific faction.
+        
+        Args:
+            faction_id: ID of the faction
+            
+        Returns:
+            List of conflicts
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        integration = await self._get_conflict_integration()
+        return await integration.get_faction_conflicts(faction_id)
+    
+    # ===== CULTURAL SYSTEMS =====
+    
+    async def generate_languages(self, count: int = 5) -> List[Dict[str, Any]]:
+        """
+        Generate languages for the world.
+        
+        Args:
+            count: Number of languages to generate
+            
+        Returns:
+            List of generated languages
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context()
+        
+        return await culture_system.generate_languages(ctx, count)
+    
+    async def generate_cultural_norms(self, nation_id: int) -> List[Dict[str, Any]]:
+        """
+        Generate cultural norms for a specific nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            List of generated cultural norms
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context(nation_id=nation_id)
+        
+        return await culture_system.generate_cultural_norms(ctx, nation_id)
+    
+    async def generate_etiquette(self, nation_id: int) -> List[Dict[str, Any]]:
+        """
+        Generate etiquette systems for a specific nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            List of generated etiquette systems
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context(nation_id=nation_id)
+        
+        return await culture_system.generate_etiquette(ctx, nation_id)
+    
+    async def get_nation_culture(self, nation_id: int) -> Dict[str, Any]:
+        """
+        Get comprehensive cultural information about a nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            Dictionary with nation's cultural information
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        culture_system = await self._get_regional_culture_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context(nation_id=nation_id)
+        
+        return await culture_system.get_nation_culture(ctx, nation_id)
+    
+    # ===== NATIONAL CONFLICTS AND DOMESTIC ISSUES =====
+    
+    async def generate_domestic_issues(self, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
+        """
+        Generate domestic issues for a specific nation.
+        
+        Args:
+            nation_id: ID of the nation
+            count: Number of issues to generate
+            
+        Returns:
+            List of generated domestic issues
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        conflict_system = await self._get_national_conflict_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context(nation_id=nation_id, count=count)
+        
+        return await conflict_system.generate_domestic_issues(ctx, nation_id, count)
+    
+    async def generate_initial_conflicts(self, count: int = 3) -> List[Dict[str, Any]]:
+        """
+        Generate initial conflicts between nations.
+        
+        Args:
+            count: Number of conflicts to generate
+            
+        Returns:
+            List of generated conflicts
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        conflict_system = await self._get_national_conflict_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context(count=count)
+        
+        return await conflict_system.generate_initial_conflicts(ctx, count)
+    
+    async def get_nation_issues(self, nation_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all domestic issues for a nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            List of domestic issues
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        conflict_system = await self._get_national_conflict_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context(nation_id=nation_id)
+        
+        return await conflict_system.get_nation_issues(ctx, nation_id)
+    
+    async def evolve_all_conflicts(self, days_passed: int = 7) -> Dict[str, Any]:
+        """
+        Evolve all active conflicts and domestic issues over time.
+        
+        Args:
+            days_passed: Number of days that have passed
+            
+        Returns:
+            Evolution results
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        conflict_system = await self._get_national_conflict_system()
+        
+        # Create mock context with the expected structure for governance
+        ctx = self._create_mock_context(
+            action='evolve_conflicts',
+            days_passed=days_passed
+        )
+        
+        # Note: If evolve_all_conflicts is not implemented in NationalConflictSystem,
+        # this will need to be implemented or use an alternative method
+        if hasattr(conflict_system, 'evolve_all_conflicts'):
+            return await conflict_system.evolve_all_conflicts(ctx, days_passed)
+        else:
+            # Fallback: Get active conflicts and return them as-is
+            logger.warning("evolve_all_conflicts not implemented, returning current conflicts")
+            return {
+                'conflicts': await conflict_system.get_active_conflicts(ctx),
+                'evolved': False,
+                'message': 'Evolution not yet implemented'
+            }
+    
+    async def get_active_national_conflicts(self) -> List[Dict[str, Any]]:
+        """
+        Get all active national/international conflicts.
+        
+        Returns:
+            List of active national conflicts
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        conflict_system = await self._get_national_conflict_system()
+        
+        # Create mock context for governance
+        ctx = self._create_mock_context()
+        
+        return await conflict_system.get_active_conflicts(ctx)
+    
+    # ===== RELIGIOUS SYSTEMS =====
+    
+    async def distribute_religions(self) -> List[Dict[str, Any]]:
+        """
+        Distribute religions across nations.
+        
+        Returns:
+            List of national religion distributions
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        religious_system = await self._get_religious_distribution_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context()
+        
+        return await religious_system.distribute_religions(ctx)
+    
+    async def get_nation_religion(self, nation_id: int) -> Dict[str, Any]:
+        """
+        Get comprehensive religious information about a nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            Dictionary with nation's religious information
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        religious_system = await self._get_religious_distribution_system()
+        
+        # Create a mock context for governance
+        ctx = self._create_mock_context(nation_id=nation_id)
+        
+        return await religious_system.get_nation_religion(ctx, nation_id)
+    
+    # ===== LORE UPDATE SYSTEM =====
+    
+    async def generate_lore_updates(
+        self,
+        affected_elements: List[Dict[str, Any]],
+        event_description: str,
+        player_character: Dict[str, Any] = None,
+        dominant_npcs: List[Dict[str, Any]] = None,
+        world_state: Dict[str, Any] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate sophisticated updates for affected lore elements.
+        
+        Args:
+            affected_elements: List of affected lore elements
+            event_description: Description of the event
+            player_character: Optional player character data
+            dominant_npcs: Optional list of ruling NPCs
+            world_state: Optional current world state data
+            
+        Returns:
+            List of detailed updates with cascading effects
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        update_system = await self._get_lore_update_system()
+        
+        # Create a mock context for governance with event details
+        ctx = self._create_mock_context(
+            event_description=event_description[:100],  # Truncate for context
+            affected_count=len(affected_elements)
+        )
+        
+        return await update_system.generate_lore_updates(
+            ctx,
+            affected_elements,
+            event_description,
+            player_character,
+            dominant_npcs,
+            world_state
+        )
     
     # ===== QUEST MANAGEMENT =====
     
@@ -579,9 +914,25 @@ class LoreOrchestrator:
         agent = await self._get_environment_agent()
         return await agent.update_environment_state(location_id, updates)
     
+    async def update_game_time(self, time_data: Dict[str, Any]) -> bool:
+        """
+        Update game time and trigger related events.
+        
+        Args:
+            time_data: Time update data
+            
+        Returns:
+            Success status
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        agent = await self._get_environment_agent()
+        return await agent.update_game_time(time_data)
+    
     # ===== COMPONENT GENERATION =====
     
-    async def generate_component(self, component_type: str, context: Dict[str, Any], config: Optional[ComponentConfig] = None) -> Dict[str, Any]:
+    async def generate_component(self, component_type: str, context: Dict[str, Any], config: Optional[Any] = None) -> Dict[str, Any]:
         """
         Generate a specific lore component.
         
@@ -596,8 +947,19 @@ class LoreOrchestrator:
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
         
+        from lore.lore_generator import ComponentGeneratorFactory, ComponentConfig
         factory = await self._get_component_factory()
-        generator = factory.create_generator(component_type, self.user_id, self.conversation_id, config)
+        
+        # Convert config if needed
+        if config and not isinstance(config, ComponentConfig):
+            config = ComponentConfig(**config) if isinstance(config, dict) else None
+        
+        generator = ComponentGeneratorFactory.create_generator(
+            component_type, 
+            self.user_id, 
+            self.conversation_id, 
+            config
+        )
         await generator.initialize()
         return await generator.generate(context)
     
@@ -616,7 +978,7 @@ class LoreOrchestrator:
         analyzer = await self._get_setting_analyzer()
         
         # Create a mock context for governance
-        ctx = type('obj', (object,), {})()
+        ctx = self._create_mock_context()
         
         demographics = await analyzer.analyze_setting_demographics(ctx)
         organizations = await analyzer.generate_organizations(ctx)
@@ -625,6 +987,55 @@ class LoreOrchestrator:
             "demographics": demographics,
             "organizations": organizations
         }
+    
+    async def analyze_setting_demographics(self) -> Dict[str, Any]:
+        """
+        Analyze the demographics and social structure of the setting.
+        
+        Returns:
+            Demographics analysis
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        agent = await self._get_foundation_agent()
+        npc_data = await agent.aggregate_npc_data()
+        return await agent.analyze_setting_demographics(npc_data)
+    
+    # ===== DIRECTIVE HANDLING =====
+    
+    async def process_directives(self, force_check: bool = False) -> Dict[str, Any]:
+        """
+        Process all active directives for lore agents.
+        
+        Args:
+            force_check: Whether to force checking directives
+            
+        Returns:
+            Processing results
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        directive_handler = await self._get_directive_handler()
+        return await directive_handler.process_directives(force_check)
+    
+    async def check_permission(self, action_type: str, details: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Check if an action is permitted based on directives.
+        
+        Args:
+            action_type: Type of action to check
+            details: Optional action details
+            
+        Returns:
+            Permission status dictionary
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        directive_handler = await self._get_directive_handler()
+        return await directive_handler.check_permission(action_type, details)
     
     # ===== VALIDATION =====
     
@@ -664,6 +1075,7 @@ class LoreOrchestrator:
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
         
+        from lore.metrics import metrics_manager
         return await metrics_manager.get_metrics_summary()
     
     # ===== RESOURCE MANAGEMENT =====
@@ -720,7 +1132,11 @@ class LoreOrchestrator:
             self._dynamic_generator,
             self._npc_integration,
             self._conflict_integration,
-            self._context_enhancer
+            self._context_enhancer,
+            self._regional_culture_system,
+            self._national_conflict_system,
+            self._religious_distribution_system,
+            self._lore_update_system
         ]:
             if component and hasattr(component, 'cleanup'):
                 await component.cleanup()
@@ -733,25 +1149,66 @@ class LoreOrchestrator:
         self.initialized = False
         logger.info("Lore Orchestrator cleanup complete")
     
+    # ===== UTILITY METHODS =====
+    
+    def _create_mock_context(self, **attributes) -> object:
+        """
+        Create a mock context object for governance decorators.
+        
+        This utility method creates lightweight mock objects that satisfy
+        the requirements of @with_governance decorated functions without
+        requiring full governance context imports.
+        
+        Args:
+            **attributes: Key-value pairs to set as object attributes
+            
+        Returns:
+            Mock object with specified attributes
+            
+        Examples:
+            # Simple context
+            ctx = self._create_mock_context()
+            
+            # Context with NPC ID
+            ctx = self._create_mock_context(npc_id=123)
+            
+            # Context with nested structure
+            ctx = self._create_mock_context(
+                context={'user_id': 1, 'conversation_id': 2}
+            )
+        """
+        # Default context structure many governance decorators expect
+        if 'context' not in attributes:
+            attributes['context'] = {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            }
+        
+        # Create and return mock object with attributes
+        return type('MockContext', (object,), attributes)()
+    
     # ===== COMPONENT GETTERS (Lazy Initialization) =====
     
-    async def _get_lore_system(self) -> LoreSystem:
+    async def _get_lore_system(self):
         """Get or initialize the core lore system."""
         if not self._lore_system:
+            from lore.lore_system import LoreSystem
             self._lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
             await self._lore_system.initialize()
         return self._lore_system
     
-    async def _get_matriarchal_system(self) -> MatriarchalLoreSystem:
+    async def _get_matriarchal_system(self):
         """Get or initialize the matriarchal lore system."""
         if not self._matriarchal_system:
+            from lore.main import MatriarchalLoreSystem
             self._matriarchal_system = MatriarchalLoreSystem(self.user_id, self.conversation_id)
             await self._matriarchal_system.ensure_initialized()
         return self._matriarchal_system
     
-    async def _get_dynamic_generator(self) -> DynamicLoreGenerator:
+    async def _get_dynamic_generator(self):
         """Get or initialize the dynamic lore generator."""
         if not self._dynamic_generator:
+            from lore.lore_generator import DynamicLoreGenerator
             self._dynamic_generator = DynamicLoreGenerator.get_instance(
                 self.user_id, 
                 self.conversation_id,
@@ -760,88 +1217,147 @@ class LoreOrchestrator:
             await self._dynamic_generator.initialize()
         return self._dynamic_generator
     
-    async def _get_setting_analyzer(self) -> SettingAnalyzer:
+    async def _get_setting_analyzer(self):
         """Get or initialize the setting analyzer."""
         if not self._setting_analyzer:
+            from lore.setting_analyzer import SettingAnalyzer
             self._setting_analyzer = SettingAnalyzer(self.user_id, self.conversation_id)
             await self._setting_analyzer.initialize_governance()
         return self._setting_analyzer
     
-    async def _get_npc_integration(self, npc_id: Optional[int] = None) -> NPCLoreIntegration:
+    async def _get_npc_integration(self, npc_id: Optional[int] = None):
         """Get or initialize NPC lore integration."""
         if not self._npc_integration:
+            from lore.integration import NPCLoreIntegration
             self._npc_integration = NPCLoreIntegration(self.user_id, self.conversation_id, npc_id)
             self._npc_integration.governor = self._governor
             await self._npc_integration.initialize()
         return self._npc_integration
     
-    async def _get_conflict_integration(self) -> ConflictIntegration:
+    async def _get_conflict_integration(self):
         """Get or initialize conflict integration."""
         if not self._conflict_integration:
+            from lore.integration import ConflictIntegration
             self._conflict_integration = ConflictIntegration(self.user_id, self.conversation_id)
             self._conflict_integration.governor = self._governor
             await self._conflict_integration.initialize()
         return self._conflict_integration
     
-    async def _get_context_enhancer(self) -> ContextEnhancer:
+    async def _get_context_enhancer(self):
         """Get or initialize context enhancer."""
         if not self._context_enhancer:
+            from lore.integration import ContextEnhancer
             self._context_enhancer = ContextEnhancer(self.user_id, self.conversation_id)
             self._context_enhancer.governor = self._governor
             await self._context_enhancer.initialize()
         return self._context_enhancer
     
-    async def _get_agent_context(self) -> LoreAgentContext:
+    async def _get_regional_culture_system(self):
+        """Get or initialize regional culture system."""
+        if not self._regional_culture_system:
+            from lore.matriarchal_lore_system import RegionalCultureSystem
+            self._regional_culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
+            await self._regional_culture_system.initialize_tables()
+            await self._regional_culture_system.initialize_governance()
+        return self._regional_culture_system
+    
+    async def _get_national_conflict_system(self):
+        """Get or initialize national conflict system."""
+        if not self._national_conflict_system:
+            from lore.matriarchal_lore_system import NationalConflictSystem
+            self._national_conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
+            await self._national_conflict_system.initialize_tables()
+            await self._national_conflict_system.initialize_governance()
+        return self._national_conflict_system
+    
+    async def _get_religious_distribution_system(self):
+        """Get or initialize religious distribution system."""
+        if not self._religious_distribution_system:
+            from lore.matriarchal_lore_system import ReligiousDistributionSystem
+            self._religious_distribution_system = ReligiousDistributionSystem(self.user_id, self.conversation_id)
+            await self._religious_distribution_system.initialize_tables()
+            await self._religious_distribution_system.initialize_governance()
+        return self._religious_distribution_system
+    
+    async def _get_lore_update_system(self):
+        """Get or initialize lore update system."""
+        if not self._lore_update_system:
+            from lore.matriarchal_lore_system import LoreUpdateSystem
+            self._lore_update_system = LoreUpdateSystem(self.user_id, self.conversation_id)
+            await self._lore_update_system.initialize_governance()
+        return self._lore_update_system
+    
+    async def _get_agent_context(self):
         """Get or initialize agent context."""
         if not self._agent_context:
+            from lore.lore_agents import LoreAgentContext
             self._agent_context = LoreAgentContext(self.user_id, self.conversation_id)
             await self._agent_context.start()
         return self._agent_context
     
-    async def _get_quest_agent(self) -> QuestAgent:
+    async def _get_directive_handler(self):
+        """Get or initialize directive handler."""
+        if not self._directive_handler:
+            from lore.lore_agents import LoreDirectiveHandler
+            self._directive_handler = LoreDirectiveHandler(
+                self.user_id,
+                self.conversation_id,
+                AgentType.NARRATIVE_CRAFTER,
+                "lore_orchestrator"
+            )
+            await self._directive_handler.initialize()
+        return self._directive_handler
+    
+    async def _get_quest_agent(self):
         """Get or initialize quest agent."""
         if not self._quest_agent:
+            from lore.lore_agents import QuestAgent
             lore_system = await self._get_lore_system()
             self._quest_agent = QuestAgent(lore_system)
             await self._quest_agent.initialize()
         return self._quest_agent
     
-    async def _get_narrative_agent(self) -> NarrativeAgent:
+    async def _get_narrative_agent(self):
         """Get or initialize narrative agent."""
         if not self._narrative_agent:
+            from lore.lore_agents import NarrativeAgent
             lore_system = await self._get_lore_system()
             self._narrative_agent = NarrativeAgent(lore_system)
             await self._narrative_agent.initialize()
         return self._narrative_agent
     
-    async def _get_environment_agent(self) -> EnvironmentAgent:
+    async def _get_environment_agent(self):
         """Get or initialize environment agent."""
         if not self._environment_agent:
+            from lore.lore_agents import EnvironmentAgent
             lore_system = await self._get_lore_system()
             self._environment_agent = EnvironmentAgent(lore_system)
             await self._environment_agent.initialize()
         return self._environment_agent
     
-    async def _get_foundation_agent(self) -> FoundationAgent:
+    async def _get_foundation_agent(self):
         """Get or initialize foundation agent."""
         if not self._foundation_agent:
+            from lore.lore_agents import FoundationAgent
             lore_system = await self._get_lore_system()
             self._foundation_agent = FoundationAgent(lore_system)
             await self._foundation_agent.initialize()
         return self._foundation_agent
     
-    async def _get_faction_agent(self) -> FactionAgent:
+    async def _get_faction_agent(self):
         """Get or initialize faction agent."""
         if not self._faction_agent:
+            from lore.lore_agents import FactionAgent
             lore_system = await self._get_lore_system()
             self._faction_agent = FactionAgent(lore_system)
             await self._faction_agent.initialize()
         return self._faction_agent
     
-    async def _get_component_factory(self) -> ComponentGeneratorFactory:
+    async def _get_component_factory(self):
         """Get or initialize component factory."""
         if not self._component_factory:
-            self._component_factory = ComponentGeneratorFactory()
+            from lore.lore_generator import ComponentGeneratorFactory
+            self._component_factory = ComponentGeneratorFactory
         return self._component_factory
 
 
@@ -881,7 +1397,7 @@ async def generate_world(user_id: int, conversation_id: int, environment_desc: s
     orchestrator = await get_lore_orchestrator(user_id, conversation_id)
     
     # Create a mock context for governance
-    ctx = type('obj', (object,), {})()
+    ctx = orchestrator._create_mock_context()
     
     return await orchestrator.generate_complete_world(ctx, environment_desc, **kwargs)
 
@@ -902,7 +1418,7 @@ async def evolve_world(user_id: int, conversation_id: int, event_description: st
     orchestrator = await get_lore_orchestrator(user_id, conversation_id)
     
     # Create a mock context for governance
-    ctx = type('obj', (object,), {})()
+    ctx = orchestrator._create_mock_context()
     
     return await orchestrator.evolve_world_with_event(ctx, event_description, **kwargs)
 
