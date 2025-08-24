@@ -1,13 +1,13 @@
-# lore/lore_orchestrator.py - FULLY INTEGRATED VERSION WITH ALL SPECIALIZED MANAGERS
+# lore/lore_orchestrator.py - FULLY INTEGRATED VERSION WITH ALL MODULES
 
 """
 Lore Orchestrator - Unified Entry Point for All Lore Functionality
 
 This module provides a single, comprehensive interface to all lore system components,
-managing initialization, resource allocation, and coordination between subsystems.
+including politics, religion, and world lore management with full resource management.
 
-FULLY INTEGRATED: Now includes education, geopolitical, and local lore managers
-with all their specialized functionality accessible through this single orchestrator.
+FULLY INTEGRATED: Includes education, geopolitical, local lore, politics, religion, 
+and world lore managers with all their specialized functionality.
 """
 
 import logging
@@ -17,6 +17,10 @@ from datetime import datetime
 import json
 from enum import Enum
 from dataclasses import dataclass
+import uuid
+import os
+import asyncpg
+import random
 
 # Core imports
 from db.connection import get_db_connection_context
@@ -25,6 +29,12 @@ from db.connection import get_db_connection_context
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance, with_governance_permission
+
+# Agents SDK imports for new managers
+from agents import Agent, function_tool, Runner, ModelSettings, trace, handoff
+from agents.run import RunConfig
+from agents.run_context import RunContextWrapper
+from pydantic import BaseModel, Field
 
 # Import the specialized manager input/output models
 from lore.managers.education import (
@@ -43,7 +53,23 @@ from lore.managers.local_lore import (
     NarrativeStyle, EvolutionType, ConnectionType
 )
 
+# Import models from politics module
+from lore.managers.politics import (
+    DiplomaticNegotiationResult, MediaCoverageItem, DiplomaticNegotiation,
+    FactionAgentProxy
+)
+
+# Import models from religion module  
+from lore.managers.religion import (
+    DeityParams, PantheonParams, ReligiousPracticeParams, HolySiteParams,
+    ReligiousTextParams, ReligiousOrderParams, ReligiousConflictParams,
+    NationReligionDistribution, CompleteRitual, SectarianPosition
+)
+
 logger = logging.getLogger(__name__)
+
+# Database connection
+DB_DSN = os.getenv("DB_DSN")
 
 # Singleton instance storage
 _ORCHESTRATOR_INSTANCES: Dict[Tuple[int, int], "LoreOrchestrator"] = {}
@@ -62,6 +88,8 @@ class OrchestratorConfig:
     max_parallel_operations: int = 10
     auto_initialize: bool = True
     resource_limits: Dict[str, Any] = None
+    redis_url: Optional[str] = None
+    max_size_mb: float = 100
     
 
 class LoreOrchestrator:
@@ -73,6 +101,9 @@ class LoreOrchestrator:
     - Educational system management
     - Geopolitical system management  
     - Local lore and urban myth management
+    - Politics and diplomacy management
+    - Religion and faith systems management
+    - World lore and resource management
     - Canon system for canonical state management
     - Cache system for performance optimization
     - Registry system for manager coordination
@@ -119,10 +150,13 @@ class LoreOrchestrator:
         self._canon_validation = None
         self._canonical_context_class = None
         
-        # Specialized managers (NEW - lazy loaded)
+        # Specialized managers (lazy loaded)
         self._education_manager = None
         self._geopolitical_manager = None
         self._local_lore_manager = None
+        self._politics_manager = None  # NEW
+        self._religion_manager = None  # NEW
+        self._world_lore_manager = None  # NEW
         
         # Integration components
         self._npc_integration = None
@@ -162,6 +196,12 @@ class LoreOrchestrator:
         
         # Component factory
         self._component_factory = None
+        
+        # World coordination components (NEW)
+        self._master_coordinator = None
+        self._unified_trace_system = None
+        self._content_validator = None
+        self._relationship_mapper = None
         
         # Initialization tracking
         self._init_lock = asyncio.Lock()
@@ -269,7 +309,7 @@ class LoreOrchestrator:
         self._component_init_status['metrics'] = True
         logger.info("Metrics collection initialized")
     
-    # ===== EDUCATIONAL SYSTEM OPERATIONS (NEW SECTION) =====
+    # ===== EDUCATIONAL SYSTEM OPERATIONS =====
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -527,7 +567,7 @@ class LoreOrchestrator:
         
         return await get_teaching_contents(run_ctx, system_id, subject_area, include_restricted)
     
-    # ===== GEOPOLITICAL OPERATIONS (NEW SECTION) =====
+    # ===== GEOPOLITICAL OPERATIONS =====
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -788,7 +828,7 @@ class LoreOrchestrator:
             run_ctx, agent_name, target_nation, operation_type, secrecy_level
         )
     
-    # ===== LOCAL LORE OPERATIONS (NEW SECTION) =====
+    # ===== LOCAL LORE OPERATIONS =====
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1134,6 +1174,537 @@ class LoreOrchestrator:
         })
         
         return await simulate_myth_transmission(run_ctx, myth_id, target_regions, transmission_steps)
+    
+    # ===== POLITICS OPERATIONS (NEW SECTION) =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="political_operation",
+        action_description="Performing political operation",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def add_nation(
+        self, ctx,
+        name: str,
+        government_type: str,
+        description: str,
+        relative_power: int,
+        matriarchy_level: int,
+        **kwargs
+    ) -> int:
+        """Add a nation to the political landscape."""
+        manager = await self._get_politics_manager()
+        return await manager.add_nation(
+            ctx, name, government_type, description, relative_power,
+            matriarchy_level, **kwargs
+        )
+    
+    async def add_international_relation(
+        self, ctx,
+        nation1_id: int,
+        nation2_id: int,
+        relationship_type: str,
+        relationship_quality: int,
+        description: str,
+        **kwargs
+    ) -> int:
+        """Add or update international relations between nations."""
+        manager = await self._get_politics_manager()
+        return await manager.add_international_relation(
+            ctx, nation1_id, nation2_id, relationship_type, 
+            relationship_quality, description, **kwargs
+        )
+    
+    async def get_all_nations(self, ctx) -> List[Dict[str, Any]]:
+        """Get all nations in the world."""
+        manager = await self._get_politics_manager()
+        return await manager.get_all_nations(ctx)
+    
+    async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
+        """Generate initial conflicts between nations."""
+        manager = await self._get_politics_manager()
+        return await manager.generate_initial_conflicts(ctx, count)
+    
+    async def stream_crisis_events(self, ctx, conflict_id: int) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream real-time updates about an evolving crisis."""
+        manager = await self._get_politics_manager()
+        async for event in manager.stream_crisis_events(ctx, conflict_id):
+            yield event
+    
+    async def simulate_diplomatic_negotiation(
+        self, ctx, 
+        nation1_id: int, 
+        nation2_id: int, 
+        issue: str
+    ) -> Dict[str, Any]:
+        """Simulate diplomatic negotiations between two nations."""
+        manager = await self._get_politics_manager()
+        return await manager.simulate_diplomatic_negotiation(ctx, nation1_id, nation2_id, issue)
+    
+    async def simulate_media_coverage(self, ctx, event_id: int) -> Dict[str, Any]:
+        """Simulate media coverage of a political event from different perspectives."""
+        manager = await self._get_politics_manager()
+        return await manager.simulate_media_coverage(ctx, event_id)
+    
+    async def generate_domestic_issues(self, ctx, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
+        """Generate domestic issues for a specific nation."""
+        manager = await self._get_politics_manager()
+        return await manager.generate_domestic_issues(ctx, nation_id, count)
+    
+    async def get_active_conflicts(self, ctx) -> List[Dict[str, Any]]:
+        """Get all active conflicts."""
+        manager = await self._get_politics_manager()
+        return await manager.get_active_conflicts(ctx)
+    
+    async def get_nation_politics(self, ctx, nation_id: int) -> Dict[str, Any]:
+        """Get comprehensive political information about a nation."""
+        manager = await self._get_politics_manager()
+        return await manager.get_nation_politics(ctx, nation_id)
+    
+    async def evolve_all_conflicts(self, ctx, days_passed: int = 30) -> Dict[str, Any]:
+        """Evolve all active conflicts over time."""
+        manager = await self._get_politics_manager()
+        return await manager.evolve_all_conflicts(ctx, days_passed)
+    
+    async def simulate_political_reforms(self, ctx, nation_id: int) -> Dict[str, Any]:
+        """Model how a nation's political system might evolve under pressure."""
+        manager = await self._get_politics_manager()
+        return await manager.simulate_political_reforms(ctx, nation_id)
+    
+    async def track_dynasty_lineage(
+        self, ctx, 
+        dynasty_id: int, 
+        generations_to_advance: int = 1
+    ) -> Dict[str, Any]:
+        """Advance a dynasty by generations."""
+        manager = await self._get_politics_manager()
+        return await manager.track_dynasty_lineage(ctx, dynasty_id, generations_to_advance)
+    
+    async def initialize_faction_proxies(self, ctx) -> Dict[str, Any]:
+        """Initialize agent proxies for all factions in the world."""
+        manager = await self._get_politics_manager()
+        return await manager.initialize_faction_proxies(ctx)
+    
+    async def execute_coup(self, ctx, nation_id: int, new_leader_id: int, reason: str) -> Dict[str, Any]:
+        """Execute a coup in a nation."""
+        manager = await self._get_politics_manager()
+        return await manager.execute_coup(ctx, nation_id, new_leader_id, reason)
+    
+    # ===== RELIGION OPERATIONS (NEW SECTION) =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="religious_operation",
+        action_description="Performing religious operation",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def add_deity(self, ctx, params: DeityParams) -> int:
+        """Add a deity to the pantheon."""
+        manager = await self._get_religion_manager()
+        return await manager.add_deity(ctx, params)
+    
+    async def add_pantheon(self, ctx, params: PantheonParams) -> int:
+        """Add a pantheon to the world."""
+        manager = await self._get_religion_manager()
+        return await manager.add_pantheon(ctx, params)
+    
+    async def add_religious_practice(self, ctx, params: ReligiousPracticeParams) -> int:
+        """Add a religious practice."""
+        manager = await self._get_religion_manager()
+        return await manager.add_religious_practice(ctx, params)
+    
+    async def add_holy_site(self, ctx, params: HolySiteParams) -> int:
+        """Add a holy site."""
+        manager = await self._get_religion_manager()
+        return await manager.add_holy_site(ctx, params)
+    
+    async def add_religious_text(self, ctx, params: ReligiousTextParams) -> int:
+        """Add a religious text."""
+        manager = await self._get_religion_manager()
+        return await manager.add_religious_text(ctx, params)
+    
+    async def add_religious_order(self, ctx, params: ReligiousOrderParams) -> int:
+        """Add a religious order."""
+        manager = await self._get_religion_manager()
+        return await manager.add_religious_order(ctx, params)
+    
+    async def add_religious_conflict(self, ctx, params: ReligiousConflictParams) -> int:
+        """Add a religious conflict."""
+        manager = await self._get_religion_manager()
+        return await manager.add_religious_conflict(ctx, params)
+    
+    async def generate_pantheon(self, ctx) -> Dict[str, Any]:
+        """Generate a complete pantheon."""
+        manager = await self._get_religion_manager()
+        return await manager.generate_pantheon(ctx)
+    
+    async def generate_religious_practices(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
+        """Generate religious practices for a pantheon."""
+        manager = await self._get_religion_manager()
+        return await manager.generate_religious_practices(ctx, pantheon_id)
+    
+    async def generate_complete_faith_system(self, ctx) -> Dict[str, Any]:
+        """Generate a complete faith system with all components."""
+        manager = await self._get_religion_manager()
+        return await manager.generate_complete_faith_system(ctx)
+    
+    async def distribute_religions(self, ctx) -> List[Dict[str, Any]]:
+        """Distribute religions across nations."""
+        manager = await self._get_religion_manager()
+        return await manager.distribute_religions(ctx)
+    
+    async def generate_ritual(
+        self, ctx,
+        pantheon_id: int,
+        deity_id: Optional[int] = None,
+        purpose: str = "blessing",
+        formality_level: int = 5
+    ) -> Dict[str, Any]:
+        """Generate a detailed religious ritual."""
+        manager = await self._get_religion_manager()
+        return await manager.generate_ritual(ctx, pantheon_id, deity_id, purpose, formality_level)
+    
+    async def simulate_theological_dispute(
+        self, ctx,
+        pantheon_id: int,
+        dispute_topic: str
+    ) -> Dict[str, Any]:
+        """Simulate a theological dispute between religious factions."""
+        manager = await self._get_religion_manager()
+        return await manager.simulate_theological_dispute(ctx, pantheon_id, dispute_topic)
+    
+    async def evolve_religion_from_culture(
+        self, ctx,
+        pantheon_id: int,
+        nation_id: int,
+        years: int = 50
+    ) -> Dict[str, Any]:
+        """Evolve a religion based on cultural interaction over time."""
+        manager = await self._get_religion_manager()
+        return await manager.evolve_religion_from_culture(ctx, pantheon_id, nation_id, years)
+    
+    async def generate_sectarian_development(
+        self, ctx,
+        pantheon_id: int,
+        trigger_event: str
+    ) -> Dict[str, Any]:
+        """Generate a sectarian split within a religion."""
+        manager = await self._get_religion_manager()
+        return await manager.generate_sectarian_development(ctx, pantheon_id, trigger_event)
+    
+    async def get_nation_religion(self, ctx, nation_id: int) -> Dict[str, Any]:
+        """Get comprehensive religious information about a nation."""
+        manager = await self._get_religion_manager()
+        return await manager.get_nation_religion(ctx, nation_id)
+    
+    # ===== WORLD LORE OPERATIONS (NEW SECTION) =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="world_lore_operation",
+        action_description="Performing world lore operation",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def get_world_data(self, world_id: str) -> Optional[Dict[str, Any]]:
+        """Get world data from cache or fetch if not available."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_world_data(world_id)
+    
+    async def set_world_data(
+        self,
+        world_id: str,
+        data: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set world data in cache."""
+        manager = await self._get_world_lore_manager()
+        return await manager.set_world_data(world_id, data, tags)
+    
+    async def invalidate_world_data(
+        self,
+        world_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate world data cache."""
+        manager = await self._get_world_lore_manager()
+        await manager.invalidate_world_data(world_id, recursive)
+    
+    async def get_world_history(self, world_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Get world history from cache or fetch if not available."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_world_history(world_id)
+    
+    async def set_world_history(
+        self,
+        world_id: str,
+        history: List[Dict[str, Any]],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set world history in cache."""
+        manager = await self._get_world_lore_manager()
+        return await manager.set_world_history(world_id, history, tags)
+    
+    async def get_world_events(self, world_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Get world events from cache or fetch if not available."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_world_events(world_id)
+    
+    async def set_world_events(
+        self,
+        world_id: str,
+        events: List[Dict[str, Any]],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set world events in cache."""
+        manager = await self._get_world_lore_manager()
+        return await manager.set_world_events(world_id, events, tags)
+    
+    async def get_world_relationships(self, world_id: str) -> Optional[Dict[str, Any]]:
+        """Get world relationships from cache or fetch if not available."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_world_relationships(world_id)
+    
+    async def set_world_relationships(
+        self,
+        world_id: str,
+        relationships: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set world relationships in cache."""
+        manager = await self._get_world_lore_manager()
+        return await manager.set_world_relationships(world_id, relationships, tags)
+    
+    async def get_world_metadata(self, world_id: str) -> Optional[Dict[str, Any]]:
+        """Get world metadata from cache or fetch if not available."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_world_metadata(world_id)
+    
+    async def set_world_metadata(
+        self,
+        world_id: str,
+        metadata: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set world metadata in cache."""
+        manager = await self._get_world_lore_manager()
+        return await manager.set_world_metadata(world_id, metadata, tags)
+    
+    async def create_world_element(
+        self,
+        element_type: str,
+        element_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Create any world element using the canon system."""
+        manager = await self._get_world_lore_manager()
+        return await manager.create_world_element(element_type, element_data)
+    
+    async def get_world_lore(self, world_id: int) -> Dict[str, Any]:
+        """Retrieve comprehensive world lore including cultures, religions, and history."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_world_lore(world_id)
+    
+    async def update_world_lore(self, world_id: int, updates: Dict[str, Any]) -> bool:
+        """Update world lore with new information."""
+        manager = await self._get_world_lore_manager()
+        return await manager.update_world_lore(world_id, updates)
+    
+    async def get_cultural_context(self, culture_id: int) -> Dict[str, Any]:
+        """Get detailed cultural context including traditions, customs, and beliefs."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_cultural_context(culture_id)
+    
+    async def get_religious_context(self, religion_id: int) -> Dict[str, Any]:
+        """Get detailed religious context including beliefs, practices, and hierarchy."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_religious_context(religion_id)
+    
+    async def get_historical_events(
+        self,
+        world_id: int,
+        time_period: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve historical events, optionally filtered by time period."""
+        manager = await self._get_world_lore_manager()
+        return await manager.get_historical_events(world_id, time_period)
+    
+    async def query_world_state(self, query: str) -> str:
+        """Handle a natural language query about the world state."""
+        manager = await self._get_world_lore_manager()
+        return await manager.query_world_state(query)
+    
+    async def resolve_world_inconsistencies(self, world_id: str) -> str:
+        """Identify and resolve any inconsistencies in the world lore."""
+        manager = await self._get_world_lore_manager()
+        return await manager.resolve_world_inconsistencies(world_id)
+    
+    async def generate_world_summary(
+        self,
+        world_id: str,
+        include_history: bool = True,
+        include_current_state: bool = True
+    ) -> str:
+        """Generate world documentation for history and current state."""
+        manager = await self._get_world_lore_manager()
+        return await manager.generate_world_summary(world_id, include_history, include_current_state)
+    
+    async def validate_world_consistency(self) -> Dict[str, Any]:
+        """Validate world consistency and find issues."""
+        manager = await self._get_world_lore_manager()
+        return await manager.validate_world_consistency()
+    
+    # ===== WORLD COORDINATION OPERATIONS (NEW SECTION) =====
+    
+    async def coordinate_lore_task(
+        self,
+        task_description: str,
+        subsystems: List[str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Coordinate a task across multiple lore subsystems.
+        
+        Args:
+            task_description: Description of the task
+            subsystems: List of subsystems involved
+            context: Optional context for the task
+            
+        Returns:
+            Execution plan and results
+        """
+        coordinator = await self._get_master_coordinator()
+        return await coordinator.coordinate_task(task_description, subsystems, context or {})
+    
+    async def validate_lore_consistency(
+        self,
+        content: Dict[str, Any],
+        content_type: str
+    ) -> Dict[str, Any]:
+        """
+        Validate the consistency of newly generated lore content.
+        
+        Args:
+            content: The content to validate
+            content_type: Type of content
+            
+        Returns:
+            Validation results
+        """
+        coordinator = await self._get_master_coordinator()
+        return await coordinator.validate_consistency(content, content_type)
+    
+    async def get_coordination_status(self) -> Dict[str, Any]:
+        """Get the current status of the lore coordination system."""
+        coordinator = await self._get_master_coordinator()
+        return await coordinator.get_status()
+    
+    async def validate_content(
+        self,
+        ctx,
+        content: Dict[str, Any],
+        content_type: str
+    ) -> Dict[str, Any]:
+        """
+        Validate lore content for consistency and quality.
+        
+        Args:
+            ctx: Context
+            content: Content to validate
+            content_type: Type of content
+            
+        Returns:
+            Validation results
+        """
+        validator = await self._get_content_validator()
+        return await validator.validate_content(ctx, content, content_type)
+    
+    async def create_relationship_graph(
+        self,
+        elements: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Create a relationship graph from lore elements.
+        
+        Args:
+            elements: List of lore elements
+            
+        Returns:
+            Relationship graph
+        """
+        mapper = await self._get_relationship_mapper()
+        return await mapper.create_relationship_graph(elements)
+    
+    async def find_related_elements(
+        self,
+        element_id: str,
+        element_type: str,
+        depth: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Find lore elements related to the specified element.
+        
+        Args:
+            element_id: ID of the element
+            element_type: Type of element
+            depth: Depth of relationship search
+            
+        Returns:
+            Related elements and their relationships
+        """
+        mapper = await self._get_relationship_mapper()
+        return await mapper.find_related_elements(element_id, element_type, depth)
+    
+    async def start_lore_trace(
+        self,
+        operation: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Start a trace for a lore operation.
+        
+        Args:
+            operation: Name of the operation
+            metadata: Optional metadata
+            
+        Returns:
+            Trace ID
+        """
+        trace_system = await self._get_unified_trace_system()
+        return trace_system.start_trace(operation, metadata)
+    
+    async def add_trace_step(
+        self,
+        trace_id: str,
+        step_name: str,
+        data: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Add a step to an existing trace.
+        
+        Args:
+            trace_id: ID of the trace
+            step_name: Name of the step
+            data: Optional step data
+        """
+        trace_system = await self._get_unified_trace_system()
+        trace_system.add_trace_step(trace_id, step_name, data)
+    
+    async def export_trace(
+        self,
+        trace_id: str,
+        format_type: str = "json"
+    ) -> Dict[str, Any]:
+        """
+        Export trace information.
+        
+        Args:
+            trace_id: ID of the trace
+            format_type: Format for export
+            
+        Returns:
+            Trace data
+        """
+        trace_system = await self._get_unified_trace_system()
+        return trace_system.export_trace(trace_id, format_type)
     
     # ===== CANON OPERATIONS =====
     
@@ -2617,13 +3188,22 @@ class LoreOrchestrator:
             # Cache doesn't have explicit cleanup but we can clear it
             await self._cache_system.clear_namespace("*")
         
-        # Cleanup specialized managers (IMPORTANT: Handle all three)
-        for manager in [self._education_manager, self._geopolitical_manager, self._local_lore_manager]:
+        # Cleanup specialized managers
+        for manager in [
+            self._education_manager, 
+            self._geopolitical_manager, 
+            self._local_lore_manager,
+            self._politics_manager,
+            self._religion_manager,
+            self._world_lore_manager
+        ]:
             if manager:
                 if hasattr(manager, 'cleanup'):
                     await manager.cleanup()
                 elif hasattr(manager, 'close'):
                     await manager.close()
+                elif hasattr(manager, 'stop'):
+                    await manager.stop()
                 # Also clear any agent tasks if they exist
                 if hasattr(manager, 'maintenance_task') and manager.maintenance_task:
                     manager.maintenance_task.cancel()
@@ -2645,7 +3225,11 @@ class LoreOrchestrator:
             self._religious_distribution_system,
             self._lore_update_system,
             self._matriarchal_power_framework,
-            self._lore_dynamics_system
+            self._lore_dynamics_system,
+            self._master_coordinator,
+            self._unified_trace_system,
+            self._content_validator,
+            self._relationship_mapper
         ]:
             if component and hasattr(component, 'cleanup'):
                 await component.cleanup()
@@ -2780,6 +3364,78 @@ class LoreOrchestrator:
                 await self._local_lore_manager.register_with_governance()
             logger.info("Local lore manager initialized")
         return self._local_lore_manager
+    
+    async def _get_politics_manager(self):
+        """Get or initialize the politics manager."""
+        if not self._politics_manager:
+            from lore.managers.politics import WorldPoliticsManager
+            self._politics_manager = WorldPoliticsManager(self.user_id, self.conversation_id)
+            await self._politics_manager.ensure_initialized()
+            if self._governor:
+                await self._politics_manager.register_with_governance()
+            logger.info("Politics manager initialized")
+        return self._politics_manager
+    
+    async def _get_religion_manager(self):
+        """Get or initialize the religion manager."""
+        if not self._religion_manager:
+            from lore.managers.religion import ReligionManager
+            self._religion_manager = ReligionManager(self.user_id, self.conversation_id)
+            await self._religion_manager.ensure_initialized()
+            if self._governor:
+                await self._religion_manager.register_with_governance()
+            logger.info("Religion manager initialized")
+        return self._religion_manager
+    
+    async def _get_world_lore_manager(self):
+        """Get or initialize the world lore manager."""
+        if not self._world_lore_manager:
+            from lore.managers.world_lore_manager import WorldLoreManager
+            self._world_lore_manager = WorldLoreManager(
+                self.user_id, 
+                self.conversation_id,
+                max_size_mb=self.config.max_size_mb,
+                redis_url=self.config.redis_url
+            )
+            await self._world_lore_manager.start()
+            logger.info("World lore manager initialized")
+        return self._world_lore_manager
+    
+    async def _get_master_coordinator(self):
+        """Get or initialize the master coordination agent."""
+        if not self._master_coordinator:
+            from lore.managers.world_lore_manager import MasterCoordinationAgent
+            world_lore_manager = await self._get_world_lore_manager()
+            self._master_coordinator = MasterCoordinationAgent(world_lore_manager)
+            await self._master_coordinator.initialize(self.user_id, self.conversation_id)
+            logger.info("Master coordinator initialized")
+        return self._master_coordinator
+    
+    async def _get_unified_trace_system(self):
+        """Get or initialize the unified trace system."""
+        if not self._unified_trace_system:
+            from lore.managers.world_lore_manager import UnifiedTraceSystem
+            self._unified_trace_system = UnifiedTraceSystem(self.user_id, self.conversation_id)
+            logger.info("Unified trace system initialized")
+        return self._unified_trace_system
+    
+    async def _get_content_validator(self):
+        """Get or initialize the content validation tool."""
+        if not self._content_validator:
+            from lore.managers.world_lore_manager import ContentValidationTool
+            world_lore_manager = await self._get_world_lore_manager()
+            self._content_validator = ContentValidationTool(world_lore_manager)
+            logger.info("Content validator initialized")
+        return self._content_validator
+    
+    async def _get_relationship_mapper(self):
+        """Get or initialize the relationship mapper."""
+        if not self._relationship_mapper:
+            from lore.managers.world_lore_manager import LoreRelationshipMapper
+            world_lore_manager = await self._get_world_lore_manager()
+            self._relationship_mapper = LoreRelationshipMapper(world_lore_manager)
+            logger.info("Relationship mapper initialized")
+        return self._relationship_mapper
     
     async def _get_lore_system(self):
         """Get or initialize the core lore system."""
@@ -2978,6 +3634,35 @@ class LoreOrchestrator:
             from lore.lore_generator import ComponentGeneratorFactory
             self._component_factory = ComponentGeneratorFactory
         return self._component_factory
+    
+    def create_run_context(self, additional_context: Dict[str, Any] = None) -> RunContextWrapper:
+        """
+        Create a RunContextWrapper for agent operations.
+        
+        Args:
+            additional_context: Additional context to include
+            
+        Returns:
+            RunContextWrapper instance
+        """
+        context = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        }
+        if additional_context:
+            context.update(additional_context)
+        return RunContextWrapper(context=context)
+    
+    async def get_connection_pool(self) -> asyncpg.Pool:
+        """
+        Get a connection pool for database operations.
+        
+        Returns:
+            Database connection pool
+        """
+        if not hasattr(self, '_pool'):
+            self._pool = await asyncpg.create_pool(dsn=DB_DSN)
+        return self._pool
 
 
 # ===== CONVENIENCE FUNCTIONS =====
@@ -3041,7 +3726,7 @@ async def evolve_world(user_id: int, conversation_id: int, event_description: st
 def setup_lore_orchestrator():
     """Setup function for module initialization."""
     logging.basicConfig(level=logging.INFO)
-    logger.info("FULLY INTEGRATED Lore Orchestrator loaded with all specialized managers")
+    logger.info("FULLY INTEGRATED Lore Orchestrator loaded with all modules: education, geopolitical, local lore, politics, religion, and world lore management")
 
 
 # Run setup on module import
