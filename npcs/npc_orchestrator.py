@@ -205,6 +205,10 @@ class NPCOrchestrator:
         self._memory_system: Optional[MemorySystem] = None
         self._lore_system: Optional[LoreSystem] = None
         self._relationship_manager: Optional[OptimizedRelationshipManager] = None
+        self._calendar_system: Optional[Dict[str, Any]] = None
+        self._integrated_system: Optional[Any] = None
+        self._relationship_integration: Optional[Any] = None
+        self._npc_bridge: Optional[Any] = None
         
         # Canon integration
         self._validation_agent: Optional[CanonValidationAgent] = None
@@ -436,30 +440,39 @@ class NPCOrchestrator:
     # ==================== INITIALIZATION ====================
     
     async def initialize(self) -> None:
-        """Initialize all core systems."""
+        """Initialize all core systems with integrated modules."""
         logger.info(f"Initializing NPC Orchestrator for user {self.user_id}, conversation {self.conversation_id}")
         logger.info(f"Canon integration: {'ENABLED' if self.enable_canon else 'DISABLED'}")
-        
+
         # Initialize agent system (manages all NPCs)
         self._agent_system = NPCAgentSystem(self.user_id, self.conversation_id, None)
         await self._agent_system.initialize_agents()
-        
+
         # Initialize memory and lore systems
         self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
         self._lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
-        
+
         # Initialize behavior evolution
         self._behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
-        
+
         # Initialize lore context cache
         self._lore_context_cache = LoreContextCache(ttl_seconds=300)
-        
+
         # Initialize Nyx bridge
         self._nyx_bridge = NyxNPCBridge(self.user_id, self.conversation_id)
-        
+
+        # Initialize relationship manager (from dynamic_relationships)
+        self._relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+
+        # Initialize calendar system
+        from logic.calendar import ensure_calendar_tables
+        await ensure_calendar_tables(self.user_id, self.conversation_id)
+
         # Load active NPCs
         await self._load_active_npcs()
-    
+
+        logger.info("NPC Orchestrator initialization complete with all integrated systems")
+
     async def _load_active_npcs(self) -> None:
         """Load all active NPCs from the database."""
         async with get_db_connection_context() as conn:
@@ -1005,8 +1018,677 @@ class NPCOrchestrator:
         # Invalidate cache
         if npc_id in self._snapshot_cache:
             del self._snapshot_cache[npc_id]
-        
+
         return result
+
+    # ==================== CALENDAR INTEGRATION ====================
+
+    async def _get_calendar_system(self):
+        """Lazy load calendar system."""
+        if not hasattr(self, '_calendar_system') or self._calendar_system is None:
+            from logic.calendar import (
+                ensure_calendar_tables,
+                add_calendar_event,
+                get_calendar_events,
+                get_events_for_display,
+                check_current_events,
+                mark_event_completed,
+                mark_event_missed,
+                auto_process_missed_events
+            )
+            self._calendar_system = {
+                'ensure_tables': ensure_calendar_tables,
+                'add_event': add_calendar_event,
+                'get_events': get_calendar_events,
+                'get_display': get_events_for_display,
+                'check_current': check_current_events,
+                'mark_completed': mark_event_completed,
+                'mark_missed': mark_event_missed,
+                'auto_process': auto_process_missed_events
+            }
+            await ensure_calendar_tables(self.user_id, self.conversation_id)
+        return self._calendar_system
+
+    async def schedule_npc_event(
+        self,
+        npc_id: int,
+        event_name: str,
+        event_type: str,
+        year: int,
+        month: int,
+        day: int,
+        time_of_day: str,
+        location: Optional[str] = None,
+        duration: int = 1,
+        priority: int = 2,
+        requirements: Optional[Dict[str, Any]] = None,
+        rewards: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Schedule a calendar event for an NPC with canon integration."""
+        calendar = await self._get_calendar_system()
+
+        # Get NPC data for context
+        snapshot = await self.get_npc_snapshot(npc_id)
+
+        # Use NPC's current location if not specified
+        if not location:
+            location = snapshot.location
+
+        # Add NPCs as involved parties
+        involved_npcs = [{"npc_id": npc_id, "role": "primary"}]
+
+        # Create the event
+        result = await calendar['add_event'](
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            event_name=f"{snapshot.name}: {event_name}",
+            event_type=event_type,
+            year=year,
+            month=month,
+            day=day,
+            time_of_day=time_of_day,
+            description=f"Event involving {snapshot.name}",
+            location=location,
+            duration=duration,
+            priority=priority,
+            involved_npcs=involved_npcs,
+            requirements=requirements,
+            rewards=rewards,
+            is_recurring=False
+        )
+
+        # Canonize if significant
+        if self.enable_canon and self.auto_canonize and priority >= 3:
+            ctx = self._get_canonical_context()
+            async with get_db_connection_context() as conn:
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Scheduled event for {snapshot.name}: {event_name} on {year}-{month:02d}-{day:02d}",
+                    tags=["npc", "calendar", "event", event_type],
+                    significance=priority + 2
+                )
+
+        # Add memory for NPC about the scheduled event
+        await self.add_memory_for_npc(
+            npc_id,
+            f"I have {event_name} scheduled for {time_of_day} on day {day}",
+            memory_type="scheduling",
+            significance=priority
+        )
+
+        return result
+
+    async def get_npc_schedule(
+        self,
+        npc_id: int,
+        year: Optional[int] = None,
+        month: Optional[int] = None,
+        day: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Get calendar events for an NPC."""
+        calendar = await self._get_calendar_system()
+
+        # Get all events involving this NPC
+        events = await calendar['get_events'](
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            year=year,
+            month=month,
+            day=day,
+            include_completed=False,
+            include_missed=False
+        )
+
+        # Filter for events involving this NPC
+        npc_events = []
+        for event in events:
+            involved = event.get('involved_npcs', [])
+            if any(n.get('npc_id') == npc_id for n in involved):
+                npc_events.append(event)
+
+        return npc_events
+
+    async def check_npc_current_events(
+        self,
+        npc_id: int
+    ) -> List[Dict[str, Any]]:
+        """Check what events an NPC should be participating in right now."""
+        # Get current game time
+        async with get_db_connection_context() as conn:
+            time_row = await conn.fetchrow(
+                """
+            SELECT value FROM CurrentRoleplay
+            WHERE key IN ('Year', 'Month', 'Day', 'TimeOfDay')
+            AND user_id = $1 AND conversation_id = $2
+        """,
+                self.user_id,
+                self.conversation_id
+            )
+
+        if not time_row:
+            return []
+
+        calendar = await self._get_calendar_system()
+        current_events = await calendar['check_current'](
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            year=time_row.get('Year', 1),
+            month=time_row.get('Month', 1),
+            day=time_row.get('Day', 1),
+            time_of_day=time_row.get('TimeOfDay', 'Morning')
+        )
+
+        # Filter for this NPC
+        npc_events = []
+        for event in current_events:
+            if any(n.get('npc_id') == npc_id for n in event.get('involved_npcs', [])):
+                npc_events.append(event)
+
+                # Update NPC status if they have an event
+                if event.get('event_priority', 0) >= 4:
+                    self._npc_status[npc_id] = NPCStatus.BUSY
+
+        return npc_events
+
+    async def process_calendar_events_for_all_npcs(self) -> Dict[str, Any]:
+        """Process current calendar events for all NPCs."""
+        results = {
+            "processed_events": [],
+            "missed_events": [],
+            "npc_statuses": {}
+        }
+
+        calendar = await self._get_calendar_system()
+
+        # Auto-process missed events
+        await calendar['auto_process'](
+            self.user_id,
+            self.conversation_id,
+            1, 1, 1, "Morning"  # These would be actual game time values
+        )
+
+        # Check current events for each NPC
+        for npc_id in self._active_npcs:
+            events = await self.check_npc_current_events(npc_id)
+            if events:
+                results["npc_statuses"][npc_id] = "has_events"
+                for event in events:
+                    # Process the event
+                    if event.get('can_participate'):
+                        await calendar['mark_completed'](
+                            self.user_id,
+                            self.conversation_id,
+                            event['event_id'],
+                            {"npc_id": npc_id}
+                        )
+                        results["processed_events"].append({
+                            "npc_id": npc_id,
+                            "event": event
+                        })
+                    else:
+                        await calendar['mark_missed'](
+                            self.user_id,
+                            self.conversation_id,
+                            event['event_id']
+                        )
+                        results["missed_events"].append({
+                            "npc_id": npc_id,
+                            "event": event,
+                            "reason": event.get('missing_requirements', [])
+                        })
+
+        return results
+
+    # ==================== ENHANCED RELATIONSHIP INTEGRATION ====================
+
+    async def _get_integrated_npc_system(self):
+        """Lazy load the fully integrated NPC system."""
+        if not hasattr(self, '_integrated_system') or self._integrated_system is None:
+            from logic.fully_integrated_npc_system import IntegratedNPCSystem
+            self._integrated_system = IntegratedNPCSystem(
+                self.user_id,
+                self.conversation_id
+            )
+            await self._integrated_system.initialize()
+        return self._integrated_system
+
+    async def _get_relationship_integration(self):
+        """Lazy load relationship integration."""
+        if not hasattr(self, '_relationship_integration') or self._relationship_integration is None:
+            from logic.relationship_integration import RelationshipIntegration
+            self._relationship_integration = RelationshipIntegration(
+                self.user_id,
+                self.conversation_id
+            )
+        return self._relationship_integration
+
+    async def process_relationship_crossroads(
+        self,
+        npc_id: int,
+        choice_index: int
+    ) -> Dict[str, Any]:
+        """Process a relationship crossroads choice for an NPC."""
+        integrated = await self._get_integrated_npc_system()
+
+        # Get any pending crossroads events
+        events = await integrated.check_for_relationship_events()
+
+        for event in events:
+            if event.get('type') == 'relationship_crossroads':
+                crossroads = event.get('data')
+                if crossroads and (
+                    (crossroads.entity1_type == 'npc' and crossroads.entity1_id == npc_id) or
+                    (crossroads.entity2_type == 'npc' and crossroads.entity2_id == npc_id)
+                ):
+                    # Apply the choice
+                    result = await integrated.apply_crossroads_choice(
+                        crossroads,
+                        choice_index
+                    )
+
+                    # Create memory about the choice
+                    await self.add_memory_for_npc(
+                        npc_id,
+                        f"Made a crucial relationship decision: {result.get('outcome_text', 'Unknown outcome')}",
+                        memory_type="relationship_crossroads",
+                        significance=8
+                    )
+
+                    # Canonize if enabled
+                    if self.enable_canon and self.auto_canonize:
+                        ctx = self._get_canonical_context()
+                        async with get_db_connection_context() as conn:
+                            snapshot = await self.get_npc_snapshot(npc_id)
+                            await canon.log_canonical_event(
+                                ctx, conn,
+                                f"{snapshot.name} made relationship choice at crossroads",
+                                tags=["npc", "relationship", "crossroads", "decision"],
+                                significance=7
+                            )
+
+                    # Invalidate cache
+                    if npc_id in self._snapshot_cache:
+                        del self._snapshot_cache[npc_id]
+
+                    return result
+
+        return {"error": "No crossroads found for this NPC"}
+
+    async def generate_multi_npc_scene_with_dynamics(
+        self,
+        npc_ids: List[int],
+        location: Optional[str] = None,
+        include_player: bool = True,
+        use_integrated_system: bool = True
+    ) -> Dict[str, Any]:
+        """Generate a scene with multiple NPCs using the integrated system."""
+        if use_integrated_system:
+            integrated = await self._get_integrated_npc_system()
+            scene = await integrated.generate_multi_npc_scene(
+                npc_ids,
+                location,
+                include_player
+            )
+        else:
+            # Fallback to basic coordinator
+            coordinator = await self._get_coordinator()
+            context = {
+                "location": location,
+                "include_player": include_player
+            }
+            scene = await coordinator.make_group_decisions(npc_ids, context)
+
+        # Enhance with relationship dynamics
+        scene["relationship_dynamics"] = []
+        rel_integration = await self._get_relationship_integration()
+
+        for i, npc1_id in enumerate(npc_ids):
+            for npc2_id in npc_ids[i+1:]:
+                rel = await rel_integration.get_relationship(
+                    "npc", npc1_id, "npc", npc2_id
+                )
+                if rel:
+                    scene["relationship_dynamics"].append({
+                        "between": [npc1_id, npc2_id],
+                        "type": rel.get("relationship_type"),
+                        "level": rel.get("relationship_level"),
+                        "dynamics": rel.get("dynamics", {})
+                    })
+
+        return scene
+
+    async def generate_overheard_conversation_with_memory(
+        self,
+        npc_ids: List[int],
+        topic: Optional[str] = None,
+        about_player: bool = False
+    ) -> Dict[str, Any]:
+        """Generate overheard conversation and create memories for all involved NPCs."""
+        integrated = await self._get_integrated_npc_system()
+
+        conversation = await integrated.generate_overheard_conversation(
+            npc_ids,
+            topic,
+            about_player
+        )
+
+        # Create memories for each NPC about what they discussed
+        for line in conversation.get("lines", []):
+            npc_id = line.get("npc_id")
+            if npc_id:
+                # Memory about what they said
+                await self.add_memory_for_npc(
+                    npc_id,
+                    f"I said to the others: {line.get('text', '')}",
+                    memory_type="conversation",
+                    significance=5 if about_player else 3,
+                    tags=["conversation", "overheard", topic] if topic else ["conversation", "overheard"]
+                )
+
+                # Beliefs based on conversation
+                if about_player:
+                    await self.form_npc_belief(
+                        npc_id,
+                        f"We discussed the player regarding {topic or 'general matters'}",
+                        factuality=0.8
+                    )
+
+        return conversation
+
+    # ==================== NARRATIVE PROGRESSION INTEGRATION ====================
+
+    async def progress_npc_narrative(
+        self,
+        npc_id: int,
+        corruption_change: int = 0,
+        dependency_change: int = 0,
+        realization_change: int = 0,
+        force_stage: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Progress NPC narrative with full integration."""
+        from logic.npc_narrative_progression import progress_npc_narrative_stage
+
+        result = await progress_npc_narrative_stage(
+            self.user_id,
+            self.conversation_id,
+            npc_id,
+            corruption_change,
+            dependency_change,
+            realization_change,
+            force_stage
+        )
+
+        if result.get('stage_changed'):
+            # Create significant memory
+            await self.add_memory_for_npc(
+                npc_id,
+                f"My relationship with the player has fundamentally changed to: {result.get('new_stage')}",
+                memory_type="narrative_progression",
+                significance=9,
+                tags=["narrative", "progression", "relationship"]
+            )
+
+            # Form new beliefs based on stage
+            new_stage = result.get('new_stage')
+            if new_stage == "First Doubts":
+                await self.form_npc_belief(
+                    npc_id,
+                    "The player may not be who they seem to be",
+                    factuality=0.6
+                )
+            elif new_stage == "Creeping Realization":
+                await self.form_npc_belief(
+                    npc_id,
+                    "I am beginning to understand the true nature of our relationship",
+                    factuality=0.75
+                )
+            elif new_stage == "Veil Thinning":
+                await self.form_npc_belief(
+                    npc_id,
+                    "There is no need to hide my true nature anymore",
+                    factuality=0.85
+                )
+            elif new_stage == "Full Revelation":
+                await self.form_npc_belief(
+                    npc_id,
+                    "The player and I both know exactly what we are to each other",
+                    factuality=0.95
+                )
+
+            # Update behavior based on new stage
+            behavior_evolution = await self._get_behavior_evolution()
+            adjustments = {
+                "personality_evolution": {
+                    "mask_dropping": result.get('stats', {}).get('realization', 0) / 100,
+                    "dominance_expression": result.get('stats', {}).get('corruption', 0) / 100
+                }
+            }
+            await behavior_evolution.apply_scheming_adjustments(npc_id, adjustments)
+
+            # Canonize the progression
+            if self.enable_canon and self.auto_canonize:
+                ctx = self._get_canonical_context()
+                async with get_db_connection_context() as conn:
+                    snapshot = await self.get_npc_snapshot(npc_id)
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"{snapshot.name}'s relationship progressed to: {new_stage}",
+                        tags=["npc", "narrative", "progression", new_stage.lower().replace(" ", "_")],
+                        significance=8
+                    )
+
+        # Invalidate cache
+        if npc_id in self._snapshot_cache:
+            del self._snapshot_cache[npc_id]
+
+        return result
+
+    async def check_for_npc_revelation(
+        self,
+        npc_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Check if an NPC should have a revelation about the player."""
+        from logic.npc_narrative_progression import check_for_npc_revelation
+
+        revelation = await check_for_npc_revelation(
+            self.user_id,
+            self.conversation_id,
+            npc_id
+        )
+
+        if revelation:
+            # Create memory about the revelation
+            await self.add_memory_for_npc(
+                npc_id,
+                revelation.get('revelation_text', 'I had a revelation about the player'),
+                memory_type="revelation",
+                significance=8,
+                emotional_valence=5,
+                tags=["revelation", "narrative", "realization"]
+            )
+
+            # Form belief based on revelation
+            await self.form_npc_belief(
+                npc_id,
+                revelation.get('revelation_text', 'Something important about the player'),
+                factuality=0.9
+            )
+
+            # Trigger potential mask slippage
+            await self.trigger_npc_mask_slippage(
+                npc_id,
+                trigger="revelation",
+                severity=6
+            )
+
+        return revelation
+
+    # ==================== BRIDGE SYSTEM INTEGRATION ====================
+
+    async def _get_npc_bridge(self):
+        """Lazy load NPC system bridge."""
+        if not hasattr(self, '_npc_bridge') or self._npc_bridge is None:
+            from logic.npc_agent_bridge import NPCSystemBridge
+            self._npc_bridge = NPCSystemBridge(
+                self.user_id,
+                self.conversation_id
+            )
+        return self._npc_bridge
+
+    async def handle_player_action_with_bridge(
+        self,
+        action: Dict[str, Any],
+        context: Dict[str, Any],
+        use_new_system: bool = True
+    ) -> Dict[str, Any]:
+        """Handle player action using the bridge system."""
+        bridge = await self._get_npc_bridge()
+        bridge.use_new_system = use_new_system
+
+        result = await bridge.handle_player_action(action, context)
+
+        # Process any resulting events
+        if "npc_responses" in result:
+            for response in result["npc_responses"]:
+                npc_id = response.get("npc_id")
+                if npc_id:
+                    # Check for narrative progression triggers
+                    if response.get("action", {}).get("type") in ["submission", "dominance", "manipulation"]:
+                        await self.progress_npc_narrative(
+                            npc_id,
+                            corruption_change=5,
+                            dependency_change=3,
+                            realization_change=2
+                        )
+
+                    # Check for revelations
+                    await self.check_for_npc_revelation(npc_id)
+
+        return result
+
+    # ==================== COMPREHENSIVE SCENE GENERATION ====================
+
+    async def generate_comprehensive_scene(
+        self,
+        location: Optional[str] = None,
+        include_player: bool = True,
+        time_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Generate a comprehensive scene with all systems integrated."""
+
+        # Get NPCs at location
+        if location:
+            npcs_at_location = await self.get_npcs_at_location(location)
+            npc_ids = [npc.npc_id for npc in npcs_at_location]
+        else:
+            npc_ids = list(self._active_npcs)[:5]  # Limit to 5 for performance
+
+        scene = {
+            "location": location,
+            "npcs": {},
+            "calendar_events": [],
+            "relationships": [],
+            "group_dynamics": {},
+            "ongoing_narratives": [],
+            "environmental_context": {},
+            "canonical_constraints": []
+        }
+
+        # Get NPC snapshots
+        for npc_id in npc_ids:
+            scene["npcs"][npc_id] = await self.get_npc_snapshot(npc_id)
+
+        # Check calendar events
+        calendar_results = await self.process_calendar_events_for_all_npcs()
+        scene["calendar_events"] = calendar_results.get("processed_events", [])
+
+        # Get relationships using integrated system
+        integrated = await self._get_integrated_npc_system()
+        for i, npc1_id in enumerate(npc_ids):
+            for npc2_id in npc_ids[i+1:]:
+                rel = await integrated.get_relationship(
+                    "npc", npc1_id, "npc", npc2_id
+                )
+                if rel:
+                    scene["relationships"].append(rel)
+
+        # Check for relationship events
+        rel_events = await integrated.check_for_relationship_events()
+        scene["relationship_events"] = rel_events
+
+        # Get narrative progressions
+        for npc_id in npc_ids:
+            from logic.npc_narrative_progression import get_npc_narrative_stage
+            stage = await get_npc_narrative_stage(
+                self.user_id,
+                self.conversation_id,
+                npc_id
+            )
+            if stage:
+                scene["ongoing_narratives"].append({
+                    "npc_id": npc_id,
+                    "stage": stage.name,
+                    "description": stage.description
+                })
+
+        # Analyze group dynamics
+        scene["group_dynamics"] = await self._analyze_group_dynamics(npc_ids)
+
+        # Add canonical constraints if enabled
+        if self.enable_canon:
+            async with get_db_connection_context() as conn:
+                recent_events = await conn.fetch(
+                    """
+                    SELECT event_text, tags, significance
+                    FROM CanonicalEvents
+                    WHERE user_id = $1 AND conversation_id = $2
+                    ORDER BY timestamp DESC
+                    LIMIT 5
+                """,
+                    self.user_id,
+                    self.conversation_id
+                )
+
+                scene["canonical_constraints"] = [dict(e) for e in recent_events]
+
+        # Generate scene description
+        scene["description"] = await self._generate_scene_description(scene)
+
+        return scene
+
+    async def _generate_scene_description(self, scene_data: Dict[str, Any]) -> str:
+        """Generate a narrative description of the scene."""
+        npcs = scene_data.get("npcs", {})
+        location = scene_data.get("location", "unknown location")
+
+        if not npcs:
+            return f"The {location} is empty and quiet."
+
+        npc_names = [npc.name for npc in npcs.values()]
+        npc_list = ", ".join(npc_names[:-1]) + (" and " + npc_names[-1] if len(npc_names) > 1 else npc_names[0])
+
+        description = f"At {location}, {npc_list} "
+
+        # Add activity context
+        if scene_data.get("calendar_events"):
+            description += "are engaged in scheduled activities. "
+        else:
+            description += "are present. "
+
+        # Add relationship context
+        if scene_data.get("relationship_events"):
+            description += "Tension crackles in the air as relationships reach critical moments. "
+
+        # Add narrative context
+        narratives = scene_data.get("ongoing_narratives", [])
+        if narratives:
+            stages = set(n["stage"] for n in narratives)
+            if "Full Revelation" in stages:
+                description += "The masks have fallen, and true natures are revealed. "
+            elif "Veil Thinning" in stages:
+                description += "Pretenses are dropping as true intentions become clear. "
+
+        return description
     
     async def trigger_npc_mask_slippage(
         self,
