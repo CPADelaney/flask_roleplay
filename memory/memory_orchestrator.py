@@ -13,22 +13,25 @@ ensuring consistent access patterns and centralized management.
 
 import logging
 import asyncio
-from typing import Dict, Any, List, Optional, Union, Tuple, Set
+from typing import Dict, Any, List, Optional, Union, Tuple, Set, TYPE_CHECKING
 from datetime import datetime, timedelta
 from enum import Enum
 import json
+import os
 
-# Core memory components
-from memory.core import (
-    UnifiedMemoryManager, 
-    Memory, 
-    MemoryType, 
-    MemoryStatus,
-    MemorySignificance,
-    MemoryCache
-)
+# Defer core memory imports to avoid circular dependencies
+# These will be imported lazily in __init__ or when first needed
+if TYPE_CHECKING:
+    from memory.core import (
+        UnifiedMemoryManager, 
+        Memory, 
+        MemoryType, 
+        MemoryStatus,
+        MemorySignificance,
+        MemoryCache
+    )
 
-# Specialized managers
+# Specialized managers - these are less likely to cause circular imports
 from memory.managers import (
     NPCMemoryManager,
     NyxMemoryManager,
@@ -82,6 +85,31 @@ from memory.maintenance import MemoryMaintenance
 from logic.game_time_helper import get_game_datetime, get_game_iso_string
 
 logger = logging.getLogger("memory_orchestrator")
+
+# Lazy-loaded module references
+_memory_core = None
+_UnifiedMemoryManager = None
+_Memory = None
+_MemoryType = None
+_MemoryStatus = None
+_MemorySignificance = None
+_MemoryCache = None
+
+
+def _lazy_import_core():
+    """Lazy import of memory.core components to avoid circular imports."""
+    global _memory_core, _UnifiedMemoryManager, _Memory, _MemoryType, _MemoryStatus, _MemorySignificance, _MemoryCache
+    
+    if _memory_core is None:
+        import memory.core as _memory_core
+        _UnifiedMemoryManager = _memory_core.UnifiedMemoryManager
+        _Memory = _memory_core.Memory
+        _MemoryType = _memory_core.MemoryType
+        _MemoryStatus = _memory_core.MemoryStatus
+        _MemorySignificance = _memory_core.MemorySignificance
+        _MemoryCache = _memory_core.MemoryCache
+    
+    return _UnifiedMemoryManager, _Memory, _MemoryType, _MemoryStatus, _MemorySignificance, _MemoryCache
 
 
 class EntityType(str, Enum):
@@ -138,6 +166,9 @@ class MemoryOrchestrator:
     
     def __init__(self, user_id: int, conversation_id: int):
         """Initialize the orchestrator."""
+        # Ensure core components are imported
+        _lazy_import_core()
+        
         self.user_id = user_id
         self.conversation_id = conversation_id
         
@@ -176,7 +207,7 @@ class MemoryOrchestrator:
         # State
         self.initialized = False
         self.active_context = {}
-        self.cache = MemoryCache()
+        self.cache = _MemoryCache()
         
     async def initialize(self):
         """Initialize all memory subsystems."""
@@ -629,6 +660,7 @@ class MemoryOrchestrator:
             await self.initialize()
         
         from db.connection import get_db_connection_context
+        # Lazy import to avoid circular dependency
         from lore.core.canon import ensure_canonical_context
         
         ctx = ensure_canonical_context({
@@ -931,7 +963,7 @@ class MemoryOrchestrator:
         entity_type: Union[str, EntityType],
         entity_id: int,
         memory_text: str,
-        importance: Union[str, MemorySignificance] = "medium",
+        importance: Union[str, 'MemorySignificance'] = "medium",
         emotional: bool = True,
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
@@ -2447,6 +2479,9 @@ Return as JSON array of strings.
     
     def _parse_importance(self, importance: str) -> int:
         """Parse importance string to MemorySignificance value."""
+        # Lazy import
+        _, _, _, _, MemorySignificance, _ = _lazy_import_core()
+        
         mapping = {
             "trivial": MemorySignificance.TRIVIAL,
             "low": MemorySignificance.LOW,
@@ -2461,8 +2496,11 @@ Return as JSON array of strings.
         self,
         entity_type: str,
         entity_id: int
-    ) -> UnifiedMemoryManager:
+    ) -> 'UnifiedMemoryManager':
         """Get the appropriate memory manager for an entity."""
+        # Lazy import
+        UnifiedMemoryManager, _, _, _, _, _ = _lazy_import_core()
+        
         key = f"{entity_type}_{entity_id}"
         
         if key not in self.managers:
@@ -2600,6 +2638,9 @@ Return as JSON array of strings.
         time_window: timedelta = None
     ) -> List[Dict[str, Any]]:
         """Get recent significant events across all entities."""
+        # Lazy import
+        _, _, _, _, MemorySignificance, _ = _lazy_import_core()
+        
         if not time_window:
             time_window = timedelta(hours=24)
         
