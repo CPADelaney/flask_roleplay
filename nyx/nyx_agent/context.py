@@ -1,21 +1,69 @@
 # nyx/nyx_agent/context.py
-"""NyxContext and state management for Nyx Agent SDK with full NPC, Memory, World Director, Narrator and Lore integration"""
+"""
+Enhanced NyxContext with optimized context assembly pipeline for speed and richness
+
+Schema Version: 3
+Production-Ready Features:
+- Parallel orchestrator initialization and fetching
+- Scene-scoped context bundles with smart caching
+- LRU memory cache (128 scenes) + Redis distributed cache
+- Per-section TTLs and delta refresh
+- Token-budget aware packing with summarization fallback
+- Link hints for emergent connections (used in memory, lore, conflicts)
+- Strong DTOs for type safety (NPCSectionData, MemorySectionData, LoreSectionData)
+- Metrics with p95 tracking and throttled logging
+- Redis with exponential backoff and proper byte accounting
+- Fast JSON via orjson when available
+- Schema versioning for clean cache upgrades
+- Payload size capping (256KB) with smart trimming
+- Word-boundary NPC name matching
+- Configurable token budgets with guard rails
+- JSON-safe serialization for all data types
+
+Performance Targets:
+- Cache hits: <200ms response time
+- Cache misses: 2-5s with parallel fetching
+- Memory usage: Bounded at ~20MB (128 scenes)
+- Token efficiency: 40-60% reduction via smart packing
+"""
 
 import json
 import time
 import asyncio
+import hashlib
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+import random
+import re
+import dataclasses
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set, Tuple, Union
+from enum import Enum
+from collections import defaultdict, OrderedDict
+import redis.asyncio as redis  # Modern redis async client
+
+# Try to use faster JSON library
+try:
+    import orjson
+    def json_dumps(obj): 
+        return orjson.dumps(obj).decode('utf-8')
+    def json_loads(data): 
+        return orjson.loads(data if isinstance(data, bytes) else data.encode('utf-8'))
+except ImportError:
+    json_dumps = json.dumps
+    json_loads = json.loads
+
+# Set up logger FIRST
+logger = logging.getLogger(__name__)
+
+# Schema version for cache invalidation
+SCHEMA_VERSION = 3
 
 from db.connection import get_db_connection_context
 from nyx.user_model_sdk import UserModelManager
 from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.response_filter import ResponseFilter
 from nyx.core.emotions.emotional_core import EmotionalCore
-from nyx.performance_monitor import PerformanceMonitor
-from nyx.core.sync.strategy_controller import get_active_strategies
 
 # Import NPC orchestrator and related types
 from npcs.npc_orchestrator import NPCOrchestrator, NPCSnapshot, NPCStatus
@@ -45,10 +93,6 @@ from lore.lore_orchestrator import (
 )
 
 from .config import Config
-from .utils import (
-    safe_psutil, safe_process_metric, get_process_info, 
-    bytes_to_mb, _prune_list, _calculate_variance
-)
 from .tools import detect_conflicts_and_instability
 
 try:
@@ -68,3014 +112,1701 @@ except ImportError:
     logger.warning("World simulation models not available - slice-of-life features disabled")
     WORLD_SIMULATION_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+# Section names constant to avoid typos
+SECTION_NAMES = ('npcs', 'memories', 'lore', 'conflicts', 'world', 'narrative')
+
+# ===== New Data Structures for Optimized Context Assembly =====
+
+import re
+from collections import OrderedDict
+
+@dataclass
+class SceneScope:
+    """Defines the scope of relevant context for a scene"""
+    location_id: Optional[str] = None
+    location_name: Optional[str] = None  # Keep both ID and name
+    npc_ids: Set[int] = field(default_factory=set)
+    topics: Set[str] = field(default_factory=set)
+    lore_tags: Set[str] = field(default_factory=set)
+    conflict_ids: Set[int] = field(default_factory=set)
+    memory_anchors: Set[str] = field(default_factory=set)
+    time_window: Optional[int] = 24  # hours
+    link_hints: Dict[str, List[Union[int, str]]] = field(default_factory=dict)  # Fixed typing
+    
+    def to_key(self) -> str:
+        """Generate stable hash key for caching"""
+        data = {
+            'location': self.location_id,
+            'npcs': sorted(self.npc_ids),
+            'topics': sorted(self.topics),
+            'lore': sorted(self.lore_tags),
+            'conflicts': sorted(self.conflict_ids),
+            'anchors': sorted(self.memory_anchors)
+        }
+        return hashlib.md5(json_dumps(data).encode('utf-8')).hexdigest()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-safe dictionary"""
+        d = asdict(self)
+        # Convert sets to sorted lists for JSON serialization
+        for k in ('npc_ids', 'topics', 'lore_tags', 'conflict_ids', 'memory_anchors'):
+            if isinstance(d.get(k), set):
+                d[k] = sorted(d[k])
+        return d
+    
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> 'SceneScope':
+        """Create from dictionary, converting lists back to sets"""
+        # Convert lists back to sets
+        for k in ('npc_ids', 'topics', 'lore_tags', 'conflict_ids', 'memory_anchors'):
+            if k in d and isinstance(d[k], list):
+                d[k] = set(d[k])
+        return cls(**d)
+
+# ===== Strong DTOs for Section Data =====
+
+@dataclass
+class NPCSectionData:
+    """Strongly typed NPC section data"""
+    npcs: List[Dict[str, Any]]  # List format for JSON compatibility
+    canonical_count: int = 0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {'npcs': self.npcs, 'canonical_count': self.canonical_count}
+    
+    def compact(self, max_npcs: int = 5) -> 'NPCSectionData':
+        """Compact to essential fields"""
+        compacted = []
+        for npc in self.npcs[:max_npcs]:
+            compact_npc = {
+                'id': npc.get('id'),
+                'name': npc.get('name'),
+                'role': npc.get('role'),
+                'canonical': npc.get('canonical', False)
+            }
+            if 'relationship' in npc:
+                compact_npc['relationship'] = {
+                    k: v for k, v in npc['relationship'].items()
+                    if k in ('trust', 'respect', 'closeness')
+                }
+            compacted.append(compact_npc)
+        return NPCSectionData(npcs=compacted, canonical_count=self.canonical_count)
+
+@dataclass
+class MemorySectionData:
+    """Strongly typed memory section data"""
+    relevant: List[Dict[str, Any]]
+    recent: List[Dict[str, Any]]
+    patterns: List[Dict[str, Any]]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+    
+    def compact(self) -> 'MemorySectionData':
+        return MemorySectionData(
+            relevant=self.relevant[:3],
+            recent=self.recent[:2],
+            patterns=self.patterns[:1]
+        )
+
+@dataclass
+class LoreSectionData:
+    """Strongly typed lore section data"""
+    location: Dict[str, Any]
+    world: Dict[str, Any]
+    canonical_rules: List[str]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+    
+    def compact(self) -> 'LoreSectionData':
+        return LoreSectionData(
+            location={'description': self.location.get('description', '')[:200]},
+            world={k: v for k, v in list(self.world.items())[:3]},
+            canonical_rules=self.canonical_rules[:3]
+        )
+
+@dataclass
+class BundleSection:
+    """A section of context with metadata"""
+    data: Union[Dict[str, Any], NPCSectionData, MemorySectionData, LoreSectionData]
+    canonical: bool = False
+    priority: int = 0
+    last_changed_at: float = 0.0
+    ttl: float = 30.0  # seconds
+    version: Optional[str] = None  # For precise staleness checking
+    
+    def is_stale(self) -> bool:
+        return time.time() - self.last_changed_at > self.ttl
+    
+    @staticmethod
+    def _to_json_safe(obj: Any) -> Any:
+        """Recursively convert objects to JSON-safe types"""
+        if hasattr(obj, 'to_dict'):
+            return BundleSection._to_json_safe(obj.to_dict())
+        if dataclasses.is_dataclass(obj):
+            return BundleSection._to_json_safe(dataclasses.asdict(obj))
+        if isinstance(obj, Enum):
+            return getattr(obj, 'value', obj.name)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, (set, frozenset)):
+            return sorted(list(obj))
+        if isinstance(obj, dict):
+            return {str(k): BundleSection._to_json_safe(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [BundleSection._to_json_safe(v) for v in obj]
+        return obj
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to JSON-safe dictionary"""
+        # Convert to JSON-safe format
+        data_dict = self._to_json_safe(self.data)
+        
+        # Handle numeric keys by converting to string keys for JSON
+        if isinstance(data_dict, dict):
+            data_dict = self._stringify_numeric_keys(data_dict)
+        
+        return {
+            'data': data_dict,
+            'canonical': self.canonical,
+            'priority': self.priority,
+            'last_changed_at': self.last_changed_at,
+            'ttl': self.ttl,
+            'version': self.version
+        }
+    
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> 'BundleSection':
+        """Deserialize from dictionary"""
+        # Convert string keys back to ints where appropriate
+        data = cls._restore_numeric_keys(d['data'])
+        d['data'] = data
+        return cls(**d)
+    
+    @staticmethod
+    def _stringify_numeric_keys(obj: Any) -> Any:
+        """Recursively convert numeric dict keys to strings"""
+        if isinstance(obj, dict):
+            return {str(k): BundleSection._stringify_numeric_keys(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [BundleSection._stringify_numeric_keys(item) for item in obj]
+        return obj
+    
+    @staticmethod
+    def _restore_numeric_keys(obj: Any) -> Any:
+        """Restore numeric keys where appropriate"""
+        if isinstance(obj, dict):
+            result = {}
+            for k, v in obj.items():
+                # Try to convert key to int if it looks numeric
+                try:
+                    if k.isdigit():
+                        result[int(k)] = BundleSection._restore_numeric_keys(v)
+                    else:
+                        result[k] = BundleSection._restore_numeric_keys(v)
+                except (AttributeError, ValueError):
+                    result[k] = BundleSection._restore_numeric_keys(v)
+            return result
+        elif isinstance(obj, list):
+            return [BundleSection._restore_numeric_keys(item) for item in obj]
+        return obj
+
+@dataclass
+class ContextBundle:
+    """Scene-scoped context bundle with all relevant data"""
+    scene_scope: SceneScope
+    npcs: BundleSection
+    memories: BundleSection
+    lore: BundleSection
+    conflicts: BundleSection
+    world: BundleSection
+    narrative: BundleSection
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    
+    def pack(self, token_budget: int = 8000) -> 'PackedContext':
+        """Pack bundle into token-budget-aware context"""
+        packed = PackedContext(token_budget=token_budget)
+        
+        # Priority order: canonical first, then by priority score
+        sections = [
+            ('npcs', self.npcs),
+            ('memories', self.memories),
+            ('lore', self.lore),
+            ('conflicts', self.conflicts),
+            ('world', self.world),
+            ('narrative', self.narrative)
+        ]
+        
+        # Sort by canonical status first, then priority
+        sections.sort(key=lambda x: (not x[1].canonical, -x[1].priority))
+        
+        for name, section in sections:
+            if section.canonical:
+                packed.add_canonical(name, section.data)
+            else:
+                packed.try_add(name, section.data)
+        
+        return packed
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize bundle to JSON-safe dictionary"""
+        return {
+            'scene_scope': self.scene_scope.to_dict(),  # Use SceneScope's to_dict
+            'npcs': self.npcs.to_dict(),
+            'memories': self.memories.to_dict(),
+            'lore': self.lore.to_dict(),
+            'conflicts': self.conflicts.to_dict(),
+            'world': self.world.to_dict(),
+            'narrative': self.narrative.to_dict(),
+            'metadata': self.metadata,
+            'created_at': self.created_at
+        }
+    
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> 'ContextBundle':
+        """Deserialize bundle from dictionary"""
+        return cls(
+            scene_scope=SceneScope.from_dict(d['scene_scope']),
+            npcs=BundleSection.from_dict(d['npcs']),
+            memories=BundleSection.from_dict(d['memories']),
+            lore=BundleSection.from_dict(d['lore']),
+            conflicts=BundleSection.from_dict(d['conflicts']),
+            world=BundleSection.from_dict(d['world']),
+            narrative=BundleSection.from_dict(d['narrative']),
+            metadata=d.get('metadata', {}),
+            created_at=d.get('created_at', time.time())
+        )
+
+@dataclass 
+class PackedContext:
+    """Token-budget-aware packed context"""
+    token_budget: int
+    canonical: Dict[str, Any] = field(default_factory=dict)
+    optional: Dict[str, Any] = field(default_factory=dict)
+    summarized: Dict[str, Any] = field(default_factory=dict)
+    tokens_used: int = 0
+    
+    def add_canonical(self, key: str, data: Any):
+        """Add canonical data with budget checks and compaction"""
+        # Normalize dataclasses first
+        if hasattr(data, 'to_dict'):
+            data = data.to_dict()
+        
+        # Compact if needed
+        compact = self._compact_if_needed(key, data, hard=True)
+        tokens = self._estimate_tokens(compact)
+        
+        # If still too large, summarize
+        if self.tokens_used + tokens > self.token_budget:
+            compact = self._summarize(key, compact) or compact
+            tokens = self._estimate_tokens(compact)
+        
+        self.canonical[key] = compact
+        self.tokens_used += tokens
+    
+    def try_add(self, key: str, data: Any) -> bool:
+        """Try to add optional data, with fallback to summarization"""
+        # Normalize dataclasses and apply light compaction
+        if hasattr(data, 'to_dict'):
+            data = data.to_dict()
+        data = self._compact_if_needed(key, data, hard=False)
+        
+        estimated = self._estimate_tokens(data)
+        
+        # Try full data first
+        if self.tokens_used + estimated <= self.token_budget:
+            self.optional[key] = data
+            self.tokens_used += estimated
+            return True
+        
+        # Try summarized version
+        summary = self._summarize(key, data)
+        if summary:
+            summary_tokens = self._estimate_tokens(summary)
+            if self.tokens_used + summary_tokens <= self.token_budget:
+                self.summarized[key] = summary
+                self.tokens_used += summary_tokens
+                return True
+        
+        return False
+    
+    def _estimate_tokens(self, data: Any) -> int:
+        """Improved token estimation - handle dataclasses and count only values"""
+        # Handle dataclasses
+        if hasattr(data, 'to_dict'):
+            data = data.to_dict()
+        
+        if isinstance(data, str):
+            return max(1, len(data) // 4)
+        elif isinstance(data, dict):
+            # Count only values, not keys (keys are structure)
+            return sum(self._estimate_tokens(v) for v in data.values())
+        elif isinstance(data, list):
+            return sum(self._estimate_tokens(item) for item in data)
+        elif data is None:
+            return 0
+        else:
+            return max(1, len(str(data)) // 4)
+    
+    def _compact_if_needed(self, key: str, data: Any, hard: bool = False) -> Any:
+        """Compact data to essential fields"""
+        if key == 'npcs':
+            if isinstance(data, NPCSectionData):
+                return data.compact(max_npcs=5 if hard else 8).to_dict()
+            elif isinstance(data, dict) and 'npcs' in data:
+                # List format
+                items = data['npcs'][:5] if hard else data['npcs'][:8]
+                for item in items:
+                    # Remove verbose fields
+                    item.pop('canonical_events', None)
+                    if 'relationship' in item:
+                        rel = item['relationship']
+                        item['relationship'] = {
+                            k: v for k, v in rel.items()
+                            if k in ('trust', 'respect', 'closeness')
+                        }
+                return {'npcs': items}
+            elif isinstance(data, dict):
+                # Legacy dict format - convert to list
+                items = list(data.values())[:5] if hard else list(data.values())[:8]
+                return {'npcs': items}
+        
+        elif key == 'memories' and isinstance(data, MemorySectionData):
+            return data.compact().to_dict()
+        
+        elif key == 'lore' and isinstance(data, LoreSectionData):
+            return data.compact().to_dict()
+        
+        return data
+    
+    def _summarize(self, key: str, data: Any) -> Optional[Dict[str, Any]]:
+        """Create a summary of data if too large"""
+        if key == 'memories':
+            if isinstance(data, MemorySectionData):
+                return data.compact().to_dict()
+            elif isinstance(data, dict):
+                return {
+                    'count': len(data.get('relevant', [])) + len(data.get('recent', [])),
+                    'recent_summary': data.get('recent', [])[:2],
+                    'patterns': data.get('patterns', [])[:1]
+                }
+        
+        elif key == 'lore':
+            if isinstance(data, LoreSectionData):
+                return data.compact().to_dict()
+            elif isinstance(data, dict):
+                return {
+                    'location': data.get('location', {}).get('description', '')[:100],
+                    'canonical_rules': data.get('canonical_rules', [])[:3]
+                }
+        
+        elif key == 'npcs':
+            if isinstance(data, NPCSectionData):
+                return data.compact(max_npcs=3).to_dict()
+            elif isinstance(data, dict):
+                if 'npcs' in data:
+                    items = data['npcs'][:3]
+                else:
+                    items = list(data.values())[:3]
+                
+                summary_items = []
+                for item in items:
+                    summary_items.append({
+                        'name': item.get('name'),
+                        'role': item.get('role'),
+                        'trust': item.get('relationship', {}).get('trust')
+                    })
+                return {'npcs': summary_items}
+        
+        return None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Merge all sections into single dict"""
+        result = {**self.canonical, **self.optional}
+        if self.summarized:
+            result['_summarized'] = self.summarized
+        return result
+
+# ===== LRU Cache Implementation =====
+
+class LRUCache(OrderedDict):
+    """Simple LRU cache with capacity limit"""
+    def __init__(self, capacity: int = 128):
+        super().__init__()
+        self.capacity = capacity
+    
+    def get(self, key: str) -> Optional[Any]:
+        if key not in self:
+            return None
+        self.move_to_end(key)
+        return self[key]
+    
+    def set(self, key: str, value: Any):
+        if key in self:
+            self.move_to_end(key)
+        self[key] = value
+        if len(self) > self.capacity:
+            self.popitem(last=False)
+
+# ===== Context Broker for Smart Assembly =====
+
+class ContextBroker:
+    """Manages scene-scoped context assembly with caching and parallel fetching"""
+    
+    def __init__(self, nyx_context: 'NyxContext'):
+        self.ctx = nyx_context
+        self.bundle_cache = LRUCache(capacity=128)  # LRU cache for scenes
+        self.redis_client: Optional[redis.Redis] = None
+        self._locks = defaultdict(asyncio.Lock)  # Per-scene locks
+        self._npc_alias_cache: Optional[Dict[str, int]] = None  # name→id map
+        self._alias_cache_updated: float = 0
+        self._alias_cache_ttl: float = 300.0  # 5 minutes
+        
+        # Redis backoff state
+        self._redis_failures = 0
+        self._redis_backoff_until = 0
+        
+        # Per-section TTLs (can be overridden)
+        self.section_ttls = {
+            'npcs': 30.0,
+            'memories': 120.0,
+            'lore': 300.0,  # 5 minutes
+            'conflicts': 30.0,
+            'world': 15.0,
+            'narrative': 30.0
+        }
+        
+        # Performance metrics
+        self.metrics = {
+            'cache_hits': defaultdict(int),
+            'cache_misses': defaultdict(int),
+            'fetch_times': defaultdict(list),
+            'fetch_p95': defaultdict(float),
+            'bytes_cached': defaultdict(int)
+        }
+        
+        # Previous scene state for fast-path
+        self._last_scene_key: Optional[str] = None
+        self._last_packed: Optional[PackedContext] = None
+        self._last_bundle: Optional[ContextBundle] = None
+        
+        # Metrics logging throttle
+        self._metrics_log_counter = 0
+        self._metrics_log_interval = 5  # Log every 5th turn
+    
+    async def initialize(self):
+        """Initialize broker with optional Redis for distributed caching"""
+        await self._try_connect_redis()
+        await self._build_npc_alias_cache()
+    
+    async def _try_connect_redis(self):
+        """Try to connect to Redis with backoff on failure"""
+        if self.redis_client:  # Already connected
+            return
+        if time.time() < self._redis_backoff_until:  # Still backing off
+            return
+        
+        try:
+            self.redis_client = redis.from_url(
+                "redis://localhost:6379",
+                encoding=None,  # Handle bytes ourselves
+                decode_responses=False,
+                socket_connect_timeout=2.0
+            )
+            await self.redis_client.ping()
+            logger.info("Redis cache connected for context broker")
+            self._redis_failures = 0
+            self._redis_backoff_until = 0
+        except Exception as e:
+            self._redis_failures += 1
+            # Exponential backoff with jitter
+            backoff = min(300, 2 ** self._redis_failures) + random.uniform(0, 1)
+            self._redis_backoff_until = time.time() + backoff
+            logger.warning(f"Redis not available (attempt {self._redis_failures}), "
+                         f"retrying in {backoff:.1f}s: {e}")
+            self.redis_client = None
+    
+    def _set_redis_backoff(self):
+        """Set backoff after Redis operation failure"""
+        self._redis_failures += 1
+        backoff = min(300, 2 ** self._redis_failures) + random.uniform(0, 1)
+        self._redis_backoff_until = time.time() + backoff
+    
+    async def _build_npc_alias_cache(self):
+        """Build name→id mapping for efficient NPC lookup"""
+        if not self.ctx.npc_orchestrator:
+            return
+        
+        # Check if cache is still fresh
+        if (self._npc_alias_cache and 
+            time.time() - self._alias_cache_updated < self._alias_cache_ttl):
+            return
+        
+        try:
+            all_npcs = await self.ctx.npc_orchestrator.get_all_npcs()
+            self._npc_alias_cache = {
+                npc.get('name', '').lower(): npc['id']
+                for npc in all_npcs if 'name' in npc and 'id' in npc
+            }
+            self._alias_cache_updated = time.time()
+            logger.debug(f"Built NPC alias cache with {len(self._npc_alias_cache)} entries")
+        except Exception as e:
+            logger.warning(f"Could not build NPC alias cache: {e}")
+            self._npc_alias_cache = {}
+    
+    async def compute_scene_scope(self, user_input: str, current_state: Dict[str, Any]) -> SceneScope:
+        """Analyze input and state to determine relevant scope (no orchestrator calls)"""
+        scope = SceneScope()
+        
+        # Extract location (keep both ID and name)
+        scope.location_id = current_state.get('location_id') or current_state.get('location')
+        scope.location_name = current_state.get('location_name')
+        if not scope.location_id:
+            scope.location_id = self.ctx.current_location
+        
+        # Refresh NPC alias cache if stale
+        await self._build_npc_alias_cache()
+        
+        # Use cached NPC alias map with word boundary matching
+        if self._npc_alias_cache:
+            for npc_name, npc_id in self._npc_alias_cache.items():
+                # Use word boundaries and escape special regex chars
+                if re.search(rf'\b{re.escape(npc_name)}\b', user_input, flags=re.IGNORECASE):
+                    scope.npc_ids.add(npc_id)
+        
+        # Add NPCs already in scene
+        scope.npc_ids.update(self.ctx.current_scene_npcs)
+        
+        # Extract topics from input using proper tokenization
+        topic_keywords = ['combat', 'trade', 'romance', 'quest', 'explore', 
+                         'craft', 'magic', 'politics', 'religion', 'history']
+        tokens = set(re.findall(r'\b\w+\b', user_input.lower()))
+        scope.topics.update(kw for kw in topic_keywords if kw in tokens)
+        
+        # Add active conflicts (limit to most relevant)
+        if self.ctx.active_conflicts:
+            scope.conflict_ids.update(self.ctx.active_conflicts[:5])
+        
+        # Expand scope with linked concepts (lightweight graph hop)
+        await self._expand_scope_with_links(scope)
+        
+        return scope
+    
+    async def _expand_scope_with_links(self, scope: SceneScope):
+        """Expand scope with directly linked entities for emergent connections"""
+        # For each NPC, find directly related NPCs (limit 2 per source)
+        if scope.npc_ids and len(scope.npc_ids) < 10:
+            related_npcs = set()
+            for npc_id in list(scope.npc_ids)[:3]:  # Top 3 NPCs
+                # Could query relationship table or use cached links
+                # For now, simple placeholder - in production, query relationships
+                pass
+            if related_npcs:
+                scope.link_hints['related_npcs'] = list(related_npcs)[:5]
+        
+        # For topics, find related lore tags
+        if scope.topics:
+            # In production, use a topic→tag mapping or lightweight NLP
+            related_tags = []
+            tag_map = {
+                'combat': ['warfare', 'conflict'],
+                'trade': ['economy', 'merchants'],
+                'romance': ['relationships', 'love'],
+                'magic': ['arcane', 'mystical']
+            }
+            for topic in scope.topics:
+                related_tags.extend(tag_map.get(topic, []))
+            
+            if related_tags:
+                scope.lore_tags.update(related_tags[:5])
+                scope.link_hints['related_tags'] = related_tags[:5]
+    
+    async def load_or_fetch_bundle(self, scene_scope: SceneScope) -> ContextBundle:
+        """Load bundle from cache or fetch if needed, with per-section refresh"""
+        scene_key = scene_scope.to_key()
+        
+        # Opportunistic Redis reconnect if needed
+        if self.redis_client is None and time.time() >= self._redis_backoff_until:
+            await self._try_connect_redis()
+        
+        # Fast path: if same scene as last time, refresh stale sections
+        if scene_key == self._last_scene_key and self._last_bundle:
+            refreshed = await self._refresh_stale_sections(self._last_bundle, scene_scope)
+            if refreshed:
+                await self._save_cache(scene_key, refreshed)
+                self._last_bundle = refreshed  # Update last bundle pointer
+                self.metrics['cache_hits']['bundle'] += 1
+                return refreshed
+        
+        async with self._locks[scene_key]:
+            # Check memory cache
+            bundle = self.bundle_cache.get(scene_key)
+            
+            # Try Redis if no memory cache
+            if not bundle and self.redis_client and time.time() >= self._redis_backoff_until:
+                try:
+                    cached_json = await self.redis_client.get(f"nyx:bundle:{scene_key}")
+                    if cached_json:
+                        bundle_dict = json_loads(cached_json)
+                        
+                        # Check schema version with robust parsing
+                        raw = bundle_dict.get('metadata', {}).get('schema_version', 0)
+                        try:
+                            cached_version = int(raw)
+                        except (TypeError, ValueError):
+                            cached_version = 0
+                        
+                        if cached_version >= SCHEMA_VERSION:
+                            bundle = ContextBundle.from_dict(bundle_dict)
+                            self.bundle_cache.set(scene_key, bundle)
+                            self.metrics['bytes_cached']['redis'] += len(cached_json)
+                            logger.debug(f"Redis cache hit for scene {scene_key[:8]}")
+                        else:
+                            logger.debug(f"Skipping old schema version {cached_version} in Redis cache")
+                            # Optionally delete old entry
+                            await self.redis_client.delete(f"nyx:bundle:{scene_key}")
+                except Exception as e:
+                    logger.warning(f"Redis cache read failed: {e}")
+                    self._set_redis_backoff()
+            
+            # If we have a bundle, refresh only stale sections
+            if bundle:
+                refreshed = await self._refresh_stale_sections(bundle, scene_scope)
+                if refreshed:
+                    # CRITICAL FIX: Save refreshed bundle
+                    await self._save_cache(scene_key, refreshed)
+                    self.metrics['cache_hits']['bundle'] += 1
+                    return refreshed
+            
+            # No bundle or all sections stale - fetch everything
+            self.metrics['cache_misses']['bundle'] += 1
+            bundle = await self.fetch_bundle(scene_scope)
+            
+            # Cache it
+            await self._save_cache(scene_key, bundle)
+            
+            return bundle
+    
+    async def _refresh_stale_sections(self, bundle: ContextBundle, scope: SceneScope) -> Optional[ContextBundle]:
+        """Refresh only stale sections of a bundle, preserving metadata"""
+        sections_to_refresh = []
+        
+        for name in SECTION_NAMES:
+            section = getattr(bundle, name)
+            if section.is_stale():
+                sections_to_refresh.append(name)
+                logger.debug(f"Section {name} is stale, will refresh")
+        
+        if not sections_to_refresh:
+            # Everything is fresh
+            return bundle
+        
+        # Refresh stale sections in parallel
+        refresh_tasks = []
+        for name in sections_to_refresh:
+            refresh_tasks.append(self._fetch_section(name, scope))
+        
+        refreshed_sections = await asyncio.gather(*refresh_tasks, return_exceptions=True)
+        
+        # Update bundle with refreshed sections
+        bundle_dict = bundle.to_dict()
+        for name, result in zip(sections_to_refresh, refreshed_sections):
+            if isinstance(result, Exception):
+                logger.error(f"Failed to refresh {name}: {result}")
+                # Keep old section on error
+            else:
+                bundle_dict[name] = result.to_dict()
+                self.metrics['cache_hits'][name] += 1
+        
+        # Preserve metadata including link hints
+        if 'metadata' not in bundle_dict:
+            bundle_dict['metadata'] = {}
+        
+        # Preserve existing metadata
+        bundle_dict['metadata'].update(bundle.metadata)
+        
+        # Update link hints if scope has them
+        if scope.link_hints:
+            bundle_dict['metadata']['link_hints'] = scope.link_hints
+        
+        return ContextBundle.from_dict(bundle_dict)
+    
+    async def _fetch_section(self, section_name: str, scope: SceneScope) -> BundleSection:
+        """Fetch a single section by name"""
+        fetch_methods = {
+            'npcs': self._fetch_npc_section,
+            'memories': self._fetch_memory_section,
+            'lore': self._fetch_lore_section,
+            'conflicts': self._fetch_conflict_section,
+            'world': self._fetch_world_section,
+            'narrative': self._fetch_narrative_section
+        }
+        
+        method = fetch_methods.get(section_name)
+        if not method:
+            logger.warning(f"Unknown section name: {section_name}")
+            return BundleSection(data={}, canonical=False, priority=0)
+        
+        start_time = time.time()
+        result = await method(scope)
+        
+        # Track fetch time
+        fetch_time = time.time() - start_time
+        self.metrics['fetch_times'][section_name].append(fetch_time)
+        
+        # Apply section-specific TTL
+        result.ttl = self.section_ttls.get(section_name, 30.0)
+        
+        return result
+    
+    async def fetch_bundle(self, scene_scope: SceneScope) -> ContextBundle:
+        """Fetch all context sections in parallel"""
+        start_time = time.time()
+        
+        # Use semaphore to limit parallelism if configured
+        max_parallel = self.ctx.max_parallel_tasks
+        semaphore = asyncio.Semaphore(max_parallel) if max_parallel > 0 else None
+        
+        async def fetch_with_semaphore(section_name: str):
+            if semaphore:
+                async with semaphore:
+                    return await self._fetch_section(section_name, scene_scope)
+            else:
+                return await self._fetch_section(section_name, scene_scope)
+        
+        # Parallel fetch all sections
+        results = await asyncio.gather(
+            *[fetch_with_semaphore(name) for name in SECTION_NAMES],
+            return_exceptions=True
+        )
+        
+        # Handle results
+        bundle_data = {}
+        for section_name, result in zip(SECTION_NAMES, results):
+            if isinstance(result, Exception):
+                logger.error(f"Failed to fetch {section_name}: {result}")
+                bundle_data[section_name] = BundleSection(
+                    data={}, 
+                    canonical=False,
+                    priority=0,
+                    last_changed_at=time.time(),
+                    ttl=self.section_ttls.get(section_name, 30.0)
+                )
+            else:
+                bundle_data[section_name] = result
+        
+        fetch_time = time.time() - start_time
+        logger.info(f"Fetched context bundle in {fetch_time:.2f}s")
+        
+        # Add link hints and schema version to metadata
+        return ContextBundle(
+            scene_scope=scene_scope,
+            **bundle_data,
+            metadata={
+                'fetch_time': fetch_time,
+                'schema_version': SCHEMA_VERSION,  # Use constant
+                'link_hints': scene_scope.link_hints
+            }
+        )
+    
+    async def _save_cache(self, scene_key: str, bundle: ContextBundle):
+        """Save bundle to both memory and Redis cache"""
+        self.bundle_cache.set(scene_key, bundle)  # Use LRU set method
+        
+        # Try to reconnect if backoff expired
+        if self.redis_client is None and time.time() >= self._redis_backoff_until:
+            await self._try_connect_redis()
+        
+        if self.redis_client and time.time() >= self._redis_backoff_until:
+            try:
+                bundle_json = json_dumps(bundle.to_dict())
+                
+                # Convert to bytes for accurate accounting
+                payload = bundle_json.encode('utf-8') if isinstance(bundle_json, str) else bundle_json
+                
+                # Cap Redis payload size to avoid memory bloat
+                max_redis_size = 256 * 1024  # 256KB soft cap
+                if len(payload) > max_redis_size:
+                    # Drop lowest priority sections to fit
+                    trimmed_bundle = self._trim_bundle_for_cache(bundle, max_redis_size)
+                    bundle_json = json_dumps(trimmed_bundle.to_dict())
+                    payload = bundle_json.encode('utf-8') if isinstance(bundle_json, str) else bundle_json
+                
+                # Use max section TTL for Redis
+                ttl = max(self.section_ttls.values())
+                await self.redis_client.setex(
+                    f"nyx:bundle:{scene_key}",
+                    int(ttl),
+                    payload
+                )
+                self.metrics['bytes_cached']['redis'] += len(payload)
+            except Exception as e:
+                logger.warning(f"Redis cache write failed: {e}")
+                self._set_redis_backoff()
+    
+    def _trim_bundle_for_cache(self, bundle: ContextBundle, max_size: int) -> ContextBundle:
+        """Trim bundle by dropping low-priority sections to fit size limit"""
+        sections = [
+            ('narrative', bundle.narrative, 3),
+            ('world', bundle.world, 4),
+            ('conflicts', bundle.conflicts, 5),
+            ('lore', bundle.lore, 6),
+            ('memories', bundle.memories, 7),
+            ('npcs', bundle.npcs, 8),
+        ]
+        
+        # Sort by priority (ascending - drop lowest first)
+        sections.sort(key=lambda x: x[2])
+        
+        # Try dropping sections until it fits
+        trimmed = bundle.to_dict()
+        for name, section, priority in sections:
+            if not section.canonical:  # Never drop canonical sections
+                # Create minimal placeholder
+                trimmed[name] = BundleSection(
+                    data={}, 
+                    canonical=False, 
+                    priority=priority,
+                    last_changed_at=section.last_changed_at,
+                    ttl=section.ttl
+                ).to_dict()
+                
+                # Check if it fits now
+                test_json = json_dumps(trimmed)
+                test_payload = test_json.encode('utf-8') if isinstance(test_json, str) else test_json
+                if len(test_payload) <= max_size:
+                    return ContextBundle.from_dict(trimmed)
+        
+        # If still too large after dropping all non-canonical, hard-compact remaining
+        bundle_obj = ContextBundle.from_dict(trimmed)
+        
+        # Hard compact the largest sections
+        if hasattr(bundle_obj.memories.data, 'compact'):
+            bundle_obj.memories.data = bundle_obj.memories.data.compact()
+        if hasattr(bundle_obj.npcs.data, 'compact'):
+            bundle_obj.npcs.data = bundle_obj.npcs.data.compact(max_npcs=3)
+        if hasattr(bundle_obj.lore.data, 'compact'):
+            bundle_obj.lore.data = bundle_obj.lore.data.compact()
+        
+        # Re-check size after compaction
+        test_json = json_dumps(bundle_obj.to_dict())
+        test_payload = test_json.encode('utf-8') if isinstance(test_json, str) else test_json
+        
+        # If STILL too large, progressively drop optional fields
+        if len(test_payload) > max_size:
+            # Drop recent memories / patterns safely
+            mem = bundle_obj.memories.data
+            if isinstance(mem, MemorySectionData):
+                mem.recent = []
+                mem.patterns = []
+            elif isinstance(mem, dict):
+                mem.pop('recent', None)
+                mem.pop('patterns', None)
+        
+            # Drop world events safely
+            if isinstance(bundle_obj.world.data, dict):
+                bundle_obj.world.data.pop('events', None)
+        
+        return bundle_obj
+    
+    async def _fetch_npc_section(self, scope: SceneScope) -> BundleSection:
+        """Fetch NPC context for scene - using list format for JSON compatibility"""
+        if not self.ctx.npc_orchestrator:
+            return BundleSection(data={'npcs': []}, canonical=False, priority=0)
+        
+        npc_list = []
+        canonical_count = 0
+        
+        for npc_id in list(scope.npc_ids)[:10]:  # Cap at 10 NPCs
+            try:
+                snapshot = await self.ctx.npc_orchestrator.get_npc_snapshot(npc_id)
+                
+                # Extract essential fields with canonical first
+                npc_entry = {
+                    'id': npc_id,
+                    'name': snapshot.name,
+                    'role': snapshot.role,
+                    'canonical': bool(snapshot.canonical_events)
+                }
+                
+                # Add canonical facts first
+                if snapshot.canonical_events:
+                    canonical_count += 1
+                    npc_entry['canonical_events'] = snapshot.canonical_events[:2]
+                
+                # Then dynamic state
+                npc_entry.update({
+                    'status': snapshot.status.value if hasattr(snapshot.status, 'value') else snapshot.status,
+                    'relationship': {
+                        'trust': snapshot.trust,
+                        'respect': snapshot.respect,
+                        'closeness': snapshot.closeness
+                    },
+                    'current_intent': snapshot.emotional_state.get('intent') if snapshot.emotional_state else None
+                })
+                
+                npc_list.append(npc_entry)
+                    
+            except Exception as e:
+                logger.warning(f"Failed to get NPC {npc_id}: {e}")
+        
+        # Use NPCSectionData for strong typing
+        section_data = NPCSectionData(npcs=npc_list, canonical_count=canonical_count)
+        
+        return BundleSection(
+            data=section_data,
+            canonical=canonical_count > 0,
+            priority=8,  # High priority
+            last_changed_at=time.time(),
+            version=f"npcs_{len(npc_list)}_{time.time()}"
+        )
+    
+    async def _fetch_memory_section(self, scope: SceneScope) -> BundleSection:
+        """Fetch relevant memories using existing orchestrator API and link hints"""
+        if not self.ctx.memory_orchestrator:
+            return BundleSection(data=MemorySectionData(relevant=[], recent=[], patterns=[]), 
+                               canonical=False, priority=0)
+        
+        relevant_memories = []
+        recent_memories = []
+        patterns = []
+        
+        try:
+            # Build NPC list including link hints
+            npc_list = list(scope.npc_ids)[:3]
+            # Add related NPCs from link hints
+            hint_npcs = scope.link_hints.get('related_npcs', [])[:2]
+            for hint_npc in hint_npcs:
+                if hint_npc not in npc_list:
+                    npc_list.append(hint_npc)
+            
+            # Fetch memories for NPCs
+            for npc_id in npc_list:
+                if hasattr(self.ctx.memory_orchestrator, 'retrieve_memories'):
+                    result = await self.ctx.memory_orchestrator.retrieve_memories(
+                        entity_type=EntityType.NPC,
+                        entity_id=npc_id,
+                        query=" ".join(list(scope.topics)[:5]),
+                        limit=3,
+                        use_llm_analysis=False  # Fast path
+                    )
+                else:
+                    # Fallback to recall if available
+                    result = await self.ctx.memory_orchestrator.recall(
+                        entity_type=EntityType.NPC,
+                        entity_id=npc_id,
+                        query=" ".join(scope.topics),
+                        limit=3
+                    )
+                
+                if result and 'memories' in result:
+                    relevant_memories.extend(result['memories'][:3])
+            
+            # Get location memories
+            if scope.location_id:
+                if hasattr(self.ctx.memory_orchestrator, 'retrieve_memories'):
+                    result = await self.ctx.memory_orchestrator.retrieve_memories(
+                        entity_type=EntityType.LOCATION,
+                        entity_id=scope.location_id,
+                        limit=5,
+                        use_llm_analysis=False
+                    )
+                else:
+                    result = await self.ctx.memory_orchestrator.recall(
+                        entity_type=EntityType.LOCATION,
+                        entity_id=scope.location_id,
+                        query="",
+                        limit=5
+                    )
+                
+                if result and 'memories' in result:
+                    recent_memories.extend(result['memories'][:5])
+            
+            # Get memory patterns if available
+            if hasattr(self.ctx, 'analyze_memory_patterns') and scope.topics:
+                pattern_result = await self.ctx.analyze_memory_patterns(
+                    topic=", ".join(list(scope.topics)[:3])
+                )
+                if pattern_result and 'predictions' in pattern_result:
+                    patterns = pattern_result['predictions'][:3]
+                
+        except Exception as e:
+            logger.error(f"Memory fetch failed: {e}")
+        
+        # Use MemorySectionData for strong typing
+        section_data = MemorySectionData(
+            relevant=relevant_memories,
+            recent=recent_memories,
+            patterns=patterns
+        )
+        
+        return BundleSection(
+            data=section_data,
+            canonical=False,
+            priority=7,
+            last_changed_at=time.time(),
+            version=f"mem_{len(relevant_memories)}_{len(recent_memories)}"
+        )
+    
+    async def _fetch_lore_section(self, scope: SceneScope) -> BundleSection:
+        """Fetch lore context using link hints"""
+        if not self.ctx.lore_orchestrator:
+            return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]),
+                               canonical=False, priority=0)
+        
+        location_lore = {}
+        world_lore = {}
+        canonical_rules = []
+        
+        try:
+            # Get location lore
+            if scope.location_id:
+                location_result = await self.ctx.lore_orchestrator.get_location_context(
+                    scope.location_id
+                )
+                if location_result:
+                    location_lore = {
+                        'description': location_result.get('description', '')[:200],
+                        'governance': location_result.get('governance', {}),
+                        'culture': location_result.get('culture', {})
+                    }
+                    
+                    # Extract tags from location lore for scope
+                    if 'tags' in location_result:
+                        scope.lore_tags.update(location_result['tags'][:10])
+            
+            # Build tag list including link hints
+            tag_seed = list(scope.lore_tags)[:5]
+            # Add related tags from link hints
+            if 'related_tags' in scope.link_hints:
+                tag_seed.extend(scope.link_hints['related_tags'][:3])
+            
+            # Get relevant world lore based on tags
+            if tag_seed:
+                if hasattr(self.ctx.lore_orchestrator, 'get_tagged_lore'):
+                    tagged_lore = await self.ctx.lore_orchestrator.get_tagged_lore(
+                        tags=tag_seed
+                    )
+                    world_lore = tagged_lore or {}
+            
+            # Check for canonical lore
+            if hasattr(self.ctx.lore_orchestrator, 'check_canonical_consistency'):
+                canonical = await self.ctx.lore_orchestrator.check_canonical_consistency()
+                canonical_rules = canonical.get('rules', [])[:5]
+            
+        except Exception as e:
+            logger.error(f"Lore fetch failed: {e}")
+        
+        # Use LoreSectionData for strong typing
+        section_data = LoreSectionData(
+            location=location_lore,
+            world=world_lore,
+            canonical_rules=canonical_rules
+        )
+        
+        return BundleSection(
+            data=section_data,
+            canonical=bool(canonical_rules),
+            priority=6,
+            last_changed_at=time.time(),
+            version=f"lore_{scope.location_id}_{len(scope.lore_tags)}"
+        )
+    
+    async def _fetch_conflict_section(self, scope: SceneScope) -> BundleSection:
+        """Fetch conflict context using existing orchestrator API and link hints"""
+        if not self.ctx.conflict_synthesizer:
+            return BundleSection(data={}, canonical=False, priority=0)
+        
+        conflict_data = {
+            'active': [],
+            'tensions': {},
+            'opportunities': []
+        }
+        
+        try:
+            # Use get_conflict_state (existing API)
+            for conflict_id in list(scope.conflict_ids)[:5]:
+                if hasattr(self.ctx.conflict_synthesizer, 'get_conflict_state'):
+                    state = await self.ctx.conflict_synthesizer.get_conflict_state(conflict_id)
+                    if state:
+                        conflict_data['active'].append({
+                            'id': conflict_id,
+                            'type': state.get('conflict_type'),
+                            'intensity': state.get('subsystem_data', {}).get('tension', {}).get('level', 0.5),
+                            'stakeholders': state.get('subsystem_data', {}).get('stakeholder', {}).get('stakeholders', [])
+                        })
+            
+            # Build NPC list including link hints for conflict filtering
+            relevant_npcs = set(scope.npc_ids)
+            if 'related_npcs' in scope.link_hints:
+                relevant_npcs.update(scope.link_hints['related_npcs'][:3])
+            
+            # Get tensions using existing calculate_conflict_tensions
+            if hasattr(self.ctx, 'calculate_conflict_tensions'):
+                all_tensions = await self.ctx.calculate_conflict_tensions()
+                # Filter tensions relevant to scene NPCs and linked NPCs
+                if relevant_npcs and all_tensions:
+                    conflict_data['tensions'] = self._filter_tensions_for_npcs(
+                        all_tensions, 
+                        relevant_npcs
+                    )
+            
+        except Exception as e:
+            logger.error(f"Conflict fetch failed: {e}")
+        
+        return BundleSection(
+            data=conflict_data,
+            canonical=False,
+            priority=5,
+            last_changed_at=time.time(),
+            version=f"conflict_{len(conflict_data['active'])}"
+        )
+    
+    def _filter_tensions_for_npcs(self, all_tensions: Dict[str, float], 
+                                  npc_ids: Set[int]) -> Dict[str, float]:
+        """Filter tensions to only those involving specified NPCs"""
+        filtered = {}
+        npc_id_strs = {str(npc_id) for npc_id in npc_ids}
+        
+        for key, value in all_tensions.items():
+            # Assume keys are formatted like "npc:12|npc:47" or "12_47"
+            if '|' in key:
+                # Format: "npc:12|npc:47"
+                parts = key.split('|')
+                if any(f"npc:{npc_id}" in parts for npc_id in npc_id_strs):
+                    filtered[key] = value
+            elif '_' in key:
+                # Format: "12_47" - check exact matches
+                parts = key.split('_')
+                if any(part in npc_id_strs for part in parts):
+                    filtered[key] = value
+            else:
+                # Single entity or unknown format - check if any NPC ID appears
+                for npc_id in npc_id_strs:
+                    # Use word boundary to avoid "12" matching "312"
+                    if re.search(rf'\b{npc_id}\b', key):
+                        filtered[key] = value
+                        break
+        
+        return filtered
+    
+    async def _fetch_world_section(self, scope: SceneScope) -> BundleSection:
+        """Fetch world state with safe field access and enum handling"""
+        if not self.ctx.world_director:
+            return BundleSection(data={}, canonical=False, priority=0)
+        
+        world_data = {}
+        
+        try:
+            if hasattr(self.ctx.world_director, 'get_world_state'):
+                world_state = await self.ctx.world_director.get_world_state()
+                if world_state:
+                    # Safe extraction with getattr and enum handling
+                    mood = getattr(world_state, 'world_mood', None)
+                    if isinstance(mood, Enum):
+                        mood = mood.value
+                    
+                    weather = getattr(world_state, 'weather', None)
+                    if isinstance(weather, Enum):
+                        weather = weather.value
+                    
+                    world_data = {
+                        'time': getattr(world_state, 'current_time', None),
+                        'mood': mood,
+                        'weather': weather,
+                        'events': getattr(world_state, 'active_events', [])[:3]
+                    }
+                    
+                    # Add player vitals if available
+                    vitals = getattr(world_state, 'player_vitals', None)
+                    if vitals:
+                        world_data['vitals'] = {
+                            'fatigue': getattr(vitals, 'fatigue', 0),
+                            'hunger': getattr(vitals, 'hunger', 100),
+                            'thirst': getattr(vitals, 'thirst', 100)
+                        }
+                    
+        except Exception as e:
+            logger.error(f"World fetch failed: {e}")
+        
+        return BundleSection(
+            data=world_data,
+            canonical=False,
+            priority=4,
+            last_changed_at=time.time(),
+            version=f"world_{time.time()}"
+        )
+    
+    async def _fetch_narrative_section(self, scope: SceneScope) -> BundleSection:
+        """Fetch narrative context with safe method calls"""
+        if not self.ctx.slice_of_life_narrator:
+            return BundleSection(data={}, canonical=False, priority=0)
+        
+        narrative_data = {}
+        
+        try:
+            # Safe method calls with hasattr checks
+            if hasattr(self.ctx.slice_of_life_narrator, 'get_scene_atmosphere'):
+                atmosphere = await self.ctx.slice_of_life_narrator.get_scene_atmosphere(
+                    location=scope.location_id or scope.location_name
+                )
+                narrative_data['atmosphere'] = atmosphere
+            
+            if hasattr(self.ctx.slice_of_life_narrator, 'get_recent_narrations'):
+                recent = await self.ctx.slice_of_life_narrator.get_recent_narrations(limit=2)
+                narrative_data['recent'] = recent
+                
+        except Exception as e:
+            logger.error(f"Narrative fetch failed: {e}")
+        
+        return BundleSection(
+            data=narrative_data,
+            canonical=False,
+            priority=3,
+            last_changed_at=time.time(),
+            version=f"narr_{scope.location_id}"
+        )
+    
+    def get_metrics_summary(self) -> Dict[str, Any]:
+        """Get performance metrics summary with p95 and detailed stats"""
+        summary = {
+            'cache_hit_rate': {},
+            'avg_fetch_time': {},
+            'p95_fetch_time': {},
+            'bytes_cached': self.metrics.get('bytes_cached', {})
+        }
+        
+        for section in SECTION_NAMES:
+            hits = self.metrics['cache_hits'][section]
+            misses = self.metrics['cache_misses'][section]
+            total = hits + misses
+            
+            if total > 0:
+                summary['cache_hit_rate'][section] = round(hits / total, 2)
+            
+            fetch_times = self.metrics['fetch_times'].get(section, [])
+            if fetch_times:
+                summary['avg_fetch_time'][section] = round(sum(fetch_times) / len(fetch_times), 3)
+                # Calculate p95
+                sorted_times = sorted(fetch_times)
+                p95_idx = int(len(sorted_times) * 0.95)
+                summary['p95_fetch_time'][section] = round(sorted_times[p95_idx] if p95_idx < len(sorted_times) else sorted_times[-1], 3)
+        
+        return summary
+    
+    def log_metrics_line(self, scene_key: str, packed_context: 'PackedContext'):
+        """Log a compact metrics line for monitoring (throttled)"""
+        self._metrics_log_counter += 1
+        
+        # Only log every Nth turn or on significant changes
+        if self._metrics_log_counter % self._metrics_log_interval != 0:
+            return
+        
+        metrics = self.get_metrics_summary()
+        hit_rates = ' '.join(f"{k[:3]}={v:.2f}" for k, v in metrics['cache_hit_rate'].items())
+        p95_times = metrics.get('p95_fetch_time', {})
+        max_p95 = max(p95_times.values()) if p95_times else 0
+        
+        logger.info(f"ctx: key={scene_key[:8]} canon={len(packed_context.canonical)} "
+                   f"opt={len(packed_context.optional)} sum={len(packed_context.summarized)} "
+                   f"tok={packed_context.tokens_used} p95_fetch={max_p95*1000:.0f}ms "
+                   f"hit[{hit_rates}]")
+
+# ===== Main NyxContext Class =====
 
 @dataclass
 class NyxContext:
+    """Enhanced NyxContext with optimized parallel context assembly"""
+    
     # ────────── REQUIRED (no defaults) ──────────
     user_id: int
     conversation_id: int
 
     # ────────── SUB-SYSTEM HANDLES ──────────
-    memory_orchestrator: Optional[MemoryOrchestrator] = None  # Full memory system
-    user_model:         Optional[UserModelManager]  = None
-    task_integration:   Optional[NyxTaskIntegration] = None
-    response_filter:    Optional[ResponseFilter]    = None
-    emotional_core:     Optional[EmotionalCore]     = None
-    performance_monitor: Optional[PerformanceMonitor] = None
-    belief_system:      Optional[Any]               = None
-    world_director:     Optional[Any]               = None
-    slice_of_life_narrator: Optional[Any]           = None
-    
-    # ────────── ORCHESTRATOR INTEGRATION ──────────
-    npc_orchestrator:   Optional[NPCOrchestrator]   = None
+    memory_orchestrator: Optional[MemoryOrchestrator] = None
+    user_model: Optional[UserModelManager] = None
+    task_integration: Optional[NyxTaskIntegration] = None
+    response_filter: Optional[ResponseFilter] = None
+    emotional_core: Optional[EmotionalCore] = None
+    npc_orchestrator: Optional[NPCOrchestrator] = None
     conflict_synthesizer: Optional[ConflictSynthesizer] = None
-    lore_orchestrator:  Optional[LoreOrchestrator]  = None  # NEW: Lore Orchestrator
+    lore_orchestrator: Optional[LoreOrchestrator] = None
+    world_director: Optional[Any] = None  # CompleteWorldDirector
+    slice_of_life_narrator: Optional[Any] = None  # SliceOfLifeNarrator
     
-    # Legacy memory compatibility (will use orchestrator internally)
-    memory_system:      Optional[Any]               = None  # Legacy interface
+    # ────────── CONTEXT BROKER (NEW) ──────────
+    context_broker: Optional[ContextBroker] = None
     
-    # ────────── MUTABLE STATE BUCKETS ──────────
-    current_context:     Dict[str, Any]                = field(default_factory=dict)
-    scenario_state:      Dict[str, Any]                = field(default_factory=dict)
-    relationship_states: Dict[str, Dict[str, Any]]     = field(default_factory=dict)
-    active_tasks:        List[Dict[str, Any]]          = field(default_factory=list)
-    current_world_state: Optional[Any]                = None
-    daily_routine_tracker: Optional[Dict[str, Any]]   = None
-    emergent_narratives: List[Dict[str, Any]]        = field(default_factory=list)
-    npc_autonomy_states: Dict[int, Dict[str, Any]]   = field(default_factory=dict)
+    # ────────── CURRENT STATE ──────────
+    current_context: Dict[str, Any] = field(default_factory=dict)
+    current_location: Optional[str] = None
+    current_world_state: Optional[Any] = None
+    config: Optional[Any] = None  # For model context budget
     
     # ────────── NPC-SPECIFIC STATE ──────────
-    active_npc_ids:      Set[int]                    = field(default_factory=set)
-    npc_snapshots:       Dict[int, NPCSnapshot]      = field(default_factory=dict)
-    npc_interaction_history: List[Dict[str, Any]]    = field(default_factory=list)
-    current_scene_npcs:  List[int]                   = field(default_factory=list)
-    npc_narrative_context: Dict[str, Any]            = field(default_factory=dict)
+    npc_snapshots: Dict[int, NPCSnapshot] = field(default_factory=dict)
+    current_scene_npcs: List[int] = field(default_factory=list)
+    npc_perceptions: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    npc_decisions: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     
-    # ────────── MEMORY-SPECIFIC STATE ──────────
-    memory_context:      Dict[str, Any]              = field(default_factory=dict)
-    recent_memories:     Dict[str, List[Dict]]       = field(default_factory=dict)  # entity_key -> memories
-    active_schemas:      List[Dict[str, Any]]        = field(default_factory=list)
-    memory_narratives:   List[Dict[str, Any]]        = field(default_factory=list)
-    memory_predictions:  List[Dict[str, Any]]        = field(default_factory=list)
-    belief_systems:      Dict[str, List[Dict]]       = field(default_factory=dict)  # entity_key -> beliefs
-    emotional_memories:  Dict[str, Dict]             = field(default_factory=dict)  # entity_key -> emotional state
+    # ────────── MEMORY STATE ──────────
+    recent_memories: Dict[str, List[Any]] = field(default_factory=dict)
+    memory_patterns: List[Dict[str, Any]] = field(default_factory=list)
     
-    # ────────── CONFLICT-SPECIFIC STATE ──────────
-    active_conflicts:    Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # conflict_id -> state
-    conflict_tensions:   Dict[str, float]            = field(default_factory=dict)  # entity_pair -> tension
-    conflict_events:     List[Dict[str, Any]]        = field(default_factory=list)  # Recent conflict events
-    conflict_choices:    List[Dict[str, Any]]        = field(default_factory=list)  # Available choices
-    conflict_context:    Optional[ConflictContext]   = None
-    scene_conflicts:     List[int]                   = field(default_factory=list)  # Conflicts in current scene
-    conflict_subsystems: Set[str]                    = field(default_factory=set)   # Active subsystems
-    conflict_manifestations: List[str]               = field(default_factory=list)  # From narrator
+    # ────────── CONFLICT STATE ──────────
+    active_conflicts: List[int] = field(default_factory=list)
+    conflict_states: Dict[int, str] = field(default_factory=dict)
+    conflict_tensions: Dict[str, float] = field(default_factory=dict)
     
-    # ────────── LORE-SPECIFIC STATE (NEW) ──────────
-    world_lore:          Dict[str, Any]              = field(default_factory=dict)  # Current world lore
-    active_religions:    Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # pantheon_id -> religion data
-    active_nations:      Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # nation_id -> nation data
-    educational_systems: Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # system_id -> education data
-    local_myths:         Dict[int, Dict[str, Any]]   = field(default_factory=dict)  # myth_id -> myth data
-    current_location_lore: Dict[str, Any]            = field(default_factory=dict)  # Lore for current location
-    geopolitical_state:  Dict[str, Any]              = field(default_factory=dict)  # Current geopolitical situation
-    cultural_context:    Dict[str, Any]              = field(default_factory=dict)  # Cultural context
-    lore_events:         List[Dict[str, Any]]        = field(default_factory=list)  # Recent lore events
-    lore_consistency:    Dict[str, Any]              = field(default_factory=dict)  # Consistency status
-    faction_relationships: Dict[str, Any]            = field(default_factory=dict)  # Faction relationship matrix
-    active_political_conflicts: List[Dict[str, Any]] = field(default_factory=list)  # Active political conflicts
+    # ────────── LORE STATE ──────────
+    world_lore: Dict[str, Any] = field(default_factory=dict)
+    active_religions: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    active_nations: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     
-    # ────────── WORLD DIRECTOR & NARRATOR SYNC STATE ──────────
-    world_state_cache:   Optional[Dict[str, Any]]    = None
-    narrative_cache:     Optional[Dict[str, Any]]    = None
-    last_world_sync:     float                       = 0.0
-    last_narrative_sync: float                       = 0.0
-    last_lore_sync:      float                       = 0.0  # NEW: Track lore sync timing
-    sync_interval:       float                       = 30.0  # Sync every 30 seconds
-    
-    # World-specific extracted data
-    world_mood:          Optional[str]               = None
-    world_tensions:      Dict[str, float]            = field(default_factory=dict)
-    player_vitals:       Dict[str, Any]              = field(default_factory=dict)
-    active_addictions:   Dict[str, Any]              = field(default_factory=dict)
-    current_location:    Optional[str]               = None
-    time_of_day:         Optional[str]               = None
-    
-    # Narrator-specific extracted data
-    recent_narrations:   List[str]                   = field(default_factory=list)
-    narrative_tone:      Optional[str]               = None
-    scene_atmosphere:    Optional[str]               = None
-    power_dynamic_hints: List[str]                   = field(default_factory=list)
-    system_intersections: List[str]                  = field(default_factory=list)
-
-    # ────────── GAME LOGIC SYSTEMS ──────────
-    event_system: Optional[Any] = None  # Event system from event_system.py
-    activity_analyzer: Optional[Any] = None  # Activity analyzer
-    addiction_context: Optional[Any] = None  # Addiction system
-    currency_generator: Optional[Any] = None  # Currency system
-    inventory_context: Optional[Any] = None  # Inventory system
-    relationship_manager: Optional[Any] = None  # Already exists but ensure it's there
-    calendar_system: Optional[Any] = None  # Calendar system
-    npc_bridge: Optional[Any] = None  # NPC agent bridge
-
-    # ────────── GAME STATE ──────────
-    game_time: Dict[str, Any] = field(default_factory=lambda: {
-        "year": 1,
-        "month": 1,
-        "day": 1,
-        "time_of_day": "Morning"
-    })
-    player_inventory: List[Dict[str, Any]] = field(default_factory=list)
-    player_activities: List[Dict[str, Any]] = field(default_factory=list)
-    player_addictions: Dict[str, Any] = field(default_factory=dict)
-    player_stats: Dict[str, Any] = field(default_factory=dict)
-    currency_info: Dict[str, Any] = field(default_factory=dict)
-    calendar_events: List[Dict[str, Any]] = field(default_factory=list)
-    narrative_stage_info: Dict[int, str] = field(default_factory=dict)  # npc_id -> stage
-
-    # ────────── ACTIVITY & RESOURCE STATE ──────────
-    current_activity: Optional[Dict[str, Any]] = None
-    recent_activities: List[Dict[str, Any]] = field(default_factory=list)
-    resource_state: Dict[str, Any] = field(default_factory=lambda: {
-        "hunger": 100,
-        "energy": 100,
-        "money": 100,
-        "supplies": 10,
-        "influence": 0
-    })
-    activity_effects: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Cache of activity effects
-
-    # ────────── PERFORMANCE & EMOTION ──────────
+    # ────────── PERFORMANCE METRICS ──────────
     performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
-        # Core action metrics
-        "total_actions": 0,
-        "successful_actions": 0,
-        "failed_actions": 0,
-        
-        # Performance tracking
         "response_times": [],
-        "memory_usage": 0,
-        "cpu_usage": 0,
-        
-        # Error tracking
-        "error_rates": {
-            "total": 0,
-            "recovered": 0,
-            "unrecovered": 0
-        },
-        
-        # NPC-related metrics
-        "npc_interactions": 0,
-        "npc_decisions": 0,
-        "npc_memories_created": 0,
-        "npc_perceptions_updated": 0,
-        "npc_learning_cycles": 0,
-        "npc_scheming_evaluations": 0,
-        
-        # Memory system metrics
-        "memories_stored": 0,
-        "memories_retrieved": 0,
-        "beliefs_created": 0,
-        "beliefs_updated": 0,
-        "flashbacks_generated": 0,
-        "memory_maintenance_runs": 0,
-        "memory_consolidations": 0,
-        
-        # Conflict system metrics
-        "conflicts_created": 0,
-        "conflicts_resolved": 0,
-        "conflicts_updated": 0,
-        "conflict_scenes_processed": 0,
-        "tension_calculations": 0,
-        "conflict_choices_presented": 0,
-        "conflict_resolutions_attempted": 0,
-        "conflict_events_logged": 0,
-        "conflict_health_checks": 0,
-        "subsystem_events_processed": 0,
-        
-        # Lore system metrics (NEW)
-        "lore_queries": 0,
-        "lore_updates": 0,
-        "world_evolutions": 0,
-        "cultural_diffusions": 0,
-        "political_simulations": 0,
-        "religious_events": 0,
-        "myth_transmissions": 0,
-        "geopolitical_conflicts": 0,
-        "educational_exchanges": 0,
-        "lore_consistency_checks": 0,
-        
-        # World/Story metrics
-        "world_state_updates": 0,
-        "emergent_events_generated": 0,
-        "slice_scenes_orchestrated": 0,
-        "narrative_beats_processed": 0,
+        "memory_queries": 0,
+        "npc_updates": 0,
         "world_director_syncs": 0,
         "narrator_syncs": 0,
-        "lore_syncs": 0,  # NEW
-        
-        # System health metrics
-        "cache_hits": 0,
-        "cache_misses": 0,
-        "db_queries": 0,
-        "api_calls": 0,
-        "rate_limit_hits": 0,
-        
-        # Learning/Adaptation metrics
-        "patterns_learned": 0,
-        "strategies_adapted": 0,
-        "preferences_updated": 0
+        "lore_syncs": 0,
+        "context_assembly_times": []
     })
     
-    emotional_state: Dict[str, float] = field(default_factory=lambda: {
-        "valence": 0.0,
-        "arousal": 0.5,
-        "dominance": 0.7
+    # ────────── FEATURE FLAGS ──────────
+    enable_parallel_fetch: bool = True
+    enable_smart_caching: bool = True
+    enable_background_workers: bool = True
+    max_parallel_tasks: int = 6
+    
+    # ────────── TASK TRACKING ──────────
+    last_task_runs: Dict[str, datetime] = field(default_factory=dict)
+    task_intervals: Dict[str, float] = field(default_factory=lambda: {
+        "npc_perception_update": 30,
+        "memory_consolidation": 3600,
+        "conflict_tension_calculation": 120,
+        "lore_evolution": 1800,
+        "world_sync": 30,
+        "narrator_sync": 30
     })
-
-    # ────────── LEARNING & ADAPTATION ──────────
-    learned_patterns:      Dict[str, Any]           = field(default_factory=dict)
-    strategy_effectiveness: Dict[str, Any]          = field(default_factory=dict)
-    adaptation_history:    List[Dict[str, Any]]     = field(default_factory=list)
-    learning_metrics:      Dict[str, Any]           = field(default_factory=lambda: {
-        "pattern_recognition_rate": 0.0,
-        "strategy_improvement_rate": 0.0,
-        "adaptation_success_rate": 0.0,
-        "npc_behavior_prediction_accuracy": 0.0
-    })
-
+    
     # ────────── ERROR LOGGING ──────────
     error_log: List[Dict[str, Any]] = field(default_factory=list)
     error_counts: Dict[str, int] = field(default_factory=dict)
     
-    # ────────── FEATURE FLAGS ──────────
-    _tables_available: Dict[str, bool] = field(default_factory=dict)
-    enable_npc_canon: bool = True  # Enable canon integration for NPCs
-    enable_world_sync: bool = True  # Enable world director sync
-    enable_narrator_sync: bool = True  # Enable narrator sync
-    enable_lore_sync: bool = True  # Enable lore orchestrator sync (NEW)
-    enable_matriarchal_theme: bool = True  # Enable matriarchal theme in lore (NEW)
-    lore_cache_enabled: bool = True  # Enable lore caching (NEW)
-
-    # ────────── TASK SCHEDULING ──────────
-    last_task_runs: Dict[str, datetime] = field(default_factory=dict)
-    task_intervals: Dict[str, float]    = field(default_factory=lambda: {
-        "memory_reflection": 300, "relationship_update": 600,
-        "scenario_check": 60, "performance_check": 300,
-        "task_generation": 300, "learning_save": 900, 
-        "performance_save": 600,
-        "scenario_heartbeat": 3600,
-        "npc_perception_update": 30,  # Update NPC perceptions every 30s
-        "npc_decision_cycle": 60,      # NPC decision making every minute
-        "npc_learning_cycle": 900,     # NPC learning every 15 minutes
-        "npc_scheming_check": 600,     # Check for scheming every 10 minutes
-        "memory_maintenance": 1800,    # Memory maintenance every 30 minutes
-        "memory_consolidation": 3600,  # Memory consolidation every hour
-        "belief_update": 600,          # Belief system updates every 10 minutes
-        "canon_sync": 7200,            # Canon sync every 2 hours
-        "conflict_health_check": 300,  # Conflict system health check every 5 minutes
-        "tension_calculation": 120,    # Recalculate tensions every 2 minutes
-        "conflict_scene_check": 60,    # Check for scene conflicts every minute
-        "conflict_resolution_check": 600,  # Check for resolution opportunities every 10 minutes
-        "world_director_sync": 30,     # Sync world state every 30 seconds
-        "narrator_sync": 30,           # Sync narrative context every 30 seconds
-        "lore_sync": 60,               # Sync lore data every minute (NEW)
-        "lore_evolution": 1800,        # Check for lore evolution every 30 minutes (NEW)
-        "cultural_update": 3600,       # Update cultural context every hour (NEW)
-        "geopolitical_check": 900,     # Check geopolitical state every 15 minutes (NEW)
-        "game_time_sync": 60,          # Sync game time every minute
-        "inventory_sync": 300,         # Sync inventory every 5 minutes
-        "player_stats_sync": 120,      # Sync player stats every 2 minutes
-        "addiction_sync": 300,         # Sync addictions every 5 minutes
-        "calendar_sync": 600,          # Sync calendar every 10 minutes
-        "narrative_progression_sync": 300,  # Sync narrative progression every 5 minutes
-        "activity_sync": 180,          # Sync activities every 3 minutes
-    })
-
-    # ────────── PRIVATE CACHES (init=False) ──────────
-    _strategy_cache:             Optional[tuple] = field(init=False, default=None)
-    _strategy_cache_ttl:         float = field(init=False, default=300.0)
-    _strategy_cache_lock:        asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
-    _cpu_usage_cache:            Optional[float] = field(init=False, default=None)
-    _cpu_usage_last_update:      float = field(init=False, default=0.0)
-    _cpu_usage_update_interval:  float = field(init=False, default=10.0)
-    
     async def initialize(self):
-        """Initialize all systems including NPC, Memory, World Director, Narrator and Lore orchestrators"""
-        # Initialize Memory Orchestrator first (other systems may depend on it)
+        """Initialize all orchestrators and the context broker"""
+        # Try to load config if available
+        try:
+            from .config import Config
+            self.config = Config
+        except ImportError:
+            pass
+        
+        initialization_tasks = []
+        
+        # Initialize Memory Orchestrator
+        initialization_tasks.append(self._init_memory_orchestrator())
+        
+        # Initialize Lore Orchestrator
+        initialization_tasks.append(self._init_lore_orchestrator())
+        
+        # Initialize NPC Orchestrator
+        initialization_tasks.append(self._init_npc_orchestrator())
+        
+        # Initialize Conflict Synthesizer
+        initialization_tasks.append(self._init_conflict_synthesizer())
+        
+        # Initialize World Systems
+        if WORLD_SIMULATION_AVAILABLE:
+            initialization_tasks.append(self._init_world_systems())
+        
+        # Run all initializations in parallel
+        if self.enable_parallel_fetch:
+            results = await asyncio.gather(*initialization_tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"Initialization task {i} failed: {result}")
+                    self.log_error(result, {"task": f"init_{i}"})
+        else:
+            # Fallback to sequential initialization
+            for task in initialization_tasks:
+                try:
+                    await task
+                except Exception as e:
+                    logger.error(f"Initialization failed: {e}")
+                    self.log_error(e, {"task": "init"})
+        
+        # Initialize the context broker
+        self.context_broker = ContextBroker(self)
+        await self.context_broker.initialize()
+        
+        logger.info(f"NyxContext initialized for user {self.user_id}, conversation {self.conversation_id}")
+    
+    async def _init_memory_orchestrator(self):
+        """Initialize memory orchestrator"""
         try:
             self.memory_orchestrator = await get_memory_orchestrator(
                 self.user_id, 
                 self.conversation_id
             )
-            # Legacy compatibility wrapper
-            self.memory_system = self.memory_orchestrator
-            
-            logger.info(f"Memory Orchestrator initialized for user {self.user_id}, conversation {self.conversation_id}")
+            logger.info("Memory Orchestrator initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize Memory Orchestrator: {e}", exc_info=True)
-            self.memory_orchestrator = None
-            self.memory_system = None
-        
-        # Initialize Lore Orchestrator (NEW)
+            logger.error(f"Failed to initialize Memory Orchestrator: {e}")
+    
+    async def _init_lore_orchestrator(self):
+        """Initialize lore orchestrator"""
         try:
-            # Create config for lore orchestrator
             lore_config = OrchestratorConfig(
-                enable_matriarchal_theme=self.enable_matriarchal_theme,
                 enable_governance=True,
-                enable_metrics=True,
-                enable_validation=True,
-                enable_cache=self.lore_cache_enabled,
+                enable_cache=True,
                 auto_initialize=True
             )
-            
             self.lore_orchestrator = await get_lore_orchestrator(
                 self.user_id,
                 self.conversation_id,
                 lore_config
             )
-            
-            # Do initial lore sync
-            await self.sync_lore_data(force=True)
-            
-            logger.info(f"Lore Orchestrator initialized for user {self.user_id}, conversation {self.conversation_id}")
+            logger.info("Lore Orchestrator initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize Lore Orchestrator: {e}", exc_info=True)
-            self.lore_orchestrator = None
-        
-        # Initialize other core systems
-        self.user_model = await UserModelManager.get_instance(self.user_id, self.conversation_id)
-        self.task_integration = await NyxTaskIntegration.get_instance(self.user_id, self.conversation_id)
-        self.response_filter = ResponseFilter(self.user_id, self.conversation_id)
-        self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
-        
-        # Initialize emotional core if available
-        try:
-            self.emotional_core = EmotionalCore()
-        except Exception as e:
-            logger.warning(f"EmotionalCore not available: {e}", exc_info=True)
-        
-        # Initialize belief system if available
-        try:
-            from nyx.nyx_belief_system import BeliefSystem
-            self.belief_system = BeliefSystem(self.user_id, self.conversation_id)
-        except ImportError as e:
-            logger.warning(f"BeliefSystem module not available: {e}")
-        except Exception as e:
-            logger.warning(f"BeliefSystem initialization failed: {e}", exc_info=True)
-
-        # Initialize NPC orchestrator
+            logger.error(f"Failed to initialize Lore Orchestrator: {e}")
+    
+    async def _init_npc_orchestrator(self):
+        """Initialize NPC orchestrator"""
         try:
             self.npc_orchestrator = NPCOrchestrator(
-                self.user_id, 
-                self.conversation_id, 
-                enable_canon=self.enable_npc_canon
+                self.user_id,
+                self.conversation_id,
+                enable_canon=True
             )
             await self.npc_orchestrator.initialize()
-            
-            # Load active NPCs
-            self.active_npc_ids = self.npc_orchestrator._active_npcs.copy()
-            
-            logger.info(f"NPC Orchestrator initialized with {len(self.active_npc_ids)} active NPCs")
+            logger.info("NPC Orchestrator initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize NPC orchestrator: {e}", exc_info=True)
-            self.npc_orchestrator = None
-
-        # Initialize Conflict Synthesizer
+            logger.error(f"Failed to initialize NPC Orchestrator: {e}")
+    
+    async def _init_conflict_synthesizer(self):
+        """Initialize conflict synthesizer"""
         try:
             self.conflict_synthesizer = await get_conflict_synthesizer(
                 self.user_id,
                 self.conversation_id
             )
-            
-            # Get initial system state
-            conflict_state = await self.conflict_synthesizer.get_system_state()
-            
-            # Load active conflicts
-            for conflict_id in conflict_state.get('active_conflicts', []):
-                if isinstance(conflict_id, int):
-                    state = await self.conflict_synthesizer.get_conflict_state(conflict_id)
-                    self.active_conflicts[conflict_id] = state
-            
-            # Track active subsystems
-            self.conflict_subsystems = set(conflict_state.get('subsystems', {}).keys())
-            
-            logger.info(f"Conflict Synthesizer initialized with {len(self.active_conflicts)} active conflicts")
+            logger.info("Conflict Synthesizer initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize Conflict Synthesizer: {e}", exc_info=True)
-            self.conflict_synthesizer = None
-
-        # Initialize world systems
+            logger.error(f"Failed to initialize Conflict Synthesizer: {e}")
+    
+    async def _init_world_systems(self):
+        """Initialize world director and narrator"""
         try:
             from story_agent.world_director_agent import CompleteWorldDirector
             from story_agent.slice_of_life_narrator import SliceOfLifeNarrator
-
+            
             self.world_director = CompleteWorldDirector(self.user_id, self.conversation_id)
             await self.world_director.initialize()
-
+            
             self.slice_of_life_narrator = SliceOfLifeNarrator(self.user_id, self.conversation_id)
             await self.slice_of_life_narrator.initialize()
-
-            # Do initial sync
-            await self.sync_world_director_data(force=True)
-            await self.sync_narrator_data(force=True)
-
+            
+            logger.info("World systems initialized")
         except Exception as e:
-            logger.warning(f"World systems initialization failed: {e}", exc_info=True)
-        
-        # ────────── Initialize Game Logic Systems ──────────
-
-        # Initialize Event System
-        try:
-            from logic.event_system import EventSystem
-            self.event_system = EventSystem(self.user_id, self.conversation_id)
-            await self.event_system.initialize()
-            logger.info(f"Event System initialized with {len(self.event_system.active_events)} active events")
-        except Exception as e:
-            logger.error(f"Failed to initialize Event System: {e}", exc_info=True)
-            self.event_system = None
-
-        # Initialize Activity Analyzer
-        try:
-            from logic.activity_analyzer import ActivityAnalyzer
-            self.activity_analyzer = ActivityAnalyzer(self.user_id, self.conversation_id)
-            logger.info("Activity Analyzer initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Activity Analyzer: {e}", exc_info=True)
-            self.activity_analyzer = None
-
-        # Initialize Addiction System
-        try:
-            from logic.addiction_system_sdk import AddictionContext
-            self.addiction_context = AddictionContext(self.user_id, self.conversation_id)
-            await self.addiction_context.initialize()
-            logger.info("Addiction System initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Addiction System: {e}", exc_info=True)
-            self.addiction_context = None
-
-        # Initialize Currency System
-        try:
-            from logic.currency_generator import CurrencyGenerator
-            self.currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
-            self.currency_info = await self.currency_generator.get_currency_system()
-            logger.info(f"Currency System initialized: {self.currency_info.get('currency_name', 'unknown')}")
-        except Exception as e:
-            logger.error(f"Failed to initialize Currency System: {e}", exc_info=True)
-            self.currency_generator = None
-
-        # Initialize Inventory System
-        try:
-            from logic.inventory_system_sdk import InventoryContext
-            self.inventory_context = InventoryContext(self.user_id, self.conversation_id)
-            await self.inventory_context.initialize()
-            # Load initial inventory
-            await self.sync_inventory_data(force=True)
-            logger.info("Inventory System initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Inventory System: {e}", exc_info=True)
-            self.inventory_context = None
-
-        # Initialize Calendar System
-        try:
-            from logic.calendar import ensure_calendar_tables, load_calendar_names
-            await ensure_calendar_tables(self.user_id, self.conversation_id)
-            self.calendar_system = await load_calendar_names(self.user_id, self.conversation_id)
-            logger.info("Calendar System initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Calendar System: {e}", exc_info=True)
-            self.calendar_system = None
-
-        # Initialize NPC Bridge
-        try:
-            from logic.npc_agent_bridge import NPCSystemBridge
-            self.npc_bridge = NPCSystemBridge(self.user_id, self.conversation_id)
-            logger.info("NPC Bridge initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize NPC Bridge: {e}", exc_info=True)
-            self.npc_bridge = None
-
-        # Initialize Relationship Manager (if not already)
-        if not self.relationship_manager:
-            try:
-                from logic.dynamic_relationships import OptimizedRelationshipManager
-                self.relationship_manager = OptimizedRelationshipManager(self.user_id, self.conversation_id)
-                logger.info("Relationship Manager initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize Relationship Manager: {e}", exc_info=True)
-
-        # Initialize CPU usage monitoring
-        try:
-            self._cpu_usage_cache = safe_psutil('cpu_percent', interval=0.1, default=0.0)
-        except Exception as e:
-            logger.debug(f"Failed to initialize CPU monitoring: {e}")
-            self._cpu_usage_cache = 0.0
-
-        # Load existing state from database
-        await self._load_state()
-
-        # Load NPC context for current scene
-        await self._load_npc_context()
-
-        # Sync initial game state
-        await self.sync_game_time(force=True)
-        await self.sync_player_stats(force=True)
-        await self.sync_narrative_progression(force=True)
-        await self.sync_calendar_events(force=True)
-        await self.sync_addiction_status(force=True)
-        await self.sync_activity_data(force=True)
+            logger.error(f"Failed to initialize world systems: {e}")
     
-    # ────────── LORE SYNCHRONIZATION (NEW) ──────────
-    
-    async def sync_lore_data(self, force: bool = False):
-        """Pull latest lore data from Lore Orchestrator into context"""
-        if not self.enable_lore_sync:
-            return
-            
-        current_time = time.time()
+    async def build_context_for_input(self, user_input: str, context_data: Dict[str, Any] = None) -> PackedContext:
+        """Main entry point: build optimized context for user input"""
+        start_time = time.time()
         
-        # Check if we need to sync
-        if not force and not self.should_run_task("lore_sync"):
-            return
+        # Merge provided context
+        if context_data:
+            self.current_context.update(context_data)
         
-        if not self.lore_orchestrator:
-            logger.warning("Lore orchestrator not initialized for sync")
-            return
-            
-        try:
-            # Get world lore for current world
-            world_id = self.current_context.get("world_id", 1)  # Default to world 1
-            self.world_lore = await self.lore_orchestrator.get_world_lore(world_id)
-            
-            # Get nations
-            nations = await self.lore_orchestrator.get_all_nations(
-                self.lore_orchestrator.create_run_context()
-            )
-            for nation in nations:
-                self.active_nations[nation['id']] = nation
-            
-            # Get religions/pantheons
-            pantheons = await self.lore_orchestrator.get_all_pantheons()
-            for pantheon in pantheons:
-                self.active_religions[pantheon['id']] = pantheon
-            
-            # Get location-specific lore if we have a location
-            if self.current_location:
-                # Try to get location ID from context or search for it
-                location_id = self.current_context.get('location_id')
-                if location_id:
-                    location_lore = await self.lore_orchestrator.get_location_lore(
-                        self.lore_orchestrator.create_run_context(),
-                        location_id
-                    )
-                    self.current_location_lore = location_lore
-                    
-                    # Update context with rich location lore
-                    self.current_context['location_myths'] = location_lore.get('myths', [])
-                    self.current_context['location_history'] = location_lore.get('history', [])
-                    self.current_context['location_landmarks'] = location_lore.get('landmarks', [])
-            
-            # Get active political conflicts
-            political_conflicts = await self.lore_orchestrator.get_active_conflicts(
-                self.lore_orchestrator.create_run_context()
-            )
-            self.active_political_conflicts = political_conflicts
-            
-            # Get geopolitical state
-            if nations:
-                # Get tensions between major nations
-                geopolitical = {
-                    'nations': len(nations),
-                    'major_powers': [n for n in nations if n.get('relative_power', 0) > 7],
-                    'conflicts': political_conflicts
-                }
-                self.geopolitical_state = geopolitical
-            
-            # Get cultural context for player's current nation
-            if self.current_context.get('nation_id'):
-                cultural_context = await self.lore_orchestrator.get_cultural_context(
-                    self.current_context['nation_id']
-                )
-                self.cultural_context = cultural_context
-            
-            # Get faction relationships
-            faction_data = {}
-            for faction_id in self.current_context.get('active_factions', []):
-                faction_religion = await self.lore_orchestrator.get_faction_religion(faction_id)
-                if faction_religion:
-                    faction_data[faction_id] = faction_religion
-            self.faction_relationships = faction_data
-            
-            # Update metrics
-            self.performance_metrics["lore_syncs"] += 1
-            self.performance_metrics["lore_queries"] += 1
-            
-            # Record task run
-            self.record_task_run("lore_sync")
-            self.last_lore_sync = current_time
-            
-            logger.debug(f"Synced lore data for conversation {self.conversation_id}")
-                
-        except Exception as e:
-            logger.error(f"Failed to sync lore data: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_lore"})
-    
-    async def evolve_world_lore(self, event_description: str):
-        """Evolve the world lore based on an event"""
-        if not self.lore_orchestrator:
-            return {"error": "Lore orchestrator not initialized"}
+        # Compute scene scope
+        scene_scope = await self.context_broker.compute_scene_scope(
+            user_input,
+            self.current_context
+        )
         
-        try:
-            ctx = self.lore_orchestrator.create_run_context()
-            result = await self.lore_orchestrator.evolve_world_with_event(
-                ctx,
-                event_description,
-                self.current_context.get('location_id')
-            )
-            
-            # Update metrics
-            self.performance_metrics["world_evolutions"] += 1
-            
-            # Log as lore event
-            self.lore_events.append({
-                'type': 'world_evolution',
-                'description': event_description,
-                'result': result,
-                'timestamp': datetime.now().isoformat()
-            })
-            
-            # Keep events bounded
-            if len(self.lore_events) > 50:
-                self.lore_events = self.lore_events[-50:]
-            
-            # Force sync to get updated state
-            await self.sync_lore_data(force=True)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to evolve world lore: {e}", exc_info=True)
-            self.log_error(e, {"event": event_description})
-            return {"error": str(e)}
-    
-    async def check_lore_evolution(self):
-        """Check if lore should evolve based on time/events"""
-        if not self.lore_orchestrator:
-            return
+        # Log scope for debugging
+        logger.debug(f"Scene scope: location={scene_scope.location_id}, "
+                    f"npcs={len(scene_scope.npc_ids)}, "
+                    f"topics={len(scene_scope.topics)}")
         
-        if not self.should_run_task("lore_evolution"):
-            return
+        # Load or fetch the context bundle
+        bundle = await self.context_broker.load_or_fetch_bundle(scene_scope)
         
-        try:
-            # Check if enough events have happened to trigger evolution
-            recent_events_count = len([e for e in self.lore_events 
-                                      if time.time() - e.get('timestamp', 0) < 3600])
-            
-            if recent_events_count > 5:
-                # Generate emergent lore event
-                ctx = self.lore_orchestrator.create_run_context()
-                emergent = await self.lore_orchestrator.generate_emergent_event(ctx)
-                
-                if emergent:
-                    self.lore_events.append({
-                        'type': 'emergent_lore',
-                        'event': emergent,
-                        'timestamp': time.time()
-                    })
-                    
-                    # Apply the emergent event
-                    await self.evolve_world_lore(emergent.get('description', ''))
-            
-            # Mature lore over time
-            days_passed = self.current_context.get('days_since_last_evolution', 7)
-            if days_passed > 0:
-                maturation = await self.lore_orchestrator.mature_lore_over_time(days_passed)
-                if maturation:
-                    self.lore_events.append({
-                        'type': 'lore_maturation',
-                        'changes': maturation,
-                        'timestamp': time.time()
-                    })
-            
-            self.record_task_run("lore_evolution")
-            
-        except Exception as e:
-            logger.error(f"Failed to check lore evolution: {e}", exc_info=True)
-            self.log_error(e, {})
-    
-    async def update_cultural_context(self):
-        """Update cultural context based on current situation"""
-        if not self.lore_orchestrator:
-            return
+        # Determine token budget from config or use default
+        token_budget = 8000  # Default
+        if hasattr(self, 'config') and hasattr(self.config, 'model_context_budget'):
+            # Reserve some tokens for system prompt and response
+            reserved_tokens = getattr(self.config, 'reserved_system_tokens', 2000)
+            # Guard against negative budget
+            token_budget = max(1024, self.config.model_context_budget - reserved_tokens)
         
-        if not self.should_run_task("cultural_update"):
-            return
+        # Reserve additional tokens for user_input
+        user_input_reserve = 512  # Reserve for user input
+        effective_budget = max(512, token_budget - user_input_reserve)
         
-        try:
-            # Get cultural context for all active nations
-            for nation_id in list(self.active_nations.keys())[:5]:  # Limit to 5 for performance
-                culture = await self.lore_orchestrator.get_nation_culture(nation_id)
-                if culture:
-                    self.active_nations[nation_id]['culture'] = culture
-            
-            # Check for cultural diffusion between interacting nations
-            if len(self.active_nations) >= 2:
-                nation_ids = list(self.active_nations.keys())[:2]
-                ctx = self.lore_orchestrator.create_run_context()
-                diffusion = await self.lore_orchestrator.simulate_cultural_diffusion(
-                    ctx,
-                    nation_ids[0],
-                    nation_ids[1],
-                    years=1
-                )
-                
-                if diffusion:
-                    self.lore_events.append({
-                        'type': 'cultural_diffusion',
-                        'nations': nation_ids,
-                        'result': diffusion,
-                        'timestamp': time.time()
-                    })
-                    
-                    self.performance_metrics["cultural_diffusions"] += 1
-            
-            self.record_task_run("cultural_update")
-            
-        except Exception as e:
-            logger.error(f"Failed to update cultural context: {e}", exc_info=True)
-            self.log_error(e, {})
-    
-    async def check_geopolitical_state(self):
-        """Check and update geopolitical state"""
-        if not self.lore_orchestrator:
-            return
+        # Pack it for the LLM
+        packed = bundle.pack(token_budget=effective_budget)
         
-        if not self.should_run_task("geopolitical_check"):
-            return
+        # Add user input as canonical (will fit in reserved space)
+        packed.add_canonical('user_input', user_input)
         
-        try:
-            # Check for new political conflicts
-            ctx = self.lore_orchestrator.create_run_context()
-            new_conflicts = await self.lore_orchestrator.generate_initial_conflicts(ctx, count=1)
-            
-            if new_conflicts:
-                self.active_political_conflicts.extend(new_conflicts)
-                self.performance_metrics["geopolitical_conflicts"] += len(new_conflicts)
-                
-                # Log as event
-                for conflict in new_conflicts:
-                    self.lore_events.append({
-                        'type': 'political_conflict',
-                        'conflict': conflict,
-                        'timestamp': time.time()
-                    })
-            
-            # Evolve existing conflicts
-            if self.active_political_conflicts:
-                evolution = await self.lore_orchestrator.evolve_all_conflicts(ctx, days_passed=1)
-                if evolution:
-                    self.performance_metrics["political_simulations"] += 1
-            
-            self.record_task_run("geopolitical_check")
-            
-        except Exception as e:
-            logger.error(f"Failed to check geopolitical state: {e}", exc_info=True)
-            self.log_error(e, {})
-    
-    def get_lore_context_for_response(self) -> Dict[str, Any]:
-        """Get lore context formatted for response generation"""
-        context = {
-            "world_lore": self.world_lore.get('summary', '') if self.world_lore else '',
-            "location_lore": self.current_location_lore,
-            "active_religions": [r.get('name', 'Unknown') for r in self.active_religions.values()],
-            "active_nations": [n.get('name', 'Unknown') for n in self.active_nations.values()],
-            "cultural_context": self.cultural_context,
-            "geopolitical_tensions": self.geopolitical_state.get('conflicts', []),
-            "local_myths": list(self.local_myths.values())[:3] if self.local_myths else [],
-            "recent_lore_events": self.lore_events[-5:] if self.lore_events else [],
-            "faction_beliefs": self.faction_relationships
-        }
+        # Performance tracking
+        elapsed = time.time() - start_time
+        self.performance_metrics['response_times'].append(elapsed)
+        self.performance_metrics['context_assembly_times'].append(elapsed)
         
-        # Add specific lore for NPCs if present
-        if self.current_scene_npcs and self.lore_orchestrator:
-            npc_cultural_backgrounds = {}
-            for npc_id in self.current_scene_npcs[:3]:  # Limit for performance
-                if npc_id in self.npc_snapshots:
-                    snapshot = self.npc_snapshots[npc_id]
-                    # Get cultural background from snapshot
-                    cultural = snapshot.get('cultural_background') if isinstance(snapshot, dict) else None
-                    if cultural:
-                        npc_cultural_backgrounds[npc_id] = cultural
-            
-            context["npc_cultures"] = npc_cultural_backgrounds
+        # Keep last 100 times for stats
+        if len(self.performance_metrics['response_times']) > 100:
+            self.performance_metrics['response_times'] = self.performance_metrics['response_times'][-100:]
         
-        return context
-    
-    # ────────── WORLD DIRECTOR & NARRATOR SYNCHRONIZATION (preserved) ──────────
-    
-    async def sync_world_director_data(self, force: bool = False):
-        """Pull latest data from world director into context"""
-        if not self.enable_world_sync:
-            return
-            
-        current_time = time.time()
+        # Log compact metrics line (throttled)
+        scene_key = scene_scope.to_key()
+        self.context_broker.log_metrics_line(scene_key, packed)
         
-        # Check if we need to sync
-        if not force and not self.should_run_task("world_director_sync"):
-            return
+        # Store for potential reuse
+        self.context_broker._last_scene_key = scene_key
+        self.context_broker._last_packed = packed
+        self.context_broker._last_bundle = bundle
         
-        if not self.world_director:
-            logger.warning("World director not initialized for sync")
-            return
-            
-        try:
-            # Get complete world state
-            world_state = await self.world_director.get_world_state()
-            
-            if world_state:
-                # Update current world state
-                self.current_world_state = world_state
-                
-                # Extract vitals
-                if hasattr(world_state, 'player_vitals'):
-                    vitals = world_state.player_vitals
-                    self.player_vitals = {
-                        'fatigue': getattr(vitals, 'fatigue', 0),
-                        'hunger': getattr(vitals, 'hunger', 100),
-                        'thirst': getattr(vitals, 'thirst', 100),
-                        'arousal': getattr(vitals, 'arousal', 0)
-                    }
-                    # Add to current context
-                    self.current_context.update(self.player_vitals)
-                
-                # Extract world mood
-                if hasattr(world_state, 'world_mood'):
-                    mood = world_state.world_mood
-                    self.world_mood = mood.value if hasattr(mood, 'value') else str(mood)
-                    self.current_context['world_mood'] = self.world_mood
-                    self._update_emotional_from_mood(self.world_mood)
-                
-                # Extract time information
-                if hasattr(world_state, 'current_time'):
-                    current_time_obj = world_state.current_time
-                    if hasattr(current_time_obj, 'time_of_day'):
-                        self.time_of_day = str(current_time_obj.time_of_day)
-                        self.current_context['time_of_day'] = self.time_of_day
-                
-                # Extract location
-                if hasattr(world_state, 'location_data'):
-                    location = world_state.location_data
-                    if isinstance(location, dict):
-                        self.current_location = location.get('current_location', 'unknown')
-                        # Try to extract location ID for lore
-                        self.current_context['location_id'] = location.get('location_id')
-                    elif isinstance(location, str):
-                        self.current_location = location
-                    else:
-                        self.current_location = 'unknown'
-                    self.current_context['location'] = self.current_location
-                
-                # Extract active NPCs
-                if hasattr(world_state, 'active_npcs'):
-                    active_npcs = world_state.active_npcs
-                    self.active_npc_ids = {npc.get('npc_id') for npc in active_npcs if 'npc_id' in npc}
-                    
-                    # Update snapshots with richer data
-                    for npc in active_npcs:
-                        if 'npc_id' in npc:
-                            npc_id = npc['npc_id']
-                            # Create a snapshot-like structure
-                            self.npc_snapshots[npc_id] = {
-                                'npc_id': npc_id,
-                                'name': npc.get('npc_name', f'NPC_{npc_id}'),
-                                'dominance': npc.get('dominance', 0),
-                                'narrative_stage': npc.get('narrative_stage', 'unknown'),
-                                'mask': npc.get('mask', {}),
-                                'relationship': npc.get('relationship', {}),
-                                'location': npc.get('current_location', self.current_location),
-                                'pending_revelation': npc.get('pending_revelation'),
-                                'canonical_id': npc.get('canonical_id', npc_id),
-                                'cultural_background': npc.get('cultural_background')  # NEW: Add for lore
-                            }
-                
-                # Extract relationship dynamics
-                if hasattr(world_state, 'relationship_dynamics'):
-                    dynamics = world_state.relationship_dynamics
-                    self.current_context['player_submission'] = getattr(dynamics, 'player_submission_level', 0)
-                    self.current_context['player_resistance'] = getattr(dynamics, 'player_resistance_level', 50)
-                    self.current_context['player_corruption'] = getattr(dynamics, 'player_corruption_level', 0)
-                    self.current_context['acceptance_level'] = getattr(dynamics, 'acceptance_level', 0)
-                
-                # Extract addictions
-                if hasattr(world_state, 'addiction_status'):
-                    self.active_addictions = world_state.addiction_status
-                    self.current_context['addictions'] = self.active_addictions
-                
-                # Extract active cravings
-                if hasattr(world_state, 'active_cravings'):
-                    self.current_context['active_cravings'] = world_state.active_cravings
-                
-                # Extract tensions
-                if hasattr(world_state, 'world_tension'):
-                    tension = world_state.world_tension
-                    self.world_tensions = {
-                        'overall': getattr(tension, 'overall_tension', 0),
-                        'power': getattr(tension, 'power_tension', 0),
-                        'social': getattr(tension, 'social_tension', 0),
-                        'sexual': getattr(tension, 'sexual_tension', 0),
-                        'emotional': getattr(tension, 'emotional_tension', 0),
-                        'addiction': getattr(tension, 'addiction_tension', 0),
-                        'vital': getattr(tension, 'vital_tension', 0),
-                        'conflicts': getattr(tension, 'unresolved_conflicts', 0)
-                    }
-                    self.current_context['tensions'] = self.world_tensions
-                
-                # Extract stat information
-                if hasattr(world_state, 'hidden_stats'):
-                    self.current_context['hidden_stats'] = world_state.hidden_stats
-                if hasattr(world_state, 'visible_stats'):
-                    self.current_context['visible_stats'] = world_state.visible_stats
-                if hasattr(world_state, 'active_stat_combinations'):
-                    self.current_context['stat_combinations'] = world_state.active_stat_combinations
-                
-                # Extract pending reveals
-                if hasattr(world_state, 'pending_reveals'):
-                    self.current_context['pending_reveals'] = world_state.pending_reveals
-                
-                # Extract memories from world state
-                if hasattr(world_state, 'recent_memories'):
-                    self.recent_memories['world'] = world_state.recent_memories[:10]
-                
-                # Extract emergent elements
-                if hasattr(world_state, 'ongoing_events'):
-                    self.current_context['ongoing_events'] = world_state.ongoing_events
-                if hasattr(world_state, 'available_activities'):
-                    self.current_context['available_activities'] = world_state.available_activities
-                
-                # Cache the world state
-                self.world_state_cache = world_state.model_dump() if hasattr(world_state, 'model_dump') else {}
-                
-                # Update metrics
-                self.performance_metrics["world_director_syncs"] += 1
-                self.performance_metrics["world_state_updates"] += 1
-                
-                # Record task run
-                self.record_task_run("world_director_sync")
-                self.last_world_sync = current_time
-                
-                logger.debug(f"Synced world director data for conversation {self.conversation_id}")
-                
-        except Exception as e:
-            logger.error(f"Failed to sync world director data: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_world_director"})
-    
-    async def sync_narrator_data(self, force: bool = False):
-        """Pull latest narrative context from slice of life narrator"""
-        if not self.enable_narrator_sync:
-            return
-            
-        current_time = time.time()
-        
-        # Check if we need to sync
-        if not force and not self.should_run_task("narrator_sync"):
-            return
-            
-        if not self.slice_of_life_narrator:
-            logger.warning("Slice of life narrator not initialized for sync")
-            return
-            
-        try:
-            narrator = self.slice_of_life_narrator
-            
-            # Access the narrator's context
-            if hasattr(narrator, 'context'):
-                narrator_ctx = narrator.context
-                
-                # Sync memories
-                if hasattr(narrator_ctx, 'active_memories'):
-                    self.recent_memories['narrator'] = narrator_ctx.active_memories[:10]
-                
-                # Sync recent narrations
-                if hasattr(narrator_ctx, 'recent_narrations'):
-                    self.recent_narrations = narrator_ctx.recent_narrations[-5:]
-                    self.current_context['recent_narrations'] = self.recent_narrations
-                
-                # Sync system intersections
-                if hasattr(narrator_ctx, 'system_intersections'):
-                    self.system_intersections = narrator_ctx.system_intersections
-                    self.current_context['system_intersections'] = self.system_intersections
-                
-                # Sync conflict manifestations
-                if hasattr(narrator_ctx, 'conflict_manifestations'):
-                    self.conflict_manifestations = narrator_ctx.conflict_manifestations
-                    self.current_context['conflict_manifestations'] = self.conflict_manifestations
-                
-                # Sync current context from narrator
-                if hasattr(narrator_ctx, 'current_context'):
-                    narrator_current = narrator_ctx.current_context
-                    if narrator_current:
-                        # Merge specific fields
-                        if 'npcs' in narrator_current:
-                            self.current_context['narrator_npcs'] = narrator_current['npcs']
-                        if 'relationship_overview' in narrator_current:
-                            self.current_context['relationship_overview'] = narrator_current['relationship_overview']
-            
-            # Get emergent narratives
-            try:
-                emergent = await narrator.generate_emergent_narrative()
-                if emergent and emergent.get('has_emergent_narrative'):
-                    self.emergent_narratives.append({
-                        'timestamp': current_time,
-                        'narrative': emergent.get('narrative'),
-                        'primary_thread': emergent.get('primary_thread'),
-                        'all_threads': emergent.get('all_threads', [])
-                    })
-                    # Keep bounded
-                    if len(self.emergent_narratives) > 10:
-                        self.emergent_narratives = self.emergent_narratives[-10:]
-                    
-                    self.current_context['latest_emergent_narrative'] = emergent.get('narrative')
-            except Exception as e:
-                logger.warning(f"Could not generate emergent narrative: {e}")
-            
-            # Get current narration of world state
-            try:
-                current_narration = await narrator.narrate_world_state()
-                if current_narration:
-                    self.scene_atmosphere = current_narration
-                    self.current_context['scene_atmosphere'] = current_narration
-                    self.recent_narrations.append(current_narration)
-                    # Keep bounded
-                    if len(self.recent_narrations) > 10:
-                        self.recent_narrations = self.recent_narrations[-10:]
-            except Exception as e:
-                logger.warning(f"Could not get world narration: {e}")
-            
-            # Get performance metrics from narrator
-            try:
-                narrator_metrics = await narrator.get_performance_metrics()
-                if narrator_metrics:
-                    self.current_context['narrator_performance'] = narrator_metrics
-            except Exception as e:
-                logger.warning(f"Could not get narrator metrics: {e}")
-            
-            # Cache the narrative context
-            self.narrative_cache = {
-                'recent_narrations': self.recent_narrations,
-                'emergent_narratives': self.emergent_narratives,
-                'system_intersections': self.system_intersections,
-                'conflict_manifestations': self.conflict_manifestations,
-                'scene_atmosphere': self.scene_atmosphere
-            }
-            
-            # Update metrics
-            self.performance_metrics["narrator_syncs"] += 1
-            self.performance_metrics["slice_scenes_orchestrated"] += 1
-            
-            # Record task run
-            self.record_task_run("narrator_sync")
-            self.last_narrative_sync = current_time
-            
-            logger.debug(f"Synced narrator data for conversation {self.conversation_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to sync narrator data: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_narrator"})
-    
-    async def refresh_all_context(self, reason: str = "periodic"):
-        """Refresh context from all systems"""
-        logger.debug(f"Refreshing all context: {reason}")
-        
-        # Sync world director
-        await self.sync_world_director_data(force=True)
-        
-        # Sync narrator
-        await self.sync_narrator_data(force=True)
-        
-        # Sync lore (NEW)
-        await self.sync_lore_data(force=True)
-        
-        # Update NPC context
-        await self._load_npc_context()
-        
-        # Update conflict context if location changed
-        if self.current_location:
-            await self.update_conflict_context(
-                location=self.current_location,
-                scene_type=self.current_context.get('scene_type', 'interaction')
-            )
-        
-        # Enrich with memories
-        await self.enrich_context_with_memories()
-
-        # Sync game logic systems
-        await self.sync_game_time(force=True)
-        await self.sync_player_stats(force=True)
-        await self.sync_inventory_data(force=True)
-        await self.sync_addiction_status(force=True)
-        await self.sync_calendar_events(force=True)
-        await self.sync_narrative_progression(force=True)
-        await self.sync_activity_data(force=True)
-
-        # Check for narrative moments
-        await self.check_narrative_moments()
-        
-        # Check for lore evolution (NEW)
-        await self.check_lore_evolution()
-        
-        # Update cultural context (NEW)
-        await self.update_cultural_context()
-        
-        # Check geopolitical state (NEW)
-        await self.check_geopolitical_state()
-
-        logger.info(f"Context refresh complete: {reason}")
-    
-    def get_comprehensive_context_for_response(self) -> Dict[str, Any]:
-        """Get comprehensive context for response generation combining all systems"""
-        context = {
-            # Basic context
-            "user_input": self.current_context.get("user_input", ""),
-            "location": self.current_location,
-            "time_of_day": self.time_of_day,
-            "world_mood": self.world_mood,
-
-            # Game Time
-            "game_time": self.game_time,
-            "game_time_string": self.current_context.get("game_time_string", ""),
-
-            # Player Resources & Stats
-            "player_vitals": self.player_vitals,
-            "emotional_state": self.emotional_state,
-            "resources": self.resource_state,
-            "player_stats": self.player_stats,
-            "inventory_count": len(self.player_inventory),
-            "inventory_preview": [item["item_name"] for item in self.player_inventory[:5]],
-            "hidden_stats": self.current_context.get("hidden_stats", {}),
-            "visible_stats": self.current_context.get("visible_stats", {}),
-            "stat_combinations": self.current_context.get("stat_combinations", []),
-
-            # World tensions
-            "tensions": self.world_tensions,
-
-            # NPCs
-            "npcs_present": list(self.current_scene_npcs),
-            "npc_states": {
-                npc_id: self.npc_snapshots.get(npc_id, {})
-                for npc_id in self.current_scene_npcs
-            },
-            "npc_narrative_context": self.npc_narrative_context,
-            "npc_narrative_stages": self.narrative_stage_info,
-
-            # Relationships
-            "relationship_states": self.relationship_states,
-            "relationship_overview": self.current_context.get("relationship_overview", {}),
-
-            # Conflicts
-            "active_conflicts": list(self.active_conflicts.values()),
-            "scene_conflicts": self.scene_conflicts,
-            "conflict_choices": self.conflict_choices,
-            "conflict_manifestations": self.conflict_manifestations,
-
-            # Lore (NEW)
-            "lore": self.get_lore_context_for_response(),
-            "world_lore_summary": self.world_lore.get('summary', ''),
-            "cultural_context": self.cultural_context,
-            "geopolitical_state": self.geopolitical_state,
-            "location_lore": self.current_location_lore,
-            
-            # Activities
-            "current_activity": self.current_activity,
-            "recent_activities": self.recent_activities[-3:],
-            "available_game_activities": self.current_context.get("available_game_activities", []),
-
-            # Addictions
-            "addictions": self.active_addictions,
-            "player_addictions": self.player_addictions,
-            "active_cravings": self.current_context.get("active_cravings", []),
-
-            # Calendar
-            "todays_events": self.current_context.get("todays_events", []),
-            "upcoming_events": self.calendar_events[:5],
-
-            # Narrative
-            "recent_narrations": self.recent_narrations[-3:],
-            "scene_atmosphere": self.scene_atmosphere,
-            "emergent_narrative": self.emergent_narratives[-1] if self.emergent_narratives else None,
-            "system_intersections": self.system_intersections,
-            "power_dynamic_hints": self.power_dynamic_hints,
-            "narrative_moment": self.current_context.get("narrative_moment"),
-            "personal_revelation": self.current_context.get("personal_revelation"),
-
-            # Memories
-            "recent_memories": {
-                key: memories[:5]
-                for key, memories in self.recent_memories.items()
-            },
-            "memory_predictions": self.memory_predictions,
-
-            # Events & Currency
-            "ongoing_events": self.current_context.get("ongoing_events", []),
-            "pending_reveals": self.current_context.get("pending_reveals", []),
-            "currency_system": self.currency_info,
-            "active_game_events": len(self.event_system.active_events) if self.event_system else 0,
-
-            # Performance hints
-            "response_time_target": Config.MAX_RESPONSE_TIME if hasattr(Config, 'MAX_RESPONSE_TIME') else 5.0,
-            "sync_status": {
-                "world_synced": time.time() - self.last_world_sync < self.sync_interval,
-                "narrator_synced": time.time() - self.last_narrative_sync < self.sync_interval,
-                "lore_synced": time.time() - self.last_lore_sync < self.sync_interval * 2  # Lore syncs less frequently
-            }
-        }
-
-        return context
-    
-    # ────────── PRESERVE ALL EXISTING METHODS ──────────
-    # Note: All existing methods from the original file are preserved below
-    # including _load_npc_context, update_conflict_context, process_npc_interaction, etc.
-    # The complete original functionality is maintained with lore enhancements added
-    
-    def _update_emotional_from_mood(self, mood: str):
-        """Update emotional state based on world mood"""
-        mood_lower = mood.lower() if mood else ""
-        
-        mood_emotions = {
-            'relaxed': {'valence': 0.3, 'arousal': 0.3, 'dominance': 0.5},
-            'playful': {'valence': 0.6, 'arousal': 0.6, 'dominance': 0.6},
-            'intimate': {'valence': 0.7, 'arousal': 0.7, 'dominance': 0.4},
-            'mysterious': {'valence': 0.0, 'arousal': 0.5, 'dominance': 0.5},
-            'oppressive': {'valence': -0.3, 'arousal': 0.4, 'dominance': 0.2},
-            'tense': {'valence': -0.2, 'arousal': 0.7, 'dominance': 0.4},
-            'corrupted': {'valence': 0.2, 'arousal': 0.8, 'dominance': 0.3},
-            'dreamlike': {'valence': 0.1, 'arousal': 0.4, 'dominance': 0.5},
-            'chaotic': {'valence': -0.4, 'arousal': 0.9, 'dominance': 0.3},
-            'desperate': {'valence': -0.6, 'arousal': 0.8, 'dominance': 0.1},
-            'craving': {'valence': -0.3, 'arousal': 0.9, 'dominance': 0.2},
-            'exhausted': {'valence': -0.5, 'arousal': 0.2, 'dominance': 0.1}
-        }
-        
-        if mood_lower in mood_emotions:
-            mood_emotion = mood_emotions[mood_lower]
-            # Blend with current emotional state (70% mood, 30% current)
-            for key in ['valence', 'arousal', 'dominance']:
-                self.emotional_state[key] = (
-                    0.7 * mood_emotion[key] +
-                    0.3 * self.emotional_state[key]
-                )
-
-    # ────────── GAME LOGIC SYNCHRONIZATION ──────────
-
-    async def sync_game_time(self, force: bool = False):
-        """Sync game time from time system"""
-        if not force and not self.should_run_task("game_time_sync"):
-            return
-        try:
-            from logic.game_time_helper import get_current_time
-            year, month, day, time_of_day = await get_current_time(self.user_id, self.conversation_id)
-            self.game_time = {
-                "year": year,
-                "month": month,
-                "day": day,
-                "time_of_day": time_of_day
-            }
-            self.current_context.update(self.game_time)
-            from logic.game_time_helper import get_game_time_string
-            self.current_context["game_time_string"] = await get_game_time_string(
-                self.user_id, self.conversation_id
-            )
-            self.record_task_run("game_time_sync")
-            logger.debug(f"Synced game time: {self.game_time}")
-        except Exception as e:
-            logger.error(f"Failed to sync game time: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_game_time"})
-
-    async def sync_inventory_data(self, force: bool = False):
-        """Sync inventory data"""
-        if not force and not self.should_run_task("inventory_sync"):
-            return
-        try:
-            from logic.inventory_system_sdk import get_inventory_direct
-            inventory_data = await get_inventory_direct(
-                self.user_id,
-                self.conversation_id,
-                "Chase"
-            )
-            self.player_inventory = inventory_data.get("items", [])
-            self.current_context["inventory_count"] = len(self.player_inventory)
-            self.current_context["inventory_items"] = [
-                item["item_name"] for item in self.player_inventory[:10]
-            ]
-            self.record_task_run("inventory_sync")
-            logger.debug(f"Synced inventory: {len(self.player_inventory)} items")
-        except Exception as e:
-            logger.error(f"Failed to sync inventory: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_inventory"})
-
-    async def sync_player_stats(self, force: bool = False):
-        """Sync player stats from database"""
-        if not force and not self.should_run_task("player_stats_sync"):
-            return
-        try:
-            async with get_db_connection_context() as conn:
-                stats = await conn.fetchrow(
-                    """
-                    SELECT corruption, dependency, confidence, willpower, 
-                           obedience, lust, shame, submission
-                    FROM PlayerStats
-                    WHERE user_id = $1 AND conversation_id = $2 
-                    AND player_name = 'Chase'
-                    LIMIT 1
-                    """,
-                    self.user_id,
-                    self.conversation_id
-                )
-                if stats:
-                    self.player_stats = dict(stats)
-                    self.current_context["player_stats"] = self.player_stats
-                    self._update_emotional_from_stats()
-            self.record_task_run("player_stats_sync")
-            logger.debug(f"Synced player stats: {self.player_stats}")
-        except Exception as e:
-            logger.error(f"Failed to sync player stats: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_player_stats"})
-
-    async def sync_addiction_status(self, force: bool = False):
-        """Sync addiction status"""
-        if not force and not self.should_run_task("addiction_sync"):
-            return
-        if not self.addiction_context:
-            return
-        try:
-            from logic.addiction_system_sdk import get_addiction_status
-            addiction_status = await get_addiction_status(
-                self.user_id,
-                self.conversation_id,
-                "Chase"
-            )
-            self.player_addictions = addiction_status
-            self.current_context["has_addictions"] = addiction_status.get("has_addictions", False)
-            self.current_context["addiction_types"] = list(addiction_status.get("addictions", {}).keys())
-            if addiction_status.get("has_addictions"):
-                addiction_count = len(addiction_status.get("addictions", {}))
-                self.world_tensions["addiction"] = min(1.0, addiction_count * 0.2)
-            self.record_task_run("addiction_sync")
-            logger.debug(f"Synced addictions: {addiction_status.get('has_addictions')}")
-        except Exception as e:
-            logger.error(f"Failed to sync addiction status: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_addictions"})
-
-    async def sync_calendar_events(self, force: bool = False):
-        """Sync upcoming calendar events"""
-        if not force and not self.should_run_task("calendar_sync"):
-            return
-        try:
-            from logic.calendar import get_events_for_display
-            events = await get_events_for_display(
-                self.user_id,
-                self.conversation_id,
-                self.game_time["year"],
-                self.game_time["month"],
-                self.game_time["day"],
-                lookahead_days=7
-            )
-            self.calendar_events = []
-            for date_key, date_events in events.items():
-                for event in date_events:
-                    event["date"] = date_key
-                    self.calendar_events.append(event)
-            today_key = f"{self.game_time['year']}-{self.game_time['month']:02d}-{self.game_time['day']:02d}"
-            self.current_context["todays_events"] = events.get(today_key, [])
-            self.current_context["upcoming_events_count"] = len(self.calendar_events)
-            self.record_task_run("calendar_sync")
-            logger.debug(f"Synced calendar: {len(self.calendar_events)} upcoming events")
-        except Exception as e:
-            logger.error(f"Failed to sync calendar events: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_calendar"})
-
-    async def sync_narrative_progression(self, force: bool = False):
-        """Sync NPC narrative progression stages"""
-        if not force and not self.should_run_task("narrative_progression_sync"):
-            return
-        try:
-            from logic.npc_narrative_progression import get_npc_narrative_stage
-            for npc_id in self.current_scene_npcs:
-                stage = await get_npc_narrative_stage(
-                    self.user_id,
-                    self.conversation_id,
-                    npc_id
-                )
-                self.narrative_stage_info[npc_id] = stage.name
-            self.current_context["npc_narrative_stages"] = self.narrative_stage_info
-            self.record_task_run("narrative_progression_sync")
-            logger.debug(f"Synced narrative progression for {len(self.narrative_stage_info)} NPCs")
-        except Exception as e:
-            logger.error(f"Failed to sync narrative progression: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_narrative_progression"})
-
-    async def sync_activity_data(self, force: bool = False):
-        """Sync activity and resource data"""
-        if not force and not self.should_run_task("activity_sync"):
-            return
-        try:
-            from logic.resource_management import ResourceManager
-            resource_manager = ResourceManager(self.user_id, self.conversation_id)
-            resources = await resource_manager.get_all_resources("Chase")
-            if resources:
-                self.resource_state = resources
-                self.current_context["resources"] = resources
-            from logic.activities_logic import filter_activities_for_npc
-            if self.current_scene_npcs:
-                npc_archetypes = []
-                for npc_id in self.current_scene_npcs[:3]:
-                    if npc_id in self.npc_snapshots:
-                        snapshot = self.npc_snapshots[npc_id]
-                        if hasattr(snapshot, 'archetype'):
-                            npc_archetypes.append(snapshot.archetype)
-                activities = await filter_activities_for_npc(
-                    npc_archetypes=npc_archetypes,
-                    meltdown_level=self.player_stats.get("corruption", 0) // 20,
-                    user_stats=self.player_stats,
-                    setting=self.current_location
-                )
-                self.player_activities = activities
-                self.current_context["available_game_activities"] = [
-                    activity["name"] for activity in activities
-                ]
-            self.record_task_run("activity_sync")
-            logger.debug(f"Synced activities and resources")
-        except Exception as e:
-            logger.error(f"Failed to sync activity data: {e}", exc_info=True)
-            self.log_error(e, {"operation": "sync_activities"})
-
-    # ────────── GAME LOGIC INTERACTIONS ──────────
-
-    async def process_activity(self, activity_text: str, context: Dict[str, Any] = None):
-        """Process a player activity and apply effects"""
-        if not self.activity_analyzer:
-            return {"error": "Activity system not initialized"}
-        try:
-            result = await self.activity_analyzer.analyze_activity(
-                activity_text,
-                setting_context=self.current_location,
-                apply_effects=True
-            )
-            self.current_activity = result
-            self.recent_activities.append({
-                "timestamp": time.time(),
-                "activity": activity_text,
-                "effects": result.get("effects", {}),
-                "type": result.get("activity_type")
-            })
-            if len(self.recent_activities) > 20:
-                self.recent_activities = self.recent_activities[-20:]
-            await self.sync_activity_data(force=True)
-            self.performance_metrics["activities_processed"] = \
-                self.performance_metrics.get("activities_processed", 0) + 1
-            return result
-        except Exception as e:
-            logger.error(f"Failed to process activity: {e}", exc_info=True)
-            self.log_error(e, {"activity": activity_text})
-            return {"error": str(e)}
-
-    async def add_inventory_item(self, item_name: str, description: str = None,
-                                 effect: str = None, quantity: int = 1):
-        """Add an item to inventory"""
-        try:
-            from logic.inventory_system_sdk import add_item
-            result = await add_item(
-                self.user_id,
-                self.conversation_id,
-                "Chase",
-                item_name,
-                description,
-                effect,
-                quantity=quantity
-            )
-            await self.sync_inventory_data(force=True)
-            return result
-        except Exception as e:
-            logger.error(f"Failed to add inventory item: {e}", exc_info=True)
-            return {"error": str(e)}
-
-    async def remove_inventory_item(self, item_name: str, quantity: int = 1):
-        """Remove an item from inventory"""
-        try:
-            from logic.inventory_system_sdk import remove_item
-            result = await remove_item(
-                self.user_id,
-                self.conversation_id,
-                "Chase",
-                item_name,
-                quantity
-            )
-            await self.sync_inventory_data(force=True)
-            return result
-        except Exception as e:
-            logger.error(f"Failed to remove inventory item: {e}", exc_info=True)
-            return {"error": str(e)}
-
-    async def create_game_event(self, event_type: str, event_data: Dict[str, Any], 
-                               priority: int = 0):
-        """Create a game event"""
-        if not self.event_system:
-            return {"error": "Event system not initialized"}
-        try:
-            return await self.event_system.create_event(
-                event_type,
-                event_data,
-                priority
-            )
-        except Exception as e:
-            logger.error(f"Failed to create game event: {e}", exc_info=True)
-            return {"error": str(e)}
-
-    async def check_narrative_moments(self):
-        """Check for narrative moments and revelations"""
-        try:
-            from logic.narrative_events import (
-                check_for_narrative_moments,
-                check_for_personal_revelations
-            )
-            moment = await check_for_narrative_moments(self.user_id, self.conversation_id)
-            if moment:
-                self.current_context["narrative_moment"] = moment
-                if self.event_system:
-                    await self.event_system.create_event(
-                        "narrative_moment",
-                        moment,
-                        priority=5
-                    )
-            revelation = await check_for_personal_revelations(self.user_id, self.conversation_id)
-            if revelation:
-                self.current_context["personal_revelation"] = revelation
-                if self.event_system:
-                    await self.event_system.create_event(
-                        "personal_revelation",
-                        revelation,
-                        priority=7
-                    )
-            return {"moment": moment, "revelation": revelation}
-        except Exception as e:
-            logger.error(f"Failed to check narrative moments: {e}", exc_info=True)
-            return {"error": str(e)}
-
-    async def format_currency(self, amount: int) -> str:
-        """Format currency amount according to game's currency system"""
-        if not self.currency_generator:
-            return f"{amount} money"
-        try:
-            return await self.currency_generator.format_currency(amount)
-        except Exception as e:
-            logger.error(f"Failed to format currency: {e}", exc_info=True)
-            return f"{amount} money"
-
-    def _update_emotional_from_stats(self):
-        """Update emotional state based on player stats"""
-        if not self.player_stats:
-            return
-        corruption = self.player_stats.get("corruption", 0) / 100
-        dependency = self.player_stats.get("dependency", 0) / 100
-        confidence = self.player_stats.get("confidence", 50) / 100
-        willpower = self.player_stats.get("willpower", 50) / 100
-        self.emotional_state["valence"] = 0.5 - (corruption * 0.5)
-        self.emotional_state["arousal"] = 0.5 + (dependency * 0.3)
-        self.emotional_state["dominance"] = willpower * 0.8
-
-    
-    # ────────── EXISTING METHODS (preserved) ──────────
-    
-    async def _load_npc_context(self):
-        """Load NPC context for the current scene with enhanced memory integration"""
-        if not self.npc_orchestrator:
-            return
-        
-        try:
-            # Get current location from context or world state
-            current_location = self.current_location
-            if not current_location:
-                if self.current_context.get("location"):
-                    current_location = self.current_context["location"]
-                elif self.current_world_state and hasattr(self.current_world_state, 'player_location'):
-                    current_location = self.current_world_state.player_location
-            
-            # Get NPCs at current location if known
-            if current_location:
-                npcs_at_location = await self.npc_orchestrator.get_npcs_at_location(current_location)
-                self.current_scene_npcs = [npc.npc_id for npc in npcs_at_location]
-                
-                # Load snapshots for scene NPCs
-                for npc in npcs_at_location:
-                    self.npc_snapshots[npc.npc_id] = npc
-            
-            # Get comprehensive narrative context
-            self.npc_narrative_context = await self.npc_orchestrator.get_narrative_context(
-                focus_npc_ids=self.current_scene_npcs if self.current_scene_npcs else None,
-                location=current_location,
-                include_relationships=True,
-                include_beliefs=True,
-                include_decision_patterns=True,
-                include_learning_data=True,
-                include_nyx_governance=True
-            )
-            
-            # Enhance with Memory Orchestrator data if available
-            if self.memory_orchestrator:
-                for npc_id in self.current_scene_npcs:
-                    entity_key = f"npc_{npc_id}"
-                    
-                    # Get rich memories from orchestrator
-                    npc_memories = await self.memory_orchestrator.retrieve_memories(
-                        entity_type=EntityType.NPC,
-                        entity_id=npc_id,
-                        limit=5,
-                        use_llm_analysis=True
-                    )
-                    
-                    if npc_memories.get("memories"):
-                        self.recent_memories[entity_key] = npc_memories["memories"]
-                        
-                        # Add analysis to narrative context
-                        if entity_key in self.npc_narrative_context.get("npcs", {}):
-                            self.npc_narrative_context["npcs"][entity_key]["memory_analysis"] = npc_memories.get("analysis", {})
-                    
-                    # Get beliefs from orchestrator
-                    npc_beliefs = await self.memory_orchestrator.get_beliefs(
-                        entity_type="npc",
-                        entity_id=npc_id,
-                        min_confidence=0.3
-                    )
-                    
-                    if npc_beliefs:
-                        self.belief_systems[entity_key] = npc_beliefs
-                    
-                    # Get emotional state from memory system
-                    emotional_state = await self.memory_orchestrator.get_emotional_state(
-                        entity_type="npc",
-                        entity_id=npc_id
-                    )
-                    
-                    if emotional_state:
-                        self.emotional_memories[entity_key] = emotional_state
-                
-                # Get memory-based narrative predictions
-                self.memory_predictions = await self.memory_orchestrator.analyze_memory_patterns(
-                    topic="current_scene"
-                )
-            
-            logger.info(f"Loaded NPC context: {len(self.current_scene_npcs)} NPCs in scene with enhanced memory")
-            
-        except Exception as e:
-            logger.error(f"Failed to load NPC context: {e}", exc_info=True)
-    
-    async def update_conflict_context(
-        self, 
-        location: Optional[str] = None, 
-        scene_type: Optional[str] = None,
-        npc_ids: Optional[List[int]] = None
-    ):
-        """Update conflict context for a new scene or interaction"""
-        if self.npc_orchestrator:
-            try:
-                # Update location-based NPCs
-                if location:
-                    npcs_at_location = await self.npc_orchestrator.get_npcs_at_location(location)
-                    self.current_scene_npcs = [npc.npc_id for npc in npcs_at_location]
-                    
-                    # Update snapshots
-                    for npc in npcs_at_location:
-                        self.npc_snapshots[npc.npc_id] = npc
-                
-                # Add specific NPCs if provided
-                if npc_ids:
-                    for npc_id in npc_ids:
-                        if npc_id not in self.current_scene_npcs:
-                            self.current_scene_npcs.append(npc_id)
-                        
-                        # Get snapshot if not already loaded
-                        if npc_id not in self.npc_snapshots:
-                            snapshot = await self.npc_orchestrator.get_npc_snapshot(npc_id)
-                            self.npc_snapshots[npc_id] = snapshot
-                
-                # Update NPC narrative context
-                self.npc_narrative_context = await self.npc_orchestrator.get_narrative_context(
-                    focus_npc_ids=self.current_scene_npcs,
-                    location=location,
-                    include_relationships=True,
-                    include_beliefs=True
-                )
-            except Exception as e:
-                logger.error(f"Failed to update NPC context: {e}", exc_info=True)
-        
-        # Now update conflict context
-        if self.conflict_synthesizer:
-            try:
-                # Build new conflict context
-                self.conflict_context = ConflictContext(
-                    scene_type=scene_type or self.current_context.get('scene_type', 'interaction'),
-                    location=location or self.current_context.get('location'),
-                    location_id=self.current_context.get('location_id'),
-                    participants=self.current_scene_npcs,
-                    present_npcs=self.current_scene_npcs,
-                    npcs=self.current_scene_npcs,
-                    recent_events=[e['type'] for e in self.conflict_events[-5:]],
-                    timestamp=datetime.now().isoformat()
-                )
-                
-                # Process scene for conflicts
-                scene_result = await self.process_scene_conflicts({
-                    'scene_type': scene_type,
-                    'location': location
-                })
-                
-                # Update scene conflicts based on results
-                if scene_result.get('conflicts_detected'):
-                    self.scene_conflicts = scene_result['conflicts_detected']
-                
-                # Update choices
-                if scene_result.get('choices'):
-                    self.conflict_choices = scene_result['choices']
-                
-                # Update metrics
-                self.performance_metrics["conflict_scenes_processed"] += 1
-                
-                logger.info(f"Updated conflict context: {len(self.scene_conflicts)} conflicts in scene")
-                
-            except Exception as e:
-                logger.error(f"Failed to update conflict context: {e}", exc_info=True)
-    
-    async def process_npc_interaction(
-        self, 
-        npc_id: int, 
-        interaction_type: str, 
-        player_input: str,
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Process an interaction with an NPC"""
-        if not self.npc_orchestrator:
-            return {"error": "NPC system not initialized"}
-        
-        try:
-            # Add current emotional state to context
-            if context is None:
-                context = {}
-            context["nyx_emotional_state"] = self.emotional_state.copy()
-            context["current_scene_npcs"] = self.current_scene_npcs
-            
-            # Process interaction through orchestrator
-            result = await self.npc_orchestrator.process_player_interaction(
-                npc_id=npc_id,
-                player_input=player_input,
-                interaction_type=interaction_type,
-                context=context
-            )
-            
-            # Update interaction history
-            self.npc_interaction_history.append({
-                "timestamp": time.time(),
-                "npc_id": npc_id,
-                "interaction_type": interaction_type,
-                "player_input": player_input[:100],  # Truncate for storage
-                "result": result.get("outcome", "unknown")
-            })
-            
-            # Keep history bounded
-            if len(self.npc_interaction_history) > 100:
-                self.npc_interaction_history = self.npc_interaction_history[-50:]
-            
-            # Update metrics
-            self.performance_metrics["npc_interactions"] += 1
-            
-            # Refresh NPC snapshot
-            self.npc_snapshots[npc_id] = await self.npc_orchestrator.get_npc_snapshot(npc_id)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to process NPC interaction: {e}", exc_info=True)
-            self.log_error(e, {"npc_id": npc_id, "interaction_type": interaction_type})
-            return {"error": str(e)}
-    
-    async def trigger_npc_decisions(self, perception_context: Optional[Dict[str, Any]] = None):
-        """Trigger decision-making for NPCs in the current scene"""
-        if not self.npc_orchestrator or not self.current_scene_npcs:
-            return []
-        
-        if not self.should_run_task("npc_decision_cycle"):
-            return []
-        
-        decisions = []
-        try:
-            for npc_id in self.current_scene_npcs:
-                decision = await self.npc_orchestrator.make_npc_decision(
-                    npc_id=npc_id,
-                    perception=perception_context
-                )
-                decisions.append({
-                    "npc_id": npc_id,
-                    "decision": decision
-                })
-                
-                # Update metrics
-                self.performance_metrics["npc_decisions"] += 1
-            
-            self.record_task_run("npc_decision_cycle")
-            
-        except Exception as e:
-            logger.error(f"Failed to trigger NPC decisions: {e}", exc_info=True)
-            self.log_error(e, {"perception_context": perception_context})
-        
-        return decisions
-    
-    async def update_npc_perceptions(self):
-        """Update perception for all NPCs in scene"""
-        if not self.npc_orchestrator or not self.current_scene_npcs:
-            return
-        
-        if not self.should_run_task("npc_perception_update"):
-            return
-        
-        try:
-            for npc_id in self.current_scene_npcs:
-                perception = await self.npc_orchestrator.get_npc_perception(npc_id)
-                
-                # Store in autonomy states
-                if npc_id not in self.npc_autonomy_states:
-                    self.npc_autonomy_states[npc_id] = {}
-                self.npc_autonomy_states[npc_id]["perception"] = perception
-                self.npc_autonomy_states[npc_id]["last_update"] = time.time()
-            
-            self.record_task_run("npc_perception_update")
-            
-        except Exception as e:
-            logger.error(f"Failed to update NPC perceptions: {e}", exc_info=True)
-            self.log_error(e, {})
-    
-    async def create_npc_memory(
-        self, 
-        npc_id: int, 
-        memory_text: str, 
-        memory_type: str = "observation",
-        significance: int = 3,
-        emotional_valence: int = 0
-    ):
-        """Create a memory for an NPC using the Memory Orchestrator"""
-        if not self.memory_orchestrator:
-            # Fallback to NPC orchestrator if memory orchestrator not available
-            if self.npc_orchestrator:
-                return await self.npc_orchestrator.add_memory_for_npc(
-                    npc_id=npc_id,
-                    memory_text=memory_text,
-                    memory_type=memory_type,
-                    significance=significance,
-                    emotional_valence=emotional_valence,
-                    tags=["nyx_interaction"],
-                    use_nyx_governance=True
-                )
-            return None
-        
-        try:
-            # Use Memory Orchestrator for rich memory creation
-            result = await self.memory_orchestrator.store_memory(
-                entity_type=EntityType.NPC,
-                entity_id=npc_id,
-                memory_text=memory_text,
-                importance=self._significance_to_importance(significance),
-                emotional=abs(emotional_valence) > 0,
-                tags=["nyx_interaction", memory_type],
-                metadata={
-                    "memory_type": memory_type,
-                    "emotional_valence": emotional_valence,
-                    "created_by": "nyx"
-                },
-                use_governance=True,
-                check_canon_consistency=self.enable_npc_canon
-            )
-            
-            # Update metrics
-            self.performance_metrics["npc_memories_created"] += 1
-            
-            # Cache the memory
-            entity_key = f"npc_{npc_id}"
-            if entity_key not in self.recent_memories:
-                self.recent_memories[entity_key] = []
-            self.recent_memories[entity_key].append({
-                "memory_id": result.get("memory_id"),
-                "text": memory_text,
-                "timestamp": datetime.now().isoformat()
-            })
-            # Keep cache bounded
-            if len(self.recent_memories[entity_key]) > 10:
-                self.recent_memories[entity_key] = self.recent_memories[entity_key][-10:]
-            
-            return result.get("memory_id")
-            
-        except Exception as e:
-            logger.error(f"Failed to create NPC memory via orchestrator: {e}", exc_info=True)
-            self.log_error(e, {"npc_id": npc_id, "memory_text": memory_text})
-            return None
-    
-    def _significance_to_importance(self, significance: int) -> str:
-        """Convert numeric significance to importance string"""
-        if significance <= 2:
-            return "trivial"
-        elif significance <= 4:
-            return "low"
-        elif significance <= 6:
-            return "medium"
-        elif significance <= 8:
-            return "high"
-        else:
-            return "critical"
-    
-    # ────────── MEMORY ORCHESTRATOR OPERATIONS ──────────
-    
-    async def store_memory(
-        self,
-        entity_type: Union[str, EntityType],
-        entity_id: int,
-        memory_text: str,
-        importance: str = "medium",
-        tags: List[str] = None,
-        emotional: bool = True,
-        metadata: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """Store a memory using the Memory Orchestrator"""
-        if not self.memory_orchestrator:
-            return {"error": "Memory orchestrator not initialized"}
-        
-        try:
-            result = await self.memory_orchestrator.store_memory(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                memory_text=memory_text,
-                importance=importance,
-                emotional=emotional,
-                tags=tags or [],
-                metadata=metadata,
-                use_governance=True,
-                check_canon_consistency=self.enable_npc_canon
-            )
-            
-            # Update cache
-            entity_key = f"{entity_type}_{entity_id}"
-            if entity_key not in self.recent_memories:
-                self.recent_memories[entity_key] = []
-            self.recent_memories[entity_key].append({
-                "memory_id": result.get("memory_id"),
-                "text": memory_text,
-                "importance": importance,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to store memory: {e}", exc_info=True)
-            self.log_error(e, {"entity_type": entity_type, "entity_id": entity_id})
-            return {"error": str(e)}
-    
-    async def retrieve_memories(
-        self,
-        entity_type: Union[str, EntityType],
-        entity_id: int,
-        query: str = None,
-        limit: int = 5,
-        use_llm_analysis: bool = True
-    ) -> Dict[str, Any]:
-        """Retrieve memories using the Memory Orchestrator"""
-        if not self.memory_orchestrator:
-            return {"error": "Memory orchestrator not initialized", "memories": []}
-        
-        try:
-            result = await self.memory_orchestrator.retrieve_memories(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                query=query,
-                context=self.current_context,
-                limit=limit,
-                include_analysis=True,
-                use_governance=True,
-                use_llm_analysis=use_llm_analysis
-            )
-            
-            # Update cache
-            entity_key = f"{entity_type}_{entity_id}"
-            if result.get("memories"):
-                self.recent_memories[entity_key] = [
-                    {
-                        "memory_id": m.get("id") or m.get("memory_id"),
-                        "text": m.get("text") or m.get("memory_text"),
-                        "importance": m.get("importance") or "medium",
-                        "timestamp": m.get("timestamp") or datetime.now().isoformat()
-                    }
-                    for m in result["memories"][:10]
-                ]
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to retrieve memories: {e}", exc_info=True)
-            self.log_error(e, {"entity_type": entity_type, "entity_id": entity_id})
-            return {"error": str(e), "memories": []}
-    
-    async def get_narrative_memory_context(
-        self,
-        include_npcs: bool = True,
-        include_player: bool = True,
-        include_canon: bool = True,
-        time_window_hours: int = 24
-    ) -> Dict[str, Any]:
-        """Get comprehensive narrative context from both memory and NPC systems"""
-        if not self.memory_orchestrator:
-            return {"error": "Memory orchestrator not initialized"}
-        
-        try:
-            # Get memory-based narrative context
-            if include_canon:
-                memory_context = await self.memory_orchestrator.get_canon_aware_narrative_context(
-                    include_canon=True,
-                    time_window_hours=time_window_hours
-                )
-            else:
-                memory_context = await self.memory_orchestrator.get_narrative_context(
-                    time_window=timedelta(hours=time_window_hours),
-                    include_predictions=True
-                )
-            
-            # Enhance with NPC context if available
-            if include_npcs and self.npc_orchestrator:
-                npc_context = self.get_npc_context_for_response()
-                memory_context["npcs"] = npc_context
-            
-            # Add player memories
-            if include_player:
-                player_memories = await self.retrieve_memories(
-                    entity_type=EntityType.PLAYER,
-                    entity_id=self.user_id,
-                    limit=5
-                )
-                memory_context["player"] = {
-                    "recent_memories": player_memories.get("memories", []),
-                    "analysis": player_memories.get("analysis", {})
-                }
-            
-            # Cache the context
-            self.memory_context = memory_context
-            
-            return memory_context
-            
-        except Exception as e:
-            logger.error(f"Failed to get narrative memory context: {e}", exc_info=True)
-            self.log_error(e, {})
-            return {"error": str(e)}
-    
-    async def create_belief(
-        self,
-        entity_type: str,
-        entity_id: int,
-        belief_text: str,
-        confidence: float = 0.5
-    ) -> Dict[str, Any]:
-        """Create a belief for an entity"""
-        if not self.memory_orchestrator:
-            return {"error": "Memory orchestrator not initialized"}
-        
-        try:
-            result = await self.memory_orchestrator.create_belief(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                belief_text=belief_text,
-                confidence=confidence,
-                use_governance=True
-            )
-            
-            # Update cache
-            entity_key = f"{entity_type}_{entity_id}"
-            if entity_key not in self.belief_systems:
-                self.belief_systems[entity_key] = []
-            self.belief_systems[entity_key].append({
-                "belief": belief_text,
-                "confidence": confidence,
-                "created_at": datetime.now().isoformat()
-            })
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to create belief: {e}", exc_info=True)
-            self.log_error(e, {"entity_type": entity_type, "entity_id": entity_id})
-            return {"error": str(e)}
-    
-    async def get_beliefs(
-        self,
-        entity_type: str,
-        entity_id: int,
-        topic: str = None,
-        min_confidence: float = 0.0
-    ) -> List[Dict[str, Any]]:
-        """Get beliefs for an entity"""
-        if not self.memory_orchestrator:
-            return []
-        
-        try:
-            beliefs = await self.memory_orchestrator.get_beliefs(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                topic=topic,
-                min_confidence=min_confidence,
-                use_governance=True
-            )
-            
-            # Update cache
-            entity_key = f"{entity_type}_{entity_id}"
-            if beliefs:
-                self.belief_systems[entity_key] = beliefs[:10]
-            
-            return beliefs
-            
-        except Exception as e:
-            logger.error(f"Failed to get beliefs: {e}", exc_info=True)
-            self.log_error(e, {"entity_type": entity_type, "entity_id": entity_id})
-            return []
-    
-    async def trigger_flashback(
-        self,
-        entity_type: str,
-        entity_id: int,
-        context: str
-    ) -> Optional[Dict[str, Any]]:
-        """Generate a flashback for an entity"""
-        if not self.memory_orchestrator:
-            return None
-        
-        try:
-            return await self.memory_orchestrator.generate_flashback(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                context=context
-            )
-        except Exception as e:
-            logger.error(f"Failed to generate flashback: {e}", exc_info=True)
-            return None
-    
-    async def analyze_memory_patterns(
-        self,
-        entity_type: str = None,
-        entity_id: int = None,
-        topic: str = None
-    ) -> Dict[str, Any]:
-        """Analyze patterns in memories"""
-        if not self.memory_orchestrator:
-            return {"error": "Memory orchestrator not initialized"}
-        
-        try:
-            patterns = await self.memory_orchestrator.analyze_memory_patterns(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                topic=topic
-            )
-            
-            # Cache predictions if available
-            if patterns.get("predictions"):
-                self.memory_predictions = patterns["predictions"]
-            
-            return patterns
-            
-        except Exception as e:
-            logger.error(f"Failed to analyze memory patterns: {e}", exc_info=True)
-            self.log_error(e, {"entity_type": entity_type, "entity_id": entity_id})
-            return {"error": str(e)}
-    
-    async def update_emotional_memory(
-        self,
-        entity_type: str,
-        entity_id: int,
-        emotion: str,
-        intensity: float = 0.5
-    ) -> Dict[str, Any]:
-        """Update emotional state in memory system"""
-        if not self.memory_orchestrator:
-            return {"error": "Memory orchestrator not initialized"}
-        
-        try:
-            result = await self.memory_orchestrator.update_emotional_state(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                emotion=emotion,
-                intensity=intensity
-            )
-            
-            # Update cache
-            entity_key = f"{entity_type}_{entity_id}"
-            self.emotional_memories[entity_key] = {
-                "emotion": emotion,
-                "intensity": intensity,
-                "updated_at": datetime.now().isoformat()
-            }
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to update emotional memory: {e}", exc_info=True)
-            self.log_error(e, {"entity_type": entity_type, "entity_id": entity_id})
-            return {"error": str(e)}
-    
-    async def run_memory_maintenance(self, operations: List[str] = None) -> Dict[str, Any]:
-        """Run memory maintenance operations"""
-        if not self.memory_orchestrator:
-            return {"error": "Memory orchestrator not initialized"}
-        
-        if not self.should_run_task("memory_maintenance"):
-            return {"skipped": "Too soon since last maintenance"}
-        
-        try:
-            result = await self.memory_orchestrator.run_maintenance(
-                operations=operations,
-                use_governance=True
-            )
-            
-            self.record_task_run("memory_maintenance")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to run memory maintenance: {e}", exc_info=True)
-            self.log_error(e, {})
-            return {"error": str(e)}
-    
-    async def enrich_context_with_memories(self) -> Dict[str, Any]:
-        """Enrich current context with relevant memories"""
-        if not self.memory_orchestrator:
-            return self.current_context
-        
-        try:
-            user_input = self.current_context.get("user_input", "")
-            enriched = await self.memory_orchestrator.enrich_context(
-                user_input=user_input,
-                context=self.current_context
-            )
-            
-            # Merge enriched context
-            self.current_context.update(enriched)
-            
-            return self.current_context
-            
-        except Exception as e:
-            logger.error(f"Failed to enrich context with memories: {e}", exc_info=True)
-            self.log_error(e, {})
-            return self.current_context
-    
-    # ────────── CONFLICT SYNTHESIZER OPERATIONS ──────────
-    
-    async def create_conflict(
-        self,
-        conflict_type: str,
-        context: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """Create a new conflict using the Conflict Synthesizer"""
-        if not self.conflict_synthesizer:
-            return {"error": "Conflict synthesizer not initialized"}
-        
-        try:
-            # Enhance context with current scene data
-            enhanced_context = context or {}
-            enhanced_context.update({
-                'location': self.current_context.get('location'),
-                'present_npcs': self.current_scene_npcs,
-                'participants': self.current_scene_npcs[:],
-                'recent_events': self.conflict_events[-5:] if self.conflict_events else [],
-                'active_conflicts': list(self.active_conflicts.keys())
-            })
-            
-            # Create conflict through synthesizer
-            result = await self.conflict_synthesizer.create_conflict(
-                conflict_type=conflict_type,
-                context=enhanced_context
-            )
-            
-            # Update local state
-            conflict_id = result.get('conflict_id')
-            if conflict_id:
-                self.active_conflicts[conflict_id] = result
-                self.scene_conflicts.append(conflict_id)
-                
-                # Log as event
-                self.conflict_events.append({
-                    'type': 'conflict_created',
-                    'conflict_id': conflict_id,
-                    'conflict_type': conflict_type,
-                    'timestamp': datetime.now().isoformat()
-                })
-                
-                # Keep events bounded
-                if len(self.conflict_events) > 50:
-                    self.conflict_events = self.conflict_events[-50:]
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to create conflict: {e}", exc_info=True)
-            self.log_error(e, {"conflict_type": conflict_type, "context": context})
-            return {"error": str(e)}
-    
-    async def update_conflict(
-        self,
-        conflict_id: int,
-        update_type: str,
-        update_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Update an existing conflict"""
-        if not self.conflict_synthesizer:
-            return {"error": "Conflict synthesizer not initialized"}
-        
-        try:
-            result = await self.conflict_synthesizer.update_conflict(
-                conflict_id=conflict_id,
-                update_type=update_type,
-                update_data=update_data
-            )
-            
-            # Update local state
-            if conflict_id in self.active_conflicts:
-                self.active_conflicts[conflict_id].update(result)
-            
-            # Log as event
-            self.conflict_events.append({
-                'type': 'conflict_updated',
-                'conflict_id': conflict_id,
-                'update_type': update_type,
-                'timestamp': datetime.now().isoformat()
-            })
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to update conflict: {e}", exc_info=True)
-            self.log_error(e, {"conflict_id": conflict_id, "update_type": update_type})
-            return {"error": str(e)}
-    
-    async def resolve_conflict(
-        self,
-        conflict_id: int,
-        resolution_type: str,
-        resolution_context: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """Resolve a conflict"""
-        if not self.conflict_synthesizer:
-            return {"error": "Conflict synthesizer not initialized"}
-        
-        try:
-            result = await self.conflict_synthesizer.resolve_conflict(
-                conflict_id=conflict_id,
-                resolution_type=resolution_type,
-                resolution_context=resolution_context or {}
-            )
-            
-            # Update local state
-            if conflict_id in self.active_conflicts:
-                del self.active_conflicts[conflict_id]
-            if conflict_id in self.scene_conflicts:
-                self.scene_conflicts.remove(conflict_id)
-            
-            # Log as event
-            self.conflict_events.append({
-                'type': 'conflict_resolved',
-                'conflict_id': conflict_id,
-                'resolution_type': resolution_type,
-                'outcome': result.get('outcome'),
-                'timestamp': datetime.now().isoformat()
-            })
-            
-            # Store any new conflicts created
-            new_conflicts = result.get('new_conflicts_created', [])
-            for new_id in new_conflicts:
-                state = await self.conflict_synthesizer.get_conflict_state(new_id)
-                self.active_conflicts[new_id] = state
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to resolve conflict: {e}", exc_info=True)
-            self.log_error(e, {"conflict_id": conflict_id, "resolution_type": resolution_type})
-            return {"error": str(e)}
-    
-    async def process_scene_conflicts(
-        self,
-        scene_context: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """Process conflicts for the current scene"""
-        if not self.conflict_synthesizer:
-            return {"error": "Conflict synthesizer not initialized"}
-        
-        try:
-            # Build scene context
-            scene_data = scene_context or {}
-            scene_data.update({
-                'scene_type': self.current_context.get('scene_type', 'interaction'),
-                'characters_present': self.current_scene_npcs,
-                'location_id': self.current_context.get('location_id'),
-                'active_conflicts': self.scene_conflicts,
-                'npcs': self.current_scene_npcs,
-                'timestamp': datetime.now().isoformat()
-            })
-            
-            # Process through synthesizer
-            result = await self.conflict_synthesizer.process_scene(scene_data)
-            
-            # Update choices if available
-            if result.get('choices'):
-                self.conflict_choices = result['choices']
-            
-            # Update scene conflicts
-            if result.get('conflicts_detected'):
-                for conflict_id in result['conflicts_detected']:
-                    if conflict_id not in self.scene_conflicts:
-                        self.scene_conflicts.append(conflict_id)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to process scene conflicts: {e}", exc_info=True)
-            self.log_error(e, {"scene_context": scene_context})
-            return {"error": str(e)}
-    
-    async def get_conflict_system_health(self) -> Dict[str, Any]:
-        """Get health status of the conflict system"""
-        if not self.conflict_synthesizer:
-            return {"healthy": False, "error": "Conflict synthesizer not initialized"}
-        
-        if not self.should_run_task("conflict_health_check"):
-            # Return cached state
-            return {
-                "healthy": True,
-                "cached": True,
-                "active_conflicts": len(self.active_conflicts),
-                "subsystems": len(self.conflict_subsystems)
-            }
-        
-        try:
-            state = await self.conflict_synthesizer.get_system_state()
-            
-            self.record_task_run("conflict_health_check")
-            
-            return {
-                "healthy": state.get('metrics', {}).get('system_health', 0) > 0.5,
-                "metrics": state.get('metrics', {}),
-                "active_conflicts": len(state.get('active_conflicts', [])),
-                "subsystem_health": state.get('health', {}),
-                "complexity_score": state.get('metrics', {}).get('complexity_score', 0)
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get conflict system health: {e}", exc_info=True)
-            return {"healthy": False, "error": str(e)}
+        return packed
     
     async def calculate_conflict_tensions(self) -> Dict[str, float]:
-        """Calculate current conflict tensions between entities"""
+        """Calculate tensions between entities (adapter for existing code)"""
         if not self.conflict_synthesizer:
             return {}
         
-        if not self.should_run_task("tension_calculation"):
-            return self.conflict_tensions
-        
         try:
-            # Get tension data from conflict system
-            tensions = {}
-            
-            for conflict_id, conflict_state in self.active_conflicts.items():
-                # Extract stakeholders and their tensions
-                stakeholders = conflict_state.get('subsystem_data', {}).get('stakeholder', {}).get('stakeholders', [])
-                
-                for i, stakeholder1 in enumerate(stakeholders):
-                    for stakeholder2 in stakeholders[i+1:]:
-                        key = f"{stakeholder1}_{stakeholder2}"
-                        # Aggregate tension from multiple conflicts
-                        current_tension = tensions.get(key, 0.0)
-                        conflict_tension = conflict_state.get('subsystem_data', {}).get('tension', {}).get('level', 0.5)
-                        tensions[key] = min(1.0, current_tension + conflict_tension * 0.5)
+            # Use existing conflict synthesizer methods
+            if hasattr(self.conflict_synthesizer, 'calculate_tensions'):
+                tensions = await self.conflict_synthesizer.calculate_tensions()
+            elif hasattr(self.conflict_synthesizer, 'get_all_tensions'):
+                tensions = await self.conflict_synthesizer.get_all_tensions()
+            else:
+                # Fallback: build from conflict states
+                tensions = {}
+                for conflict_id in self.active_conflicts:
+                    state = await self.conflict_synthesizer.get_conflict_state(conflict_id)
+                    if state:
+                        tension_data = state.get('subsystem_data', {}).get('tension', {})
+                        level = tension_data.get('level', 0.5)
+                        tensions[f"conflict_{conflict_id}"] = level
             
             self.conflict_tensions = tensions
-            self.record_task_run("tension_calculation")
-            
             return tensions
             
         except Exception as e:
-            logger.error(f"Failed to calculate tensions: {e}", exc_info=True)
-            self.log_error(e, {})
-            return self.conflict_tensions
+            logger.error(f"Failed to calculate tensions: {e}")
+            return {}
     
-    async def check_conflict_resolution_opportunities(self) -> List[Dict[str, Any]]:
-        """Check for opportunities to resolve conflicts"""
-        if not self.conflict_synthesizer:
-            return []
-        
-        if not self.should_run_task("conflict_resolution_check"):
-            return []
+    async def analyze_memory_patterns(self, topic: str = None) -> Dict[str, Any]:
+        """Analyze memory patterns (adapter method)"""
+        if not self.memory_orchestrator:
+            return {'predictions': []}
         
         try:
-            opportunities = []
-            
-            for conflict_id, conflict_state in self.active_conflicts.items():
-                # Check various resolution conditions
-                phase = conflict_state.get('subsystem_data', {}).get('flow', {}).get('phase', '')
-                intensity = conflict_state.get('subsystem_data', {}).get('tension', {}).get('level', 0.5)
-                
-                # Low intensity conflicts can be resolved
-                if intensity < 0.3:
-                    opportunities.append({
-                        'conflict_id': conflict_id,
-                        'resolution_type': 'peaceful',
-                        'reason': 'Low tension allows peaceful resolution',
-                        'priority': 0.7
-                    })
-                
-                # Climax phase conflicts should resolve
-                if 'climax' in phase.lower() or 'resolution' in phase.lower():
-                    opportunities.append({
-                        'conflict_id': conflict_id,
-                        'resolution_type': 'narrative',
-                        'reason': 'Conflict has reached natural resolution point',
-                        'priority': 0.9
-                    })
-                
-                # Check for victory conditions
-                victory_data = conflict_state.get('subsystem_data', {}).get('victory', {})
-                if victory_data.get('victory_achieved'):
-                    opportunities.append({
-                        'conflict_id': conflict_id,
-                        'resolution_type': 'victory',
-                        'reason': 'Victory conditions met',
-                        'priority': 1.0
-                    })
-            
-            self.record_task_run("conflict_resolution_check")
-            
-            # Sort by priority
-            opportunities.sort(key=lambda x: x.get('priority', 0), reverse=True)
-            
-            return opportunities
-            
-        except Exception as e:
-            logger.error(f"Failed to check resolution opportunities: {e}", exc_info=True)
-            self.log_error(e, {})
-            return []
-    
-    def get_conflict_context_for_response(self) -> Dict[str, Any]:
-        """Get conflict context formatted for response generation"""
-        context = {
-            "active_conflicts": [],
-            "tensions": self.conflict_tensions,
-            "available_choices": self.conflict_choices,
-            "recent_events": self.conflict_events[-5:],
-            "scene_conflicts": [],
-            "resolution_opportunities": []
-        }
-        
-        # Format active conflicts
-        for conflict_id, state in self.active_conflicts.items():
-            context["active_conflicts"].append({
-                "id": conflict_id,
-                "type": state.get('conflict_type', 'unknown'),
-                "phase": state.get('subsystem_data', {}).get('flow', {}).get('phase', 'unknown'),
-                "intensity": state.get('subsystem_data', {}).get('tension', {}).get('level', 0.5),
-                "stakeholders": state.get('subsystem_data', {}).get('stakeholder', {}).get('stakeholders', [])
-            })
-        
-        # Format scene conflicts
-        for conflict_id in self.scene_conflicts:
-            if conflict_id in self.active_conflicts:
-                state = self.active_conflicts[conflict_id]
-                context["scene_conflicts"].append({
-                    "id": conflict_id,
-                    "manifestations": state.get('manifestations', []),
-                    "atmosphere": state.get('atmospheric_elements', [])
-                })
-        
-        return context
-    
-    async def check_npc_scheming(self):
-        """Check for scheming behavior in NPCs"""
-        if not self.npc_orchestrator or not self.current_scene_npcs:
-            return {}
-        
-        if not self.should_run_task("npc_scheming_check"):
-            return {}
-        
-        try:
-            scheming_results = {}
-            for npc_id in self.current_scene_npcs:
-                result = await self.npc_orchestrator.evaluate_npc_scheming(
-                    npc_id=npc_id,
-                    with_user_model=True
+            if hasattr(self.memory_orchestrator, 'analyze_patterns'):
+                return await self.memory_orchestrator.analyze_patterns(
+                    topic=topic,
+                    time_window_hours=24
                 )
-                scheming_results[npc_id] = result
-            
-            self.record_task_run("npc_scheming_check")
-            return scheming_results
-            
-        except Exception as e:
-            logger.error(f"Failed to check NPC scheming: {e}", exc_info=True)
-            self.log_error(e, {})
-            return {}
-    
-    async def run_npc_learning_cycle(self):
-        """Run learning cycle for NPCs"""
-        if not self.npc_orchestrator or not self.current_scene_npcs:
-            return
-        
-        if not self.should_run_task("npc_learning_cycle"):
-            return
-        
-        try:
-            for npc_id in self.current_scene_npcs:
-                result = await self.npc_orchestrator.process_npc_learning_cycle(npc_id)
-                
-                # Update learning metrics based on NPC learning
-                if result.get("memory_learning", {}).get("patterns_found"):
-                    self.learning_metrics["npc_behavior_prediction_accuracy"] = (
-                        self.learning_metrics.get("npc_behavior_prediction_accuracy", 0) * 0.9 +
-                        0.1 * (1.0 if result["memory_learning"]["patterns_found"] else 0.0)
-                    )
-            
-            self.record_task_run("npc_learning_cycle")
-            
-        except Exception as e:
-            logger.error(f"Failed to run NPC learning cycle: {e}", exc_info=True)
-            self.log_error(e, {})
-    
-    def get_npc_context_for_response(self) -> Dict[str, Any]:
-        """Get NPC context formatted for response generation with memory integration"""
-        context = {
-            "npcs_present": [],
-            "npc_states": {},
-            "relationships": {},
-            "recent_interactions": [],
-            "group_dynamics": {},
-            "active_narratives": [],
-            "npc_memories": {},
-            "npc_beliefs": {},
-            "emotional_states": {},
-            "memory_predictions": self.memory_predictions if hasattr(self, 'memory_predictions') else []
-        }
-        
-        # Add NPC snapshots
-        for npc_id, snapshot in self.npc_snapshots.items():
-            if npc_id in self.current_scene_npcs:
-                entity_key = f"npc_{npc_id}"
-                
-                context["npcs_present"].append({
-                    "id": npc_id,
-                    "name": snapshot.name if hasattr(snapshot, 'name') else snapshot.get('name', 'Unknown'),
-                    "status": snapshot.status.value if hasattr(snapshot, 'status') and hasattr(snapshot.status, 'value') else str(snapshot.get('status', 'active')),
-                    "activity": snapshot.current_activity if hasattr(snapshot, 'current_activity') else snapshot.get('current_activity'),
-                    "location": snapshot.location if hasattr(snapshot, 'location') else snapshot.get('location')
-                })
-                
-                context["npc_states"][npc_id] = {
-                    "emotional": snapshot.emotional_state if hasattr(snapshot, 'emotional_state') else snapshot.get('emotional_state'),
-                    "mask_integrity": snapshot.mask_integrity if hasattr(snapshot, 'mask_integrity') else snapshot.get('mask', {}).get('integrity'),
-                    "stats": snapshot.stats if hasattr(snapshot, 'stats') else snapshot.get('stats'),
-                    "scheming_level": snapshot.scheming_level if hasattr(snapshot, 'scheming_level') else snapshot.get('scheming_level'),
-                    "current_goals": snapshot.current_goals if hasattr(snapshot, 'current_goals') else snapshot.get('current_goals', [])
-                }
-                
-                context["relationships"][npc_id] = snapshot.active_relationships if hasattr(snapshot, 'active_relationships') else snapshot.get('relationship', {})
-                
-                # Add memory data if available
-                if entity_key in self.recent_memories:
-                    context["npc_memories"][npc_id] = self.recent_memories[entity_key]
-                
-                # Add beliefs if available
-                if entity_key in self.belief_systems:
-                    context["npc_beliefs"][npc_id] = self.belief_systems[entity_key]
-                
-                # Add emotional memory state if available
-                if entity_key in self.emotional_memories:
-                    context["emotional_states"][npc_id] = self.emotional_memories[entity_key]
-        
-        # Add recent interactions
-        context["recent_interactions"] = self.npc_interaction_history[-5:]
-        
-        # Add narrative context if available
-        if self.npc_narrative_context:
-            context["group_dynamics"] = self.npc_narrative_context.get("group_dynamics", {})
-            context["active_narratives"] = self.npc_narrative_context.get("narrative_threads", [])
-        
-        # Add memory context if available
-        if self.memory_context:
-            context["memory_narrative"] = self.memory_context.get("narrative_threads", [])
-            context["memory_insights"] = self.memory_context.get("analysis", {})
-        
-        return context
-    
-    # ────────── EXISTING METHODS (continued) ──────────
-    
-    async def get_active_strategies_cached(self):
-        """Get active strategies with caching and lock to prevent thundering herd"""
-        current_time = time.time()
-        
-        # Check cache without lock first
-        if self._strategy_cache:
-            cache_time, strategies = self._strategy_cache
-            if current_time - cache_time < self._strategy_cache_ttl:
-                return strategies
-        
-        # Need to refresh - use lock to prevent multiple refreshes
-        async with self._strategy_cache_lock:
-            # Double-check cache inside lock
-            if self._strategy_cache:
-                cache_time, strategies = self._strategy_cache
-                if current_time - cache_time < self._strategy_cache_ttl:
-                    return strategies
-            
-            # Fetch new strategies using its own connection
-            async with get_db_connection_context() as conn:
-                strategies = await get_active_strategies(conn)
-            
-            # Update cache
-            self._strategy_cache = (current_time, strategies)
-            return strategies
-    
-    async def _load_state(self):
-        """Load existing state from database"""
-        # Use context manager to get a connection
-        async with get_db_connection_context() as conn:
-            # Load emotional state
-            row = await conn.fetchrow("""
-                SELECT emotional_state FROM NyxAgentState
-                WHERE user_id = $1 AND conversation_id = $2
-            """, self.user_id, self.conversation_id)
-            
-            if row and row["emotional_state"]:
-                state = json.loads(row["emotional_state"])
-                self.emotional_state.update(state)
-            
-            # Load scenario state if exists and table is available
-            if self._tables_available.get("scenario_states", True):
-                try:
-                    scenario_row = await conn.fetchrow("""
-                        SELECT state_data FROM scenario_states
-                        WHERE user_id = $1 AND conversation_id = $2
-                        ORDER BY created_at DESC LIMIT 1
-                    """, self.user_id, self.conversation_id)
-                    
-                    if scenario_row and scenario_row["state_data"]:
-                        self.scenario_state = json.loads(scenario_row["state_data"])
-                except Exception as e:
-                    # Table might not exist yet
-                    if "does not exist" in str(e) or "no such table" in str(e).lower():
-                        logger.info("scenario_states table not found - migrations may need to be run")
-                        self._tables_available["scenario_states"] = False
-                    else:
-                        logger.debug(f"Could not load scenario state: {e}")
-    
-    def update_performance(self, metric: str, value: Any):
-        """Update performance metrics"""
-        if metric in self.performance_metrics:
-            if isinstance(self.performance_metrics[metric], list):
-                self.performance_metrics[metric].append(value)
-                # Keep only last entries based on config
-                if len(self.performance_metrics[metric]) > Config.MAX_RESPONSE_TIMES:
-                    self.performance_metrics[metric] = self.performance_metrics[metric][-Config.MAX_RESPONSE_TIMES:]
             else:
-                self.performance_metrics[metric] = value
-    
-    async def learn_from_interaction(self, action: str, outcome: str, success: bool):
-        """Learn from an interaction outcome"""
-        # Update patterns
-        pattern_key = f"{action}_{outcome}"
-        if pattern_key not in self.learned_patterns:
-            self.learned_patterns[pattern_key] = {
-                "occurrences": 0,
-                "successes": 0,
-                "last_seen": time.time()
-            }
-        
-        pattern = self.learned_patterns[pattern_key]
-        pattern["occurrences"] += 1
-        if success:
-            pattern["successes"] += 1
-        pattern["last_seen"] = time.time()
-        pattern["success_rate"] = pattern["successes"] / pattern["occurrences"]
-        
-        # Update adaptation history with emotional state snapshot
-        self.adaptation_history.append({
-            "timestamp": time.time(),
-            "action": action,
-            "outcome": outcome,
-            "success": success,
-            "emotional_state": self.emotional_state.copy()
-        })
-        
-        # Keep adaptation history bounded
-        max_history = Config.MAX_ADAPTATION_HISTORY if success else Config.MAX_ADAPTATION_HISTORY // 2
-        if len(self.adaptation_history) > max_history * 2:
-            self.adaptation_history = self.adaptation_history[-max_history:]
-        
-        # Prune old patterns (older than 24 hours)
-        current_time = time.time()
-        self.learned_patterns = {
-            k: v for k, v in self.learned_patterns.items()
-            if current_time - v.get("last_seen", 0) < 86400
-        }
-        
-        # Update learning metrics
-        self._update_learning_metrics()
-    
-    def should_generate_task(self) -> bool:
-        """Determine if we should generate a creative task"""
-        context = self.current_context
-        
-        if not context.get("active_npc_id"):
-            return False
-            
-        scenario_type = context.get("scenario_type", "").lower()
-        task_scenarios = ["training", "challenge", "service", "discipline"]
-        if not any(t in scenario_type for t in task_scenarios):
-            return False
-            
-        npc_relationship = context.get("npc_relationship_level", 0)
-        if npc_relationship < Config.MIN_NPC_RELATIONSHIP_FOR_TASK:
-            return False
-            
-        # Check task timing
-        if not self.should_run_task("task_generation"):
-            return False
-            
-        return True
-    
-    def should_recommend_activities(self) -> bool:
-        """Determine if we should recommend activities"""
-        context = self.current_context
-        
-        if not context.get("present_npc_ids"):
-            return False
-            
-        scenario_type = context.get("scenario_type", "").lower()
-        if "task" in scenario_type or "challenge" in scenario_type:
-            return False
-            
-        user_input = context.get("user_input", "").lower()
-        suggestion_triggers = ["what should", "what can", "what to do", "suggestions", "ideas"]
-        if any(trigger in user_input for trigger in suggestion_triggers):
-            return True
-            
-        if context.get("is_scene_transition") or context.get("is_activity_completed"):
-            return True
-            
-        return False
-    
-    async def handle_high_memory_usage(self):
-        """Handle high memory usage by cleaning up"""
-        # Trim memory system cache if available
-        if hasattr(self.memory_system, 'trim_cache'):
-            await self.memory_system.trim_cache()
-        
-        # Clear old patterns
-        self.learned_patterns = dict(list(self.learned_patterns.items())[-Config.MAX_LEARNED_PATTERNS:])
-        
-        # Clear old history
-        self.adaptation_history = self.adaptation_history[-Config.MAX_ADAPTATION_HISTORY:]
-        self.error_log = self.error_log[-Config.MAX_ERROR_LOG_ENTRIES:]
-        self.npc_interaction_history = self.npc_interaction_history[-50:]
-        self.conflict_events = self.conflict_events[-50:]
-        
-        # Clear old NPC snapshots not in current scene
-        self.npc_snapshots = {
-            npc_id: snapshot 
-            for npc_id, snapshot in self.npc_snapshots.items()
-            if npc_id in self.current_scene_npcs
-        }
-        
-        # Clear inactive conflicts
-        if len(self.active_conflicts) > 10:
-            # Keep only the 10 most recent conflicts
-            conflict_ids = sorted(self.active_conflicts.keys())[-10:]
-            self.active_conflicts = {
-                cid: self.active_conflicts[cid] 
-                for cid in conflict_ids
-            }
-        
-        # Clear old conflict choices
-        self.conflict_choices = self.conflict_choices[-10:] if self.conflict_choices else []
-        
-        # Clear performance metrics history
-        if "response_times" in self.performance_metrics:
-            self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-Config.MAX_RESPONSE_TIMES:]
-        
-        # Force garbage collection
-        import gc
-        gc.collect()
-        
-        logger.info("Performed memory cleanup")
-    
-    def get_cpu_usage(self) -> float:
-        """Get CPU usage with caching"""
-        try:
-            current_time = time.time()
-            # Check if we need to update the cache
-            if (self._cpu_usage_cache is None or 
-                current_time - self._cpu_usage_last_update >= self._cpu_usage_update_interval):
-                # Update the cache using safe wrapper
-                new_value = safe_psutil('cpu_percent', interval=0.1, default=0.0)
-                if new_value is not None:
-                    self._cpu_usage_cache = new_value
-                    self._cpu_usage_last_update = current_time
-            
-            return self._cpu_usage_cache or 0.0
-        except Exception as e:
-            logger.debug(f"Failed to get CPU usage: {e}")
-            return 0.0
-
-    def db_connection_ctx(self):
-        """Get a database connection context manager"""
-        return get_db_connection_context()
-    
-    # Legacy compatibility
-    async def get_db_connection(self):
-        """DEPRECATED: Use db_connection_ctx() instead"""
-        logger.warning("get_db_connection is deprecated, use db_connection_ctx() instead")
-        return self.db_connection_ctx()
-
-    async def close_db_connection(self, conn=None):
-        """No-op compatibility wrapper"""
-        if conn is not None:
-            await conn.__aexit__(None, None, None)
-    
-    def _update_learning_metrics(self):
-        """Update learning-related metrics"""
-        if self.learned_patterns:
-            successful_patterns = sum(1 for p in self.learned_patterns.values() 
-                                    if p.get("success_rate", 0) > 0.6)
-            self.learning_metrics["pattern_recognition_rate"] = (
-                successful_patterns / len(self.learned_patterns)
-            )
-        
-        if self.adaptation_history:
-            recent = self.adaptation_history[-Config.MAX_ADAPTATION_HISTORY:]
-            successes = sum(1 for a in recent if a["success"])
-            self.learning_metrics["adaptation_success_rate"] = successes / len(recent)
-        
-        # Update NPC behavior prediction based on interaction history
-        if self.npc_interaction_history:
-            recent_interactions = self.npc_interaction_history[-20:]
-            successful_outcomes = sum(1 for i in recent_interactions 
-                                     if i.get("result") in ["success", "positive"])
-            if recent_interactions:
-                self.learning_metrics["npc_behavior_prediction_accuracy"] = (
-                    successful_outcomes / len(recent_interactions)
+                # Fallback: simple pattern detection
+                memories = await self.memory_orchestrator.retrieve_memories(
+                    entity_type=EntityType.PLAYER,
+                    entity_id=self.user_id,
+                    query=topic or "",
+                    limit=20
                 )
+                
+                # Extract basic patterns
+                patterns = []
+                if memories and 'memories' in memories:
+                    # Count recurring themes
+                    theme_counts = defaultdict(int)
+                    for mem in memories['memories']:
+                        if 'tags' in mem:
+                            for tag in mem['tags']:
+                                theme_counts[tag] += 1
+                    
+                    # Top themes are patterns
+                    for theme, count in sorted(theme_counts.items(), 
+                                              key=lambda x: x[1], reverse=True)[:3]:
+                        patterns.append({
+                            'theme': theme,
+                            'frequency': count,
+                            'prediction': f"Theme '{theme}' is recurring"
+                        })
+                
+                return {'predictions': patterns}
+                
+        except Exception as e:
+            logger.error(f"Failed to analyze memory patterns: {e}")
+            return {'predictions': []}
     
-    # ────────── DEPRECATED COMPATIBILITY METHODS ──────────
-    
-    def db_connection_ctx(self):
-        """Get a database connection context manager"""
-        return get_db_connection_context()
-    
-    # Legacy compatibility
-    async def get_db_connection(self):
-        """DEPRECATED: Use db_connection_ctx() instead"""
-        logger.warning("get_db_connection is deprecated, use db_connection_ctx() instead")
-        return self.db_connection_ctx()
-
-    async def close_db_connection(self, conn=None):
-        """No-op compatibility wrapper"""
-        if conn is not None:
-            await conn.__aexit__(None, None, None)
-    
-    def should_run_task(self, task_id: str) -> bool:
-        """Check if enough time has passed to run task again"""
-        if task_id not in self.last_task_runs:
+    def should_run_task(self, task_name: str) -> bool:
+        """Check if a periodic task should run"""
+        if task_name not in self.task_intervals:
+            return False
+        
+        interval = self.task_intervals[task_name]
+        last_run = self.last_task_runs.get(task_name)
+        
+        if not last_run:
             return True
         
-        time_since_run = (datetime.now(timezone.utc) - self.last_task_runs[task_id]).total_seconds()
-        return time_since_run >= self.task_intervals.get(task_id, 300)
+        elapsed = (datetime.now(timezone.utc) - last_run).total_seconds()
+        return elapsed >= interval
     
-    def record_task_run(self, task_id: str):
-        """Record that a task has been run"""
-        self.last_task_runs[task_id] = datetime.now(timezone.utc)
+    def record_task_run(self, task_name: str):
+        """Record that a task has run"""
+        self.last_task_runs[task_name] = datetime.now(timezone.utc)
     
     def log_error(self, error: Exception, context: Dict[str, Any] = None):
-        """Log an error with context and aggregate by type"""
-        error_type = type(error).__name__
+        """Log an error with context"""
         error_entry = {
-            "timestamp": time.time(),
-            "error": str(error),
-            "type": error_type,
-            "context": context or {}
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'error': str(error),
+            'type': type(error).__name__,
+            'context': context or {}
         }
+        
         self.error_log.append(error_entry)
-        
-        # Track error counts by type
-        self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
-        
-        # Update error metrics
-        self.performance_metrics["error_rates"]["total"] += 1
+        self.error_counts[type(error).__name__] = self.error_counts.get(type(error).__name__, 0) + 1
         
         # Keep error log bounded
-        if len(self.error_log) > Config.MAX_ERROR_LOG_ENTRIES * 2:
-            _prune_list(self.error_log, Config.MAX_ERROR_LOG_ENTRIES)
-            
-        # Log warning if we see repeated errors
-        if self.error_counts[error_type] > 10:
-            logger.warning(f"Repeated error type {error_type}: {self.error_counts[error_type]} occurrences")
+        if len(self.error_log) > 100:
+            self.error_log = self.error_log[-100:]
+    
+    # ────────── COMPATIBILITY METHODS ──────────
+    
+    def get_comprehensive_context_for_response(self) -> Dict[str, Any]:
+        """Get comprehensive context (compatibility with existing code)"""
+        return self.current_context.copy()
+    
+    def get_npc_context_for_response(self) -> Dict[str, Any]:
+        """Get NPC context for response"""
+        return {
+            'npcs': {npc_id: snapshot for npc_id, snapshot in self.npc_snapshots.items()},
+            'scene_npcs': self.current_scene_npcs,
+            'perceptions': self.npc_perceptions
+        }
+    
+    def get_conflict_context_for_response(self) -> Dict[str, Any]:
+        """Get conflict context for response"""
+        return {
+            'active': self.active_conflicts,
+            'states': self.conflict_states,
+            'tensions': self.conflict_tensions
+        }
+    
+    def get_lore_context_for_response(self) -> Dict[str, Any]:
+        """Get lore context for response"""
+        return {
+            'world': self.world_lore,
+            'religions': list(self.active_religions.values()),
+            'nations': list(self.active_nations.values())
+        }
