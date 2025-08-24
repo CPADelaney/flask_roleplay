@@ -242,6 +242,42 @@ async def process_user_input(
                 narrative_context = await nyx_context._slice_of_life_narrator.narrate_world_state()
                 nyx_context.current_context["narrative_context"] = narrative_context
 
+        # ===== STEP 2.5: Update Conflict Context =====
+        async with _log_step("update_conflict_context", trace_id):
+            if nyx_context.conflict_synthesizer:
+                # Update conflict context for current scene
+                location = nyx_context.current_context.get('location')
+                scene_type = nyx_context.current_context.get('scene_type', 'interaction')
+                
+                await nyx_context.update_conflict_context(
+                    location=location,
+                    scene_type=scene_type
+                )
+                
+                # Process scene for conflicts
+                scene_result = await nyx_context.process_scene_conflicts({
+                    'user_input': user_input,
+                    'scene_type': scene_type,
+                    'location': location
+                })
+                
+                # Add conflict context to current_context for the agent
+                conflict_context = nyx_context.get_conflict_context_for_response()
+                nyx_context.current_context['conflicts'] = conflict_context
+                nyx_context.current_context['conflict_choices'] = scene_result.get('choices', [])
+
+        # ===== STEP 2.6: Conflict System Maintenance =====
+        if nyx_context.conflict_synthesizer:
+            # Check conflict health periodically
+            if nyx_context.should_run_task("conflict_health_check"):
+                health = await nyx_context.get_conflict_system_health()
+                if not health.get("healthy"):
+                    logger.warning(f"Conflict system unhealthy: {health}")
+            
+            # Calculate tensions periodically
+            if nyx_context.should_run_task("tension_calculation"):
+                await nyx_context.calculate_conflict_tensions()
+
         # ===== STEP 3: Tool sanitization =====
         async with _log_step("tool_sanitization", trace_id):
             sanitize_agent_tools_in_place(nyx_main_agent)
