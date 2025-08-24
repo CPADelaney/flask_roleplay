@@ -19,7 +19,7 @@ from agents import (
 )
 
 from memory.memory_agent_wrapper import MemoryAgentWrapper
-from memory.wrapper import MemorySystem
+# Remove this import: from memory.wrapper import MemorySystem
 from memory.core import MemorySignificance  # kept in case callers rely on it
 
 
@@ -99,8 +99,10 @@ def _json_safe(obj: Any) -> Any:
     return str(obj)
 
 
-async def _ensure_memory_system(ctx: RunContextWrapper[MemorySystemContext]) -> MemorySystem:
+async def _ensure_memory_system(ctx: RunContextWrapper[MemorySystemContext]) -> 'MemorySystem':
     if ctx.context.memory_system is None:
+        # Lazy import to avoid circular dependency
+        from memory.wrapper import MemorySystem
         ctx.context.memory_system = await MemorySystem.get_instance(
             ctx.context.user_id, ctx.context.conversation_id
         )
@@ -464,39 +466,3 @@ def create_memory_agent(
     )
     return base_agent
 
-# ----------------------------- quick manual test -----------------------------
-
-async def main():
-    user_id = 1
-    conversation_id = 1
-
-    memory_context = MemorySystemContext(user_id, conversation_id)
-    agent = create_memory_agent(user_id, conversation_id)
-    wrapper = MemoryAgentWrapper(agent, memory_context)
-
-    # Example: remember
-    res1 = await wrapper.remember(
-        memory_context,
-        entity_type="player",
-        entity_id=101,
-        memory_text="Discovered a hidden passage behind the bookshelf to an ancient library.",
-        importance="high",
-        emotional=True,
-        tags=["discovery", "library"],
-    )
-    print("remember ->", res1)
-
-    # Example: recall
-    res2 = await wrapper.recall(
-        memory_context,
-        entity_type="player",
-        entity_id=101,
-        query="library",
-        context_text="exploration",
-        limit=5,
-    )
-    print("recall ->", res2)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
