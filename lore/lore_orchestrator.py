@@ -2289,6 +2289,577 @@ class LoreOrchestrator:
         
         dynamics = await self._get_lore_dynamics_system()
         return await dynamics.evolve_world_over_time(ctx, days_passed)
+
+    async def get_faction_religion(self, faction_id: int) -> Dict[str, Any]:
+        """
+        Get religious information for a faction.
+        
+        Args:
+            faction_id: ID of the faction
+            
+        Returns:
+            Religious affiliations and practices
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get faction data
+                faction = await conn.fetchrow("""
+                    SELECT * FROM Factions WHERE id = $1
+                """, faction_id)
+                
+                if not faction:
+                    return {"error": "Faction not found"}
+                
+                # Get religious orders associated with faction
+                orders = await conn.fetch("""
+                    SELECT ro.* FROM ReligiousOrders ro
+                    WHERE $1 = ANY(ro.notable_members)
+                       OR ro.name LIKE '%' || $2 || '%'
+                """, faction['name'], faction['name'])
+                
+                # Get holy sites controlled by faction
+                holy_sites = await conn.fetch("""
+                    SELECT hs.* FROM HolySites hs
+                    JOIN Locations l ON hs.location_id = l.id
+                    WHERE l.controlling_faction = $1
+                """, faction_id)
+                
+                return {
+                    "faction": dict(faction),
+                    "religious_orders": [dict(o) for o in orders],
+                    "controlled_holy_sites": [dict(s) for s in holy_sites]
+                }
+    
+    async def get_location_full_context(self, location_id: int) -> Dict[str, Any]:
+        """
+        Get complete context for a location including lore, politics, and religion.
+        
+        Args:
+            location_id: ID of the location
+            
+        Returns:
+            Complete location context
+        """
+        # Get base location data
+        location_context = await self.get_location_context(f"location_{location_id}")
+        
+        # Get local lore
+        local_lore = await self.get_location_lore(
+            self.create_run_context(),
+            location_id
+        )
+        
+        # Get religious sites at location
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                holy_sites = await conn.fetch("""
+                    SELECT * FROM HolySites WHERE location_id = $1
+                """, location_id)
+                
+                # Get political control
+                political = await conn.fetchrow("""
+                    SELECT l.*, f.name as faction_name, n.name as nation_name
+                    FROM Locations l
+                    LEFT JOIN Factions f ON l.controlling_faction = f.id
+                    LEFT JOIN Nations n ON l.nation_id = n.id
+                    WHERE l.id = $1
+                """, location_id)
+        
+        return {
+            "base_context": location_context,
+            "local_lore": local_lore,
+            "holy_sites": [dict(s) for s in holy_sites],
+            "political_control": dict(political) if political else {}
+        }
+    
+    async def simulate_cultural_religious_exchange(
+        self,
+        nation1_id: int,
+        nation2_id: int,
+        exchange_type: str = "peaceful",
+        duration_years: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Simulate cultural and religious exchange between nations.
+        
+        Args:
+            nation1_id: First nation ID
+            nation2_id: Second nation ID
+            exchange_type: Type of exchange ('peaceful', 'conquest', 'trade')
+            duration_years: Duration of exchange
+            
+        Returns:
+            Exchange results
+        """
+        # Get cultural diffusion
+        cultural_results = await self.simulate_cultural_diffusion(
+            self.create_run_context(),
+            nation1_id,
+            nation2_id,
+            duration_years
+        )
+        
+        # Get religious evolution
+        nation1_religion = await self.get_nation_religion(
+            self.create_run_context(),
+            nation1_id
+        )
+        
+        if nation1_religion and "primary_pantheon" in nation1_religion:
+            pantheon_id = nation1_religion["primary_pantheon"]["id"]
+            religious_results = await self.evolve_religion_from_culture(
+                self.create_run_context(),
+                pantheon_id,
+                nation2_id,
+                duration_years
+            )
+        else:
+            religious_results = {"message": "No primary religion to evolve"}
+        
+        return {
+            "cultural_exchange": cultural_results,
+            "religious_evolution": religious_results,
+            "exchange_type": exchange_type,
+            "duration_years": duration_years
+        }
+
+    async def get_resource_usage_stats(self) -> Dict[str, Any]:
+        """
+        Get detailed resource usage statistics.
+        
+        Returns:
+            Resource usage statistics
+        """
+        world_manager = await self._get_world_lore_manager()
+        return await world_manager.get_resource_stats()
+    
+    async def optimize_world_resources(self) -> Dict[str, Any]:
+        """
+        Optimize world lore resource usage.
+        
+        Returns:
+            Optimization results
+        """
+        world_manager = await self._get_world_lore_manager()
+        await world_manager.optimize_resources()
+        return {"status": "optimized", "timestamp": datetime.now().isoformat()}
+    
+    async def cleanup_world_resources(self) -> Dict[str, Any]:
+        """
+        Clean up unused world lore resources.
+        
+        Returns:
+            Cleanup results
+        """
+        world_manager = await self._get_world_lore_manager()
+        await world_manager.cleanup_resources()
+        return {"status": "cleaned", "timestamp": datetime.now().isoformat()}
+    
+    async def resolve_world_inconsistencies_with_fixes(self, world_id: str = "main") -> Dict[str, Any]:
+        """
+        Identify and automatically resolve world inconsistencies.
+        
+        Args:
+            world_id: ID of the world
+            
+        Returns:
+            Resolution results
+        """
+        world_manager = await self._get_world_lore_manager()
+        return await world_manager.resolve_world_inconsistencies(world_id)
+    
+    async def generate_world_documentation(
+        self,
+        world_id: str = "main",
+        include_history: bool = True,
+        include_current_state: bool = True,
+        format_type: str = "markdown"
+    ) -> str:
+        """
+        Generate comprehensive world documentation.
+        
+        Args:
+            world_id: ID of the world
+            include_history: Include historical timeline
+            include_current_state: Include current state
+            format_type: Output format ('markdown', 'html', 'json')
+            
+        Returns:
+            Formatted documentation
+        """
+        world_manager = await self._get_world_lore_manager()
+        doc = await world_manager.generate_world_summary(world_id, include_history, include_current_state)
+        
+        if format_type == "html":
+            # Convert markdown to HTML
+            import markdown
+            return markdown.markdown(doc)
+        elif format_type == "json":
+            # Parse and return as JSON structure
+            return json.dumps({"documentation": doc, "world_id": world_id})
+        return doc
+    
+    async def query_world_natural_language(self, query: str, world_id: str = "main") -> str:
+        """
+        Query the world state using natural language.
+        
+        Args:
+            query: Natural language query
+            world_id: ID of the world
+            
+        Returns:
+            Query response
+        """
+        world_manager = await self._get_world_lore_manager()
+        return await world_manager.query_world_state(query)
+    
+    async def export_world_trace(self, trace_id: str, format_type: str = "json") -> Dict[str, Any]:
+        """
+        Export a trace of world operations.
+        
+        Args:
+            trace_id: ID of the trace
+            format_type: Export format
+            
+        Returns:
+            Trace data
+        """
+        trace_system = await self._get_unified_trace_system()
+        return trace_system.export_trace(trace_id, format_type)
+    
+    async def create_lore_relationship_graph(self, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Create a relationship graph from lore elements.
+        
+        Args:
+            elements: List of lore elements
+            
+        Returns:
+            Relationship graph
+        """
+        mapper = await self._get_relationship_mapper()
+        return await mapper.create_relationship_graph(elements)
+    
+    async def find_lore_connections(
+        self,
+        element_id: str,
+        element_type: str,
+        depth: int = 2,
+        connection_types: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Find deep connections between lore elements.
+        
+        Args:
+            element_id: ID of the element
+            element_type: Type of element
+            depth: Search depth
+            connection_types: Types of connections to find
+            
+        Returns:
+            Connection graph
+        """
+        mapper = await self._get_relationship_mapper()
+        connections = await mapper.find_related_elements(element_id, element_type, depth)
+        
+        # Filter by connection types if specified
+        if connection_types:
+            filtered = []
+            for conn in connections.get("related_elements", []):
+                if conn.get("relationship_type") in connection_types:
+                    filtered.append(conn)
+            connections["related_elements"] = filtered
+        
+        return connections
+    
+    async def validate_lore_element(self, element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
+        """
+        Validate a lore element for consistency and quality.
+        
+        Args:
+            element: Element data
+            element_type: Type of element
+            
+        Returns:
+            Validation results
+        """
+        validator = await self._get_content_validator()
+        return await validator.validate_content(
+            self.create_run_context(),
+            element,
+            element_type
+        )
+
+    async def search_religious_content(self, query: str, content_type: str = 'all', limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Search religious content by semantic similarity.
+        
+        Args:
+            query: Search query
+            content_type: Type of content ('deity', 'pantheon', 'practice', 'text', 'order', 'all')
+            limit: Maximum results
+            
+        Returns:
+            List of matching religious content
+        """
+        from utils.embedding_service import get_embedding
+        
+        embed = await get_embedding(query)
+        results = []
+        
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                if content_type in ['deity', 'all']:
+                    deities = await conn.fetch("""
+                        SELECT *, embedding <=> $1 as distance
+                        FROM Deities
+                        ORDER BY distance
+                        LIMIT $2
+                    """, embed, limit if content_type == 'deity' else 5)
+                    results.extend([{**dict(d), 'type': 'deity'} for d in deities])
+                
+                if content_type in ['pantheon', 'all']:
+                    pantheons = await conn.fetch("""
+                        SELECT *, embedding <=> $1 as distance
+                        FROM Pantheons
+                        ORDER BY distance
+                        LIMIT $2
+                    """, embed, limit if content_type == 'pantheon' else 5)
+                    results.extend([{**dict(p), 'type': 'pantheon'} for p in pantheons])
+                
+                if content_type in ['practice', 'all']:
+                    practices = await conn.fetch("""
+                        SELECT *, embedding <=> $1 as distance
+                        FROM ReligiousPractices
+                        ORDER BY distance
+                        LIMIT $2
+                    """, embed, limit if content_type == 'practice' else 5)
+                    results.extend([{**dict(p), 'type': 'practice'} for p in practices])
+        
+        # Sort by distance and limit
+        results.sort(key=lambda x: x.get('distance', float('inf')))
+        return results[:limit]
+
+    async def get_all_pantheons(self) -> List[Dict[str, Any]]:
+        """
+        Get all pantheons in the world.
+        
+        Returns:
+            List of pantheons
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                pantheons = await conn.fetch("""
+                    SELECT * FROM Pantheons
+                    ORDER BY id
+                """)
+                return [dict(p) for p in pantheons]
+    
+    async def get_pantheon_deities(self, pantheon_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all deities in a pantheon.
+        
+        Args:
+            pantheon_id: ID of the pantheon
+            
+        Returns:
+            List of deities
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                deities = await conn.fetch("""
+                    SELECT * FROM Deities
+                    WHERE pantheon_id = $1
+                    ORDER BY rank DESC
+                """, pantheon_id)
+                return [dict(d) for d in deities]
+    
+    async def get_religious_practices_by_nation(self, nation_id: int) -> List[Dict[str, Any]]:
+        """
+        Get religious practices specific to a nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            List of regional religious practices
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                practices = await conn.fetch("""
+                    SELECT rrp.*, rp.name, rp.practice_type, rp.purpose
+                    FROM RegionalReligiousPractice rrp
+                    JOIN ReligiousPractices rp ON rrp.practice_id = rp.id
+                    WHERE rrp.nation_id = $1
+                    ORDER BY rrp.importance DESC
+                """, nation_id)
+                return [dict(p) for p in practices]
+    
+    async def get_holy_sites_by_pantheon(self, pantheon_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all holy sites for a pantheon.
+        
+        Args:
+            pantheon_id: ID of the pantheon
+            
+        Returns:
+            List of holy sites
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                sites = await conn.fetch("""
+                    SELECT * FROM HolySites
+                    WHERE pantheon_id = $1
+                    ORDER BY id
+                """, pantheon_id)
+                return [dict(s) for s in sites]
+    
+    async def get_religious_texts_by_pantheon(self, pantheon_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all religious texts for a pantheon.
+        
+        Args:
+            pantheon_id: ID of the pantheon
+            
+        Returns:
+            List of religious texts
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                texts = await conn.fetch("""
+                    SELECT * FROM ReligiousTexts
+                    WHERE pantheon_id = $1
+                    ORDER BY id
+                """, pantheon_id)
+                return [dict(t) for t in texts]
+    
+    async def get_religious_conflicts_by_pantheon(self, pantheon_id: int) -> List[Dict[str, Any]]:
+        """
+        Get religious conflicts involving a pantheon.
+        
+        Args:
+            pantheon_id: ID of the pantheon
+            
+        Returns:
+            List of religious conflicts
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get pantheon name first
+                pantheon_name = await conn.fetchval("""
+                    SELECT name FROM Pantheons WHERE id = $1
+                """, pantheon_id)
+                
+                if pantheon_name:
+                    conflicts = await conn.fetch("""
+                        SELECT * FROM ReligiousConflicts
+                        WHERE $1 = ANY(parties_involved)
+                        ORDER BY beginning_date DESC
+                    """, pantheon_name)
+                    return [dict(c) for c in conflicts]
+                return []
+
+    async def get_nation_issues(self, nation_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all domestic issues for a specific nation.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            List of domestic issues
+        """
+        manager = await self._get_politics_manager()
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                issues = await conn.fetch("""
+                    SELECT * FROM DomesticIssues
+                    WHERE nation_id = $1
+                    ORDER BY severity DESC
+                """, nation_id)
+                return [dict(issue) for issue in issues]
+    
+    async def get_faction_proxy(self, faction_id: int) -> Optional[Any]:
+        """
+        Get a faction agent proxy for autonomous faction behavior.
+        
+        Args:
+            faction_id: ID of the faction
+            
+        Returns:
+            FactionAgentProxy instance or None
+        """
+        manager = await self._get_politics_manager()
+        if not manager.faction_proxies:
+            await manager.initialize_faction_proxies(self.create_run_context())
+        return manager.faction_proxies.get(faction_id)
+    
+    async def simulate_faction_reaction(self, faction_id: int, event: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Simulate how a faction reacts to an event.
+        
+        Args:
+            faction_id: ID of the faction
+            event: Event data
+            
+        Returns:
+            Faction reaction
+        """
+        proxy = await self.get_faction_proxy(faction_id)
+        if not proxy:
+            return {"error": f"Faction {faction_id} not found or not initialized"}
+        return await proxy.react_to_event(event, self.create_run_context())
+    
+    async def create_dynasty(self, name: str, founding_date: str, ruling_nation: int, **kwargs) -> int:
+        """
+        Create a new dynasty.
+        
+        Args:
+            name: Dynasty name
+            founding_date: Founding date
+            ruling_nation: ID of ruling nation
+            **kwargs: Additional dynasty attributes
+            
+        Returns:
+            Dynasty ID
+        """
+        manager = await self._get_politics_manager()
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                dynasty_id = await conn.fetchval("""
+                    INSERT INTO Dynasties (
+                        name, founding_date, ruling_nation, matriarch, 
+                        patriarch, notable_members, family_traits
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING id
+                """, 
+                name, founding_date, ruling_nation,
+                kwargs.get('matriarch'), kwargs.get('patriarch'),
+                kwargs.get('notable_members', []), kwargs.get('family_traits', []))
+                
+                return dynasty_id
+    
+    async def get_conflict_news(self, conflict_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get news articles about a specific conflict.
+        
+        Args:
+            conflict_id: ID of the conflict
+            limit: Maximum number of articles
+            
+        Returns:
+            List of news articles
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                news = await conn.fetch("""
+                    SELECT * FROM ConflictNews
+                    WHERE conflict_id = $1
+                    ORDER BY publication_date DESC
+                    LIMIT $2
+                """, conflict_id, limit)
+                return [dict(article) for article in news]
     
     # ===== REGIONAL CULTURE OPERATIONS =====
     
