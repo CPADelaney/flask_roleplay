@@ -42,6 +42,7 @@ from .utils import (
     safe_psutil, safe_process_metric, get_process_info, 
     bytes_to_mb, _prune_list, _calculate_variance
 )
+from .tools import detect_conflicts_and_instability
 
 try:
     from story_agent.world_simulation_models import (
@@ -123,15 +124,75 @@ class NyxContext:
 
     # ────────── PERFORMANCE & EMOTION ──────────
     performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
-        "total_actions": 0, "successful_actions": 0, "failed_actions": 0,
-        "response_times": [], "memory_usage": 0, "cpu_usage": 0,
-        "error_rates": {"total": 0, "recovered": 0, "unrecovered": 0},
-        "npc_interactions": 0, "npc_decisions": 0, "npc_memories_created": 0,
-        "conflicts_created": 0, "conflicts_resolved": 0, "conflicts_updated": 0,
-        "conflict_scenes_processed": 0, "tension_calculations": 0
+        # Core action metrics
+        "total_actions": 0,
+        "successful_actions": 0,
+        "failed_actions": 0,
+        
+        # Performance tracking
+        "response_times": [],
+        "memory_usage": 0,
+        "cpu_usage": 0,
+        
+        # Error tracking
+        "error_rates": {
+            "total": 0,
+            "recovered": 0,
+            "unrecovered": 0
+        },
+        
+        # NPC-related metrics
+        "npc_interactions": 0,
+        "npc_decisions": 0,
+        "npc_memories_created": 0,
+        "npc_perceptions_updated": 0,
+        "npc_learning_cycles": 0,
+        "npc_scheming_evaluations": 0,
+        
+        # Memory system metrics
+        "memories_stored": 0,
+        "memories_retrieved": 0,
+        "beliefs_created": 0,
+        "beliefs_updated": 0,
+        "flashbacks_generated": 0,
+        "memory_maintenance_runs": 0,
+        "memory_consolidations": 0,
+        
+        # Conflict system metrics
+        "conflicts_created": 0,
+        "conflicts_resolved": 0,
+        "conflicts_updated": 0,
+        "conflict_scenes_processed": 0,
+        "tension_calculations": 0,
+        "conflict_choices_presented": 0,
+        "conflict_resolutions_attempted": 0,
+        "conflict_events_logged": 0,
+        "conflict_health_checks": 0,
+        "subsystem_events_processed": 0,
+        
+        # World/Story metrics
+        "world_state_updates": 0,
+        "emergent_events_generated": 0,
+        "slice_scenes_orchestrated": 0,
+        "narrative_beats_processed": 0,
+        
+        # System health metrics
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "db_queries": 0,
+        "api_calls": 0,
+        "rate_limit_hits": 0,
+        
+        # Learning/Adaptation metrics
+        "patterns_learned": 0,
+        "strategies_adapted": 0,
+        "preferences_updated": 0
     })
+    
     emotional_state: Dict[str, float] = field(default_factory=lambda: {
-        "valence": 0.0, "arousal": 0.5, "dominance": 0.7
+        "valence": 0.0,
+        "arousal": 0.5,
+        "dominance": 0.7
     })
 
     # ────────── LEARNING & ADAPTATION ──────────
@@ -372,80 +433,82 @@ class NyxContext:
         except Exception as e:
             logger.error(f"Failed to load NPC context: {e}", exc_info=True)
     
-    async def update_conflict_context(self, location: Optional[str] = None, scene_type: Optional[str] = None):
+    async def update_conflict_context(
+        self, 
+        location: Optional[str] = None, 
+        scene_type: Optional[str] = None,
+        npc_ids: Optional[List[int]] = None
+    ):
         """Update conflict context for a new scene or interaction"""
-        if not self.conflict_synthesizer:
-            return
-        
-        try:
-            # Build new conflict context
-            self.conflict_context = ConflictContext(
-                scene_type=scene_type or self.current_context.get('scene_type', 'interaction'),
-                location=location or self.current_context.get('location'),
-                location_id=self.current_context.get('location_id'),
-                participants=self.current_scene_npcs,
-                present_npcs=self.current_scene_npcs,
-                npcs=self.current_scene_npcs,
-                recent_events=[e['type'] for e in self.conflict_events[-5:]],
-                timestamp=datetime.now().isoformat()
-            )
-            
-            # Process scene for conflicts
-            scene_result = await self.process_scene_conflicts({
-                'scene_type': scene_type,
-                'location': location
-            })
-            
-            # Update scene conflicts based on results
-            if scene_result.get('conflicts_detected'):
-                self.scene_conflicts = scene_result['conflicts_detected']
-            
-            # Update choices
-            if scene_result.get('choices'):
-                self.conflict_choices = scene_result['choices']
-            
-            # Update metrics
-            self.performance_metrics["conflict_scenes_processed"] += 1
-            
-            logger.info(f"Updated conflict context: {len(self.scene_conflicts)} conflicts in scene")
-            
-        except Exception as e:
-            logger.error(f"Failed to update conflict context: {e}", exc_info=True)
-        """Update NPC context for a new scene or interaction"""
-        if not self.npc_orchestrator:
-            return
-        
-        try:
-            # Update location-based NPCs
-            if location:
-                npcs_at_location = await self.npc_orchestrator.get_npcs_at_location(location)
-                self.current_scene_npcs = [npc.npc_id for npc in npcs_at_location]
-                
-                # Update snapshots
-                for npc in npcs_at_location:
-                    self.npc_snapshots[npc.npc_id] = npc
-            
-            # Add specific NPCs if provided
-            if npc_ids:
-                for npc_id in npc_ids:
-                    if npc_id not in self.current_scene_npcs:
-                        self.current_scene_npcs.append(npc_id)
+        # Update NPCs first
+        if self.npc_orchestrator:
+            try:
+                # Update location-based NPCs
+                if location:
+                    npcs_at_location = await self.npc_orchestrator.get_npcs_at_location(location)
+                    self.current_scene_npcs = [npc.npc_id for npc in npcs_at_location]
                     
-                    # Get snapshot if not already loaded
-                    if npc_id not in self.npc_snapshots:
-                        snapshot = await self.npc_orchestrator.get_npc_snapshot(npc_id)
-                        self.npc_snapshots[npc_id] = snapshot
-            
-            # Update narrative context
-            self.npc_narrative_context = await self.npc_orchestrator.get_narrative_context(
-                focus_npc_ids=self.current_scene_npcs,
-                location=location,
-                include_relationships=True,
-                include_beliefs=True
-            )
-            
-        except Exception as e:
-            logger.error(f"Failed to update NPC context: {e}", exc_info=True)
+                    # Update snapshots
+                    for npc in npcs_at_location:
+                        self.npc_snapshots[npc.npc_id] = npc
+                
+                # Add specific NPCs if provided
+                if npc_ids:
+                    for npc_id in npc_ids:
+                        if npc_id not in self.current_scene_npcs:
+                            self.current_scene_npcs.append(npc_id)
+                        
+                        # Get snapshot if not already loaded
+                        if npc_id not in self.npc_snapshots:
+                            snapshot = await self.npc_orchestrator.get_npc_snapshot(npc_id)
+                            self.npc_snapshots[npc_id] = snapshot
+                
+                # Update NPC narrative context
+                self.npc_narrative_context = await self.npc_orchestrator.get_narrative_context(
+                    focus_npc_ids=self.current_scene_npcs,
+                    location=location,
+                    include_relationships=True,
+                    include_beliefs=True
+                )
+            except Exception as e:
+                logger.error(f"Failed to update NPC context: {e}", exc_info=True)
+        
+        # Now update conflict context
+        if self.conflict_synthesizer:
+            try:
+                # Build new conflict context
+                self.conflict_context = ConflictContext(
+                    scene_type=scene_type or self.current_context.get('scene_type', 'interaction'),
+                    location=location or self.current_context.get('location'),
+                    location_id=self.current_context.get('location_id'),
+                    participants=self.current_scene_npcs,
+                    present_npcs=self.current_scene_npcs,
+                    npcs=self.current_scene_npcs,
+                    recent_events=[e['type'] for e in self.conflict_events[-5:]],
+                    timestamp=datetime.now().isoformat()
+                )
+                
+                # Process scene for conflicts
+                scene_result = await self.process_scene_conflicts({
+                    'scene_type': scene_type,
+                    'location': location
+                })
+                
+                # Update scene conflicts based on results
+                if scene_result.get('conflicts_detected'):
+                    self.scene_conflicts = scene_result['conflicts_detected']
+                
+                # Update choices
+                if scene_result.get('choices'):
+                    self.conflict_choices = scene_result['choices']
+                
+                # Update metrics
+                self.performance_metrics["conflict_scenes_processed"] += 1
+                
+                logger.info(f"Updated conflict context: {len(self.scene_conflicts)} conflicts in scene")
+                
+            except Exception as e:
+                logger.error(f"Failed to update conflict context: {e}", exc_info=True)
     
     async def process_npc_interaction(
         self, 
