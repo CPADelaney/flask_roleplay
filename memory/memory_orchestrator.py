@@ -620,13 +620,11 @@ class MemoryOrchestrator:
             
             try:
                 response = client.chat.completions.create(
-                    model="gpt-4",
+                    model="gpt-5-nano",
                     messages=[
                         {"role": "system", "content": "You are a canon consistency validator."},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.3,
-                    max_tokens=500
                 )
                 
                 result = json.loads(response.choices[0].message.content)
@@ -1969,10 +1967,8 @@ Remember: You are analyzing complex narrative memories. Be thorough, insightful,
                     self._create_analysis_tool("predict_developments"),
                     self._create_analysis_tool("assess_coherence")
                 ],
-                model="gpt-4",
+                model="gpt-5-nano",
                 model_settings=ModelSettings(
-                    max_tokens=2000,
-                    temperature=0.7
                 )
             )
             
@@ -2064,13 +2060,11 @@ Return JSON:
 """
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You are a narrative coherence analyzer."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.5,
-                max_tokens=500
             )
             
             result = json.loads(response.choices[0].message.content)
@@ -2271,13 +2265,11 @@ Return only the prompt text, no explanation.
 """
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You generate memory prompts for narrative AI systems."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.8,
-                max_tokens=200
             )
             
             return response.choices[0].message.content.strip()
@@ -2354,13 +2346,11 @@ Generate only the narrative text, no meta-commentary.
 """
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You are a narrative synthesizer for memory systems."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                max_tokens=400
             )
             
             return response.choices[0].message.content.strip()
@@ -2422,13 +2412,11 @@ Return as JSON array of strings.
 """
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You generate insightful questions for memory exploration."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.8,
-                max_tokens=300
             )
             
             result = json.loads(response.choices[0].message.content)
@@ -2711,13 +2699,11 @@ Return as JSON array with this structure:
 """
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You are a narrative analyst identifying story threads in roleplay scenarios."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                response_format={"type": "json_object"}
             )
             
             result = json.loads(response.choices[0].message.content)
@@ -2816,13 +2802,11 @@ Return JSON with structure:
 """
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You are a belief conflict analyzer."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,
-                max_tokens=200
             )
             
             result = json.loads(response.choices[0].message.content)
@@ -2921,13 +2905,11 @@ Return as JSON array:
 """
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You are a narrative prediction system analyzing roleplay scenarios to predict future developments."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.8,
-                max_tokens=1500
             )
             
             # Parse response
@@ -3164,13 +3146,11 @@ Return JSON:
 """
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": "You are a cross-entity pattern analyzer for narrative memory systems."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                max_tokens=1500
             )
             
             result = json.loads(response.choices[0].message.content)
