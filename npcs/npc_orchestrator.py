@@ -43,7 +43,7 @@ from npcs.new_npc_creation import NPCCreationHandler
 from db.connection import get_db_connection_context
 
 # Import canon system for logging canonical events
-from lore.canon_integration import log_canonical_event
+from lore.core.canon import log_canonical_event
 
 logger = logging.getLogger(__name__)
 
