@@ -20,11 +20,11 @@ import hashlib
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from .context import NyxContext, SceneScope, ContextBundle, PackedContext
-from .models import NyxResponse, ContextMetrics
-from .assembly import assemble_nyx_response
-from .prompts import get_system_prompt
-from .config import NyxConfig
+from nyx.nyx_agent_sdk.context import NyxContext, SceneScope, ContextBundle, PackedContext
+from nyx.nyx_agent_sdk.models import NyxResponse, ContextMetrics
+from nyx.nyx_agent_sdk.assembly import assemble_nyx_response
+from nyx.nyx_agent_sdk.prompts import get_system_prompt
+from nyx.nyx_agent_sdk.config import NyxConfig
 from ..utils.performance import log_performance_metrics
 from ..utils.background import enqueue_task  # Background task queue
 
