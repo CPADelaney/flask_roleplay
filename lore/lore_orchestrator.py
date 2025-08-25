@@ -1,26 +1,26 @@
-# lore/lore_orchestrator.py - FULLY INTEGRATED VERSION WITH ALL MODULES
-
 """
-Lore Orchestrator - Unified Entry Point for All Lore Functionality
-
-This module provides a single, comprehensive interface to all lore system components,
-including politics, religion, and world lore management with full resource management.
+Lore Orchestrator - ENHANCED with Scene Bundle Support
+=====================================================
+Master orchestrator for all lore operations across the Nyx game.
+Acts as the single entry point for external systems to interact with lore.
 
 FULLY INTEGRATED: Includes education, geopolitical, local lore, politics, religion, 
 and world lore managers with all their specialized functionality.
+
+NEW: Scene-scoped bundle methods for optimized context assembly.
 """
 
 import logging
 import asyncio
-from typing import Dict, List, Any, Optional, Union, Tuple, Set, AsyncGenerator
-from datetime import datetime
+from typing import Dict, List, Any, Optional, Union, Tuple, Set, AsyncGenerator, Protocol
+from datetime import datetime, timedelta
 import json
 from enum import Enum
-from dataclasses import dataclass
-import uuid
+from dataclasses import dataclass, field
 import os
 import asyncpg
-import random
+import hashlib
+import time
 
 # Core imports
 from db.connection import get_db_connection_context
@@ -75,6 +75,21 @@ DB_DSN = os.getenv("DB_DSN")
 _ORCHESTRATOR_INSTANCES: Dict[Tuple[int, int], "LoreOrchestrator"] = {}
 
 
+class SceneScope(Protocol):
+    """Protocol for scene scope objects."""
+    location_id: Optional[int]
+    npc_ids: Set[int]
+    lore_tags: Set[str]
+    topics: Set[str]
+    conflict_ids: Set[int]
+    nation_ids: Set[int]
+    link_hints: Dict[str, Any]
+    
+    def to_key(self) -> str:
+        """Generate a cache key for this scope."""
+        ...
+
+
 @dataclass
 class OrchestratorConfig:
     """Configuration for the Lore Orchestrator"""
@@ -85,12 +100,39 @@ class OrchestratorConfig:
     enable_cache: bool = True
     cache_ttl: int = 3600
     cache_max_size: int = 1000
+    bundle_cache_max_size: int = 100  # Separate limit for scene bundles
     max_parallel_operations: int = 10
     auto_initialize: bool = True
     resource_limits: Dict[str, Any] = None
     redis_url: Optional[str] = None
     max_size_mb: float = 100
+    bundle_ttl: float = 60.0  # TTL for scene bundles
+    subfetch_timeout: float = 1.5  # Timeout for individual fetch operations
     
+
+@dataclass
+class SceneBundleData:
+    """Scene-specific lore bundle data"""
+    location: Dict[str, Any] = field(default_factory=dict)
+    world: Dict[str, Any] = field(default_factory=dict)
+    canonical_rules: List[Union[str, Dict[str, str]]] = field(default_factory=list)  # Can be strings or {text, source} dicts
+    nations: List[Dict[str, Any]] = field(default_factory=list)
+    religions: List[Dict[str, Any]] = field(default_factory=list)
+    conflicts: List[Dict[str, Any]] = field(default_factory=list)
+    myths: List[Dict[str, Any]] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return {
+            'location': self.location,
+            'world': self.world,
+            'canonical_rules': self.canonical_rules,
+            'nations': self.nations,
+            'religions': self.religions,
+            'conflicts': self.conflicts,
+            'myths': self.myths
+        }
+
 
 class LoreOrchestrator:
     """
@@ -108,6 +150,8 @@ class LoreOrchestrator:
     - Cache system for performance optimization
     - Registry system for manager coordination
     - Validation system for data integrity
+    
+    NEW: Scene bundle support for optimized context assembly
     """
     
     @classmethod
@@ -128,1937 +172,1732 @@ class LoreOrchestrator:
         Initialize the Lore Orchestrator.
         
         Args:
-            user_id: User ID for context
-            conversation_id: Conversation ID for context
-            config: Optional configuration settings
+            user_id: User ID
+            conversation_id: Conversation ID
+            config: Optional configuration
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.config = config or OrchestratorConfig()
         self.initialized = False
         
-        # Core components (initialized on demand)
+        # Core components (lazy loaded)
         self._lore_system = None
-        self._matriarchal_system = None
-        self._dynamic_generator = None
-        self._setting_analyzer = None
-        
-        # Core systems
         self._canon_module = None
         self._cache_system = None
         self._registry_system = None
         self._canon_validation = None
         self._canonical_context_class = None
         
-        # Specialized managers (lazy loaded)
+        # Manager instances (lazy loaded)
         self._education_manager = None
-        self._geopolitical_manager = None
+        self._religion_manager = None
         self._local_lore_manager = None
-        self._politics_manager = None  # NEW
-        self._religion_manager = None  # NEW
-        self._world_lore_manager = None  # NEW
+        self._geopolitical_manager = None
+        self._politics_manager = None
+        self._regional_culture_system = None
+        self._world_lore_manager = None
         
-        # Integration components
+        # Integration components (lazy loaded)
         self._npc_integration = None
         self._conflict_integration = None
         self._context_enhancer = None
-        
-        # Framework components
-        self._matriarchal_framework = None
-        self._matriarchal_power_framework = None
-        
-        # System components
-        self._lore_dynamics_system = None
-        self._regional_culture_system = None
-        
-        # Management components
-        self._config_manager = None
-        self._error_handler = None
-        self._resource_manager = None
-        self._validation_manager = None
-        
-        # Agent components
-        self._agent_context = None
-        self._directive_handler = None
-        self._quest_agent = None
-        self._narrative_agent = None
-        self._environment_agent = None
-        self._foundation_agent = None
-        self._faction_agent = None
-        
-        # Extended systems (lazy loaded)
-        self._national_conflict_system = None
-        self._religious_distribution_system = None
-        self._lore_update_system = None
-        
-        # Governance
-        self._governor = None
-        
-        # Component factory
-        self._component_factory = None
-        
-        # World coordination components (NEW)
+        self._lore_generator = None
         self._master_coordinator = None
-        self._unified_trace_system = None
         self._content_validator = None
         self._relationship_mapper = None
+        self._unified_trace_system = None
         
-        # Initialization tracking
-        self._init_lock = asyncio.Lock()
-        self._component_init_status: Dict[str, bool] = {}
+        # Data access components (lazy loaded)
+        self._npc_data_access = None
+        self._location_data_access = None
+        self._faction_data_access = None
+        self._knowledge_access = None
+        
+        # Metrics
+        self.metrics = {
+            "operations": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "bundle_hits": 0,
+            "bundle_misses": 0,
+            "db_roundtrips": 0,
+            "errors": 0,
+            "last_operation": None
+        }
+        
+        # Scene bundle cache
+        self._scene_bundle_cache = {}
+        self._bundle_last_changed = {}  # Wall clock time for external reference
+        self._bundle_cached_at = {}     # Monotonic time for TTL checks  
+        self._bundle_ttl = config.bundle_ttl if config else 60.0
+        self._cache_lock = asyncio.Lock()  # Prevent cache race conditions
+        
+        # Change tracking for delta updates
+        self._element_snapshots = {}  # Track last known state of elements
+        self._change_log = {}  # Track changes per scope
+        self._change_tracking_enabled = True
+        
+        logger.info(f"LoreOrchestrator created for user {user_id}, conversation {conversation_id}")
     
-    async def initialize(self) -> bool:
-        """
-        Initialize the orchestrator and all configured components.
+    # ===== INITIALIZATION =====
+    
+    async def initialize(self) -> None:
+        """Initialize all components."""
+        if self.initialized:
+            return
         
-        Returns:
-            True if initialization successful
-        """
-        async with self._init_lock:
-            if self.initialized:
-                return True
+        logger.info(f"Initializing LoreOrchestrator for user {self.user_id}")
+        
+        try:
+            # Initialize core systems
+            await self._get_lore_system()
+            await self._get_canon_module()
             
+            if self.config.enable_cache:
+                await self._get_cache_system()
+            
+            # Prepare the registry
+            await self._get_registry_system()
+            
+            # Initialize database if needed
+            await self._ensure_database_setup()
+            
+            self.initialized = True
+            logger.info("LoreOrchestrator initialization complete")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize LoreOrchestrator: {e}", exc_info=True)
+            raise
+    
+    async def _ensure_database_setup(self) -> None:
+        """Ensure database tables and indexes exist."""
+        try:
+            async with get_db_connection_context() as conn:
+                # Check if Nations table exists
+                exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables 
+                        WHERE table_name = 'nations'
+                    )
+                """)
+                
+                if not exists:
+                    logger.info("Creating lore database tables...")
+                    # This would trigger the creation of all necessary tables
+                    # through the canon module's initialization
+                    canon = await self._get_canon_module()
+                    if hasattr(canon, 'initialize_database'):
+                        await canon.initialize_database(conn)
+                
+                # Create change tracking table if it doesn't exist
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS LoreChangeLog (
+                        change_id SERIAL PRIMARY KEY,
+                        conversation_id INTEGER NOT NULL,
+                        element_type VARCHAR(50) NOT NULL,
+                        element_id INTEGER NOT NULL,
+                        operation VARCHAR(20) NOT NULL,
+                        changed_fields JSONB,
+                        old_value JSONB,
+                        new_value JSONB,
+                        scope_keys TEXT[],
+                        timestamp TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                
+                # Create indexes for efficient querying
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_changes_conversation_time 
+                    ON LoreChangeLog(conversation_id, timestamp DESC)
+                """)
+                
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_changes_scope 
+                    ON LoreChangeLog USING GIN(scope_keys)
+                """)
+                
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_changes_element 
+                    ON LoreChangeLog(element_type, element_id)
+                """)
+                    
+        except Exception as e:
+            logger.warning(f"Database setup check failed: {e}")
+            # Continue anyway - tables may be created on demand
+    
+    def _create_mock_context(self, **attributes) -> Any:
+        """
+        Create a mock context object for operations that require governance context.
+        
+        This utility method creates lightweight mock objects that satisfy
+        the requirements of @with_governance decorated functions without
+        requiring full governance context imports.
+        
+        Args:
+            **attributes: Key-value pairs to set as object attributes
+            
+        Returns:
+            Mock object with specified attributes
+        """
+        # Default context structure many governance decorators expect
+        if 'context' not in attributes:
+            attributes['context'] = {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            }
+        
+        # Create and return mock object with attributes
+        return type('MockContext', (object,), attributes)()
+    
+    # ===== SCENE BUNDLE METHODS (NEW) =====
+    
+    async def get_scene_bundle(self, scope: Any) -> Dict[str, Any]:
+        """
+        Get scene-scoped lore bundle with canonical data prioritized.
+        
+        Args:
+            scope: SceneScope containing location_id, npc_ids, topics, lore_tags, etc.
+            
+        Returns:
+            Dictionary with:
+                - section: 'lore' (for consistent merging)
+                - anchors: IDs of core entities in the bundle
+                - data: Scene-relevant lore data (SceneBundleData)
+                - canonical: Boolean indicating if contains canonical data
+                - last_changed_at: Timestamp of last change
+                - version: Version string for cache validation
+        """
+        start_time = time.perf_counter()
+        
+        # Generate cache key from scope
+        cache_key = self._generate_scene_cache_key(scope)
+        
+        # Check cache first with lock for race safety
+        async with self._cache_lock:
+            cached = self._get_cached_bundle(cache_key)
+            if cached and not self._is_bundle_stale(cached):
+                logger.debug(f"Scene bundle cache hit for key {cache_key[:8]}")
+                self.metrics['bundle_hits'] = self.metrics.get('bundle_hits', 0) + 1
+                return cached
+        
+        self.metrics['bundle_misses'] = self.metrics.get('bundle_misses', 0) + 1
+        
+        # Build fresh bundle in parallel
+        bundle_data = SceneBundleData()
+        canonical = False
+        
+        # Prepare parallel tasks with semaphore
+        sem = asyncio.Semaphore(self.config.max_parallel_operations)
+        
+        async def _fetch_with_semaphore(task_coro):
+            """Execute task with semaphore limit."""
+            async with sem:
+                return await task_coro
+        
+        # Use configurable timeout
+        timeout = self.config.subfetch_timeout if hasattr(self.config, 'subfetch_timeout') else 1.5
+        
+        async def _with_timeout(coro, label):
+            """Wrap task with timeout to prevent tail latency."""
             try:
-                logger.info(f"Initializing Lore Orchestrator for user {self.user_id}, conversation {self.conversation_id}")
+                return await asyncio.wait_for(coro, timeout)
+            except asyncio.TimeoutError:
+                logger.warning(f"{label} fetch timed out after {timeout}s")
+                return None
+        
+        # Build task list based on scope
+        tasks = []
+        
+        if hasattr(scope, 'location_id') and scope.location_id:
+            tasks.append(('location', self._fetch_location_lore_for_bundle(scope.location_id)))
+            tasks.append(('religions', self._fetch_religions_for_location(scope.location_id)))
+            tasks.append(('myths', self._fetch_myths_for_location(scope.location_id)))
+        
+        if hasattr(scope, 'lore_tags') and scope.lore_tags:
+            tasks.append(('world', self._fetch_world_lore_for_bundle(list(scope.lore_tags)[:10])))
+        
+        if hasattr(scope, 'nation_ids') and scope.nation_ids:
+            tasks.append(('nations', self._fetch_nations_for_bundle(list(scope.nation_ids)[:5])))
+        
+        if hasattr(scope, 'conflict_ids') and scope.conflict_ids:
+            tasks.append(('conflicts', self._fetch_conflicts_for_bundle(list(scope.conflict_ids)[:5])))
+        
+        # Execute all tasks in parallel with timeout protection
+        try:
+            # Create wrapped tasks with semaphore and timeout
+            wrapped_tasks = [
+                (label, asyncio.create_task(
+                    _with_timeout(_fetch_with_semaphore(coro), label)
+                ))
+                for label, coro in tasks
+            ]
+            
+            # Wait for all to complete
+            results = []
+            for label, task in wrapped_tasks:
+                try:
+                    result = await task
+                    results.append((label, result))
+                except Exception as e:
+                    logger.warning(f"Failed to fetch {label}: {e}")
+                    results.append((label, None))
+            
+            # Process results
+            for label, data in results:
+                if data is None:
+                    continue
+                    
+                if label == 'location':
+                    bundle_data.location = data
+                    if 'canonical_rules' in data:
+                        bundle_data.canonical_rules.extend([
+                            {"text": rule, "source": "location"}
+                            for rule in data['canonical_rules']
+                        ])
+                        canonical = True
+                        
+                elif label == 'world':
+                    bundle_data.world = data
+                    
+                elif label == 'nations':
+                    bundle_data.nations = data
+                    canonical = True  # Nations are canonical
+                    
+                elif label == 'religions':
+                    bundle_data.religions = data[:3]  # Top 3 religions
+                    
+                elif label == 'conflicts':
+                    bundle_data.conflicts = data
+                    
+                elif label == 'myths':
+                    bundle_data.myths = data[:3]  # Top 3 myths
+            
+            # Add canonical consistency rules (after main fetches)
+            if self.config.enable_validation:
+                try:
+                    canonical_rules = await _with_timeout(
+                        _fetch_with_semaphore(self._get_canonical_rules_for_scope(scope)),
+                        'canonical_rules'
+                    )
+                    if canonical_rules:
+                        bundle_data.canonical_rules.extend([
+                            {"text": rule, "source": "validation"}
+                            for rule in canonical_rules
+                        ])
+                        canonical = True
+                except Exception as e:
+                    logger.debug(f"Could not fetch canonical rules: {e}")
+            
+        except Exception as e:
+            logger.error(f"Error building scene bundle: {e}")
+            # Return minimal bundle on error
+        
+        # Calculate build time
+        build_ms = (time.perf_counter() - start_time) * 1000
+        self.metrics['build_ms'] = self.metrics.get('build_ms', [])
+        if isinstance(self.metrics['build_ms'], list):
+            self.metrics['build_ms'].append(build_ms)
+            # Keep only last 100 measurements
+            if len(self.metrics['build_ms']) > 100:
+                self.metrics['build_ms'] = self.metrics['build_ms'][-100:]
+        
+        # Build result with consistent structure and anchors
+        result = {
+            'section': 'lore',  # Consistent with other bundles
+            'anchors': {
+                'location_id': getattr(scope, 'location_id', None),
+                'nation_ids': sorted(list(getattr(scope, 'nation_ids', set())))[:5],
+                'conflict_ids': sorted(list(getattr(scope, 'conflict_ids', set())))[:5],
+            },
+            'data': bundle_data.to_dict(),
+            'canonical': canonical,  # Changed from 'canon'
+            'last_changed_at': time.time(),
+            'version': f"lore_{cache_key[:8]}_{int(time.time())}",
+            'build_ms': build_ms
+        }
+        
+        # Cache the bundle with lock for race safety
+        async with self._cache_lock:
+            self._cache_bundle(cache_key, result)
+        
+        return result
+    
+    async def get_scene_delta(self, scope: Any, since_ts: float) -> Dict[str, Any]:
+        """
+        Get only the changes to lore since a given timestamp.
+        
+        Args:
+            scope: SceneScope for filtering
+            since_ts: Timestamp to get changes since
+            
+        Returns:
+            Dictionary with:
+                - section: 'lore' (for consistent merging)
+                - anchors: IDs of core entities in the bundle
+                - data: Changed lore data
+                - canonical: Boolean indicating if contains canonical changes
+                - last_changed_at: Timestamp of last change
+                - version: Version string
+        """
+        cache_key = self._generate_scene_cache_key(scope)
+        
+        # First check if we have any tracked changes
+        changes = await self._get_changes_since(cache_key, since_ts)
+        
+        if not changes:
+            # Check if we have a cached timestamp for this scope
+            if cache_key in self._bundle_last_changed:
+                last_changed = self._bundle_last_changed[cache_key]
+                if last_changed <= since_ts:
+                    # No changes since requested time
+                    self.metrics['bundle_hits'] = self.metrics.get('bundle_hits', 0) + 1
+                    return {
+                        'section': 'lore',
+                        'anchors': {
+                            'location_id': getattr(scope, 'location_id', None),
+                            'nation_ids': sorted(list(getattr(scope, 'nation_ids', set())))[:5],
+                            'conflict_ids': sorted(list(getattr(scope, 'conflict_ids', set())))[:5],
+                        },
+                        'data': {},
+                        'canonical': False,
+                        'last_changed_at': last_changed,
+                        'version': f"lore_delta_{cache_key[:8]}_{int(last_changed)}"
+                    }
+            
+            # No change tracking available - return full bundle
+            self.metrics['bundle_misses'] = self.metrics.get('bundle_misses', 0) + 1
+            return await self.get_scene_bundle(scope)
+        
+        self.metrics['bundle_hits'] = self.metrics.get('bundle_hits', 0) + 1
+        
+        # Build delta bundle from changes
+        delta_data = SceneBundleData()
+        canonical_changed = False
+        
+        for change in changes:
+            element_type = change['element_type']
+            element_id = change['element_id']
+            operation = change['operation']
+            new_value = change.get('new_value', {})
+            changed_fields = change.get('changed_fields', [])
+            
+            # Process changes by element type
+            if element_type == 'location':
+                if operation != 'delete':
+                    delta_data.location.update(new_value)
+                    if 'canonical_rules' in changed_fields:
+                        canonical_changed = True
+                        rules = new_value.get('canonical_rules', [])
+                        delta_data.canonical_rules.extend([
+                            {"text": rule, "source": "location"}
+                            for rule in rules
+                        ])
+                        
+            elif element_type == 'nation':
+                # Find and update or add nation
+                nation_found = False
+                for nation in delta_data.nations:
+                    if nation.get('id') == element_id:
+                        nation.update(new_value)
+                        nation['_operation'] = operation
+                        nation_found = True
+                        break
                 
-                # Initialize governance if enabled
-                if self.config.enable_governance:
-                    await self._initialize_governance()
+                if not nation_found and operation != 'delete':
+                    nation_entry = {
+                        'id': element_id,
+                        '_operation': operation,
+                        **new_value
+                    }
+                    delta_data.nations.append(nation_entry)
+                canonical_changed = True  # Nations are canonical
                 
-                # Initialize cache if enabled
-                if self.config.enable_cache:
-                    await self._initialize_cache()
+            elif element_type == 'religion':
+                religion_found = False
+                for religion in delta_data.religions:
+                    if religion.get('id') == element_id:
+                        religion.update(new_value)
+                        religion['_operation'] = operation
+                        religion_found = True
+                        break
                 
-                # Initialize core configuration
-                await self._initialize_config()
+                if not religion_found and operation != 'delete':
+                    religion_entry = {
+                        'id': element_id,
+                        '_operation': operation,
+                        **new_value
+                    }
+                    delta_data.religions.append(religion_entry)
+                    
+            elif element_type == 'myth':
+                myth_found = False
+                for myth in delta_data.myths:
+                    if myth.get('id') == element_id:
+                        myth.update(new_value)
+                        myth['_operation'] = operation
+                        myth_found = True
+                        break
                 
-                # Initialize error handling
-                await self._initialize_error_handling()
+                if not myth_found and operation != 'delete':
+                    myth_entry = {
+                        'id': element_id,
+                        '_operation': operation,
+                        **new_value
+                    }
+                    delta_data.myths.append(myth_entry)
+                    
+            elif element_type == 'conflict':
+                conflict_found = False
+                for conflict in delta_data.conflicts:
+                    if conflict.get('id') == element_id:
+                        conflict.update(new_value)
+                        conflict['_operation'] = operation
+                        conflict_found = True
+                        break
                 
-                # Initialize resource management
-                await self._initialize_resource_management()
-                
-                # Initialize validation if enabled
-                if self.config.enable_validation:
-                    await self._initialize_validation()
-                
-                # Initialize metrics if enabled
-                if self.config.enable_metrics:
-                    await self._initialize_metrics()
-                
-                # Mark as initialized
-                self.initialized = True
-                logger.info("Lore Orchestrator initialization complete")
-                return True
-                
-            except Exception as e:
-                logger.error(f"Failed to initialize Lore Orchestrator: {e}")
-                return False
-    
-    async def _initialize_governance(self):
-        """Initialize governance system."""
-        self._governor = await get_central_governance(self.user_id, self.conversation_id)
-        self._component_init_status['governance'] = True
-        logger.info("Governance system initialized")
-    
-    async def _initialize_cache(self):
-        """Initialize cache system."""
-        cache = await self._get_cache_system()
-        self._component_init_status['cache'] = True
-        logger.info("Cache system initialized")
-    
-    async def _initialize_config(self):
-        """Initialize configuration management."""
-        from lore.config import ConfigManager
-        self._config_manager = ConfigManager()
-        await self._config_manager.load_config()
-        self._component_init_status['config'] = True
-        logger.info("Configuration management initialized")
-    
-    async def _initialize_error_handling(self):
-        """Initialize error handling."""
-        from lore.error_manager import ErrorHandler
-        self._error_handler = ErrorHandler(self.user_id, self.conversation_id, self._config_manager.config)
-        await self._error_handler.start_monitoring()
-        self._component_init_status['error_handling'] = True
-        logger.info("Error handling initialized")
-    
-    async def _initialize_resource_management(self):
-        """Initialize resource management."""
-        from lore.resource_manager import ResourceManager
-        self._resource_manager = ResourceManager(
-            self.user_id, 
-            self.conversation_id,
-            config=await self._config_manager.get_lore_config() if self._config_manager else None
+                if not conflict_found and operation != 'delete':
+                    conflict_entry = {
+                        'id': element_id,
+                        '_operation': operation,
+                        **new_value
+                    }
+                    delta_data.conflicts.append(conflict_entry)
+            
+            elif element_type == 'world_lore':
+                # Update world lore section
+                delta_data.world.update(new_value)
+                if 'canonical' in new_value:
+                    canonical_changed = True
+        
+        # Get latest timestamp from changes
+        latest_timestamp = max(
+            change.get('timestamp', since_ts) for change in changes
         )
-        await self._resource_manager.start()
-        self._component_init_status['resource_management'] = True
-        logger.info("Resource management initialized")
-    
-    async def _initialize_validation(self):
-        """Initialize validation system."""
-        from lore.validation import validation_manager
-        self._validation_manager = validation_manager
-        await self._validation_manager.initialize()
-        self._component_init_status['validation'] = True
-        logger.info("Validation system initialized")
-    
-    async def _initialize_metrics(self):
-        """Initialize metrics collection."""
-        from lore.metrics import metrics_manager
-        self._component_init_status['metrics'] = True
-        logger.info("Metrics collection initialized")
-    
-    # ===== EDUCATIONAL SYSTEM OPERATIONS =====
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="educational_operation",
-        action_description="Performing educational system operation",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def add_educational_system(
-        self, ctx,
-        name: str,
-        system_type: str,
-        description: str,
-        target_demographics: List[str],
-        controlled_by: str,
-        core_teachings: List[str],
-        teaching_methods: List[str],
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Add an educational system.
-        
-        Args:
-            name: Name of the educational system
-            system_type: Type of system
-            description: Description
-            target_demographics: Target demographics
-            controlled_by: Controlling faction
-            core_teachings: Core teachings
-            teaching_methods: Teaching methods
-            **kwargs: Additional parameters
-            
-        Returns:
-            Dictionary with system ID and status
-        """
-        manager = await self._get_education_manager()
-        from lore.managers.education import add_educational_system as add_edu_system
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await add_edu_system(
-            run_ctx, name, system_type, description, target_demographics,
-            controlled_by, core_teachings, teaching_methods, **kwargs
-        )
-    
-    async def add_knowledge_tradition(
-        self, ctx,
-        name: str,
-        tradition_type: str,
-        description: str,
-        knowledge_domain: str,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Add a knowledge tradition.
-        
-        Args:
-            name: Name of the tradition
-            tradition_type: Type of tradition
-            description: Description
-            knowledge_domain: Domain of knowledge
-            **kwargs: Additional parameters
-            
-        Returns:
-            Dictionary with tradition ID and status
-        """
-        manager = await self._get_education_manager()
-        from lore.managers.education import add_knowledge_tradition as add_tradition
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await add_tradition(
-            run_ctx, name, tradition_type, description, knowledge_domain, **kwargs
-        )
-    
-    async def add_teaching_content(
-        self, ctx,
-        system_id: int,
-        title: str,
-        content_type: str,
-        subject_area: str,
-        description: str,
-        target_age_group: str,
-        key_points: List[str],
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Add teaching content to an educational system.
-        
-        Args:
-            system_id: ID of the educational system
-            title: Content title
-            content_type: Type of content
-            subject_area: Subject area
-            description: Description
-            target_age_group: Target age group
-            key_points: Key points
-            **kwargs: Additional parameters
-            
-        Returns:
-            Dictionary with content ID and status
-        """
-        manager = await self._get_education_manager()
-        from lore.managers.education import add_teaching_content as add_content
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await add_content(
-            run_ctx, system_id, title, content_type, subject_area,
-            description, target_age_group, key_points, **kwargs
-        )
-    
-    async def generate_educational_systems(self, ctx=None) -> List[Dict[str, Any]]:
-        """
-        Generate educational systems.
-        
-        Returns:
-            List of generated educational systems
-        """
-        manager = await self._get_education_manager()
-        return await manager.generate_educational_systems(ctx)
-    
-    async def generate_knowledge_traditions(self, ctx=None) -> List[Dict[str, Any]]:
-        """
-        Generate knowledge traditions.
-        
-        Returns:
-            List of generated knowledge traditions
-        """
-        manager = await self._get_education_manager()
-        return await manager.generate_knowledge_traditions(ctx)
-    
-    async def stream_educational_development(
-        self, ctx,
-        system_name: str,
-        system_type: str,
-        matriarchy_level: int = 8
-    ) -> AsyncGenerator[StreamingPhaseUpdate, None]:
-        """
-        Stream the development of a complete educational system.
-        
-        Args:
-            system_name: Name of the system
-            system_type: Type of system
-            matriarchy_level: Level of matriarchy (1-10)
-            
-        Yields:
-            StreamingPhaseUpdate objects for each phase
-        """
-        manager = await self._get_education_manager()
-        from lore.managers.education import stream_educational_development as stream_edu
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        async for update in stream_edu(run_ctx, system_name, system_type, matriarchy_level):
-            yield update
-    
-    async def exchange_knowledge_between_systems(
-        self, ctx,
-        source_system_id: int,
-        target_system_id: int,
-        knowledge_domain: str
-    ) -> Dict[str, Any]:
-        """
-        Facilitate knowledge exchange between two educational systems.
-        
-        Args:
-            source_system_id: Source system ID
-            target_system_id: Target system ID
-            knowledge_domain: Domain of knowledge to exchange
-            
-        Returns:
-            Dictionary with exchange results
-        """
-        manager = await self._get_education_manager()
-        from lore.managers.education import exchange_knowledge_between_systems as exchange_knowledge
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await exchange_knowledge(run_ctx, source_system_id, target_system_id, knowledge_domain)
-    
-    async def search_educational_systems(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Search educational systems by semantic similarity.
-        
-        Args:
-            query: Search query
-            limit: Maximum results
-            
-        Returns:
-            List of matching systems
-        """
-        manager = await self._get_education_manager()
-        from lore.managers.education import search_educational_systems as search_edu
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await search_edu(run_ctx, query, limit)
-    
-    async def get_teaching_contents(
-        self,
-        system_id: int,
-        subject_area: Optional[str] = None,
-        include_restricted: bool = False
-    ) -> List[Dict[str, Any]]:
-        """
-        Get teaching contents for an educational system.
-        
-        Args:
-            system_id: System ID
-            subject_area: Optional subject area filter
-            include_restricted: Whether to include restricted content
-            
-        Returns:
-            List of teaching contents
-        """
-        manager = await self._get_education_manager()
-        from lore.managers.education import get_teaching_contents
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await get_teaching_contents(run_ctx, system_id, subject_area, include_restricted)
-    
-    # ===== GEOPOLITICAL OPERATIONS =====
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="geopolitical_operation",
-        action_description="Performing geopolitical operation",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def add_geographic_region(
-        self, ctx,
-        name: str,
-        region_type: str,
-        description: str,
-        **kwargs
-    ) -> int:
-        """
-        Add a geographic region.
-        
-        Args:
-            name: Region name
-            region_type: Type of region
-            description: Description
-            **kwargs: Additional parameters (climate, resources, governing_faction, etc.)
-            
-        Returns:
-            Region ID
-        """
-        manager = await self._get_geopolitical_manager()
-        from lore.managers.geopolitical import GeopoliticalSystemManager
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        # Call the static function tool which properly handles all the parameters
-        return await GeopoliticalSystemManager.add_geographic_region(
-            run_ctx, name, region_type, description, **kwargs
-        )
-    
-    async def generate_world_nations(self, count: int = 5) -> List[Dict[str, Any]]:
-        """
-        Generate world nations.
-        
-        Args:
-            count: Number of nations to generate
-            
-        Returns:
-            List of generated nations with all their properties
-        """
-        manager = await self._get_geopolitical_manager()
-        from lore.managers.geopolitical import GeopoliticalSystemManager
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        # Call the static function tool
-        return await GeopoliticalSystemManager.generate_world_nations(run_ctx, count)
-    
-    async def simulate_conflict(
-        self,
-        entity_ids: List[int],
-        conflict_type: str,
-        alliances: Optional[Dict[str, List[int]]] = None,
-        duration_months: int = 12
-    ) -> Dict[str, Any]:
-        """
-        Simulate conflict between entities (supports multi-party conflicts).
-        
-        Args:
-            entity_ids: List of entity IDs involved (minimum 2)
-            conflict_type: Type of conflict (war, trade_war, diplomatic, etc.)
-            alliances: Optional alliance structure {alliance_name: [member_ids]}
-            duration_months: Duration of conflict simulation in months
-            
-        Returns:
-            Comprehensive conflict simulation results including outcomes
-        """
-        manager = await self._get_geopolitical_manager()
-        from lore.managers.geopolitical import GeopoliticalSystemManager
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        # Call the static function tool
-        return await GeopoliticalSystemManager.simulate_conflict(
-            run_ctx, entity_ids, conflict_type, alliances, duration_months
-        )
-    
-    async def resolve_border_dispute(
-        self,
-        dispute_id: int,
-        resolution_approach: str
-    ) -> Dict[str, Any]:
-        """
-        Resolve a border dispute.
-        
-        Args:
-            dispute_id: ID of the dispute
-            resolution_approach: Approach to use (diplomatic, military, arbitration, etc.)
-            
-        Returns:
-            Resolution results with stability rating
-        """
-        manager = await self._get_geopolitical_manager()
-        from lore.managers.geopolitical import GeopoliticalSystemManager
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        # Call the static function tool
-        return await GeopoliticalSystemManager.resolve_border_dispute(
-            run_ctx, dispute_id, resolution_approach
-        )
-    
-    async def predict_geopolitical_evolution(
-        self,
-        entity_id: int,
-        years_forward: int = 5,
-        include_events: bool = True
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Predict geopolitical evolution of an entity.
-        
-        Args:
-            entity_id: Entity ID
-            years_forward: Years to predict forward
-            include_events: Whether to include events
-            
-        Yields:
-            Evolution updates as they are generated
-        """
-        manager = await self._get_geopolitical_manager()
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        # This is a generator function, so we need to properly yield from it
-        async for update in manager.predict_geopolitical_evolution(
-            run_ctx, entity_id, years_forward, include_events
-        ):
-            yield update
-    
-    async def simulate_trade(
-        self,
-        nation1: str,
-        nation2: str,
-        trade_goods: List[str],
-        trade_route: str
-    ) -> Dict[str, Any]:
-        """
-        Simulate economic trade between nations.
-        
-        Args:
-            nation1: First nation name
-            nation2: Second nation name
-            trade_goods: List of goods being traded
-            trade_route: Trade route description
-            
-        Returns:
-            Trade simulation results with economic impacts
-        """
-        manager = await self._get_geopolitical_manager()
-        from lore.managers.geopolitical import GeopoliticalSystemManager
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        # Call the static function tool
-        return await GeopoliticalSystemManager.simulate_trade(
-            run_ctx, nation1, nation2, trade_goods, trade_route
-        )
-    
-    async def simulate_geography_impact(
-        self,
-        region_name: str,
-        terrain_features: List[str],
-        climate_type: str
-    ) -> Dict[str, Any]:
-        """
-        Simulate geography impact on political development.
-        
-        Args:
-            region_name: Name of region
-            terrain_features: List of terrain features (mountains, rivers, etc.)
-            climate_type: Climate type (temperate, arid, tropical, etc.)
-            
-        Returns:
-            Impact simulation results with political stability effects
-        """
-        manager = await self._get_geopolitical_manager()
-        from lore.managers.geopolitical import GeopoliticalSystemManager
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        # Call the static function tool
-        return await GeopoliticalSystemManager.simulate_geography_impact(
-            run_ctx, region_name, terrain_features, climate_type
-        )
-    
-    async def simulate_espionage(
-        self,
-        agent_name: str,
-        target_nation: str,
-        operation_type: str,
-        secrecy_level: int
-    ) -> Dict[str, Any]:
-        """
-        Simulate covert operations between nations.
-        
-        Args:
-            agent_name: Name of the agent conducting the operation
-            target_nation: Target nation name
-            operation_type: Type of operation (intelligence_gathering, sabotage, etc.)
-            secrecy_level: Secrecy level (1-10, higher = more secret)
-            
-        Returns:
-            Espionage simulation results with mission outcome
-        """
-        manager = await self._get_geopolitical_manager()
-        from lore.managers.geopolitical import GeopoliticalSystemManager
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        # Call the static function tool
-        return await GeopoliticalSystemManager.simulate_espionage(
-            run_ctx, agent_name, target_nation, operation_type, secrecy_level
-        )
-    
-    # ===== LOCAL LORE OPERATIONS =====
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="local_lore_operation",
-        action_description="Performing local lore operation",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def add_urban_myth(self, ctx, input: MythCreationInput) -> int:
-        """
-        Add an urban myth.
-        
-        Args:
-            input: MythCreationInput with myth details
-            
-        Returns:
-            Myth ID
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import add_urban_myth
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await add_urban_myth(run_ctx, input)
-    
-    async def add_local_history(self, ctx, input: HistoryCreationInput) -> int:
-        """
-        Add a local historical event.
-        
-        Args:
-            input: HistoryCreationInput with event details
-            
-        Returns:
-            History ID
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import add_local_history
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await add_local_history(run_ctx, input)
-    
-    async def add_landmark(self, ctx, input: LandmarkCreationInput) -> int:
-        """
-        Add a landmark.
-        
-        Args:
-            input: LandmarkCreationInput with landmark details
-            
-        Returns:
-            Landmark ID
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import add_landmark
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
         
-        return await add_landmark(run_ctx, input)
-    
-    async def evolve_myth(
-        self, ctx,
-        myth_id: int,
-        evolution_type: EvolutionType,
-        causal_factors: Optional[List[str]] = None
-    ) -> NarrativeEvolution:
-        """
-        Evolve an urban myth.
-        
-        Args:
-            myth_id: ID of the myth
-            evolution_type: Type of evolution
-            causal_factors: Causal factors
-            
-        Returns:
-            NarrativeEvolution results
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import evolve_myth
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await evolve_myth(run_ctx, myth_id, evolution_type, causal_factors)
-    
-    async def connect_myth_history(self, ctx, myth_id: int, history_id: int) -> NarrativeConnection:
-        """
-        Connect a myth to a historical event.
-        
-        Args:
-            myth_id: Myth ID
-            history_id: History ID
-            
-        Returns:
-            NarrativeConnection
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import connect_myth_history
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await connect_myth_history(run_ctx, myth_id, history_id)
-    
-    async def connect_history_landmark(self, ctx, history_id: int, landmark_id: int) -> NarrativeConnection:
-        """
-        Connect a historical event to a landmark.
-        
-        Args:
-            history_id: History ID
-            landmark_id: Landmark ID
-            
-        Returns:
-            NarrativeConnection
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import connect_history_landmark
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await connect_history_landmark(run_ctx, history_id, landmark_id)
-    
-    async def ensure_narrative_consistency(
-        self, ctx,
-        location_id: int,
-        auto_fix: bool = True
-    ) -> ConsistencyCheckResult:
-        """
-        Ensure narrative consistency for a location.
-        
-        Args:
-            location_id: Location ID
-            auto_fix: Whether to auto-fix issues
-            
-        Returns:
-            ConsistencyCheckResult
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import ensure_narrative_consistency
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await ensure_narrative_consistency(run_ctx, location_id, auto_fix)
-    
-    async def get_location_lore(self, ctx, location_id: int) -> LocationLoreResult:
-        """
-        Get all lore for a location.
-        
-        Args:
-            location_id: Location ID
-            
-        Returns:
-            LocationLoreResult
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import get_location_lore
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await get_location_lore(run_ctx, location_id)
-    
-    async def generate_location_lore(self, ctx, location_data: LocationDataInput) -> Dict[str, Any]:
-        """
-        Generate comprehensive lore for a location.
-        
-        Args:
-            location_data: LocationDataInput
-            
-        Returns:
-            Generation statistics
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import generate_location_lore
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await generate_location_lore(run_ctx, location_data)
-    
-    async def evolve_location_lore(
-        self, ctx,
-        location_id: int,
-        event_description: str
-    ) -> LoreEvolutionResult:
-        """
-        Evolve location lore based on an event.
-        
-        Args:
-            location_id: Location ID
-            event_description: Event description
-            
-        Returns:
-            LoreEvolutionResult
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import evolve_location_lore
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await evolve_location_lore(run_ctx, location_id, event_description)
-    
-    async def generate_legend_variants(
-        self, ctx,
-        myth_id: int,
-        variant_count: int = 3
-    ) -> Dict[str, Any]:
-        """
-        Generate contradictory legend variants.
-        
-        Args:
-            myth_id: Myth ID
-            variant_count: Number of variants
-            
-        Returns:
-            Generated variants
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import generate_legend_variants
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await generate_legend_variants(run_ctx, myth_id, variant_count)
-    
-    async def develop_tourist_attraction(self, ctx, myth_id: int) -> TouristDevelopment:
-        """
-        Develop a tourist attraction from a myth.
-        
-        Args:
-            myth_id: Myth ID
-            
-        Returns:
-            TouristDevelopment plan
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import develop_tourist_attraction
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await develop_tourist_attraction(run_ctx, myth_id)
-    
-    async def simulate_tradition_dynamics(self, ctx, myth_id: int) -> TraditionDynamics:
-        """
-        Simulate oral vs written tradition dynamics.
-        
-        Args:
-            myth_id: Myth ID
-            
-        Returns:
-            TraditionDynamics
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import simulate_tradition_dynamics
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await simulate_tradition_dynamics(run_ctx, myth_id)
-    
-    async def simulate_myth_transmission(
-        self, ctx,
-        myth_id: int,
-        target_regions: List[str],
-        transmission_steps: int = 3
-    ) -> MythTransmissionResult:
-        """
-        Simulate myth transmission across regions.
-        
-        Args:
-            myth_id: Myth ID
-            target_regions: Target regions
-            transmission_steps: Number of steps
-            
-        Returns:
-            MythTransmissionResult
-        """
-        manager = await self._get_local_lore_manager()
-        from lore.managers.local_lore import simulate_myth_transmission
-        from agents import RunContextWrapper
-        
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "manager": manager
-        })
-        
-        return await simulate_myth_transmission(run_ctx, myth_id, target_regions, transmission_steps)
-    
-    # ===== POLITICS OPERATIONS (NEW SECTION) =====
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="political_operation",
-        action_description="Performing political operation",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def add_nation(
-        self, ctx,
-        name: str,
-        government_type: str,
-        description: str,
-        relative_power: int,
-        matriarchy_level: int,
-        **kwargs
-    ) -> int:
-        """Add a nation to the political landscape."""
-        manager = await self._get_politics_manager()
-        return await manager.add_nation(
-            ctx, name, government_type, description, relative_power,
-            matriarchy_level, **kwargs
-        )
-    
-    async def add_international_relation(
-        self, ctx,
-        nation1_id: int,
-        nation2_id: int,
-        relationship_type: str,
-        relationship_quality: int,
-        description: str,
-        **kwargs
-    ) -> int:
-        """Add or update international relations between nations."""
-        manager = await self._get_politics_manager()
-        return await manager.add_international_relation(
-            ctx, nation1_id, nation2_id, relationship_type, 
-            relationship_quality, description, **kwargs
-        )
-    
-    async def get_all_nations(self, ctx) -> List[Dict[str, Any]]:
-        """Get all nations in the world."""
-        manager = await self._get_politics_manager()
-        return await manager.get_all_nations(ctx)
-    
-    async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
-        """Generate initial conflicts between nations."""
-        manager = await self._get_politics_manager()
-        return await manager.generate_initial_conflicts(ctx, count)
-    
-    async def stream_crisis_events(self, ctx, conflict_id: int) -> AsyncGenerator[Dict[str, Any], None]:
-        """Stream real-time updates about an evolving crisis."""
-        manager = await self._get_politics_manager()
-        async for event in manager.stream_crisis_events(ctx, conflict_id):
-            yield event
-    
-    async def simulate_diplomatic_negotiation(
-        self, ctx, 
-        nation1_id: int, 
-        nation2_id: int, 
-        issue: str
-    ) -> Dict[str, Any]:
-        """Simulate diplomatic negotiations between two nations."""
-        manager = await self._get_politics_manager()
-        return await manager.simulate_diplomatic_negotiation(ctx, nation1_id, nation2_id, issue)
-    
-    async def simulate_media_coverage(self, ctx, event_id: int) -> Dict[str, Any]:
-        """Simulate media coverage of a political event from different perspectives."""
-        manager = await self._get_politics_manager()
-        return await manager.simulate_media_coverage(ctx, event_id)
-    
-    async def generate_domestic_issues(self, ctx, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
-        """Generate domestic issues for a specific nation."""
-        manager = await self._get_politics_manager()
-        return await manager.generate_domestic_issues(ctx, nation_id, count)
-    
-    async def get_active_conflicts(self, ctx) -> List[Dict[str, Any]]:
-        """Get all active conflicts."""
-        manager = await self._get_politics_manager()
-        return await manager.get_active_conflicts(ctx)
-    
-    async def get_nation_politics(self, ctx, nation_id: int) -> Dict[str, Any]:
-        """Get comprehensive political information about a nation."""
-        manager = await self._get_politics_manager()
-        return await manager.get_nation_politics(ctx, nation_id)
-    
-    async def evolve_all_conflicts(self, ctx, days_passed: int = 30) -> Dict[str, Any]:
-        """Evolve all active conflicts over time."""
-        manager = await self._get_politics_manager()
-        return await manager.evolve_all_conflicts(ctx, days_passed)
-    
-    async def simulate_political_reforms(self, ctx, nation_id: int) -> Dict[str, Any]:
-        """Model how a nation's political system might evolve under pressure."""
-        manager = await self._get_politics_manager()
-        return await manager.simulate_political_reforms(ctx, nation_id)
-    
-    async def track_dynasty_lineage(
-        self, ctx, 
-        dynasty_id: int, 
-        generations_to_advance: int = 1
-    ) -> Dict[str, Any]:
-        """Advance a dynasty by generations."""
-        manager = await self._get_politics_manager()
-        return await manager.track_dynasty_lineage(ctx, dynasty_id, generations_to_advance)
-    
-    async def initialize_faction_proxies(self, ctx) -> Dict[str, Any]:
-        """Initialize agent proxies for all factions in the world."""
-        manager = await self._get_politics_manager()
-        return await manager.initialize_faction_proxies(ctx)
-    
-    async def execute_coup(self, ctx, nation_id: int, new_leader_id: int, reason: str) -> Dict[str, Any]:
-        """Execute a coup in a nation."""
-        manager = await self._get_politics_manager()
-        return await manager.execute_coup(ctx, nation_id, new_leader_id, reason)
-    
-    # ===== RELIGION OPERATIONS (NEW SECTION) =====
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="religious_operation",
-        action_description="Performing religious operation",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def add_deity(self, ctx, params: DeityParams) -> int:
-        """Add a deity to the pantheon."""
-        manager = await self._get_religion_manager()
-        return await manager.add_deity(ctx, params)
-    
-    async def add_pantheon(self, ctx, params: PantheonParams) -> int:
-        """Add a pantheon to the world."""
-        manager = await self._get_religion_manager()
-        return await manager.add_pantheon(ctx, params)
-    
-    async def add_religious_practice(self, ctx, params: ReligiousPracticeParams) -> int:
-        """Add a religious practice."""
-        manager = await self._get_religion_manager()
-        return await manager.add_religious_practice(ctx, params)
-    
-    async def add_holy_site(self, ctx, params: HolySiteParams) -> int:
-        """Add a holy site."""
-        manager = await self._get_religion_manager()
-        return await manager.add_holy_site(ctx, params)
-    
-    async def add_religious_text(self, ctx, params: ReligiousTextParams) -> int:
-        """Add a religious text."""
-        manager = await self._get_religion_manager()
-        return await manager.add_religious_text(ctx, params)
-    
-    async def add_religious_order(self, ctx, params: ReligiousOrderParams) -> int:
-        """Add a religious order."""
-        manager = await self._get_religion_manager()
-        return await manager.add_religious_order(ctx, params)
-    
-    async def add_religious_conflict(self, ctx, params: ReligiousConflictParams) -> int:
-        """Add a religious conflict."""
-        manager = await self._get_religion_manager()
-        return await manager.add_religious_conflict(ctx, params)
-    
-    async def generate_pantheon(self, ctx) -> Dict[str, Any]:
-        """Generate a complete pantheon."""
-        manager = await self._get_religion_manager()
-        return await manager.generate_pantheon(ctx)
-    
-    async def generate_religious_practices(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
-        """Generate religious practices for a pantheon."""
-        manager = await self._get_religion_manager()
-        return await manager.generate_religious_practices(ctx, pantheon_id)
-    
-    async def generate_complete_faith_system(self, ctx) -> Dict[str, Any]:
-        """Generate a complete faith system with all components."""
-        manager = await self._get_religion_manager()
-        return await manager.generate_complete_faith_system(ctx)
-    
-    async def distribute_religions(self, ctx) -> List[Dict[str, Any]]:
-        """Distribute religions across nations."""
-        manager = await self._get_religion_manager()
-        return await manager.distribute_religions(ctx)
-    
-    async def generate_ritual(
-        self, ctx,
-        pantheon_id: int,
-        deity_id: Optional[int] = None,
-        purpose: str = "blessing",
-        formality_level: int = 5
-    ) -> Dict[str, Any]:
-        """Generate a detailed religious ritual."""
-        manager = await self._get_religion_manager()
-        return await manager.generate_ritual(ctx, pantheon_id, deity_id, purpose, formality_level)
-    
-    async def simulate_theological_dispute(
-        self, ctx,
-        pantheon_id: int,
-        dispute_topic: str
-    ) -> Dict[str, Any]:
-        """Simulate a theological dispute between religious factions."""
-        manager = await self._get_religion_manager()
-        return await manager.simulate_theological_dispute(ctx, pantheon_id, dispute_topic)
-    
-    async def evolve_religion_from_culture(
-        self, ctx,
-        pantheon_id: int,
-        nation_id: int,
-        years: int = 50
-    ) -> Dict[str, Any]:
-        """Evolve a religion based on cultural interaction over time."""
-        manager = await self._get_religion_manager()
-        return await manager.evolve_religion_from_culture(ctx, pantheon_id, nation_id, years)
-    
-    async def generate_sectarian_development(
-        self, ctx,
-        pantheon_id: int,
-        trigger_event: str
-    ) -> Dict[str, Any]:
-        """Generate a sectarian split within a religion."""
-        manager = await self._get_religion_manager()
-        return await manager.generate_sectarian_development(ctx, pantheon_id, trigger_event)
-    
-    async def get_nation_religion(self, ctx, nation_id: int) -> Dict[str, Any]:
-        """Get comprehensive religious information about a nation."""
-        manager = await self._get_religion_manager()
-        return await manager.get_nation_religion(ctx, nation_id)
-    
-    # ===== WORLD LORE OPERATIONS (NEW SECTION) =====
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="world_lore_operation",
-        action_description="Performing world lore operation",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def get_world_data(self, world_id: str) -> Optional[Dict[str, Any]]:
-        """Get world data from cache or fetch if not available."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_world_data(world_id)
-    
-    async def set_world_data(
-        self,
-        world_id: str,
-        data: Dict[str, Any],
-        tags: Optional[Set[str]] = None
+        # Build result with consistent structure
+        result = {
+            'section': 'lore',  # Consistent with other bundles
+            'anchors': {
+                'location_id': getattr(scope, 'location_id', None),
+                'nation_ids': sorted(list(getattr(scope, 'nation_ids', set())))[:5],
+                'conflict_ids': sorted(list(getattr(scope, 'conflict_ids', set())))[:5],
+            },
+            'data': delta_data.to_dict(),
+            'canonical': canonical_changed,  # Changed from 'canon'
+            'last_changed_at': latest_timestamp,
+            'version': f"lore_delta_{cache_key[:8]}_{int(latest_timestamp)}",
+            'is_delta': True,
+            'change_summary': {
+                'total_changes': len(changes),
+                'creates': len([c for c in changes if c['operation'] == 'create']),
+                'updates': len([c for c in changes if c['operation'] == 'update']),
+                'deletes': len([c for c in changes if c['operation'] == 'delete']),
+                'element_types': list(set(c['element_type'] for c in changes))
+            }
+        }
+        
+        # Update our tracking
+        self._bundle_last_changed[cache_key] = latest_timestamp
+        
+        return result
+    
+    # ===== CHANGE TRACKING METHODS =====
+    
+    async def _track_element_change(
+        self, 
+        element_type: str, 
+        element_id: int, 
+        new_data: Dict[str, Any],
+        scope_keys: Optional[List[str]] = None
     ) -> bool:
-        """Set world data in cache."""
-        manager = await self._get_world_lore_manager()
-        return await manager.set_world_data(world_id, data, tags)
-    
-    async def invalidate_world_data(
-        self,
-        world_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate world data cache."""
-        manager = await self._get_world_lore_manager()
-        await manager.invalidate_world_data(world_id, recursive)
-    
-    async def get_world_history(self, world_id: str) -> Optional[List[Dict[str, Any]]]:
-        """Get world history from cache or fetch if not available."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_world_history(world_id)
-    
-    async def set_world_history(
-        self,
-        world_id: str,
-        history: List[Dict[str, Any]],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set world history in cache."""
-        manager = await self._get_world_lore_manager()
-        return await manager.set_world_history(world_id, history, tags)
-    
-    async def get_world_events(self, world_id: str) -> Optional[List[Dict[str, Any]]]:
-        """Get world events from cache or fetch if not available."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_world_events(world_id)
-    
-    async def set_world_events(
-        self,
-        world_id: str,
-        events: List[Dict[str, Any]],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set world events in cache."""
-        manager = await self._get_world_lore_manager()
-        return await manager.set_world_events(world_id, events, tags)
-    
-    async def get_world_relationships(self, world_id: str) -> Optional[Dict[str, Any]]:
-        """Get world relationships from cache or fetch if not available."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_world_relationships(world_id)
-    
-    async def set_world_relationships(
-        self,
-        world_id: str,
-        relationships: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set world relationships in cache."""
-        manager = await self._get_world_lore_manager()
-        return await manager.set_world_relationships(world_id, relationships, tags)
-    
-    async def get_world_metadata(self, world_id: str) -> Optional[Dict[str, Any]]:
-        """Get world metadata from cache or fetch if not available."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_world_metadata(world_id)
-    
-    async def set_world_metadata(
-        self,
-        world_id: str,
-        metadata: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set world metadata in cache."""
-        manager = await self._get_world_lore_manager()
-        return await manager.set_world_metadata(world_id, metadata, tags)
-    
-    async def create_world_element(
-        self,
-        element_type: str,
-        element_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Create any world element using the canon system."""
-        manager = await self._get_world_lore_manager()
-        return await manager.create_world_element(element_type, element_data)
-    
-    async def get_world_lore(self, world_id: int) -> Dict[str, Any]:
-        """Retrieve comprehensive world lore including cultures, religions, and history."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_world_lore(world_id)
-    
-    async def update_world_lore(self, world_id: int, updates: Dict[str, Any]) -> bool:
-        """Update world lore with new information."""
-        manager = await self._get_world_lore_manager()
-        return await manager.update_world_lore(world_id, updates)
-    
-    async def get_cultural_context(self, culture_id: int) -> Dict[str, Any]:
-        """Get detailed cultural context including traditions, customs, and beliefs."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_cultural_context(culture_id)
-    
-    async def get_religious_context(self, religion_id: int) -> Dict[str, Any]:
-        """Get detailed religious context including beliefs, practices, and hierarchy."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_religious_context(religion_id)
-    
-    async def get_historical_events(
-        self,
-        world_id: int,
-        time_period: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """Retrieve historical events, optionally filtered by time period."""
-        manager = await self._get_world_lore_manager()
-        return await manager.get_historical_events(world_id, time_period)
-    
-    async def query_world_state(self, query: str) -> str:
-        """Handle a natural language query about the world state."""
-        manager = await self._get_world_lore_manager()
-        return await manager.query_world_state(query)
-    
-    async def resolve_world_inconsistencies(self, world_id: str) -> str:
-        """Identify and resolve any inconsistencies in the world lore."""
-        manager = await self._get_world_lore_manager()
-        return await manager.resolve_world_inconsistencies(world_id)
-    
-    async def generate_world_summary(
-        self,
-        world_id: str,
-        include_history: bool = True,
-        include_current_state: bool = True
-    ) -> str:
-        """Generate world documentation for history and current state."""
-        manager = await self._get_world_lore_manager()
-        return await manager.generate_world_summary(world_id, include_history, include_current_state)
-    
-    async def validate_world_consistency(self) -> Dict[str, Any]:
-        """Validate world consistency and find issues."""
-        manager = await self._get_world_lore_manager()
-        return await manager.validate_world_consistency()
-    
-    # ===== WORLD COORDINATION OPERATIONS (NEW SECTION) =====
-    
-    async def coordinate_lore_task(
-        self,
-        task_description: str,
-        subsystems: List[str],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
         """
-        Coordinate a task across multiple lore subsystems.
+        Track changes to a lore element.
         
         Args:
-            task_description: Description of the task
-            subsystems: List of subsystems involved
-            context: Optional context for the task
-            
-        Returns:
-            Execution plan and results
-        """
-        coordinator = await self._get_master_coordinator()
-        return await coordinator.coordinate_task(task_description, subsystems, context or {})
-    
-    async def validate_lore_consistency(
-        self,
-        content: Dict[str, Any],
-        content_type: str
-    ) -> Dict[str, Any]:
-        """
-        Validate the consistency of newly generated lore content.
-        
-        Args:
-            content: The content to validate
-            content_type: Type of content
-            
-        Returns:
-            Validation results
-        """
-        coordinator = await self._get_master_coordinator()
-        return await coordinator.validate_consistency(content, content_type)
-    
-    async def get_coordination_status(self) -> Dict[str, Any]:
-        """Get the current status of the lore coordination system."""
-        coordinator = await self._get_master_coordinator()
-        return await coordinator.get_status()
-    
-    async def validate_content(
-        self,
-        ctx,
-        content: Dict[str, Any],
-        content_type: str
-    ) -> Dict[str, Any]:
-        """
-        Validate lore content for consistency and quality.
-        
-        Args:
-            ctx: Context
-            content: Content to validate
-            content_type: Type of content
-            
-        Returns:
-            Validation results
-        """
-        validator = await self._get_content_validator()
-        return await validator.validate_content(ctx, content, content_type)
-    
-    async def create_relationship_graph(
-        self,
-        elements: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """
-        Create a relationship graph from lore elements.
-        
-        Args:
-            elements: List of lore elements
-            
-        Returns:
-            Relationship graph
-        """
-        mapper = await self._get_relationship_mapper()
-        return await mapper.create_relationship_graph(elements)
-    
-    async def find_related_elements(
-        self,
-        element_id: str,
-        element_type: str,
-        depth: int = 1
-    ) -> Dict[str, Any]:
-        """
-        Find lore elements related to the specified element.
-        
-        Args:
+            element_type: Type of element (location, nation, myth, etc.)
             element_id: ID of the element
-            element_type: Type of element
-            depth: Depth of relationship search
+            new_data: New data for the element
+            scope_keys: Optional list of scope keys this change affects
             
         Returns:
-            Related elements and their relationships
+            True if changes were detected and recorded
         """
-        mapper = await self._get_relationship_mapper()
-        return await mapper.find_related_elements(element_id, element_type, depth)
-    
-    async def start_lore_trace(
-        self,
-        operation: str,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> str:
-        """
-        Start a trace for a lore operation.
+        if not self._change_tracking_enabled:
+            return False
         
-        Args:
-            operation: Name of the operation
-            metadata: Optional metadata
-            
-        Returns:
-            Trace ID
-        """
-        trace_system = await self._get_unified_trace_system()
-        return trace_system.start_trace(operation, metadata)
+        element_key = f"{element_type}:{element_id}"
+        old_data = self._element_snapshots.get(element_key)
+        
+        # Detect what changed
+        operation = 'create' if old_data is None else 'update'
+        changed_fields = []
+        
+        if old_data:
+            # Compare fields
+            all_fields = set(old_data.keys()) | set(new_data.keys())
+            for field in all_fields:
+                old_val = old_data.get(field)
+                new_val = new_data.get(field)
+                if old_val != new_val:
+                    changed_fields.append(field)
+        else:
+            # New element
+            changed_fields = list(new_data.keys())
+        
+        if not changed_fields and operation == 'update':
+            # No actual changes
+            return False
+        
+        # Record the change
+        change_record = {
+            'element_type': element_type,
+            'element_id': element_id,
+            'operation': operation,
+            'changed_fields': changed_fields,
+            'old_value': {k: old_data.get(k) for k in changed_fields if old_data} if old_data else None,
+            'new_value': {k: new_data.get(k) for k in changed_fields if k in new_data},
+            'timestamp': time.time()
+        }
+        
+        # Store in database
+        await self._persist_change(change_record, scope_keys)
+        
+        # Update snapshot
+        self._element_snapshots[element_key] = new_data.copy()
+        
+        # Update in-memory change log for affected scopes
+        if scope_keys:
+            for scope_key in scope_keys:
+                if scope_key not in self._change_log:
+                    self._change_log[scope_key] = []
+                self._change_log[scope_key].append(change_record)
+                
+                # Limit in-memory log size
+                if len(self._change_log[scope_key]) > 100:
+                    self._change_log[scope_key] = self._change_log[scope_key][-50:]
+        
+        return True
     
-    async def add_trace_step(
-        self,
-        trace_id: str,
-        step_name: str,
-        data: Optional[Dict[str, Any]] = None
+    async def _persist_change(
+        self, 
+        change_record: Dict[str, Any], 
+        scope_keys: Optional[List[str]] = None
     ) -> None:
+        """Persist a change record to the database."""
+        try:
+            async with get_db_connection_context() as conn:
+                # Pass Python dicts directly - asyncpg handles JSONB conversion
+                await conn.execute("""
+                    INSERT INTO LoreChangeLog (
+                        conversation_id, element_type, element_id,
+                        operation, changed_fields, old_value, new_value,
+                        scope_keys, timestamp
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """,
+                    self.conversation_id,
+                    change_record['element_type'],
+                    change_record['element_id'],
+                    change_record['operation'],
+                    change_record['changed_fields'],  # Direct list - asyncpg handles JSONB
+                    change_record.get('old_value'),   # Direct dict - asyncpg handles JSONB
+                    change_record.get('new_value'),   # Direct dict - asyncpg handles JSONB
+                    scope_keys or [],
+                    datetime.fromtimestamp(change_record['timestamp'])
+                )
+        except Exception as e:
+            logger.warning(f"Failed to persist change record: {e}")
+
+    async def _get_pool(self):
+        """Get database connection pool."""
+        if not hasattr(self, '_pool'):
+            self._pool = await asyncpg.create_pool(dsn=DB_DSN)
+        return self._pool
+
+    async def get_location_context(self, location_name: str) -> Dict[str, Any]:
         """
-        Add a step to an existing trace.
-        
-        Args:
-            trace_id: ID of the trace
-            step_name: Name of the step
-            data: Optional step data
+        Retrieve a lightweight location context by name.
+        Used by legacy call sites that expect a dict with key fields.
         """
-        trace_system = await self._get_unified_trace_system()
-        trace_system.add_trace_step(trace_id, step_name, data)
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT location_id, location_name, description,
+                           nation_id, governance, culture, population,
+                           canonical_rules, tags
+                    FROM Locations
+                    WHERE location_name = $1
+                    LIMIT 1
+                """, location_name)
     
-    async def export_trace(
-        self,
-        trace_id: str,
-        format_type: str = "json"
-    ) -> Dict[str, Any]:
-        """
-        Export trace information.
-        
-        Args:
-            trace_id: ID of the trace
-            format_type: Format for export
-            
-        Returns:
-            Trace data
-        """
-        trace_system = await self._get_unified_trace_system()
-        return trace_system.export_trace(trace_id, format_type)
+                if not row:
+                    return {}
     
-    # ===== CANON OPERATIONS =====
+                data = {
+                    'id': row['location_id'],
+                    'name': row['location_name'],
+                    'description': (row['description'] or '')[:200],
+                    'nation_id': row['nation_id'],
+                    'governance': row['governance'] or {},
+                    'culture': row['culture'] or {},
+                    'population': row['population'] or 0,
+                    'canonical_rules': row['canonical_rules'] or [],
+                    'tags': row['tags'] or []
+                }
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="canonical_operation",
-        action_description="Performing canonical operation",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def find_or_create_npc(self, ctx, npc_name: str, **kwargs) -> int:
-        """
-        Find or create an NPC canonically with semantic similarity checking.
-        
-        Args:
-            npc_name: Name of the NPC
-            **kwargs: Additional NPC attributes (role, affiliations, etc.)
-            
-        Returns:
-            NPC ID
-        """
-        canon = await self._get_canon_module()
-        async with get_db_connection_context() as conn:
-            return await canon.find_or_create_npc(ctx, conn, npc_name, **kwargs)
+                # Optional enrichments to mirror bundle fetches (best-effort)
+                landmarks = await conn.fetch("""
+                    SELECT landmark_id, name, significance
+                    FROM Landmarks
+                    WHERE location_id = $1
+                    ORDER BY significance DESC
+                    LIMIT 3
+                """, row['location_id'])
+                if landmarks:
+                    data['landmarks'] = [
+                        {'id': lm['landmark_id'], 'name': lm['name'], 'significance': lm['significance']}
+                        for lm in landmarks
+                    ]
     
-    async def find_or_create_location(self, location_name: str, **kwargs) -> str:
-        """
-        Find or create a location canonically.
-        
-        Args:
-            location_name: Name of the location
-            **kwargs: Additional location attributes
-            
-        Returns:
-            Location name (canonical)
-        """
-        canon = await self._get_canon_module()
-        ctx = self._create_canonical_context()
-        async with get_db_connection_context() as conn:
-            return await canon.find_or_create_location(ctx, conn, location_name, **kwargs)
+                events = await conn.fetch("""
+                    SELECT event_name, description, event_date
+                    FROM Events
+                    WHERE location = $1
+                    ORDER BY event_date DESC
+                    LIMIT 2
+                """, row['location_name'])
+                if events:
+                    data['recent_events'] = [
+                        {
+                            'name': e['event_name'],
+                            'description': (e['description'] or '')[:100],
+                            'date': e['event_date'].isoformat() if e['event_date'] else None
+                        }
+                        for e in events
+                    ]
     
-    async def find_or_create_faction(self, faction_name: str, **kwargs) -> int:
-        """
-        Find or create a faction canonically.
-        
-        Args:
-            faction_name: Name of the faction
-            **kwargs: Additional faction attributes
-            
-        Returns:
-            Faction ID
-        """
-        canon = await self._get_canon_module()
-        ctx = self._create_canonical_context()
-        async with get_db_connection_context() as conn:
-            return await canon.find_or_create_faction(ctx, conn, faction_name, **kwargs)
+                return data
     
-    async def log_canonical_event(self, event_text: str, tags: List[str] = None, significance: int = 5):
-        """
-        Log a canonical event to establish world history.
-        
-        Args:
-            event_text: Description of the event
-            tags: Event tags
-            significance: Significance level (1-10)
-        """
-        canon = await self._get_canon_module()
-        ctx = self._create_canonical_context()
-        async with get_db_connection_context() as conn:
-            await canon.log_canonical_event(ctx, conn, event_text, tags, significance)
-    
-    async def create_journal_entry(self, entry_text: str, **kwargs) -> int:
-        """
-        Create a journal entry integrated with memory system.
-        
-        Args:
-            entry_text: Journal entry text
-            **kwargs: Additional metadata
-            
-        Returns:
-            Journal entry ID
-        """
-        canon = await self._get_canon_module()
-        ctx = self._create_canonical_context()
-        async with get_db_connection_context() as conn:
-            return await canon.add_journal_entry(ctx, conn, entry_text, **kwargs)
-    
-    async def update_player_stat(self, player_name: str, stat_name: str, new_value: int, reason: str):
-        """
-        Update a player stat canonically with memory integration.
-        
-        Args:
-            player_name: Name of the player
-            stat_name: Name of the stat
-            new_value: New stat value
-            reason: Reason for the change
-        """
-        canon = await self._get_canon_module()
-        ctx = self._create_canonical_context()
-        async with get_db_connection_context() as conn:
-            await canon.update_player_stat_canonically(ctx, conn, player_name, stat_name, new_value, reason)
-    
-    async def find_or_create_social_link(self, **kwargs) -> int:
-        """
-        Create or find a social relationship between entities.
-        
-        Args:
-            **kwargs: Relationship parameters
-            
-        Returns:
-            Link ID
-        """
-        canon = await self._get_canon_module()
-        ctx = self._create_canonical_context()
-        async with get_db_connection_context() as conn:
-            return await canon.find_or_create_social_link(ctx, conn, **kwargs)
-    
-    async def propose_and_enact_change(self, entity_type: str, entity_identifier: Dict[str, Any], 
-                                       updates: Dict[str, Any], reason: str) -> Dict[str, Any]:
-        """
-        Propose and enact a canonical change through the lore system.
-        
-        Args:
-            entity_type: Type of entity to change
-            entity_identifier: How to identify the entity
-            updates: Changes to make
-            reason: Reason for the change
-            
-        Returns:
-            Change results
-        """
-        lore_system = await self._get_lore_system()
-        ctx = self._create_canonical_context()
-        return await lore_system.propose_and_enact_change(ctx, entity_type, entity_identifier, updates, reason)
-    
-    # ===== CACHE OPERATIONS =====
-    
-    async def cache_get(self, namespace: str, key: str, user_id: Optional[int] = None, 
-                       conversation_id: Optional[int] = None) -> Any:
-        """
-        Get an item from cache.
-        
-        Args:
-            namespace: Cache namespace
-            key: Cache key
-            user_id: Optional user ID for scoping
-            conversation_id: Optional conversation ID for scoping
-            
-        Returns:
-            Cached value or None
-        """
-        if not self.config.enable_cache:
-            return None
-            
-        cache = await self._get_cache_system()
-        return await cache.get(namespace, key, user_id or self.user_id, 
-                              conversation_id or self.conversation_id)
-    
-    async def cache_set(self, namespace: str, key: str, value: Any, ttl: Optional[int] = None,
-                       user_id: Optional[int] = None, conversation_id: Optional[int] = None, 
-                       priority: int = 0):
-        """
-        Set an item in cache.
-        
-        Args:
-            namespace: Cache namespace
-            key: Cache key
-            value: Value to cache
-            ttl: Time to live in seconds
-            user_id: Optional user ID for scoping
-            conversation_id: Optional conversation ID for scoping
-            priority: Cache priority (0-10)
-        """
-        if not self.config.enable_cache:
-            return
-            
-        cache = await self._get_cache_system()
-        await cache.set(namespace, key, value, ttl or self.config.cache_ttl,
-                       user_id or self.user_id, conversation_id or self.conversation_id,
-                       priority)
-    
-    async def cache_invalidate(self, namespace: str, key: str, user_id: Optional[int] = None,
-                              conversation_id: Optional[int] = None):
-        """
-        Invalidate a cache entry.
-        
-        Args:
-            namespace: Cache namespace
-            key: Cache key
-            user_id: Optional user ID for scoping
-            conversation_id: Optional conversation ID for scoping
-        """
-        if not self.config.enable_cache:
-            return
-            
-        cache = await self._get_cache_system()
-        await cache.invalidate(namespace, key, user_id or self.user_id,
-                              conversation_id or self.conversation_id)
-    
-    async def cache_invalidate_pattern(self, namespace: str, pattern: str):
-        """
-        Invalidate cache entries matching a pattern.
-        
-        Args:
-            namespace: Cache namespace
-            pattern: Regex pattern to match keys
-        """
-        if not self.config.enable_cache:
-            return
-            
-        cache = await self._get_cache_system()
-        await cache.invalidate_pattern(namespace, pattern, self.user_id, self.conversation_id)
-    
-    async def get_cache_analytics(self) -> Dict[str, Any]:
-        """
-        Get cache performance analytics.
-        
-        Returns:
-            Cache analytics data
-        """
-        if not self.config.enable_cache:
+        except Exception as e:
+            logger.debug(f"get_location_context failed for '{location_name}': {e}")
             return {}
-            
-        cache = await self._get_cache_system()
-        return await cache.get_cache_analytics()
-    
-    async def optimize_cache(self) -> Dict[str, Any]:
-        """
-        Optimize cache using AI-driven analysis.
         
-        Returns:
-            Optimization recommendations and results
+    async def _get_changes_since(
+        self, 
+        scope_key: str, 
+        since_ts: float
+    ) -> List[Dict[str, Any]]:
         """
-        if not self.config.enable_cache:
-            return {"status": "cache disabled"}
-            
-        cache = await self._get_cache_system()
-        return await cache.optimize_cache()
-    
-    # ===== REGISTRY OPERATIONS =====
-    
-    async def get_manager(self, manager_key: str) -> Any:
-        """
-        Get a specialized manager by key.
+        Get all changes for a scope since a timestamp.
         
         Args:
-            manager_key: Manager identifier
+            scope_key: The scope key to filter by
+            since_ts: Timestamp to get changes since
             
         Returns:
-            Manager instance
+            List of change records
         """
-        registry = await self._get_registry_system()
-        result = await registry.get_manager(manager_key)
-        return await registry._get_or_init_manager(manager_key)
-    
-    async def get_available_manager_tools(self) -> List[Dict[str, Any]]:
-        """
-        Get all available tools across all managers.
+        changes = []
         
-        Returns:
-            List of available tools with metadata
-        """
-        registry = await self._get_registry_system()
-        tools = await registry.get_available_tools()
-        return [tool.dict() for tool in tools]
-    
-    async def discover_manager_relationships(self) -> Dict[str, List[str]]:
-        """
-        Get the relationship map between managers.
+        # Check in-memory log first
+        if scope_key in self._change_log:
+            changes = [
+                c for c in self._change_log[scope_key]
+                if c['timestamp'] > since_ts
+            ]
+            if changes:
+                return changes
         
-        Returns:
-            Manager relationship map
-        """
-        registry = await self._get_registry_system()
-        result = await registry.discover_manager_relationships()
-        return result.relationships
+        # Fall back to database
+        try:
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT element_type, element_id, operation,
+                           changed_fields, old_value, new_value,
+                           EXTRACT(EPOCH FROM timestamp) as timestamp
+                    FROM LoreChangeLog
+                    WHERE conversation_id = $1
+                      AND $2 = ANY(scope_keys)
+                      AND timestamp > $3
+                    ORDER BY timestamp ASC
+                    LIMIT 100
+                """,
+                    self.conversation_id,
+                    scope_key,
+                    datetime.fromtimestamp(since_ts)
+                )
+                
+                for row in rows:
+                    changes.append({
+                        'element_type': row['element_type'],
+                        'element_id': row['element_id'],
+                        'operation': row['operation'],
+                        'changed_fields': row['changed_fields'] or [],  # asyncpg returns Python list/dict
+                        'old_value': row['old_value'],  # asyncpg returns Python dict
+                        'new_value': row['new_value'],  # asyncpg returns Python dict
+                        'timestamp': row['timestamp']
+                    })
+                
+                # Cache in memory for next time
+                if changes and scope_key not in self._change_log:
+                    self._change_log[scope_key] = changes[-20:]  # Keep last 20
+                    
+        except Exception as e:
+            logger.warning(f"Failed to load changes from database: {e}")
+        
+        return changes
     
-    async def execute_cross_manager_operation(self, starting_manager: str, target_manager: str,
-                                             operation: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_affected_scope_keys(
+        self, 
+        element_type: str, 
+        element_id: int,
+        element_data: Dict[str, Any]
+    ) -> List[str]:
         """
-        Execute an operation requiring coordination between managers.
+        Determine which scope keys are affected by a change.
         
         Args:
-            starting_manager: Starting manager key
-            target_manager: Target manager key
-            operation: Operation to perform
-            params: Operation parameters
+            element_type: Type of element
+            element_id: ID of element
+            element_data: Element data
             
         Returns:
-            Operation results
+            List of affected scope keys
         """
-        registry = await self._get_registry_system()
-        from lore.core.registry import CrossManagerHandoffParams
+        scope_keys = []
         
-        handoff_params = CrossManagerHandoffParams(
-            starting_manager=starting_manager,
-            target_manager=target_manager,
-            operation=operation,
-            params=params
-        )
-        
-        result = await registry.execute_cross_manager_handoff(handoff_params)
-        return result.dict()
-    
-    # ===== VALIDATION OPERATIONS =====
-    
-    async def validate_canon_duplicate(self, entity_type: str, proposal: Dict[str, Any], 
-                                      existing_id: int) -> bool:
-        """
-        Validate if a proposed entity is a duplicate of an existing one.
-        
-        Args:
-            entity_type: Type of entity
-            proposal: Proposed entity data
-            existing_id: ID of potentially duplicate entity
+        # Generate scope keys based on element type
+        if element_type == 'location':
+            # This affects scopes that include this location
+            scope = type('Scope', (), {
+                'location_id': element_id,
+                'npc_ids': set(),
+                'lore_tags': set(),
+                'topics': set(),
+                'conflict_ids': set(),
+                'nation_ids': set(),
+                'link_hints': {}
+            })()
+            scope_keys.append(self._generate_scene_cache_key(scope))
             
-        Returns:
-            True if duplicate, False otherwise
-        """
-        validator = await self._get_canon_validation()
+        elif element_type == 'nation':
+            # Affects scopes that include this nation
+            scope = type('Scope', (), {
+                'location_id': None,
+                'npc_ids': set(),
+                'lore_tags': set(),
+                'topics': set(),
+                'conflict_ids': set(),
+                'nation_ids': {element_id},
+                'link_hints': {}
+            })()
+            scope_keys.append(self._generate_scene_cache_key(scope))
+            
+        # Add more sophisticated scope detection based on relationships
+        # For example, if a myth changes, find all locations that reference it
         
-        async with get_db_connection_context() as conn:
-            if entity_type.lower() == "npc":
-                return await validator.confirm_is_duplicate_npc(conn, proposal, existing_id)
+        return scope_keys
+    
+    # ===== SCENE BUNDLE HELPER METHODS =====
+    
+    def _generate_scene_cache_key(self, scope: Any) -> str:
+        to_key = getattr(scope, "to_key", None)
+        if callable(to_key):
+            return hashlib.md5(to_key().encode()).hexdigest()
+    
+        key_parts = []
+        
+        # Only add location if not None
+        if getattr(scope, 'location_id', None) is not None:
+            key_parts.append(f"loc_{scope.location_id}")
+        
+        if hasattr(scope, 'npc_ids') and scope.npc_ids:
+            s = sorted(scope.npc_ids)
+            npc_str = "_".join(str(nid) for nid in s[:5])
+            # Add count to avoid collisions from truncation
+            key_parts.append(f"npcs_{npc_str}+n={len(s)}")
+        
+        if hasattr(scope, 'lore_tags') and scope.lore_tags:
+            s = sorted(scope.lore_tags)
+            tag_str = "_".join(s[:5])
+            # Add count to avoid collisions
+            key_parts.append(f"tags_{tag_str}+n={len(s)}")
+        
+        if hasattr(scope, 'topics') and scope.topics:
+            s = sorted(scope.topics)
+            topic_str = "_".join(s[:3])
+            # Add count to avoid collisions
+            key_parts.append(f"topics_{topic_str}+n={len(s)}")
+        
+        if hasattr(scope, 'nation_ids') and scope.nation_ids:
+            s = sorted(scope.nation_ids)
+            nation_str = "_".join(str(nid) for nid in s[:3])
+            key_parts.append(f"nations_{nation_str}+n={len(s)}")
+        
+        if hasattr(scope, 'conflict_ids') and scope.conflict_ids:
+            s = sorted(scope.conflict_ids)
+            conflict_str = "_".join(str(cid) for cid in s[:3])
+            key_parts.append(f"conflicts_{conflict_str}+n={len(s)}")
+        
+        if not key_parts:
+            key_parts.append("empty")
+    
+        key_string = "|".join(key_parts)
+        return hashlib.md5(key_string.encode()).hexdigest()
+    
+    def _get_cached_bundle(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        """Get a cached bundle if it exists and is fresh (no memoization)."""
+        bundle = self._scene_bundle_cache.get(cache_key)
+        if bundle and self._is_bundle_stale(bundle):
+            # Hard-evict stale entries so future calls rebuild
+            self._scene_bundle_cache.pop(cache_key, None)
+            self._bundle_last_changed.pop(cache_key, None)
+            self._bundle_cached_at.pop(cache_key, None)
+            return None
+        return bundle
+    
+    def _is_bundle_stale(self, bundle: Dict[str, Any]) -> bool:
+        """Check if a bundle is stale based on TTL using monotonic clock."""
+        # Use cache key from bundle for TTL tracking
+        cache_key = bundle.get('_cache_key')
+        if cache_key is None:
+            return True
+        
+        cached_at = self._bundle_cached_at.get(cache_key)
+        if cached_at is None:
+            return True
+        
+        age = time.monotonic() - cached_at
+        return age > self._bundle_ttl
+    
+    def _cache_bundle(self, cache_key: str, bundle: Dict[str, Any]) -> None:
+        """Cache a bundle and track its change time."""
+        # Store cache key in bundle for TTL tracking
+        bundle['_cache_key'] = cache_key
+        
+        self._scene_bundle_cache[cache_key] = bundle
+        self._bundle_last_changed[cache_key] = bundle['last_changed_at']
+        self._bundle_cached_at[cache_key] = time.monotonic()
+        
+        # Limit cache size using separate limit for bundles
+        max_size = self.config.bundle_cache_max_size if hasattr(self.config, 'bundle_cache_max_size') else 100
+        if len(self._scene_bundle_cache) > max_size:
+            # Remove oldest entries
+            sorted_keys = sorted(
+                self._scene_bundle_cache.keys(),
+                key=lambda k: self._scene_bundle_cache[k].get('last_changed_at', 0)
+            )
+            # Remove oldest 25%
+            for key in sorted_keys[:len(self._scene_bundle_cache) // 4]:
+                self._scene_bundle_cache.pop(key, None)
+                self._bundle_last_changed.pop(key, None)
+                self._bundle_cached_at.pop(key, None)
+    
+    async def _fetch_location_lore_for_bundle(self, location_id: int) -> Dict[str, Any]:
+        """Fetch location-specific lore for a bundle."""
+        try:
+            location_lore = {}
+            
+            async with get_db_connection_context() as conn:
+                self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
+                
+                # Get location data
+                location = await conn.fetchrow("""
+                    SELECT location_id, location_name, description, 
+                           nation_id, governance, culture, population,
+                           canonical_rules, tags
+                    FROM Locations
+                    WHERE location_id = $1
+                """, location_id)
+                
+                if location:
+                    location_lore = {
+                        'id': location['location_id'],
+                        'name': location['location_name'],
+                        'description': (location['description'] or '')[:200],
+                        'nation_id': location['nation_id'],
+                        'governance': location['governance'] or {},
+                        'culture': location['culture'] or {},
+                        'population': location['population'] or 0,
+                        'canonical_rules': location['canonical_rules'] or [],
+                        'tags': location['tags'] or []
+                    }
+                    
+                    # Track changes if enabled
+                    if self._change_tracking_enabled:
+                        scope_keys = self._get_affected_scope_keys('location', location_id, location_lore)
+                        await self._track_element_change('location', location_id, location_lore, scope_keys)
+                    
+                    # Get associated landmarks
+                    landmarks = await conn.fetch("""
+                        SELECT landmark_id, name, significance
+                        FROM Landmarks
+                        WHERE location_id = $1
+                        ORDER BY significance DESC
+                        LIMIT 3
+                    """, location_id)
+                    
+                    if landmarks:
+                        location_lore['landmarks'] = [
+                            {
+                                'id': lm['landmark_id'],
+                                'name': lm['name'],
+                                'significance': lm['significance']
+                            }
+                            for lm in landmarks
+                        ]
+                    
+                    # Get recent historical events
+                    events = await conn.fetch("""
+                        SELECT event_name, description, event_date
+                        FROM Events
+                        WHERE location = $1
+                        ORDER BY event_date DESC
+                        LIMIT 2
+                    """, location['location_name'])
+                    
+                    if events:
+                        location_lore['recent_events'] = [
+                            {
+                                'name': e['event_name'],
+                                'description': (e['description'] or '')[:100],
+                                'date': e['event_date'].isoformat() if e['event_date'] else None
+                            }
+                            for e in events
+                        ]
+            
+            return location_lore
+            
+        except Exception as e:
+            logger.debug(f"Could not fetch location lore: {e}")
+            # Fallback to simpler approach
+            try:
+                # Try the existing method as fallback
+                location_name = f"location_{location_id}"
+                context = await self.get_location_context(location_name)
+                return {
+                    'id': location_id,
+                    'description': context.get('description', '')[:200],
+                    'governance': context.get('governance', {}),
+                    'culture': context.get('culture', {}),
+                    'canonical_rules': context.get('canonical_rules', [])
+                }
+            except:
+                return {}
+    
+    async def _fetch_world_lore_for_bundle(self, tags: List[str]) -> Dict[str, Any]:
+        """Fetch world lore based on tags."""
+        try:
+            # Use get_tagged_lore method
+            tagged_lore = await self.get_tagged_lore(tags=tags)
+            
+            # Add any world-level facts from cache
+            if self.config.enable_cache and self._cache_system:
+                for tag in tags[:3]:
+                    cached = await self._cache_system.get(f"world_lore_{tag}")
+                    if cached:
+                        tagged_lore[tag] = cached
+            
+            return tagged_lore
+        except Exception as e:
+            logger.debug(f"Could not fetch world lore: {e}")
+            return {}
+    
+    async def _fetch_nations_for_bundle(self, nation_ids: List[int]) -> List[Dict[str, Any]]:
+        """Fetch nation data for bundle using batch query."""
+        try:
+            nations = []
+            async with get_db_connection_context() as conn:
+                self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
+                
+                # Batch query using ANY()
+                rows = await conn.fetch("""
+                    SELECT nation_id, nation_name, government_type, 
+                           culture, lore_context
+                    FROM Nations
+                    WHERE nation_id = ANY($1::int[])
+                """, nation_ids[:5])
+                
+                for nation in rows:
+                    nation_data = {
+                        'id': nation['nation_id'],
+                        'name': nation['nation_name'],
+                        'government': nation['government_type'],
+                        'culture': nation['culture']
+                    }
+                    nations.append(nation_data)
+                    
+                    # Track changes
+                    if self._change_tracking_enabled:
+                        scope_keys = self._get_affected_scope_keys('nation', nation['nation_id'], nation_data)
+                        await self._track_element_change('nation', nation['nation_id'], nation_data, scope_keys)
+            
+            return nations
+        except Exception as e:
+            logger.debug(f"Could not fetch nations: {e}")
+            return []
+    
+    async def _fetch_religions_for_location(self, location_id: int) -> List[Dict[str, Any]]:
+        """Fetch religions active in a location."""
+        try:
+            religions = []
+            
+            async with get_db_connection_context() as conn:
+                self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
+                
+                # Query religions active in this location
+                result = await conn.fetch("""
+                    SELECT DISTINCT r.religion_id, r.religion_name, 
+                           r.deity_names, r.core_beliefs, r.sacred_texts,
+                           nrd.influence_level
+                    FROM Religions r
+                    LEFT JOIN NationReligionDistribution nrd ON r.religion_id = nrd.religion_id
+                    LEFT JOIN Locations l ON l.nation_id = nrd.nation_id
+                    WHERE l.location_id = $1 AND nrd.influence_level > 0.1
+                    ORDER BY nrd.influence_level DESC
+                    LIMIT 5
+                """, location_id)
+                
+                for row in result:
+                    religion_data = {
+                        'id': row['religion_id'],
+                        'name': row['religion_name'],
+                        'deities': (row['deity_names'] or [])[:3],  # Guard against None
+                        'beliefs': (row['core_beliefs'] or '')[:100],
+                        'influence': row['influence_level'] or 0.5
+                    }
+                    religions.append(religion_data)
+                    
+                    # Track changes
+                    if self._change_tracking_enabled:
+                        scope_keys = self._get_affected_scope_keys('religion', row['religion_id'], religion_data)
+                        await self._track_element_change('religion', row['religion_id'], religion_data, scope_keys)
+            
+            return religions
+        except Exception as e:
+            logger.debug(f"Could not fetch religions: {e}")
+            return []
+    
+    async def _fetch_conflicts_for_bundle(self, conflict_ids: List[int]) -> List[Dict[str, Any]]:
+        """Fetch conflict data for bundle using batch query."""
+        try:
+            conflicts = []
+            
+            async with get_db_connection_context() as conn:
+                self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
+                
+                # Batch query using ANY()
+                rows = await conn.fetch("""
+                    SELECT conflict_id, conflict_type, description,
+                           stakeholders, intensity, phase, resolution_status
+                    FROM Conflicts
+                    WHERE conflict_id = ANY($1::int[])
+                """, conflict_ids[:5])
+                
+                for conflict in rows:
+                    conflict_data = {
+                        'id': conflict['conflict_id'],
+                        'type': conflict['conflict_type'],
+                        'description': (conflict['description'] or '')[:150],
+                        'stakeholders': (conflict['stakeholders'] or [])[:3],
+                        'intensity': conflict['intensity'] or 0.5,
+                        'phase': conflict['phase'] or 'active',
+                        'resolution_status': conflict['resolution_status'] or 'ongoing'
+                    }
+                    conflicts.append(conflict_data)
+                    
+                    # Track changes
+                    if self._change_tracking_enabled:
+                        scope_keys = self._get_affected_scope_keys('conflict', conflict['conflict_id'], conflict_data)
+                        await self._track_element_change('conflict', conflict['conflict_id'], conflict_data, scope_keys)
+            
+            return conflicts
+        except Exception as e:
+            logger.debug(f"Could not fetch conflicts: {e}")
+            return []
+    
+    async def _fetch_myths_for_location(self, location_id: int) -> List[Dict[str, Any]]:
+        """Fetch urban myths for a location."""
+        try:
+            myths = []
+            
+            async with get_db_connection_context() as conn:
+                self.metrics['db_roundtrips'] = self.metrics.get('db_roundtrips', 0) + 1
+                
+                # Query urban myths for this location
+                result = await conn.fetch("""
+                    SELECT um.myth_id, um.title, um.description, 
+                           um.origin_period, um.belief_level, um.variants
+                    FROM UrbanMyths um
+                    WHERE um.location_id = $1
+                    ORDER BY um.belief_level DESC
+                    LIMIT 5
+                """, location_id)
+                
+                for row in result:
+                    myth_data = {
+                        'id': row['myth_id'],
+                        'title': row['title'],
+                        'description': (row['description'] or '')[:200],
+                        'origin': row['origin_period'] or 'unknown',
+                        'belief_level': row['belief_level'] or 0.3,
+                        'has_variants': bool(row['variants'])
+                    }
+                    myths.append(myth_data)
+                    
+                    # Track changes
+                    if self._change_tracking_enabled:
+                        scope_keys = self._get_affected_scope_keys('myth', row['myth_id'], myth_data)
+                        await self._track_element_change('myth', row['myth_id'], myth_data, scope_keys)
+            
+            return myths
+        except Exception as e:
+            logger.debug(f"Could not fetch myths: {e}")
+            return []
+    
+    async def _get_canonical_rules_for_scope(self, scope: Any) -> List[str]:
+        """Get canonical consistency rules relevant to the scope."""
+        try:
+            rules = []
+            
+            # Get canon module and validation (ensure initialized)
+            canon = await self._get_canon_module()
+            validator = await self._get_canon_validation()
+            
+            # Add location-specific canonical rules
+            if hasattr(scope, 'location_id') and scope.location_id:
+                async with get_db_connection_context() as conn:
+                    # Get location governance rules
+                    location_rules = await conn.fetchval("""
+                        SELECT canonical_rules 
+                        FROM Locations 
+                        WHERE location_id = $1
+                    """, scope.location_id)
+                    
+                    if location_rules:
+                        if isinstance(location_rules, list):
+                            rules.extend(location_rules[:3])
+                        elif isinstance(location_rules, str):
+                            rules.append(location_rules)
+            
+            # Add nation-specific rules if nations in scope
+            if hasattr(scope, 'nation_ids') and scope.nation_ids:
+                async with get_db_connection_context() as conn:
+                    for nation_id in list(scope.nation_ids)[:2]:
+                        nation_rules = await conn.fetchval("""
+                            SELECT governance_rules 
+                            FROM Nations 
+                            WHERE nation_id = $1
+                        """, nation_id)
+                        
+                        if nation_rules:
+                            if isinstance(nation_rules, dict):
+                                # Extract key rules from governance structure
+                                if 'laws' in nation_rules:
+                                    rules.append(f"Nation {nation_id}: {nation_rules['laws'][:100]}")
+            
+            # Add global canonical rules from validator
+            if hasattr(validator, 'get_global_rules'):
+                global_rules = await validator.get_global_rules()
+                rules.extend(global_rules[:2])
             else:
-                # Generic validation for other entity types
-                logger.warning(f"No specific duplicate validator for entity type: {entity_type}")
-                return False
+                # Default canonical rules
+                rules.extend([
+                    "Maintain timeline consistency",
+                    "Respect established character relationships",
+                    "Honor location governance structures"
+                ])
+            
+            # Deduplicate and limit
+            seen = set()
+            unique_rules = []
+            for rule in rules:
+                if rule not in seen:
+                    seen.add(rule)
+                    unique_rules.append(rule)
+            
+            return unique_rules[:5]  # Limit to top 5 rules
+        except Exception as e:
+            logger.debug(f"Could not fetch canonical rules: {e}")
+            return []
     
-    # ===== CONTEXT OPERATIONS =====
-    
-    def create_canonical_context(self, **kwargs) -> Any:
+    async def get_tagged_lore(self, tags: List[str]) -> Dict[str, Any]:
         """
-        Create a canonical context object for operations.
+        Get lore elements by tags.
         
         Args:
-            **kwargs: Additional context attributes
+            tags: List of tags to search for
             
         Returns:
-            CanonicalContext instance
+            Dictionary of tagged lore elements
         """
-        context_class = self._get_canonical_context_class()
-        return context_class(self.user_id, self.conversation_id, **kwargs)
+        try:
+            tagged_lore = {}
+            
+            async with get_db_connection_context() as conn:
+                # Search across multiple lore tables for tagged content
+                for tag in tags[:10]:  # Limit to 10 tags
+                    tag_lower = tag.lower()
+                    lore_items = []
+                    
+                    # Search in Nations
+                    nations = await conn.fetch("""
+                        SELECT nation_id, nation_name, culture, lore_context
+                        FROM Nations
+                        WHERE LOWER(culture::text) LIKE $1 
+                           OR LOWER(lore_context::text) LIKE $1
+                        LIMIT 2
+                    """, f'%{tag_lower}%')
+                    
+                    for nation in nations:
+                        lore_items.append({
+                            'type': 'nation',
+                            'id': nation['nation_id'],
+                            'name': nation['nation_name'],
+                            'relevance': 0.8
+                        })
+                    
+                    # Search in Religions
+                    religions = await conn.fetch("""
+                        SELECT religion_id, religion_name, core_beliefs
+                        FROM Religions
+                        WHERE LOWER(core_beliefs::text) LIKE $1
+                           OR LOWER(religion_name) LIKE $1
+                        LIMIT 2
+                    """, f'%{tag_lower}%')
+                    
+                    for religion in religions:
+                        lore_items.append({
+                            'type': 'religion',
+                            'id': religion['religion_id'],
+                            'name': religion['religion_name'],
+                            'relevance': 0.7
+                        })
+                    
+                    # Search in historical events (if table exists)
+                    try:
+                        events = await conn.fetch("""
+                            SELECT event_id, event_name, description
+                            FROM Events
+                            WHERE LOWER(description::text) LIKE $1
+                               OR LOWER(event_name) LIKE $1
+                            LIMIT 2
+                        """, f'%{tag_lower}%')
+                        
+                        for event in events:
+                            lore_items.append({
+                                'type': 'event',
+                                'id': event['event_id'],
+                                'name': event['event_name'],
+                                'relevance': 0.6
+                            })
+                    except:
+                        pass  # Events table might not exist
+                    
+                    if lore_items:
+                        tagged_lore[tag] = lore_items
+            
+            # Add cached lore if available
+            if self.config.enable_cache and self._cache_system:
+                for tag in tags:
+                    cache_key = f"lore_tag_{tag}"
+                    cached = await self._cache_system.get(cache_key)
+                    if cached and tag not in tagged_lore:
+                        tagged_lore[tag] = cached
+            
+            return tagged_lore
+            
+        except Exception as e:
+            logger.error(f"Error fetching tagged lore: {e}")
+            return {}
     
-    def _create_canonical_context(self, **kwargs) -> Any:
+    async def check_canonical_consistency(self) -> Dict[str, Any]:
         """
-        Internal method to create canonical context.
-        
-        Args:
-            **kwargs: Additional context attributes
-            
+        Check canonical consistency across all lore systems.
+    
         Returns:
-            CanonicalContext instance
+            Dictionary with consistency check results and rules
         """
-        return self.create_canonical_context(**kwargs)
+        try:
+            result = {
+                'is_consistent': True,
+                'rules': [],
+                'violations': [],
+                'warnings': []
+            }
+    
+            # Ensure modules/agents are initialized
+            await self._get_canon_module()
+            validator = await self._get_canon_validation()
+    
+            if validator:
+                async with get_db_connection_context() as conn:
+                    # Timeline consistency: prefer event_date for Events
+                    timeline_check = await conn.fetchval("""
+                        SELECT COUNT(*)
+                        FROM Events
+                        WHERE conversation_id = $1
+                          AND event_date > CURRENT_TIMESTAMP
+                    """, self.conversation_id)
+    
+                    if timeline_check and timeline_check > 0:
+                        result['warnings'].append(f"Found {timeline_check} future-dated events")
+                        result['is_consistent'] = False
+    
+                    # NPC relationship symmetry
+                    npc_check = await conn.fetch("""
+                        SELECT sl1.entity1_id, sl1.entity2_id, sl1.link_type
+                        FROM SocialLinks sl1
+                        JOIN SocialLinks sl2
+                          ON sl1.entity1_id = sl2.entity2_id
+                         AND sl1.entity2_id = sl2.entity1_id
+                        WHERE sl1.conversation_id = $1
+                          AND sl1.link_type != sl2.link_type
+                        LIMIT 5
+                    """, self.conversation_id)
+    
+                    if npc_check:
+                        for row in npc_check:
+                            result['warnings'].append(
+                                f"Asymmetric relationship between NPCs {row['entity1_id']} and {row['entity2_id']}"
+                            )
+    
+                    # Collect canonical rules from existing data
+                    rules_query = await conn.fetch("""
+                        SELECT DISTINCT canonical_rule 
+                        FROM (
+                            SELECT unnest(canonical_rules) as canonical_rule 
+                            FROM Locations 
+                            WHERE conversation_id = $1
+                            UNION
+                            SELECT governance_rules::text as canonical_rule 
+                            FROM Nations 
+                            WHERE conversation_id = $1
+                        ) rules
+                        WHERE canonical_rule IS NOT NULL
+                        LIMIT 10
+                    """, self.conversation_id)
+    
+                    for row in rules_query:
+                        if row['canonical_rule']:
+                            result['rules'].append(row['canonical_rule'])
+    
+            # Default rules if none were sourced
+            if not result['rules']:
+                result['rules'] = [
+                    "Maintain temporal consistency across all events",
+                    "Preserve established character relationships and personalities",
+                    "Respect location governance and cultural norms",
+                    "Ensure magic/technology consistency with world rules",
+                    "Honor faction alliances and conflicts"
+                ]
+    
+            # Overall consistency decision
+            if result['violations'] or len(result['warnings']) > 5:
+                result['is_consistent'] = False
+    
+            # Summary
+            result['summary'] = {
+                'total_rules': len(result['rules']),
+                'violations': len(result['violations']),
+                'warnings': len(result['warnings']),
+                'checked_at': datetime.now().isoformat()
+            }
+    
+            return result
+    
+        except Exception as e:
+            logger.error(f"Error checking canonical consistency: {e}")
+            return {
+                'is_consistent': True,  # Assume consistent on error
+                'rules': [
+                    "Maintain temporal consistency",
+                    "Preserve character relationships",
+                    "Respect world rules"
+                ],
+                'error': str(e)
+            }
+        
+    # ===== COMPONENT GETTERS (LAZY INITIALIZATION) =====
+    
+    async def _get_canon_module(self):
+        """
+        Get or initialize the canon module.
+        CRITICAL: This is lazy loaded as many other modules depend on it.
+        """
+        if not self._canon_module:
+            # Import here to avoid circular dependencies
+            from lore.core import canon
+            self._canon_module = canon
+            logger.info("Canon module loaded")
+        return self._canon_module
+    
+    async def _get_cache_system(self):
+        """Get or initialize the cache system."""
+        if not self._cache_system:
+            from lore.core.cache import LoreCache
+            self._cache_system = LoreCache(
+                max_size=self.config.cache_max_size,
+                ttl=self.config.cache_ttl
+            )
+            logger.info("Cache system initialized")
+        return self._cache_system
+    
+    async def _get_registry_system(self):
+        """Get or initialize the manager registry."""
+        if not self._registry_system:
+            from lore.core.registry import ManagerRegistry
+            self._registry_system = ManagerRegistry(self.user_id, self.conversation_id)
+            logger.info("Registry system initialized")
+        return self._registry_system
+    
+    async def _get_canon_validation(self):
+        """Get or initialize the canon validation agent."""
+        if not self._canon_validation:
+            from lore.core.validation import CanonValidationAgent
+            self._canon_validation = CanonValidationAgent()
+            logger.info("Canon validation agent initialized")
+        return self._canon_validation
+    
+    def _get_canonical_context_class(self):
+        """Get the CanonicalContext class (lazy loaded)."""
+        if not self._canonical_context_class:
+            from lore.core.context import CanonicalContext
+            self._canonical_context_class = CanonicalContext
+            logger.info("CanonicalContext class loaded")
+        return self._canonical_context_class
+    
+    async def _get_education_manager(self):
+        """Get or initialize the education manager."""
+        if not self._education_manager:
+            from lore.managers.education import EducationalSystemManager
+            self._education_manager = EducationalSystemManager(self.user_id, self.conversation_id)
+            await self._education_manager.ensure_initialized()
+            logger.info("Education manager initialized")
+        return self._education_manager
+    
+    async def _get_religion_manager(self):
+        """Get or initialize the religion manager."""
+        if not self._religion_manager:
+            from lore.managers.religion import ReligionManager
+            self._religion_manager = ReligionManager(self.user_id, self.conversation_id)
+            await self._religion_manager.ensure_initialized()
+            logger.info("Religion manager initialized")
+        return self._religion_manager
+    
+    async def _get_local_lore_manager(self):
+        """Get or initialize the local lore manager."""
+        if not self._local_lore_manager:
+            from lore.managers.local_lore import LocalLoreManager
+            self._local_lore_manager = LocalLoreManager(self.user_id, self.conversation_id)
+            await self._local_lore_manager.ensure_initialized()
+            logger.info("Local lore manager initialized")
+        return self._local_lore_manager
+    
+    async def _get_geopolitical_manager(self):
+        """Get or initialize the geopolitical manager."""
+        if not self._geopolitical_manager:
+            from lore.managers.geopolitical import GeopoliticalSystemManager
+            self._geopolitical_manager = GeopoliticalSystemManager(self.user_id, self.conversation_id)
+            await self._geopolitical_manager.ensure_initialized()
+            logger.info("Geopolitical manager initialized")
+        return self._geopolitical_manager
+    
+    async def _get_politics_manager(self):
+        """Get or initialize the politics manager."""
+        if not self._politics_manager:
+            from lore.managers.politics import WorldPoliticsManager
+            self._politics_manager = WorldPoliticsManager(self.user_id, self.conversation_id)
+            await self._politics_manager.ensure_initialized()
+            logger.info("Politics manager initialized")
+        return self._politics_manager
+    
+    async def _get_lore_system(self):
+        """Get or initialize the core lore system."""
+        if not self._lore_system:
+            from lore.core.lore_system import LoreSystem
+            self._lore_system = LoreSystem(self.user_id, self.conversation_id)
+            await self._lore_system.initialize()
+            logger.info("Core lore system initialized")
+        return self._lore_system
+    
+    async def _get_npc_integration(self):
+        """Get or initialize NPC integration."""
+        if not self._npc_integration:
+            from lore.integration import NPCLoreIntegration
+            self._npc_integration = NPCLoreIntegration()
+            logger.info("NPC integration initialized")
+        return self._npc_integration
+    
+    async def _get_context_enhancer(self):
+        """Get or initialize context enhancer."""
+        if not self._context_enhancer:
+            from lore.integration import ContextEnhancer
+            self._context_enhancer = ContextEnhancer()
+            logger.info("Context enhancer initialized")
+        return self._context_enhancer
+    
+    async def _get_world_lore_manager(self):
+        """Get or initialize the world lore manager."""
+        if not self._world_lore_manager:
+            from lore.managers.world_lore import WorldLoreManager
+            self._world_lore_manager = WorldLoreManager(self.user_id, self.conversation_id)
+            await self._world_lore_manager.ensure_initialized()
+            logger.info("World lore manager initialized")
+        return self._world_lore_manager
+    
+    async def _get_lore_dynamics_system(self):
+        """Get or initialize the lore dynamics system."""
+        if not hasattr(self, '_lore_dynamics_system'):
+            from lore.systems.dynamics import LoreDynamicsSystem
+            self._lore_dynamics_system = LoreDynamicsSystem(self.user_id, self.conversation_id)
+            logger.info("Lore dynamics system initialized")
+        return self._lore_dynamics_system
+    
+    async def _get_lore_update_system(self):
+        """Get or initialize the lore update system."""
+        if not hasattr(self, '_lore_update_system'):
+            from lore.systems.lore_update import LoreUpdateSystem
+            self._lore_update_system = LoreUpdateSystem(self.user_id, self.conversation_id)
+            logger.info("Lore update system initialized")
+        return self._lore_update_system
+    
+    async def _get_matriarchal_system(self):
+        """Get or initialize the matriarchal lore system."""
+        if not hasattr(self, '_matriarchal_system'):
+            from lore.matriarchal_lore_system import MatriarchalLoreSystem
+            self._matriarchal_system = MatriarchalLoreSystem(self.user_id, self.conversation_id)
+            await self._matriarchal_system.initialize()
+            logger.info("Matriarchal lore system initialized")
+        return self._matriarchal_system
+    
+    async def _get_dynamic_generator(self):
+        """Get or initialize the dynamic lore generator."""
+        if not hasattr(self, '_dynamic_generator'):
+            from lore.lore_generator import DynamicLoreGenerator
+            self._dynamic_generator = DynamicLoreGenerator.get_instance(
+                self.user_id, 
+                self.conversation_id
+            )
+            await self._dynamic_generator.initialize()
+            logger.info("Dynamic lore generator initialized")
+        return self._dynamic_generator
+    
+    async def _get_conflict_integration(self):
+        """Get or initialize conflict integration."""
+        if not self._conflict_integration:
+            from lore.integration import ConflictIntegration
+            self._conflict_integration = ConflictIntegration()
+            logger.info("Conflict integration initialized")
+        return self._conflict_integration
+    
+    async def _get_master_coordinator(self):
+        """Get or initialize the master coordinator."""
+        if not self._master_coordinator:
+            from lore.coordination import MasterCoordinator
+            self._master_coordinator = MasterCoordinator(self.user_id, self.conversation_id)
+            logger.info("Master coordinator initialized")
+        return self._master_coordinator
+    
+    async def _get_content_validator(self):
+        """Get or initialize the content validator."""
+        if not self._content_validator:
+            from lore.validation import ContentValidator
+            self._content_validator = ContentValidator()
+            logger.info("Content validator initialized")
+        return self._content_validator
+    
+    async def _get_relationship_mapper(self):
+        """Get or initialize the relationship mapper."""
+        if not self._relationship_mapper:
+            from lore.mapping import RelationshipMapper
+            self._relationship_mapper = RelationshipMapper()
+            logger.info("Relationship mapper initialized")
+        return self._relationship_mapper
+    
+    async def _get_unified_trace_system(self):
+        """Get or initialize the unified trace system."""
+        if not self._unified_trace_system:
+            from lore.tracing import UnifiedTraceSystem
+            self._unified_trace_system = UnifiedTraceSystem(self.user_id, self.conversation_id)
+            logger.info("Unified trace system initialized")
+        return self._unified_trace_system
+    
+    async def _get_npc_data_access(self):
+        """Get or initialize NPC data access."""
+        if not self._npc_data_access:
+            from lore.data_access import NPCDataAccess
+            self._npc_data_access = NPCDataAccess()
+            logger.info("NPC data access initialized")
+        return self._npc_data_access
+    
+    async def _get_location_data_access(self):
+        """Get or initialize location data access."""
+        if not self._location_data_access:
+            from lore.data_access import LocationDataAccess
+            self._location_data_access = LocationDataAccess()
+            logger.info("Location data access initialized")
+        return self._location_data_access
+    
+    async def _get_faction_data_access(self):
+        """Get or initialize faction data access."""
+        if not self._faction_data_access:
+            from lore.data_access import FactionDataAccess
+            self._faction_data_access = FactionDataAccess()
+            logger.info("Faction data access initialized")
+        return self._faction_data_access
+    
+    async def _get_knowledge_access(self):
+        """Get or initialize knowledge access."""
+        if not self._knowledge_access:
+            from lore.data_access import LoreKnowledgeAccess
+            self._knowledge_access = LoreKnowledgeAccess()
+            logger.info("Knowledge access initialized")
+        return self._knowledge_access
+    
+    async def _get_lore_generator(self):
+        """Get or initialize lore generator."""
+        if not self._lore_generator:
+            from lore.lore_generator import DynamicLoreGenerator
+            self._lore_generator = DynamicLoreGenerator.get_instance(
+                self.user_id,
+                self.conversation_id
+            )
+            logger.info("Lore generator initialized")
+        return self._lore_generator
+    
+    async def _get_regional_culture_system(self):
+        """Get or initialize regional culture system."""
+        if not self._regional_culture_system:
+            from lore.systems.regional_culture import RegionalCultureSystem
+            self._regional_culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
+            await self._regional_culture_system.initialize_tables()
+            logger.info("Regional culture system initialized")
+        return self._regional_culture_system
+    
+    async def _get_national_conflict_system(self):
+        """Get or initialize national conflict system."""
+        if not hasattr(self, '_national_conflict_system'):
+            from lore.systems.national_conflict import NationalConflictSystem
+            self._national_conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
+            logger.info("National conflict system initialized")
+        return self._national_conflict_system
+    
+    async def _get_religious_distribution_system(self):
+        """Get or initialize religious distribution system."""
+        if not hasattr(self, '_religious_distribution_system'):
+            from lore.systems.religious_distribution import ReligiousDistributionSystem
+            self._religious_distribution_system = ReligiousDistributionSystem(self.user_id, self.conversation_id)
+            logger.info("Religious distribution system initialized")
+        return self._religious_distribution_system
+    
+    async def _get_matriarchal_power_framework(self):
+        """Get or initialize matriarchal power framework."""
+        if not hasattr(self, '_matriarchal_power_framework'):
+            from lore.frameworks.matriarchal_power import MatriarchalPowerFramework
+            self._matriarchal_power_framework = MatriarchalPowerFramework(self.user_id, self.conversation_id)
+            logger.info("Matriarchal power framework initialized")
+        return self._matriarchal_power_framework
     
     # ===== CORE LORE OPERATIONS =====
     
@@ -2073,6 +1912,7 @@ class LoreOrchestrator:
         Generate a complete world with all lore components.
         
         Args:
+            ctx: Context object
             environment_desc: Description of the environment/setting
             use_matriarchal_theme: Override config setting for matriarchal theme
             
@@ -2082,24 +1922,24 @@ class LoreOrchestrator:
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
         
-        use_theme = use_matriarchal_theme if use_matriarchal_theme is not None else self.config.enable_matriarchal_theme
+        # Determine theme
+        use_matriarchal = use_matriarchal_theme if use_matriarchal_theme is not None else self.config.enable_matriarchal_theme
         
-        try:
-            if use_theme:
-                # Use matriarchal system
-                system = await self._get_matriarchal_system()
-                return await system.generate_complete_world(ctx, environment_desc)
-            else:
-                # Use standard generator
-                generator = await self._get_dynamic_generator()
-                return await generator.generate_complete_lore(environment_desc)
-                
-        except Exception as e:
-            if self._error_handler:
-                from lore.error_manager import LoreError, ErrorType
-                error = LoreError(f"Failed to generate world: {str(e)}", ErrorType.UNKNOWN)
-                await self._error_handler.handle_error(error)
-            raise
+        # Get the lore system
+        lore_system = await self._get_lore_system()
+        
+        # Generate the world
+        result = await lore_system.generate_complete_world(
+            ctx,
+            environment_desc,
+            use_matriarchal_theme=use_matriarchal
+        )
+        
+        # Update metrics
+        self.metrics["operations"] += 1
+        self.metrics["last_operation"] = "generate_world"
+        
+        return result
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -2112,6 +1952,7 @@ class LoreOrchestrator:
         Evolve the world based on a narrative event.
         
         Args:
+            ctx: Context object
             event_description: Description of the event
             affected_location_id: Optional specific location affected
             
@@ -2121,977 +1962,44 @@ class LoreOrchestrator:
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
         
-        if self.config.enable_matriarchal_theme:
-            system = await self._get_matriarchal_system()
-            return await system.handle_narrative_event(
-                ctx,
-                event_description,
-                affected_location_id
+        # Get lore dynamics system
+        dynamics = await self._get_lore_dynamics_system()
+        
+        # Evolve the world
+        result = await dynamics.evolve_lore_with_event(event_description)
+        
+        # If specific location affected, update local lore
+        if affected_location_id:
+            local_mgr = await self._get_local_lore_manager()
+            location_update = await local_mgr.evolve_location_lore(
+                ctx, affected_location_id, event_description
             )
-        else:
-            generator = await self._get_dynamic_generator()
-            evolution = await generator.lore_evolution.evolve_lore_with_event(event_description)
-            return evolution
-    
-    # ===== MATRIARCHAL POWER FRAMEWORK OPERATIONS =====
-    
-    async def generate_matriarchal_core_principles(self) -> Dict[str, Any]:
-        """
-        Generate core principles for a matriarchal world.
-        
-        Returns:
-            Core principles structure
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        framework = await self._get_matriarchal_power_framework()
-        return await framework.generate_core_principles()
-    
-    async def generate_hierarchical_constraints(self) -> Dict[str, Any]:
-        """
-        Generate hierarchical constraints for matriarchal society.
-        
-        Returns:
-            Hierarchical constraints structure
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        framework = await self._get_matriarchal_power_framework()
-        return await framework.generate_hierarchical_constraints()
-    
-    async def apply_matriarchal_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Apply matriarchal power lens to foundation lore.
-        
-        Args:
-            foundation_data: Foundation lore to transform
+            result['location_update'] = location_update
             
-        Returns:
-            Transformed lore with matriarchal themes
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
+            # Record location change
+            if self._change_tracking_enabled and location_update:
+                await self.record_lore_change(
+                    'location', 
+                    affected_location_id, 
+                    'update',
+                    new_data={'event': event_description, 'updates': location_update}
+                )
         
-        framework = await self._get_matriarchal_power_framework()
-        return await framework.apply_power_lens(foundation_data)
-    
-    async def generate_power_expressions(self) -> List[Dict[str, Any]]:
-        """
-        Generate power expressions for matriarchal society.
-        
-        Returns:
-            List of power expressions
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        framework = await self._get_matriarchal_power_framework()
-        return await framework.generate_power_expressions()
-    
-    async def develop_matriarchal_narrative(self, narrative_theme: str, initial_scene: str) -> AsyncGenerator[str, None]:
-        """
-        Develop a narrative through iterative dialogue with matriarchal themes.
-        
-        Args:
-            narrative_theme: Theme of the narrative
-            initial_scene: Starting scene
-            
-        Yields:
-            Narrative segments as they develop
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        framework = await self._get_matriarchal_power_framework()
-        async for segment in framework.develop_narrative_through_dialogue(narrative_theme, initial_scene):
-            yield segment
-    
-    # ===== LORE DYNAMICS OPERATIONS =====
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="evolve_lore_with_event",
-        action_description="Evolving lore based on event",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def evolve_lore_with_event(self, ctx, event_description: str) -> Dict[str, Any]:
-        """
-        Evolve world lore based on a narrative event using the dynamics system.
-        
-        Args:
-            event_description: Description of the event
-            
-        Returns:
-            Evolution results with affected elements and updates
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        dynamics = await self._get_lore_dynamics_system()
-        return await dynamics.evolve_lore_with_event(ctx, event_description)
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_emergent_event",
-        action_description="Generating emergent world event",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def generate_emergent_event(self, ctx) -> Dict[str, Any]:
-        """
-        Generate a random emergent event in the world.
-        
-        Returns:
-            Generated event data with lore updates
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        dynamics = await self._get_lore_dynamics_system()
-        return await dynamics.generate_emergent_event(ctx)
-    
-    async def mature_lore_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
-        """
-        Natural evolution of lore over time.
-        
-        Args:
-            days_passed: Number of days to simulate
-            
-        Returns:
-            Maturation summary with changes
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        dynamics = await self._get_lore_dynamics_system()
-        ctx = self._create_mock_context()
-        return await dynamics.mature_lore_over_time(days_passed)
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="evolve_world_over_time",
-        action_description="Evolving world over time period",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def evolve_world_over_time(self, ctx, days_passed: int = 30) -> Dict[str, Any]:
-        """
-        Evolve the entire world across a specified time period.
-        
-        Args:
-            days_passed: Number of days to simulate
-            
-        Returns:
-            Complete evolution results
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        dynamics = await self._get_lore_dynamics_system()
-        return await dynamics.evolve_world_over_time(ctx, days_passed)
-
-    async def get_faction_religion(self, faction_id: int) -> Dict[str, Any]:
-        """
-        Get religious information for a faction.
-        
-        Args:
-            faction_id: ID of the faction
-            
-        Returns:
-            Religious affiliations and practices
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get faction data
-                faction = await conn.fetchrow("""
-                    SELECT * FROM Factions WHERE id = $1
-                """, faction_id)
-                
-                if not faction:
-                    return {"error": "Faction not found"}
-                
-                # Get religious orders associated with faction
-                orders = await conn.fetch("""
-                    SELECT ro.* FROM ReligiousOrders ro
-                    WHERE $1 = ANY(ro.notable_members)
-                       OR ro.name LIKE '%' || $2 || '%'
-                """, faction['name'], faction['name'])
-                
-                # Get holy sites controlled by faction
-                holy_sites = await conn.fetch("""
-                    SELECT hs.* FROM HolySites hs
-                    JOIN Locations l ON hs.location_id = l.id
-                    WHERE l.controlling_faction = $1
-                """, faction_id)
-                
-                return {
-                    "faction": dict(faction),
-                    "religious_orders": [dict(o) for o in orders],
-                    "controlled_holy_sites": [dict(s) for s in holy_sites]
-                }
-    
-    async def get_location_full_context(self, location_id: int) -> Dict[str, Any]:
-        """
-        Get complete context for a location including lore, politics, and religion.
-        
-        Args:
-            location_id: ID of the location
-            
-        Returns:
-            Complete location context
-        """
-        # Get base location data
-        location_context = await self.get_location_context(f"location_{location_id}")
-        
-        # Get local lore
-        local_lore = await self.get_location_lore(
-            self.create_run_context(),
-            location_id
-        )
-        
-        # Get religious sites at location
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                holy_sites = await conn.fetch("""
-                    SELECT * FROM HolySites WHERE location_id = $1
-                """, location_id)
-                
-                # Get political control
-                political = await conn.fetchrow("""
-                    SELECT l.*, f.name as faction_name, n.name as nation_name
-                    FROM Locations l
-                    LEFT JOIN Factions f ON l.controlling_faction = f.id
-                    LEFT JOIN Nations n ON l.nation_id = n.id
-                    WHERE l.id = $1
-                """, location_id)
-        
-        return {
-            "base_context": location_context,
-            "local_lore": local_lore,
-            "holy_sites": [dict(s) for s in holy_sites],
-            "political_control": dict(political) if political else {}
-        }
-    
-    async def simulate_cultural_religious_exchange(
-        self,
-        nation1_id: int,
-        nation2_id: int,
-        exchange_type: str = "peaceful",
-        duration_years: int = 10
-    ) -> Dict[str, Any]:
-        """
-        Simulate cultural and religious exchange between nations.
-        
-        Args:
-            nation1_id: First nation ID
-            nation2_id: Second nation ID
-            exchange_type: Type of exchange ('peaceful', 'conquest', 'trade')
-            duration_years: Duration of exchange
-            
-        Returns:
-            Exchange results
-        """
-        # Get cultural diffusion
-        cultural_results = await self.simulate_cultural_diffusion(
-            self.create_run_context(),
-            nation1_id,
-            nation2_id,
-            duration_years
-        )
-        
-        # Get religious evolution
-        nation1_religion = await self.get_nation_religion(
-            self.create_run_context(),
-            nation1_id
-        )
-        
-        if nation1_religion and "primary_pantheon" in nation1_religion:
-            pantheon_id = nation1_religion["primary_pantheon"]["id"]
-            religious_results = await self.evolve_religion_from_culture(
-                self.create_run_context(),
-                pantheon_id,
-                nation2_id,
-                duration_years
-            )
-        else:
-            religious_results = {"message": "No primary religion to evolve"}
-        
-        return {
-            "cultural_exchange": cultural_results,
-            "religious_evolution": religious_results,
-            "exchange_type": exchange_type,
-            "duration_years": duration_years
-        }
-
-    async def get_resource_usage_stats(self) -> Dict[str, Any]:
-        """
-        Get detailed resource usage statistics.
-        
-        Returns:
-            Resource usage statistics
-        """
-        world_manager = await self._get_world_lore_manager()
-        return await world_manager.get_resource_stats()
-    
-    async def optimize_world_resources(self) -> Dict[str, Any]:
-        """
-        Optimize world lore resource usage.
-        
-        Returns:
-            Optimization results
-        """
-        world_manager = await self._get_world_lore_manager()
-        await world_manager.optimize_resources()
-        return {"status": "optimized", "timestamp": datetime.now().isoformat()}
-    
-    async def cleanup_world_resources(self) -> Dict[str, Any]:
-        """
-        Clean up unused world lore resources.
-        
-        Returns:
-            Cleanup results
-        """
-        world_manager = await self._get_world_lore_manager()
-        await world_manager.cleanup_resources()
-        return {"status": "cleaned", "timestamp": datetime.now().isoformat()}
-    
-    async def resolve_world_inconsistencies_with_fixes(self, world_id: str = "main") -> Dict[str, Any]:
-        """
-        Identify and automatically resolve world inconsistencies.
-        
-        Args:
-            world_id: ID of the world
-            
-        Returns:
-            Resolution results
-        """
-        world_manager = await self._get_world_lore_manager()
-        return await world_manager.resolve_world_inconsistencies(world_id)
-    
-    async def generate_world_documentation(
-        self,
-        world_id: str = "main",
-        include_history: bool = True,
-        include_current_state: bool = True,
-        format_type: str = "markdown"
-    ) -> str:
-        """
-        Generate comprehensive world documentation.
-        
-        Args:
-            world_id: ID of the world
-            include_history: Include historical timeline
-            include_current_state: Include current state
-            format_type: Output format ('markdown', 'html', 'json')
-            
-        Returns:
-            Formatted documentation
-        """
-        world_manager = await self._get_world_lore_manager()
-        doc = await world_manager.generate_world_summary(world_id, include_history, include_current_state)
-        
-        if format_type == "html":
-            # Convert markdown to HTML
-            import markdown
-            return markdown.markdown(doc)
-        elif format_type == "json":
-            # Parse and return as JSON structure
-            return json.dumps({"documentation": doc, "world_id": world_id})
-        return doc
-    
-    async def query_world_natural_language(self, query: str, world_id: str = "main") -> str:
-        """
-        Query the world state using natural language.
-        
-        Args:
-            query: Natural language query
-            world_id: ID of the world
-            
-        Returns:
-            Query response
-        """
-        world_manager = await self._get_world_lore_manager()
-        return await world_manager.query_world_state(query)
-    
-    async def export_world_trace(self, trace_id: str, format_type: str = "json") -> Dict[str, Any]:
-        """
-        Export a trace of world operations.
-        
-        Args:
-            trace_id: ID of the trace
-            format_type: Export format
-            
-        Returns:
-            Trace data
-        """
-        trace_system = await self._get_unified_trace_system()
-        return trace_system.export_trace(trace_id, format_type)
-    
-    async def create_lore_relationship_graph(self, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Create a relationship graph from lore elements.
-        
-        Args:
-            elements: List of lore elements
-            
-        Returns:
-            Relationship graph
-        """
-        mapper = await self._get_relationship_mapper()
-        return await mapper.create_relationship_graph(elements)
-    
-    async def find_lore_connections(
-        self,
-        element_id: str,
-        element_type: str,
-        depth: int = 2,
-        connection_types: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
-        """
-        Find deep connections between lore elements.
-        
-        Args:
-            element_id: ID of the element
-            element_type: Type of element
-            depth: Search depth
-            connection_types: Types of connections to find
-            
-        Returns:
-            Connection graph
-        """
-        mapper = await self._get_relationship_mapper()
-        connections = await mapper.find_related_elements(element_id, element_type, depth)
-        
-        # Filter by connection types if specified
-        if connection_types:
-            filtered = []
-            for conn in connections.get("related_elements", []):
-                if conn.get("relationship_type") in connection_types:
-                    filtered.append(conn)
-            connections["related_elements"] = filtered
-        
-        return connections
-    
-    async def validate_lore_element(self, element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
-        """
-        Validate a lore element for consistency and quality.
-        
-        Args:
-            element: Element data
-            element_type: Type of element
-            
-        Returns:
-            Validation results
-        """
-        validator = await self._get_content_validator()
-        return await validator.validate_content(
-            self.create_run_context(),
-            element,
-            element_type
-        )
-
-    async def search_religious_content(self, query: str, content_type: str = 'all', limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Search religious content by semantic similarity.
-        
-        Args:
-            query: Search query
-            content_type: Type of content ('deity', 'pantheon', 'practice', 'text', 'order', 'all')
-            limit: Maximum results
-            
-        Returns:
-            List of matching religious content
-        """
-        from utils.embedding_service import get_embedding
-        
-        embed = await get_embedding(query)
-        results = []
-        
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                if content_type in ['deity', 'all']:
-                    deities = await conn.fetch("""
-                        SELECT *, embedding <=> $1 as distance
-                        FROM Deities
-                        ORDER BY distance
-                        LIMIT $2
-                    """, embed, limit if content_type == 'deity' else 5)
-                    results.extend([{**dict(d), 'type': 'deity'} for d in deities])
-                
-                if content_type in ['pantheon', 'all']:
-                    pantheons = await conn.fetch("""
-                        SELECT *, embedding <=> $1 as distance
-                        FROM Pantheons
-                        ORDER BY distance
-                        LIMIT $2
-                    """, embed, limit if content_type == 'pantheon' else 5)
-                    results.extend([{**dict(p), 'type': 'pantheon'} for p in pantheons])
-                
-                if content_type in ['practice', 'all']:
-                    practices = await conn.fetch("""
-                        SELECT *, embedding <=> $1 as distance
-                        FROM ReligiousPractices
-                        ORDER BY distance
-                        LIMIT $2
-                    """, embed, limit if content_type == 'practice' else 5)
-                    results.extend([{**dict(p), 'type': 'practice'} for p in practices])
-        
-        # Sort by distance and limit
-        results.sort(key=lambda x: x.get('distance', float('inf')))
-        return results[:limit]
-
-    async def get_all_pantheons(self) -> List[Dict[str, Any]]:
-        """
-        Get all pantheons in the world.
-        
-        Returns:
-            List of pantheons
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                pantheons = await conn.fetch("""
-                    SELECT * FROM Pantheons
-                    ORDER BY id
-                """)
-                return [dict(p) for p in pantheons]
-    
-    async def get_pantheon_deities(self, pantheon_id: int) -> List[Dict[str, Any]]:
-        """
-        Get all deities in a pantheon.
-        
-        Args:
-            pantheon_id: ID of the pantheon
-            
-        Returns:
-            List of deities
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                deities = await conn.fetch("""
-                    SELECT * FROM Deities
-                    WHERE pantheon_id = $1
-                    ORDER BY rank DESC
-                """, pantheon_id)
-                return [dict(d) for d in deities]
-    
-    async def get_religious_practices_by_nation(self, nation_id: int) -> List[Dict[str, Any]]:
-        """
-        Get religious practices specific to a nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            List of regional religious practices
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                practices = await conn.fetch("""
-                    SELECT rrp.*, rp.name, rp.practice_type, rp.purpose
-                    FROM RegionalReligiousPractice rrp
-                    JOIN ReligiousPractices rp ON rrp.practice_id = rp.id
-                    WHERE rrp.nation_id = $1
-                    ORDER BY rrp.importance DESC
-                """, nation_id)
-                return [dict(p) for p in practices]
-    
-    async def get_holy_sites_by_pantheon(self, pantheon_id: int) -> List[Dict[str, Any]]:
-        """
-        Get all holy sites for a pantheon.
-        
-        Args:
-            pantheon_id: ID of the pantheon
-            
-        Returns:
-            List of holy sites
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                sites = await conn.fetch("""
-                    SELECT * FROM HolySites
-                    WHERE pantheon_id = $1
-                    ORDER BY id
-                """, pantheon_id)
-                return [dict(s) for s in sites]
-    
-    async def get_religious_texts_by_pantheon(self, pantheon_id: int) -> List[Dict[str, Any]]:
-        """
-        Get all religious texts for a pantheon.
-        
-        Args:
-            pantheon_id: ID of the pantheon
-            
-        Returns:
-            List of religious texts
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                texts = await conn.fetch("""
-                    SELECT * FROM ReligiousTexts
-                    WHERE pantheon_id = $1
-                    ORDER BY id
-                """, pantheon_id)
-                return [dict(t) for t in texts]
-    
-    async def get_religious_conflicts_by_pantheon(self, pantheon_id: int) -> List[Dict[str, Any]]:
-        """
-        Get religious conflicts involving a pantheon.
-        
-        Args:
-            pantheon_id: ID of the pantheon
-            
-        Returns:
-            List of religious conflicts
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get pantheon name first
-                pantheon_name = await conn.fetchval("""
-                    SELECT name FROM Pantheons WHERE id = $1
-                """, pantheon_id)
-                
-                if pantheon_name:
-                    conflicts = await conn.fetch("""
-                        SELECT * FROM ReligiousConflicts
-                        WHERE $1 = ANY(parties_involved)
-                        ORDER BY beginning_date DESC
-                    """, pantheon_name)
-                    return [dict(c) for c in conflicts]
-                return []
-
-    async def get_nation_issues(self, nation_id: int) -> List[Dict[str, Any]]:
-        """
-        Get all domestic issues for a specific nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            List of domestic issues
-        """
-        manager = await self._get_politics_manager()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                issues = await conn.fetch("""
-                    SELECT * FROM DomesticIssues
-                    WHERE nation_id = $1
-                    ORDER BY severity DESC
-                """, nation_id)
-                return [dict(issue) for issue in issues]
-    
-    async def get_faction_proxy(self, faction_id: int) -> Optional[Any]:
-        """
-        Get a faction agent proxy for autonomous faction behavior.
-        
-        Args:
-            faction_id: ID of the faction
-            
-        Returns:
-            FactionAgentProxy instance or None
-        """
-        manager = await self._get_politics_manager()
-        if not manager.faction_proxies:
-            await manager.initialize_faction_proxies(self.create_run_context())
-        return manager.faction_proxies.get(faction_id)
-    
-    async def simulate_faction_reaction(self, faction_id: int, event: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Simulate how a faction reacts to an event.
-        
-        Args:
-            faction_id: ID of the faction
-            event: Event data
-            
-        Returns:
-            Faction reaction
-        """
-        proxy = await self.get_faction_proxy(faction_id)
-        if not proxy:
-            return {"error": f"Faction {faction_id} not found or not initialized"}
-        return await proxy.react_to_event(event, self.create_run_context())
-    
-    async def create_dynasty(self, name: str, founding_date: str, ruling_nation: int, **kwargs) -> int:
-        """
-        Create a new dynasty.
-        
-        Args:
-            name: Dynasty name
-            founding_date: Founding date
-            ruling_nation: ID of ruling nation
-            **kwargs: Additional dynasty attributes
-            
-        Returns:
-            Dynasty ID
-        """
-        manager = await self._get_politics_manager()
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                dynasty_id = await conn.fetchval("""
-                    INSERT INTO Dynasties (
-                        name, founding_date, ruling_nation, matriarch, 
-                        patriarch, notable_members, family_traits
+        # Record world-level changes from the evolution
+        if self._change_tracking_enabled and 'updates' in result:
+            for update in result.get('updates', []):
+                if 'element_type' in update and 'element_id' in update:
+                    await self.record_lore_change(
+                        update['element_type'],
+                        update['element_id'],
+                        update.get('operation', 'update'),
+                        new_data=update.get('new_data'),
+                        old_data=update.get('old_data')
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    RETURNING id
-                """, 
-                name, founding_date, ruling_nation,
-                kwargs.get('matriarch'), kwargs.get('patriarch'),
-                kwargs.get('notable_members', []), kwargs.get('family_traits', []))
-                
-                return dynasty_id
+        
+        return result
     
-    async def get_conflict_news(self, conflict_id: int, limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Get news articles about a specific conflict.
-        
-        Args:
-            conflict_id: ID of the conflict
-            limit: Maximum number of articles
-            
-        Returns:
-            List of news articles
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                news = await conn.fetch("""
-                    SELECT * FROM ConflictNews
-                    WHERE conflict_id = $1
-                    ORDER BY publication_date DESC
-                    LIMIT $2
-                """, conflict_id, limit)
-                return [dict(article) for article in news]
-    
-    # ===== REGIONAL CULTURE OPERATIONS =====
-    
-    async def summarize_culture(self, nation_id: int, format_type: str = "brief") -> str:
-        """
-        Generate a textual summary of a nation's culture.
-        
-        Args:
-            nation_id: ID of the nation
-            format_type: Format type (brief, detailed, narrative)
-            
-        Returns:
-            Cultural summary text
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        return await culture_system.summarize_culture(nation_id, format_type)
-    
-    async def detect_cultural_conflicts(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
-        """
-        Analyze potential cultural conflicts between two nations.
-        
-        Args:
-            nation_id1: First nation ID
-            nation_id2: Second nation ID
-            
-        Returns:
-            Cultural conflict analysis
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        return await culture_system.detect_cultural_conflicts(nation_id1, nation_id2)
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="simulate_cultural_diffusion",
-        action_description="Simulating cultural diffusion",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def simulate_cultural_diffusion(self, ctx, nation1_id: int, nation2_id: int, years: int = 50) -> Dict[str, Any]:
-        """
-        Simulate cultural diffusion between two nations over time.
-        
-        Args:
-            nation1_id: First nation ID
-            nation2_id: Second nation ID
-            years: Years to simulate
-            
-        Returns:
-            Cultural diffusion results
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        return await culture_system.simulate_cultural_diffusion(ctx, nation1_id, nation2_id, years)
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="evolve_dialect",
-        action_description="Evolving regional dialect",
-        id_from_context=lambda ctx: "lore_orchestrator"
-    )
-    async def evolve_dialect(self, ctx, language_id: int, region_id: int, years: int = 100) -> Dict[str, Any]:
-        """
-        Evolve a regional dialect of a language.
-        
-        Args:
-            language_id: ID of the language
-            region_id: ID of the region
-            years: Years to simulate
-            
-        Returns:
-            Dialect evolution results
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        return await culture_system.evolve_dialect(ctx, language_id, region_id, years)
-    
-    async def generate_diplomatic_protocol(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
-        """
-        Generate diplomatic protocol guide for interactions between two nations.
-        
-        Args:
-            nation_id1: First nation ID
-            nation_id2: Second nation ID
-            
-        Returns:
-            Diplomatic protocol guide
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        return await culture_system.generate_diplomatic_protocol(nation_id1, nation_id2)
-    
-    async def generate_languages(self, count: int = 5) -> List[Dict[str, Any]]:
-        """
-        Generate languages for the world.
-        
-        Args:
-            count: Number of languages to generate
-            
-        Returns:
-            List of generated languages
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        ctx = self._create_mock_context()
-        return await culture_system.generate_languages(ctx, count)
-    
-    async def generate_cultural_norms(self, nation_id: int) -> List[Dict[str, Any]]:
-        """
-        Generate cultural norms for a specific nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            List of generated cultural norms
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        ctx = self._create_mock_context(nation_id=nation_id)
-        return await culture_system.generate_cultural_norms(ctx, nation_id)
-    
-    async def generate_etiquette(self, nation_id: int) -> List[Dict[str, Any]]:
-        """
-        Generate etiquette systems for a specific nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            List of generated etiquette systems
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        ctx = self._create_mock_context(nation_id=nation_id)
-        return await culture_system.generate_etiquette(ctx, nation_id)
-    
-    async def get_nation_culture(self, nation_id: int) -> Dict[str, Any]:
-        """
-        Get comprehensive cultural information about a nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            Dictionary with nation's cultural information
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        culture_system = await self._get_regional_culture_system()
-        ctx = self._create_mock_context(nation_id=nation_id)
-        return await culture_system.get_nation_culture(ctx, nation_id)
-    
-    # ===== NPC INTEGRATION =====
-    
-    async def integrate_lore_with_npc(self, npc_id: int, cultural_background: str, faction_affiliations: List[str]) -> Dict[str, Any]:
-        """
-        Integrate lore with a specific NPC.
-        
-        Args:
-            npc_id: ID of the NPC
-            cultural_background: NPC's cultural background
-            faction_affiliations: List of faction names
-            
-        Returns:
-            Integration results
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        integration = await self._get_npc_integration(npc_id)
-        ctx = self._create_mock_context(npc_id=npc_id)
-        return await integration.initialize_npc_lore_knowledge(
-            ctx,
-            npc_id,
-            cultural_background,
-            faction_affiliations
-        )
-    
-    async def process_npc_lore_interaction(self, npc_id: int, player_input: str) -> Dict[str, Any]:
-        """
-        Process a lore-related interaction between player and NPC.
-        
-        Args:
-            npc_id: ID of the NPC
-            player_input: Player's input/question
-            
-        Returns:
-            Interaction results and NPC response
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        integration = await self._get_npc_integration(npc_id)
-        ctx = self._create_mock_context(npc_id=npc_id)
-        return await integration.process_npc_lore_interaction(ctx, npc_id, player_input)
-    
-    async def apply_dialect_to_npc_text(self, text: str, dialect_id: int, intensity: str = 'medium', npc_id: Optional[int] = None) -> str:
-        """
-        Apply dialect features to NPC text.
-        
-        Args:
-            text: Original text
-            dialect_id: ID of the dialect to apply
-            intensity: Intensity of dialect application ('light', 'medium', 'strong')
-            npc_id: Optional NPC ID for personalized dialect features
-            
-        Returns:
-            Modified text with dialect features applied
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        integration = await self._get_npc_integration(npc_id)
-        return await integration.apply_dialect_to_text(text, dialect_id, intensity, npc_id)
+    # ===== NPC LORE OPERATIONS =====
     
     async def get_npc_data(self, npc_ids: List[int]) -> Dict[int, Dict[str, Any]]:
         """
@@ -3149,24 +2057,54 @@ class LoreOrchestrator:
         from lore.lore_agents import integrate_npc_lore
         return await integrate_npc_lore(npc_id, relevant_lore, context)
     
-    # ===== LOCATION OPERATIONS =====
-    
-    async def get_location_context(self, location_name: str) -> Dict[str, Any]:
+    async def initialize_npc_lore_knowledge(
+        self,
+        npc_id: int,
+        cultural_background: str,
+        faction_affiliations: List[str]
+    ) -> Dict[str, Any]:
         """
-        Get comprehensive context for a location including lore.
+        Initialize NPC lore knowledge based on background.
         
         Args:
-            location_name: Name of the location
+            npc_id: ID of the NPC
+            cultural_background: NPC's cultural background
+            faction_affiliations: List of faction names
             
         Returns:
-            Complete location context
+            Integration results
         """
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
         
-        enhancer = await self._get_context_enhancer()
-        location_data = {"location": location_name}
-        return await enhancer.enhance_context(location_data)
+        integration = await self._get_npc_integration()
+        ctx = self._create_mock_context(npc_id=npc_id)
+        return await integration.initialize_npc_lore_knowledge(
+            ctx,
+            npc_id,
+            cultural_background,
+            faction_affiliations
+        )
+    
+    async def process_npc_lore_interaction(self, npc_id: int, player_input: str) -> Dict[str, Any]:
+        """
+        Process a lore-related interaction between player and NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            player_input: Player's input/question
+            
+        Returns:
+            Interaction results and NPC response
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        integration = await self._get_npc_integration()
+        ctx = self._create_mock_context(npc_id=npc_id)
+        return await integration.process_npc_lore_interaction(ctx, npc_id, player_input)
+    
+    # ===== LOCATION OPERATIONS =====
     
     async def generate_scene_description(self, location_name: str) -> Dict[str, Any]:
         """
@@ -3181,1060 +2119,586 @@ class LoreOrchestrator:
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
         
-        enhancer = await self._get_context_enhancer()
-        return await enhancer.generate_scene_description(location_name)
+        from lore.lore_agents import generate_scene_description
+        location_data = await self.get_location_context(location_name)
+        lore_context = await self._get_lore_system()
+        
+        return await generate_scene_description(
+            location_data,
+            lore_context,
+            {}
+        )
     
-    async def get_location_data(self, location_name: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    # ===== LOCAL LORE OPERATIONS =====
+    
+    async def create_urban_myth(self, ctx, params: MythCreationInput) -> int:
         """
-        Retrieve location-specific data including environment, NPCs, and lore.
+        Create an urban myth for a location.
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import create_urban_myth
+        from agents import RunContextWrapper
+    
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+    
+        myth_id = await create_urban_myth(run_ctx, params)
+    
+        # Record the change
+        if myth_id and self._change_tracking_enabled:
+            myth_data = {
+                'title': getattr(params, 'title', None),
+                'description': getattr(params, 'description', None),
+                'location_id': getattr(params, 'location_id', None),
+                'belief_level': getattr(params, 'belief_level', 0.5)
+            }
+            await self.record_lore_change('myth', myth_id, 'create', new_data=myth_data)
+    
+        return myth_id
+    
+    async def add_local_history(self, ctx, params: HistoryCreationInput) -> int:
+        """
+        Add local history to a location.
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import add_local_history
+        from agents import RunContextWrapper
+    
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+    
+        return await add_local_history(run_ctx, params)
+    
+    async def add_landmark(self, ctx, params: LandmarkCreationInput) -> int:
+        """
+        Add a landmark to a location.
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import add_landmark
+        from agents import RunContextWrapper
+    
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+    
+        return await add_landmark(run_ctx, params)
+    
+    async def evolve_myth(
+        self, ctx,
+        myth_id: int,
+        evolution_type: EvolutionType,
+        causal_factors: Optional[List[str]] = None
+    ) -> NarrativeEvolution:
+        """
+        Evolve an urban myth.
         
         Args:
-            location_name: Name of the location
-            context: Optional context dictionary
+            ctx: Context object
+            myth_id: ID of the myth
+            evolution_type: Type of evolution
+            causal_factors: Causal factors
             
         Returns:
-            Dict containing location data
+            NarrativeEvolution results
         """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import evolve_myth
+        from agents import RunContextWrapper
         
-        from lore.lore_agents import get_location_data
-        return await get_location_data(location_name, context)
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await evolve_myth(run_ctx, myth_id, evolution_type, causal_factors)
     
-    # ===== CONFLICT MANAGEMENT =====
-    
-    async def get_active_conflicts(self) -> List[Dict[str, Any]]:
+    async def get_location_lore(self, ctx, location_id: int) -> LocationLoreResult:
         """
-        Get all active conflicts in the world.
+        Get all lore for a location.
+        
+        Args:
+            ctx: Context object
+            location_id: Location ID
+            
+        Returns:
+            LocationLoreResult
+        """
+        manager = await self._get_local_lore_manager()
+        from lore.managers.local_lore import get_location_lore
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await get_location_lore(run_ctx, location_id)
+    
+    # ===== EDUCATION SYSTEM OPERATIONS =====
+    
+    async def generate_educational_systems(self, ctx, count: int = 3) -> List[EducationalSystem]:
+        """
+        Generate educational systems for the world.
+        
+        Args:
+            ctx: Context object
+            count: Number of systems to generate
+            
+        Returns:
+            List of EducationalSystem objects
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import generate_educational_systems
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await generate_educational_systems(run_ctx, count)
+    
+    async def generate_knowledge_traditions(self, ctx, system_id: int, count: int = 5) -> List[KnowledgeTradition]:
+        """
+        Generate knowledge traditions for an educational system.
+        
+        Args:
+            ctx: Context object
+            system_id: Educational system ID
+            count: Number of traditions to generate
+            
+        Returns:
+            List of KnowledgeTradition objects
+        """
+        manager = await self._get_education_manager()
+        from lore.managers.education import generate_knowledge_traditions
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await generate_knowledge_traditions(run_ctx, system_id, count)
+    
+    # ===== RELIGION OPERATIONS =====
+    
+    async def add_deity(self, ctx, params: DeityParams) -> int:
+        """Add a deity to the world."""
+        manager = await self._get_religion_manager()
+        return await manager.add_deity(ctx, params)
+    
+    async def add_pantheon(self, ctx, params: PantheonParams) -> int:
+        """Add a pantheon to the world."""
+        manager = await self._get_religion_manager()
+        return await manager.add_pantheon(ctx, params)
+    
+    async def generate_complete_faith_system(self, ctx) -> Dict[str, Any]:
+        """Generate a complete faith system with all components."""
+        manager = await self._get_religion_manager()
+        return await manager.generate_complete_faith_system(ctx)
+    
+    async def distribute_religions(self, ctx) -> List[Dict[str, Any]]:
+        """Distribute religions across nations."""
+        manager = await self._get_religion_manager()
+        return await manager.distribute_religions(ctx)
+    
+    async def generate_ritual(
+        self, ctx,
+        pantheon_id: int,
+        deity_id: Optional[int] = None,
+        purpose: str = "blessing",
+        formality_level: int = 5
+    ) -> Dict[str, Any]:
+        """Generate a detailed religious ritual."""
+        manager = await self._get_religion_manager()
+        return await manager.generate_ritual(ctx, pantheon_id, deity_id, purpose, formality_level)
+    
+    # ===== POLITICS OPERATIONS =====
+    
+    async def add_nation(
+        self, ctx,
+        name: str,
+        government_type: str,
+        description: str,
+        relative_power: int = 5,
+        matriarchy_level: int = 50,
+        **kwargs
+    ) -> int:
+        """Add a nation to the world."""
+        manager = await self._get_politics_manager()
+        return await manager.add_nation(
+            ctx, name, government_type, description, relative_power,
+            matriarchy_level, **kwargs
+        )
+    
+    async def get_all_nations(self, ctx) -> List[Dict[str, Any]]:
+        """Get all nations in the world."""
+        manager = await self._get_politics_manager()
+        return await manager.get_all_nations(ctx)
+    
+    async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
+        """Generate initial conflicts between nations."""
+        manager = await self._get_politics_manager()
+        return await manager.generate_initial_conflicts(ctx, count)
+    
+    async def simulate_diplomatic_negotiation(
+        self, ctx, 
+        nation1_id: int, 
+        nation2_id: int, 
+        issue: str
+    ) -> Dict[str, Any]:
+        """Simulate diplomatic negotiations between two nations."""
+        manager = await self._get_politics_manager()
+        return await manager.simulate_diplomatic_negotiation(ctx, nation1_id, nation2_id, issue)
+    
+    # ===== GEOPOLITICAL OPERATIONS =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="geopolitical_operation",
+        action_description="Performing geopolitical operation",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def add_geographic_region(
+        self, ctx,
+        name: str,
+        region_type: str,
+        description: str,
+        **kwargs
+    ) -> int:
+        """
+        Add a geographic region.
+        
+        Args:
+            ctx: Context object
+            name: Region name
+            region_type: Type of region
+            description: Description
+            **kwargs: Additional parameters (climate, resources, governing_faction, etc.)
+            
+        Returns:
+            Region ID
+        """
+        manager = await self._get_geopolitical_manager()
+        from lore.managers.geopolitical import GeopoliticalSystemManager
+        from agents import RunContextWrapper
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "manager": manager
+        })
+        
+        return await GeopoliticalSystemManager.add_geographic_region(
+            run_ctx, name, region_type, description, **kwargs
+        )
+    
+    # ===== LORE DYNAMICS OPERATIONS =====
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_emergent_event",
+        action_description="Generating emergent world event",
+        id_from_context=lambda ctx: "lore_orchestrator"
+    )
+    async def generate_emergent_event(self, ctx) -> Dict[str, Any]:
+        """
+        Generate a random emergent event in the world.
         
         Returns:
-            List of active conflicts
+            Generated event data with lore updates
         """
         if not self.initialized and self.config.auto_initialize:
             await self.initialize()
         
-        integration = await self._get_conflict_integration()
+        dynamics = await self._get_lore_dynamics_system()
+        return await dynamics.generate_emergent_event(ctx)
+    
+    async def mature_lore_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
+        """
+        Natural evolution of lore over time.
         
-        # Query active conflicts from database
+        Args:
+            days_passed: Number of days to simulate
+            
+        Returns:
+            Maturation summary with changes
+        """
+        if not self.initialized and self.config.auto_initialize:
+            await self.initialize()
+        
+        dynamics = await self._get_lore_dynamics_system()
+        ctx = self._create_mock_context()
+        return await dynamics.mature_lore_over_time(days_passed)
+    
+    # ===== CANON OPERATIONS =====
+    
+    async def ensure_canonical_consistency(self, ctx, content: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ensure content is canonically consistent.
+        
+        Args:
+            ctx: Context object
+            content: Content to validate
+            
+        Returns:
+            Validation results with any corrections
+        """
+        canon = await self._get_canon_module()
+        return await canon.ensure_canonical_consistency(ctx, content)
+    
+    async def log_canonical_event(
+        self, ctx,
+        event_description: str,
+        tags: List[str] = None,
+        significance: int = 3
+    ) -> int:
+        """
+        Log a canonical event.
+        
+        Args:
+            ctx: Context object
+            event_description: Description of the event
+            tags: Event tags
+            significance: Significance level (1-10)
+            
+        Returns:
+            Event ID
+        """
+        canon = await self._get_canon_module()
         async with get_db_connection_context() as conn:
-            rows = await conn.fetch("""
-                SELECT * FROM Conflicts 
-                WHERE user_id = $1 AND conversation_id = $2 
-                AND status = 'active'
-            """, self.user_id, self.conversation_id)
-            
-            conflicts = []
-            for row in rows:
-                conflict_id = row['id']
-                conflict_lore = await integration.get_conflict_lore(conflict_id)
-                conflicts.append({
-                    **dict(row),
-                    'lore': conflict_lore
-                })
-            
-            return conflicts
+            return await canon.log_canonical_event(
+                ctx, conn, event_description, tags, significance
+            )
     
-    async def generate_faction_conflict(self, faction_a_id: int, faction_b_id: int) -> Dict[str, Any]:
+    
+    # ===== PUBLIC CHANGE TRACKING API =====
+    
+    async def record_lore_change(
+        self,
+        element_type: str,
+        element_id: int,
+        operation: str,
+        new_data: Optional[Dict[str, Any]] = None,
+        old_data: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """
-        Generate a conflict between two factions.
+        Public API to record a lore change.
         
         Args:
-            faction_a_id: First faction ID
-            faction_b_id: Second faction ID
+            element_type: Type of element (location, nation, myth, etc.)
+            element_id: ID of the element
+            operation: Operation type (create, update, delete)
+            new_data: New data (for create/update)
+            old_data: Old data (for update/delete)
             
         Returns:
-            Generated conflict data
+            True if change was recorded successfully
         """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
+        if not self._change_tracking_enabled:
+            return False
         
-        integration = await self._get_conflict_integration()
-        return await integration.generate_faction_conflict(faction_a_id, faction_b_id)
-    
-    async def get_faction_conflicts(self, faction_id: int) -> List[Dict[str, Any]]:
-        """
-        Get conflicts involving a specific faction.
-        
-        Args:
-            faction_id: ID of the faction
-            
-        Returns:
-            List of conflicts
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        integration = await self._get_conflict_integration()
-        return await integration.get_faction_conflicts(faction_id)
-    
-    # ===== NATIONAL CONFLICTS AND DOMESTIC ISSUES =====
-    
-    async def generate_domestic_issues(self, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
-        """
-        Generate domestic issues for a specific nation.
-        
-        Args:
-            nation_id: ID of the nation
-            count: Number of issues to generate
-            
-        Returns:
-            List of generated domestic issues
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        conflict_system = await self._get_national_conflict_system()
-        ctx = self._create_mock_context(nation_id=nation_id, count=count)
-        return await conflict_system.generate_domestic_issues(ctx, nation_id, count)
-    
-    async def generate_initial_conflicts(self, count: int = 3) -> List[Dict[str, Any]]:
-        """
-        Generate initial conflicts between nations.
-        
-        Args:
-            count: Number of conflicts to generate
-            
-        Returns:
-            List of generated conflicts
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        conflict_system = await self._get_national_conflict_system()
-        ctx = self._create_mock_context(count=count)
-        return await conflict_system.generate_initial_conflicts(ctx, count)
-    
-    async def get_nation_issues(self, nation_id: int) -> List[Dict[str, Any]]:
-        """
-        Get all domestic issues for a nation.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            List of domestic issues
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        conflict_system = await self._get_national_conflict_system()
-        ctx = self._create_mock_context(nation_id=nation_id)
-        return await conflict_system.get_nation_issues(ctx, nation_id)
-    
-    async def evolve_all_conflicts(self, days_passed: int = 7) -> Dict[str, Any]:
-        """
-        Evolve all active conflicts and domestic issues over time.
-        
-        Args:
-            days_passed: Number of days that have passed
-            
-        Returns:
-            Evolution results
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        conflict_system = await self._get_national_conflict_system()
-        ctx = self._create_mock_context(
-            action='evolve_conflicts',
-            days_passed=days_passed
+        # Determine scope keys affected
+        scope_keys = self._get_affected_scope_keys(
+            element_type, 
+            element_id, 
+            new_data or old_data or {}
         )
         
-        if hasattr(conflict_system, 'evolve_all_conflicts'):
-            return await conflict_system.evolve_all_conflicts(ctx, days_passed)
-        else:
-            logger.warning("evolve_all_conflicts not implemented, returning current conflicts")
-            return {
-                'conflicts': await conflict_system.get_active_conflicts(ctx),
-                'evolved': False,
-                'message': 'Evolution not yet implemented'
-            }
-    
-    async def get_active_national_conflicts(self) -> List[Dict[str, Any]]:
-        """
-        Get all active national/international conflicts.
+        # Build change record
+        change_record = {
+            'element_type': element_type,
+            'element_id': element_id,
+            'operation': operation,
+            'changed_fields': [],
+            'old_value': old_data,
+            'new_value': new_data,
+            'timestamp': time.time()
+        }
         
-        Returns:
-            List of active national conflicts
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
+        # Determine changed fields
+        if old_data and new_data:
+            all_fields = set(old_data.keys()) | set(new_data.keys())
+            change_record['changed_fields'] = [
+                field for field in all_fields
+                if old_data.get(field) != new_data.get(field)
+            ]
+        elif new_data:
+            change_record['changed_fields'] = list(new_data.keys())
+        elif old_data:
+            change_record['changed_fields'] = list(old_data.keys())
         
-        conflict_system = await self._get_national_conflict_system()
-        ctx = self._create_mock_context()
-        return await conflict_system.get_active_conflicts(ctx)
-    
-    # ===== RELIGIOUS SYSTEMS =====
-    
-    async def distribute_religions(self) -> List[Dict[str, Any]]:
-        """
-        Distribute religions across nations.
+        # Persist the change
+        await self._persist_change(change_record, scope_keys)
         
-        Returns:
-            List of national religion distributions
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
+        # Update in-memory tracking
+        element_key = f"{element_type}:{element_id}"
+        if operation == 'delete':
+            self._element_snapshots.pop(element_key, None)
+        elif new_data:
+            self._element_snapshots[element_key] = new_data.copy()
         
-        religious_system = await self._get_religious_distribution_system()
-        ctx = self._create_mock_context()
-        return await religious_system.distribute_religions(ctx)
+        # Update change logs for affected scopes
+        for scope_key in scope_keys:
+            if scope_key not in self._change_log:
+                self._change_log[scope_key] = []
+            self._change_log[scope_key].append(change_record)
+            
+            # Update last changed timestamp
+            self._bundle_last_changed[scope_key] = change_record['timestamp']
+            
+            # Invalidate cached bundle
+            self._scene_bundle_cache.pop(scope_key, None)
+            # Clear monotonic timestamp by cache key
+            self._bundle_cached_at.pop(scope_key, None)
+        
+        return True
     
-    async def get_nation_religion(self, nation_id: int) -> Dict[str, Any]:
+    async def clear_change_history(
+        self,
+        before_ts: Optional[float] = None,
+        scope_key: Optional[str] = None
+    ) -> int:
         """
-        Get comprehensive religious information about a nation.
+        Clear old change history to save space.
         
         Args:
-            nation_id: ID of the nation
+            before_ts: Clear changes before this timestamp
+            scope_key: Optional specific scope to clear
             
         Returns:
-            Dictionary with nation's religious information
+            Number of records cleared
         """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
+        count = 0
         
-        religious_system = await self._get_religious_distribution_system()
-        ctx = self._create_mock_context(nation_id=nation_id)
-        return await religious_system.get_nation_religion(ctx, nation_id)
+        try:
+            async with get_db_connection_context() as conn:
+                if scope_key:
+                    # Clear for specific scope
+                    result = await conn.execute("""
+                        DELETE FROM LoreChangeLog
+                        WHERE conversation_id = $1
+                          AND $2 = ANY(scope_keys)
+                          AND ($3 IS NULL OR timestamp < $3)
+                    """,
+                        self.conversation_id,
+                        scope_key,
+                        datetime.fromtimestamp(before_ts) if before_ts else None
+                    )
+                else:
+                    # Clear all old changes
+                    if not before_ts:
+                        before_ts = time.time() - (7 * 24 * 3600)  # Default: 7 days old
+                    
+                    result = await conn.execute("""
+                        DELETE FROM LoreChangeLog
+                        WHERE conversation_id = $1
+                          AND timestamp < $2
+                    """,
+                        self.conversation_id,
+                        datetime.fromtimestamp(before_ts)
+                    )
+                
+                count = int(result.split()[-1]) if result else 0
+                
+        except Exception as e:
+            logger.warning(f"Failed to clear change history: {e}")
+        
+        # Clear in-memory logs if requested
+        if scope_key and scope_key in self._change_log:
+            if before_ts:
+                self._change_log[scope_key] = [
+                    c for c in self._change_log[scope_key]
+                    if c['timestamp'] >= before_ts
+                ]
+            else:
+                del self._change_log[scope_key]
+        
+        return count
     
-    # ===== LORE UPDATE SYSTEM =====
+    def enable_change_tracking(self, enabled: bool = True) -> None:
+        """Enable or disable change tracking."""
+        self._change_tracking_enabled = enabled
+        logger.info(f"Change tracking {'enabled' if enabled else 'disabled'}")
     
-    async def generate_lore_updates(
+    async def get_change_history(
         self,
-        affected_elements: List[Dict[str, Any]],
-        event_description: str,
-        player_character: Dict[str, Any] = None,
-        dominant_npcs: List[Dict[str, Any]] = None,
-        world_state: Dict[str, Any] = None
+        element_type: Optional[str] = None,
+        element_id: Optional[int] = None,
+        since_ts: Optional[float] = None,
+        limit: int = 50
     ) -> List[Dict[str, Any]]:
         """
-        Generate sophisticated updates for affected lore elements.
-        
+        Get change history for debugging/auditing.
+    
         Args:
-            affected_elements: List of affected lore elements
-            event_description: Description of the event
-            player_character: Optional player character data
-            dominant_npcs: Optional list of ruling NPCs
-            world_state: Optional current world state data
-            
+            element_type: Optional filter by element type
+            element_id: Optional filter by element ID
+            since_ts: Optional filter by timestamp
+            limit: Maximum number of records to return
+    
         Returns:
-            List of detailed updates with cascading effects
+            List of change records
         """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        update_system = await self._get_lore_update_system()
-        ctx = self._create_mock_context(
-            event_description=event_description[:100],
-            affected_count=len(affected_elements)
-        )
-        
-        return await update_system.generate_lore_updates(
-            ctx,
-            affected_elements,
-            event_description,
-            player_character,
-            dominant_npcs,
-            world_state
-        )
-    
-    # ===== QUEST MANAGEMENT =====
-    
-    async def get_quest_context(self, quest_id: int) -> Dict[str, Any]:
-        """
-        Get comprehensive quest context including lore.
-        
-        Args:
-            quest_id: ID of the quest
-            
-        Returns:
-            Quest context with lore
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        agent = await self._get_quest_agent()
-        return await agent.get_quest_context(quest_id)
-    
-    async def update_quest_stage(self, quest_id: int, stage: str, data: Dict[str, Any]) -> bool:
-        """
-        Update quest progression.
-        
-        Args:
-            quest_id: ID of the quest
-            stage: New stage
-            data: Stage data
-            
-        Returns:
-            Success status
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        agent = await self._get_quest_agent()
-        return await agent.update_quest_stage(quest_id, stage, data)
-    
-    # ===== NARRATIVE MANAGEMENT =====
-    
-    async def get_narrative_context(self, narrative_id: int) -> Dict[str, Any]:
-        """
-        Get comprehensive narrative context.
-        
-        Args:
-            narrative_id: ID of the narrative
-            
-        Returns:
-            Narrative context
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        agent = await self._get_narrative_agent()
-        return await agent.get_narrative_context(narrative_id)
-    
-    async def update_narrative_stage(self, narrative_id: int, stage: str, data: Dict[str, Any]) -> bool:
-        """
-        Update narrative progression.
-        
-        Args:
-            narrative_id: ID of the narrative
-            stage: New stage
-            data: Stage data
-            
-        Returns:
-            Success status
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        agent = await self._get_narrative_agent()
-        return await agent.update_narrative_stage(narrative_id, stage, data)
-    
-    # ===== ENVIRONMENT MANAGEMENT =====
-    
-    async def get_environment_context(self, location_id: int) -> Dict[str, Any]:
-        """
-        Get environmental context for a location.
-        
-        Args:
-            location_id: ID of the location
-            
-        Returns:
-            Environmental context
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        agent = await self._get_environment_agent()
-        return await agent.get_environment_context(location_id)
-    
-    async def update_environment_state(self, location_id: int, updates: Dict[str, Any]) -> bool:
-        """
-        Update environmental state.
-        
-        Args:
-            location_id: ID of the location
-            updates: State updates
-            
-        Returns:
-            Success status
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        agent = await self._get_environment_agent()
-        return await agent.update_environment_state(location_id, updates)
-    
-    async def update_game_time(self, time_data: Dict[str, Any]) -> bool:
-        """
-        Update game time and trigger related events.
-        
-        Args:
-            time_data: Time update data
-            
-        Returns:
-            Success status
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        agent = await self._get_environment_agent()
-        return await agent.update_game_time(time_data)
-    
-    # ===== COMPONENT GENERATION =====
-    
-    async def generate_component(self, component_type: str, context: Dict[str, Any], config: Optional[Any] = None) -> Dict[str, Any]:
-        """
-        Generate a specific lore component.
-        
-        Args:
-            component_type: Type of component (character, location, event)
-            context: Generation context
-            config: Optional component configuration
-            
-        Returns:
-            Generated component
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        from lore.lore_generator import ComponentGeneratorFactory, ComponentConfig
-        factory = await self._get_component_factory()
-        
-        # Convert config if needed
-        if config and not isinstance(config, ComponentConfig):
-            config = ComponentConfig(**config) if isinstance(config, dict) else None
-        
-        generator = ComponentGeneratorFactory.create_generator(
-            component_type, 
-            self.user_id, 
-            self.conversation_id, 
-            config
-        )
-        await generator.initialize()
-        return await generator.generate(context)
-    
-    # ===== SETTING ANALYSIS =====
-    
-    async def analyze_setting(self) -> Dict[str, Any]:
-        """
-        Analyze the current setting and generate organizations.
-        
-        Returns:
-            Setting analysis with generated organizations
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        analyzer = await self._get_setting_analyzer()
-        ctx = self._create_mock_context()
-        
-        demographics = await analyzer.analyze_setting_demographics(ctx)
-        organizations = await analyzer.generate_organizations(ctx)
-        
-        return {
-            "demographics": demographics,
-            "organizations": organizations
-        }
-    
-    async def analyze_setting_demographics(self) -> Dict[str, Any]:
-        """
-        Analyze the demographics and social structure of the setting.
-        
-        Returns:
-            Demographics analysis
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        agent = await self._get_foundation_agent()
-        npc_data = await agent.aggregate_npc_data()
-        return await agent.analyze_setting_demographics(npc_data)
-    
-    # ===== DIRECTIVE HANDLING =====
-    
-    async def process_directives(self, force_check: bool = False) -> Dict[str, Any]:
-        """
-        Process all active directives for lore agents.
-        
-        Args:
-            force_check: Whether to force checking directives
-            
-        Returns:
-            Processing results
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        directive_handler = await self._get_directive_handler()
-        return await directive_handler.process_directives(force_check)
-    
-    async def check_permission(self, action_type: str, details: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Check if an action is permitted based on directives.
-        
-        Args:
-            action_type: Type of action to check
-            details: Optional action details
-            
-        Returns:
-            Permission status dictionary
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        directive_handler = await self._get_directive_handler()
-        return await directive_handler.check_permission(action_type, details)
-    
-    # ===== VALIDATION =====
-    
-    async def validate_lore_data(self, lore_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Validate lore data against schemas.
-        
-        Args:
-            lore_type: Type of lore data
-            data: Data to validate
-            
-        Returns:
-            Validation results
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        if not self._validation_manager:
-            return {"valid": True, "message": "Validation disabled"}
-        
-        result = await self._validation_manager.validate(lore_type, data)
-        return {
-            "valid": result.is_valid,
-            "errors": [e.to_dict() for e in result.errors],
-            "warnings": result.warnings
-        }
-    
-    # ===== METRICS =====
-    
-    async def get_metrics(self) -> Dict[str, Any]:
-        """
-        Get current system metrics.
-        
-        Returns:
-            System metrics
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        from lore.metrics import metrics_manager
-        return await metrics_manager.get_metrics_summary()
-    
-    # ===== RESOURCE MANAGEMENT =====
-    
-    async def get_resource_stats(self) -> Dict[str, Any]:
-        """
-        Get resource usage statistics.
-        
-        Returns:
-            Resource statistics
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        if self._resource_manager:
-            return await self._resource_manager.get_resource_stats()
-        return {}
-    
-    async def optimize_resources(self) -> Dict[str, Any]:
-        """
-        Optimize resource usage.
-        
-        Returns:
-            Optimization results
-        """
-        if not self.initialized and self.config.auto_initialize:
-            await self.initialize()
-        
-        if self._resource_manager:
-            return await self._resource_manager.optimize_resources()
-        return {"status": "Resource management disabled"}
-    
-    # ===== CLEANUP =====
-    
-    async def cleanup(self):
-        """Clean up all resources and shutdown components."""
-        logger.info(f"Cleaning up Lore Orchestrator for user {self.user_id}, conversation {self.conversation_id}")
-        
-        # Stop monitoring
-        if self._error_handler:
-            await self._error_handler.stop_monitoring()
-        
-        if self._resource_manager:
-            await self._resource_manager.stop()
-        
-        # Cleanup validation
-        if self._validation_manager:
-            await self._validation_manager.cleanup()
-        
-        # Cleanup cache if it exists
-        if self._cache_system:
-            # Cache doesn't have explicit cleanup but we can clear it
-            await self._cache_system.clear_namespace("*")
-        
-        # Cleanup specialized managers
-        for manager in [
-            self._education_manager, 
-            self._geopolitical_manager, 
-            self._local_lore_manager,
-            self._politics_manager,
-            self._religion_manager,
-            self._world_lore_manager
-        ]:
-            if manager:
-                if hasattr(manager, 'cleanup'):
-                    await manager.cleanup()
-                elif hasattr(manager, 'close'):
-                    await manager.close()
-                elif hasattr(manager, 'stop'):
-                    await manager.stop()
-                # Also clear any agent tasks if they exist
-                if hasattr(manager, 'maintenance_task') and manager.maintenance_task:
-                    manager.maintenance_task.cancel()
-                    try:
-                        await manager.maintenance_task
-                    except asyncio.CancelledError:
-                        pass
-        
-        # Cleanup components
-        for component in [
-            self._lore_system,
-            self._matriarchal_system,
-            self._dynamic_generator,
-            self._npc_integration,
-            self._conflict_integration,
-            self._context_enhancer,
-            self._regional_culture_system,
-            self._national_conflict_system,
-            self._religious_distribution_system,
-            self._lore_update_system,
-            self._matriarchal_power_framework,
-            self._lore_dynamics_system,
-            self._master_coordinator,
-            self._unified_trace_system,
-            self._content_validator,
-            self._relationship_mapper
-        ]:
-            if component and hasattr(component, 'cleanup'):
-                await component.cleanup()
-        
-        # Clear instance from cache
-        key = (self.user_id, self.conversation_id)
-        if key in _ORCHESTRATOR_INSTANCES:
-            del _ORCHESTRATOR_INSTANCES[key]
-        
-        self.initialized = False
-        logger.info("Lore Orchestrator cleanup complete")
-    
-    # ===== UTILITY METHODS =====
-    
-    def _create_mock_context(self, **attributes) -> object:
-        """
-        Create a mock context object for governance decorators.
-        
-        This utility method creates lightweight mock objects that satisfy
-        the requirements of @with_governance decorated functions without
-        requiring full governance context imports.
-        
-        Args:
-            **attributes: Key-value pairs to set as object attributes
-            
-        Returns:
-            Mock object with specified attributes
-        """
-        # Default context structure many governance decorators expect
-        if 'context' not in attributes:
-            attributes['context'] = {
-                'user_id': self.user_id,
-                'conversation_id': self.conversation_id
-            }
-        
-        # Create and return mock object with attributes
-        return type('MockContext', (object,), attributes)()
-    
-    # ===== COMPONENT GETTERS (LAZY INITIALIZATION) =====
-    
-    async def _get_canon_module(self):
-        """
-        Get or initialize the canon module.
-        CRITICAL: This is lazy loaded as many other modules depend on it.
-        """
-        if not self._canon_module:
-            # Import here to avoid circular dependencies
-            from lore.core import canon
-            self._canon_module = canon
-            logger.info("Canon module loaded")
-        return self._canon_module
-    
-    async def _get_cache_system(self):
-        """Get or initialize the cache system."""
-        if not self._cache_system:
-            from lore.core.cache import LoreCache
-            self._cache_system = LoreCache(
-                max_size=self.config.cache_max_size,
-                ttl=self.config.cache_ttl
-            )
-            logger.info("Cache system initialized")
-        return self._cache_system
-    
-    async def _get_registry_system(self):
-        """Get or initialize the manager registry."""
-        if not self._registry_system:
-            from lore.core.registry import ManagerRegistry
-            self._registry_system = ManagerRegistry(self.user_id, self.conversation_id)
-            logger.info("Registry system initialized")
-        return self._registry_system
-    
-    async def _get_canon_validation(self):
-        """Get or initialize the canon validation agent."""
-        if not self._canon_validation:
-            from lore.core.validation import CanonValidationAgent
-            self._canon_validation = CanonValidationAgent()
-            logger.info("Canon validation agent initialized")
-        return self._canon_validation
-    
-    def _get_canonical_context_class(self):
-        """Get the CanonicalContext class (lazy loaded)."""
-        if not self._canonical_context_class:
-            from lore.core.context import CanonicalContext
-            self._canonical_context_class = CanonicalContext
-            logger.info("CanonicalContext class loaded")
-        return self._canonical_context_class
-    
-    async def _get_education_manager(self):
-        """Get or initialize the education manager."""
-        if not self._education_manager:
-            from lore.managers.education import EducationalSystemManager
-            self._education_manager = EducationalSystemManager(self.user_id, self.conversation_id)
-            await self._education_manager.ensure_initialized()
-            if self._governor:
-                self._education_manager.set_governor(self._governor)
-                await self._education_manager.register_with_governance(
-                    AgentType.NARRATIVE_CRAFTER,
-                    "education_manager",
-                    "Manages educational systems and knowledge traditions",
-                    "education",
-                    DirectivePriority.MEDIUM
-                )
-            logger.info("Education manager initialized")
-        return self._education_manager
-    
-    async def _get_geopolitical_manager(self):
-        """Get or initialize the geopolitical manager."""
-        if not self._geopolitical_manager:
-            from lore.managers.geopolitical import GeopoliticalSystemManager
-            self._geopolitical_manager = GeopoliticalSystemManager(self.user_id, self.conversation_id)
-            await self._geopolitical_manager.ensure_initialized()
-            if self._governor:
-                self._geopolitical_manager.set_governor(self._governor)
-                await self._geopolitical_manager.register_with_governance(
-                    AgentType.NARRATIVE_CRAFTER,
-                    "geopolitical_manager",
-                    "Manages geopolitical systems and conflicts",
-                    "geopolitics",
-                    DirectivePriority.MEDIUM
-                )
-            logger.info("Geopolitical manager initialized")
-        return self._geopolitical_manager
-    
-    async def _get_local_lore_manager(self):
-        """Get or initialize the local lore manager."""
-        if not self._local_lore_manager:
-            from lore.managers.local_lore import LocalLoreManager
-            self._local_lore_manager = LocalLoreManager(self.user_id, self.conversation_id)
-            await self._local_lore_manager.ensure_initialized()
-            if self._governor:
-                self._local_lore_manager.set_governor(self._governor)
-                await self._local_lore_manager.register_with_governance()
-            logger.info("Local lore manager initialized")
-        return self._local_lore_manager
-    
-    async def _get_politics_manager(self):
-        """Get or initialize the politics manager."""
-        if not self._politics_manager:
-            from lore.managers.politics import WorldPoliticsManager
-            self._politics_manager = WorldPoliticsManager(self.user_id, self.conversation_id)
-            await self._politics_manager.ensure_initialized()
-            if self._governor:
-                await self._politics_manager.register_with_governance()
-            logger.info("Politics manager initialized")
-        return self._politics_manager
-    
-    async def _get_religion_manager(self):
-        """Get or initialize the religion manager."""
-        if not self._religion_manager:
-            from lore.managers.religion import ReligionManager
-            self._religion_manager = ReligionManager(self.user_id, self.conversation_id)
-            await self._religion_manager.ensure_initialized()
-            if self._governor:
-                await self._religion_manager.register_with_governance()
-            logger.info("Religion manager initialized")
-        return self._religion_manager
-    
-    async def _get_world_lore_manager(self):
-        """Get or initialize the world lore manager."""
-        if not self._world_lore_manager:
-            from lore.managers.world_lore_manager import WorldLoreManager
-            self._world_lore_manager = WorldLoreManager(
-                self.user_id, 
-                self.conversation_id,
-                max_size_mb=self.config.max_size_mb,
-                redis_url=self.config.redis_url
-            )
-            await self._world_lore_manager.start()
-            logger.info("World lore manager initialized")
-        return self._world_lore_manager
-    
-    async def _get_master_coordinator(self):
-        """Get or initialize the master coordination agent."""
-        if not self._master_coordinator:
-            from lore.managers.world_lore_manager import MasterCoordinationAgent
-            world_lore_manager = await self._get_world_lore_manager()
-            self._master_coordinator = MasterCoordinationAgent(world_lore_manager)
-            await self._master_coordinator.initialize(self.user_id, self.conversation_id)
-            logger.info("Master coordinator initialized")
-        return self._master_coordinator
-    
-    async def _get_unified_trace_system(self):
-        """Get or initialize the unified trace system."""
-        if not self._unified_trace_system:
-            from lore.managers.world_lore_manager import UnifiedTraceSystem
-            self._unified_trace_system = UnifiedTraceSystem(self.user_id, self.conversation_id)
-            logger.info("Unified trace system initialized")
-        return self._unified_trace_system
-    
-    async def _get_content_validator(self):
-        """Get or initialize the content validation tool."""
-        if not self._content_validator:
-            from lore.managers.world_lore_manager import ContentValidationTool
-            world_lore_manager = await self._get_world_lore_manager()
-            self._content_validator = ContentValidationTool(world_lore_manager)
-            logger.info("Content validator initialized")
-        return self._content_validator
-    
-    async def _get_relationship_mapper(self):
-        """Get or initialize the relationship mapper."""
-        if not self._relationship_mapper:
-            from lore.managers.world_lore_manager import LoreRelationshipMapper
-            world_lore_manager = await self._get_world_lore_manager()
-            self._relationship_mapper = LoreRelationshipMapper(world_lore_manager)
-            logger.info("Relationship mapper initialized")
-        return self._relationship_mapper
-    
-    async def _get_lore_system(self):
-        """Get or initialize the core lore system."""
-        if not self._lore_system:
-            from lore.core.lore_system import LoreSystem
-            self._lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
-            # Set governor if available
-            if self._governor:
-                self._lore_system.set_governor(self._governor)
-            await self._lore_system.ensure_initialized()
-        return self._lore_system
-    
-    async def _get_matriarchal_system(self):
-        """Get or initialize the matriarchal lore system."""
-        if not self._matriarchal_system:
-            from lore.main import MatriarchalLoreSystem
-            self._matriarchal_system = MatriarchalLoreSystem(self.user_id, self.conversation_id)
-            await self._matriarchal_system.ensure_initialized()
-        return self._matriarchal_system
-    
-    async def _get_dynamic_generator(self):
-        """Get or initialize the dynamic lore generator."""
-        if not self._dynamic_generator:
-            from lore.lore_generator import DynamicLoreGenerator
-            self._dynamic_generator = DynamicLoreGenerator.get_instance(
-                self.user_id, 
-                self.conversation_id,
-                self._governor
-            )
-            await self._dynamic_generator.initialize()
-        return self._dynamic_generator
-    
-    async def _get_setting_analyzer(self):
-        """Get or initialize the setting analyzer."""
-        if not self._setting_analyzer:
-            from lore.setting_analyzer import SettingAnalyzer
-            self._setting_analyzer = SettingAnalyzer(self.user_id, self.conversation_id)
-            await self._setting_analyzer.initialize_governance()
-        return self._setting_analyzer
-    
-    async def _get_npc_integration(self, npc_id: Optional[int] = None):
-        """Get or initialize NPC lore integration."""
-        if not self._npc_integration:
-            from lore.integration import NPCLoreIntegration
-            self._npc_integration = NPCLoreIntegration(self.user_id, self.conversation_id, npc_id)
-            self._npc_integration.governor = self._governor
-            await self._npc_integration.initialize()
-        return self._npc_integration
-    
-    async def _get_conflict_integration(self):
-        """Get or initialize conflict integration."""
-        if not self._conflict_integration:
-            from lore.integration import ConflictIntegration
-            self._conflict_integration = ConflictIntegration(self.user_id, self.conversation_id)
-            self._conflict_integration.governor = self._governor
-            await self._conflict_integration.initialize()
-        return self._conflict_integration
-    
-    async def _get_context_enhancer(self):
-        """Get or initialize context enhancer."""
-        if not self._context_enhancer:
-            from lore.integration import ContextEnhancer
-            self._context_enhancer = ContextEnhancer(self.user_id, self.conversation_id)
-            self._context_enhancer.governor = self._governor
-            await self._context_enhancer.initialize()
-        return self._context_enhancer
-    
-    async def _get_regional_culture_system(self):
-        """Get or initialize regional culture system."""
-        if not self._regional_culture_system:
-            from lore.systems.regional_culture import RegionalCultureSystem
-            self._regional_culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
-            await self._regional_culture_system.initialize_tables()
-            await self._regional_culture_system.initialize_governance()
-        return self._regional_culture_system
-    
-    async def _get_national_conflict_system(self):
-        """Get or initialize national conflict system."""
-        if not self._national_conflict_system:
-            from lore.matriarchal_lore_system import NationalConflictSystem
-            self._national_conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
-            await self._national_conflict_system.initialize_tables()
-            await self._national_conflict_system.initialize_governance()
-        return self._national_conflict_system
-    
-    async def _get_religious_distribution_system(self):
-        """Get or initialize religious distribution system."""
-        if not self._religious_distribution_system:
-            from lore.matriarchal_lore_system import ReligiousDistributionSystem
-            self._religious_distribution_system = ReligiousDistributionSystem(self.user_id, self.conversation_id)
-            await self._religious_distribution_system.initialize_tables()
-            await self._religious_distribution_system.initialize_governance()
-        return self._religious_distribution_system
-    
-    async def _get_lore_update_system(self):
-        """Get or initialize lore update system."""
-        if not self._lore_update_system:
-            from lore.matriarchal_lore_system import LoreUpdateSystem
-            self._lore_update_system = LoreUpdateSystem(self.user_id, self.conversation_id)
-            await self._lore_update_system.initialize_governance()
-        return self._lore_update_system
-    
-    async def _get_matriarchal_power_framework(self):
-        """Get or initialize matriarchal power framework."""
-        if not self._matriarchal_power_framework:
-            from lore.frameworks.matriarchal import MatriarchalPowerStructureFramework
-            self._matriarchal_power_framework = MatriarchalPowerStructureFramework(
-                self.user_id, 
-                self.conversation_id
-            )
-            # Framework doesn't have an explicit initialize, but ensure base is initialized
-            await self._matriarchal_power_framework.ensure_initialized()
-        return self._matriarchal_power_framework
-    
-    async def _get_lore_dynamics_system(self):
-        """Get or initialize lore dynamics system."""
-        if not self._lore_dynamics_system:
-            from lore.systems.dynamics import LoreDynamicsSystem
-            self._lore_dynamics_system = LoreDynamicsSystem(self.user_id, self.conversation_id)
-            await self._lore_dynamics_system.ensure_initialized()
-            # Set governor if available
-            if self._governor:
-                self._lore_dynamics_system.governor = self._governor
-                await self._lore_dynamics_system.register_with_governance()
-        return self._lore_dynamics_system
-    
-    async def _get_agent_context(self):
-        """Get or initialize agent context."""
-        if not self._agent_context:
-            from lore.lore_agents import LoreAgentContext
-            self._agent_context = LoreAgentContext(self.user_id, self.conversation_id)
-            await self._agent_context.start()
-        return self._agent_context
-    
-    async def _get_directive_handler(self):
-        """Get or initialize directive handler."""
-        if not self._directive_handler:
-            from lore.lore_agents import LoreDirectiveHandler
-            self._directive_handler = LoreDirectiveHandler(
-                self.user_id,
-                self.conversation_id,
-                AgentType.NARRATIVE_CRAFTER,
-                "lore_orchestrator"
-            )
-            await self._directive_handler.initialize()
-        return self._directive_handler
-    
-    async def _get_quest_agent(self):
-        """Get or initialize quest agent."""
-        if not self._quest_agent:
-            from lore.lore_agents import QuestAgent
-            lore_system = await self._get_lore_system()
-            self._quest_agent = QuestAgent(lore_system)
-            await self._quest_agent.initialize()
-        return self._quest_agent
-    
-    async def _get_narrative_agent(self):
-        """Get or initialize narrative agent."""
-        if not self._narrative_agent:
-            from lore.lore_agents import NarrativeAgent
-            lore_system = await self._get_lore_system()
-            self._narrative_agent = NarrativeAgent(lore_system)
-            await self._narrative_agent.initialize()
-        return self._narrative_agent
-    
-    async def _get_environment_agent(self):
-        """Get or initialize environment agent."""
-        if not self._environment_agent:
-            from lore.lore_agents import EnvironmentAgent
-            lore_system = await self._get_lore_system()
-            self._environment_agent = EnvironmentAgent(lore_system)
-            await self._environment_agent.initialize()
-        return self._environment_agent
-    
-    async def _get_foundation_agent(self):
-        """Get or initialize foundation agent."""
-        if not self._foundation_agent:
-            from lore.lore_agents import FoundationAgent
-            lore_system = await self._get_lore_system()
-            self._foundation_agent = FoundationAgent(lore_system)
-            await self._foundation_agent.initialize()
-        return self._foundation_agent
-    
-    async def _get_faction_agent(self):
-        """Get or initialize faction agent."""
-        if not self._faction_agent:
-            from lore.lore_agents import FactionAgent
-            lore_system = await self._get_lore_system()
-            self._faction_agent = FactionAgent(lore_system)
-            await self._faction_agent.initialize()
-        return self._faction_agent
-    
-    async def _get_component_factory(self):
-        """Get or initialize component factory."""
-        if not self._component_factory:
-            from lore.lore_generator import ComponentGeneratorFactory
-            self._component_factory = ComponentGeneratorFactory
-        return self._component_factory
-    
-    def create_run_context(self, additional_context: Dict[str, Any] = None) -> RunContextWrapper:
-        """
-        Create a RunContextWrapper for agent operations.
-        
-        Args:
-            additional_context: Additional context to include
-            
-        Returns:
-            RunContextWrapper instance
-        """
-        context = {
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        }
-        if additional_context:
-            context.update(additional_context)
-        return RunContextWrapper(context=context)
-    
-    async def get_connection_pool(self) -> asyncpg.Pool:
-        """
-        Get a connection pool for database operations.
-        
-        Returns:
-            Database connection pool
-        """
-        if not hasattr(self, '_pool'):
-            self._pool = await asyncpg.create_pool(dsn=DB_DSN)
-        return self._pool
-
+        changes = []
+    
+        try:
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT element_type, element_id, operation,
+                           changed_fields, old_value, new_value,
+                           scope_keys, EXTRACT(EPOCH FROM timestamp) as timestamp
+                    FROM LoreChangeLog
+                    WHERE conversation_id = $1
+                """
+                params = [self.conversation_id]
+    
+                if element_type:
+                    query += f" AND element_type = ${len(params) + 1}"
+                    params.append(element_type)
+    
+                if element_id is not None:
+                    query += f" AND element_id = ${len(params) + 1}"
+                    params.append(element_id)
+    
+                if since_ts:
+                    query += f" AND timestamp > ${len(params) + 1}"
+                    params.append(datetime.fromtimestamp(since_ts))
+    
+                query += f" ORDER BY timestamp DESC LIMIT ${len(params) + 1}"
+                params.append(limit)
+    
+                rows = await conn.fetch(query, *params)
+    
+                for row in rows:
+                    changes.append({
+                        'element_type': row['element_type'],
+                        'element_id': row['element_id'],
+                        'operation': row['operation'],
+                        'changed_fields': row['changed_fields'] or [],
+                        'old_value': row['old_value'],
+                        'new_value': row['new_value'],
+                        'scope_keys': row['scope_keys'],
+                        'timestamp': row['timestamp']
+                    })
+    
+        except Exception as e:
+            logger.warning(f"Failed to get change history: {e}")
+    
+        return changes
 
 # ===== CONVENIENCE FUNCTIONS =====
 
@@ -4298,6 +2762,7 @@ def setup_lore_orchestrator():
     """Setup function for module initialization."""
     logging.basicConfig(level=logging.INFO)
     logger.info("FULLY INTEGRATED Lore Orchestrator loaded with all modules: education, geopolitical, local lore, politics, religion, and world lore management")
+    logger.info("ENHANCED with scene bundle support for optimized context assembly")
 
 
 # Run setup on module import
