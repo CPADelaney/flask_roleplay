@@ -1,94 +1,22 @@
 # memory/memory_orchestrator.py
 
 """
-Memory System Orchestrator
-
-Single access point for ALL memory operations in the system.
-Provides a unified interface for the narrative generator and other components
-to interact with the complex memory subsystems.
-
-This orchestrator routes all memory operations to the appropriate subsystem,
-ensuring consistent access patterns and centralized management.
+Memory Orchestrator with Scene Bundle Optimization
+Complete refactor for optimized context assembly pipeline
 """
 
 import logging
 import asyncio
-from typing import Dict, Any, List, Optional, Union, Tuple, Set, TYPE_CHECKING
-from datetime import datetime, timedelta
-from enum import Enum
 import json
-import os
+import hashlib
+import time
+from typing import Dict, List, Any, Optional, Tuple, Set
+from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from enum import Enum
+from collections import defaultdict
 
-# Defer core memory imports to avoid circular dependencies
-# These will be imported lazily in __init__ or when first needed
-if TYPE_CHECKING:
-    from memory.core import (
-        UnifiedMemoryManager, 
-        Memory, 
-        MemoryType, 
-        MemoryStatus,
-        MemorySignificance,
-        MemoryCache
-    )
-
-# Specialized managers - these are less likely to cause circular imports
-from memory.managers import (
-    NPCMemoryManager,
-    NyxMemoryManager,
-    PlayerMemoryManager,
-    ConflictMemoryManager,
-    LoreMemoryManager,
-    ContextEvolutionManager
-)
-
-# Advanced features
-from memory.emotional import EmotionalMemoryManager
-from memory.masks import ProgressiveRevealManager, RevealType, RevealSeverity
-from memory.flashbacks import FlashbackManager
-from memory.interference import MemoryInterferenceManager
-from memory.reconsolidation import ReconsolidationManager
-from memory.schemas import MemorySchemaManager
-from memory.semantic import SemanticMemoryManager
-
-# Memory services and agents
-from memory.memory_service import MemoryEmbeddingService
-from memory.memory_retriever import MemoryRetrieverAgent
-from memory.memory_agent_sdk import create_memory_agent, MemorySystemContext
-from memory.memory_agent_wrapper import MemoryAgentWrapper
-
-# Integration layers
-from memory.integrated import IntegratedMemorySystem, init_memory_system
-from memory.wrapper import MemorySystem
-from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
-from memory.memory_integration import (
-    MemoryIntegration,
-    get_memory_service,
-    get_memory_retriever,
-    enrich_context_with_memories
-)
-
-# Initialization and setup
-from memory.init import (
-    initialize_database,
-    setup_npc,
-    setup_player,
-    setup_nyx
-)
-
-# Database and configuration
-from memory.connection import get_connection_context
-from memory.config import load_config
-from memory.memory_config import get_memory_config
-from memory.telemetry import MemoryTelemetry
-from memory.maintenance import MemoryMaintenance
-
-# Utilities
-# Game time helpers are imported lazily to avoid circular dependencies
-_game_time_helper_module = None
-
-logger = logging.getLogger("memory_orchestrator")
-
-# Lazy-loaded module references
+# Lazy imports for heavy dependencies
 _memory_core = None
 _UnifiedMemoryManager = None
 _Memory = None
@@ -96,10 +24,74 @@ _MemoryType = None
 _MemoryStatus = None
 _MemorySignificance = None
 _MemoryCache = None
+_game_time_helper_module = None
+
+logger = logging.getLogger(__name__)
 
 
-def _lazy_import_core():
-    """Lazy import of memory.core components to avoid circular imports."""
+# ============================================================================
+# Scene Bundle Data Classes
+# ============================================================================
+
+@dataclass
+class SceneScope:
+    """Defines the scope of a scene for context filtering"""
+    location_id: Optional[str] = None
+    npc_ids: Set[int] = field(default_factory=set)
+    topics: Set[str] = field(default_factory=set)
+    lore_tags: Set[str] = field(default_factory=set)
+    time_window_hours: int = 24  # Recent memories window
+    
+    def to_cache_key(self) -> str:
+        """Generate stable cache key for this scope"""
+        # Sort sets for consistent hashing
+        key_parts = [
+            f"loc:{self.location_id or 'none'}",
+            f"npcs:{','.join(map(str, sorted(self.npc_ids)))}",
+            f"topics:{','.join(sorted(self.topics))}",
+            f"lore:{','.join(sorted(self.lore_tags))}",
+            f"window:{self.time_window_hours}"
+        ]
+        key_str = "|".join(key_parts)
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+
+@dataclass
+class MemoryBundle:
+    """Scene-scoped memory bundle for efficient context assembly"""
+    # Canonical memory data
+    canon_memories: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Scene-relevant memories  
+    scene_memories: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Cross-entity patterns
+    linked_memories: List[Dict[str, Any]] = field(default_factory=list)
+    emergent_patterns: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Metadata
+    scope: Optional[SceneScope] = None
+    last_changed_at: float = field(default_factory=time.time)
+    bundle_size_tokens: int = 0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization"""
+        return {
+            "canon": self.canon_memories,
+            "scene": self.scene_memories,
+            "linked": self.linked_memories,
+            "patterns": self.emergent_patterns,
+            "last_changed": self.last_changed_at,
+            "token_size": self.bundle_size_tokens
+        }
+
+
+# ============================================================================
+# Lazy Import Functions
+# ============================================================================
+
+def _lazy_import_memory_core():
+    """Lazy import for memory core components."""
     global _memory_core, _UnifiedMemoryManager, _Memory, _MemoryType, _MemoryStatus, _MemorySignificance, _MemoryCache
     
     if _memory_core is None:
@@ -122,6 +114,12 @@ def _lazy_import_game_time_helper():
     return _game_time_helper_module
 
 
+
+    
+# ============================================================================
+# Entity Types
+# ============================================================================
+
 class EntityType(str, Enum):
     """Supported entity types in the memory system."""
     PLAYER = "player"
@@ -136,29 +134,82 @@ class EntityType(str, Enum):
     NARRATIVE = "narrative"
 
 
+# ============================================================================
+# Memory Orchestrator
+# ============================================================================
+
 class MemoryOrchestrator:
     """
-    Central orchestrator for ALL memory operations.
+    Central orchestrator for ALL memory operations with scene bundle optimization.
     
     This class serves as the single access point for:
     - Core memory operations (store, retrieve, update, delete)
+    - Scene-scoped memory bundles for efficient context assembly
     - Specialized memory managers (NPC, Player, Nyx, etc.)
     - Advanced features (schemas, emotional, masks, flashbacks, etc.)
     - Memory agents and LLM-based operations
     - Vector store and embedding operations
     - Integration with Nyx governance
     - Telemetry and maintenance
-    - Setup and initialization
     
-    All memory operations in the system should go through this orchestrator.
+    Performance optimizations:
+    - Scene-scoped bundle caching
+    - Parallel memory retrieval
+    - Delta-based updates
+    - Background maintenance tasks
     """
     
     _instances = {}  # Singleton pattern per user/conversation
+    _instances_lock = asyncio.Lock()  # Protect against rare races in get_instance
+    _bundle_cache = {}  # Scene bundle cache across conversations
+    _bundle_ttl = 300  # 5 minute TTL for bundles
+    _bundle_max_size = 512  # Max bundles in cache (soft LRU)
+    
+    # Class-wide bundle bookkeeping (keeps class-level cache coherent)
+    _bundle_cached_at: Dict[str, float] = {}  # cache_key -> last access time (for LRU)
+    _bundle_created_at: Dict[str, float] = {}  # cache_key -> creation time (for TTL)
+    _bundle_index: Dict[str, Set[str]] = defaultdict(set)  # "kind:id" -> set(cache_keys)
+    _bundle_locks: Dict[str, asyncio.Lock] = {}  # cache_key -> lock
+    
+    # Semaphore to limit concurrent vector searches
+    _vector_search_semaphore = asyncio.Semaphore(10)
+
+    @classmethod
+    def _sem(cls) -> asyncio.Semaphore:
+        if getattr(cls, "_vector_search_semaphore", None) is None:
+            cls._vector_search_semaphore = asyncio.Semaphore(10)
+        return cls._vector_search_semaphore
+    
+    @classmethod
+    def _get_lock(cls, key: str) -> asyncio.Lock:
+        """Get or create a lock for the given cache key (race-proof)."""
+        lock = cls._bundle_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            existing = cls._bundle_locks.setdefault(key, lock)
+            lock = existing  # Ensure we use the canonical one
+        return lock
+
+    @classmethod
+    def _evict_bundle_key(cls, cache_key: str) -> None:
+        entry = cls._bundle_cache.get(cache_key) or {}
+        ents = entry.get('ents', set())
+        for ent in ents:
+            s = cls._bundle_index.get(ent)
+            if s:
+                s.discard(cache_key)
+                if not s:
+                    cls._bundle_index.pop(ent, None)
+        cls._bundle_cache.pop(cache_key, None)
+        cls._bundle_cached_at.pop(cache_key, None)
+        cls._bundle_created_at.pop(cache_key, None)
+        cls._bundle_locks.pop(cache_key, None)
     
     @classmethod
     async def get_instance(cls, user_id: int, conversation_id: int) -> 'MemoryOrchestrator':
         """
         Get or create an orchestrator instance for the given user/conversation.
+        Thread-safe against concurrent initialization.
         
         Args:
             user_id: User ID
@@ -168,1160 +219,879 @@ class MemoryOrchestrator:
             MemoryOrchestrator instance
         """
         key = (user_id, conversation_id)
-        if key not in cls._instances:
-            instance = cls(user_id, conversation_id)
-            await instance.initialize()
-            cls._instances[key] = instance
-        return cls._instances[key]
+        
+        # Fast path - check without lock first
+        if key in cls._instances:
+            return cls._instances[key]
+        
+        # Slow path - acquire lock for initialization
+        async with cls._instances_lock:
+            # Double-check after acquiring lock
+            if key not in cls._instances:
+                instance = cls(user_id, conversation_id)
+                await instance.initialize()
+                cls._instances[key] = instance
+            return cls._instances[key]
     
     def __init__(self, user_id: int, conversation_id: int):
         """Initialize the orchestrator."""
-        # Ensure core components are imported
-        _lazy_import_core()
-        
         self.user_id = user_id
         self.conversation_id = conversation_id
         
-        # Configuration
-        self.config = load_config()
-        self.memory_config = get_memory_config()
+        # Core components (lazily initialized)
+        self.unified_manager = None
+        self.memory_managers = {}
+        self.embedding_service = None
+        self.cache = None
         
-        # Core systems (to be initialized)
-        self.integrated_system = None
-        self.memory_wrapper = None
+        # Agent wrappers
+        self.memory_agent_wrapper = None
+        self.retriever_agent = None
         
         # Specialized managers
-        self.managers = {}
+        self.nyx_memory_manager = None
         self.emotional_manager = None
-        self.mask_manager = None
-        self.flashback_manager = None
-        self.interference_manager = None
-        self.reconsolidation_manager = None
         self.schema_manager = None
         self.semantic_manager = None
-        
-        # Services and agents
-        self.embedding_service = None
-        self.retriever_agent = None
-        self.memory_agent = None
-        self.memory_agent_wrapper = None
-        
-        # Integration layers
-        self.nyx_bridge = None
-        self.memory_integration = None
-        
-        # Maintenance and telemetry
-        self.maintenance = None
-        self.telemetry = MemoryTelemetry
+        self.flashback_manager = None
+        self.mask_manager = None
+        self.interference_manager = None
         
         # State
         self.initialized = False
-        self.active_context = {}
-        self.cache = _MemoryCache()
-        
+        self.last_sync = datetime.now()
+        self.last_maintenance = datetime.now()
+    
+    # ========================================================================
+    # Initialization
+    # ========================================================================
+    
     async def initialize(self):
         """Initialize all memory subsystems."""
         if self.initialized:
             return
-            
+        
         try:
-            logger.info(f"Initializing Memory Orchestrator for user {self.user_id}, conversation {self.conversation_id}")
+            # Lazy import core components
+            UnifiedMemoryManager, _, _, _, _, _ = _lazy_import_memory_core()
             
-            # Initialize database if needed
-            await initialize_database()
+            # Initialize unified manager
+            self.unified_manager = UnifiedMemoryManager(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            await self.unified_manager.initialize()
             
-            # Initialize core systems
-            self.integrated_system = await init_memory_system(self.user_id, self.conversation_id)
-            self.memory_wrapper = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+            # Initialize cache
+            from memory.cache import MemoryCache
+            self.cache = MemoryCache(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            
+            # Initialize embedding service
+            from memory.embedding_service import MemoryEmbeddingService
+            self.embedding_service = MemoryEmbeddingService(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            
+            # Initialize agent wrappers
+            from memory.memory_agent import MemoryAgentWrapper
+            self.memory_agent_wrapper = MemoryAgentWrapper(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            
+            from memory.retriever_agent import RetrieverAgent
+            self.retriever_agent = RetrieverAgent(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
             
             # Initialize specialized managers
-            self.emotional_manager = EmotionalMemoryManager(self.user_id, self.conversation_id)
-            self.mask_manager = ProgressiveRevealManager(self.user_id, self.conversation_id)
-            self.flashback_manager = FlashbackManager(self.user_id, self.conversation_id)
-            self.interference_manager = MemoryInterferenceManager(self.user_id, self.conversation_id)
-            self.reconsolidation_manager = ReconsolidationManager(self.user_id, self.conversation_id)
-            self.schema_manager = MemorySchemaManager(self.user_id, self.conversation_id)
-            self.semantic_manager = SemanticMemoryManager(self.user_id, self.conversation_id)
-            
-            # Initialize memory services
-            self.embedding_service = await get_memory_service(
+            from memory.nyx_memory import NyxMemoryManager
+            self.nyx_memory_manager = NyxMemoryManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
-                vector_store_type=self.memory_config.get("vector_store", {}).get("type", "chroma"),
-                embedding_model=self.memory_config.get("embedding", {}).get("type", "local"),
-                config=self.memory_config
+                unified_manager=self.unified_manager
             )
             
-            self.retriever_agent = await get_memory_retriever(
+            from memory.emotional_memory import EmotionalMemoryManager
+            self.emotional_manager = EmotionalMemoryManager(
                 user_id=self.user_id,
-                conversation_id=self.conversation_id,
-                llm_type=self.memory_config.get("llm", {}).get("type", "openai"),
-                vector_store_type=self.memory_config.get("vector_store", {}).get("type", "chroma"),
-                embedding_model=self.memory_config.get("embedding", {}).get("type", "local"),
-                config=self.memory_config
+                conversation_id=self.conversation_id
             )
             
-            # Initialize memory agent
-            memory_context = MemorySystemContext(self.user_id, self.conversation_id)
-            base_agent = create_memory_agent(self.user_id, self.conversation_id)
-            self.memory_agent = base_agent
-            self.memory_agent_wrapper = MemoryAgentWrapper(base_agent, memory_context)
-
-            if not hasattr(self, '_canon_synced'):
-                self._canon_synced = False
+            from memory.schema_manager import SchemaManager
+            self.schema_manager = SchemaManager(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
             
-            # Run canon sync on first initialization
-            if not self._canon_synced:
-                try:
-                    sync_result = await self.sync_canon_to_memory()
-                    logger.info(f"Initial canon sync completed: {sync_result}")
-                    self._canon_synced = True
-                except Exception as e:
-                    logger.warning(f"Canon sync failed during initialization: {e}")
+            from memory.semantic_manager import SemanticManager
+            self.semantic_manager = SemanticManager(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
             
-            # Initialize integration layers
-            self.nyx_bridge = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
-            self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
-            await self.memory_integration.initialize()
+            from memory.flashback_manager import FlashbackManager
+            self.flashback_manager = FlashbackManager(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
             
-            # Initialize maintenance
-            self.maintenance = MemoryMaintenance()
+            from memory.mask_manager import MaskManager
+            self.mask_manager = MaskManager(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            
+            from memory.interference_manager import InterferenceManager
+            self.interference_manager = InterferenceManager(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
             
             self.initialized = True
-            logger.info("Memory Orchestrator initialization complete")
+            logger.info(f"Memory orchestrator initialized for user {self.user_id}, conversation {self.conversation_id}")
             
         except Exception as e:
-            logger.error(f"Failed to initialize Memory Orchestrator: {e}")
+            logger.error(f"Failed to initialize memory orchestrator: {e}")
             raise
     
     # ========================================================================
-    # Setup and Initialization Operations
+    # Scene Bundle Operations (NEW - Performance Optimization)
     # ========================================================================
-
-    async def store_canonical_entity(
-        self,
-        entity_type: str,
-        entity_id: int,
-        entity_name: str,
-        entity_data: Dict[str, Any],
-        significance: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Store a canonical entity creation as a memory.
-        This is called by canon.py when creating new entities.
-        """
-        if not self.initialized:
-            await self.initialize()
-        
-        # Create descriptive text for the entity
-        description_parts = [f"Created {entity_type}: {entity_name}"]
-        for key, value in entity_data.items():
-            if key not in ['embedding', 'user_id', 'conversation_id']:
-                description_parts.append(f"{key}: {value}")
-        
-        memory_text = ". ".join(description_parts[:5])  # Limit to avoid too long text
-        
-        # Map significance to importance
-        importance_map = {
-            1: "trivial", 2: "trivial", 3: "low",
-            4: "low", 5: "medium", 6: "medium",
-            7: "high", 8: "high", 9: "critical", 10: "critical"
-        }
-        importance = importance_map.get(significance, "medium")
-        
-        # Store as a memory
-        result = await self.store_memory(
-            entity_type=EntityType.LORE,
-            entity_id=0,  # Use 0 for general lore
-            memory_text=memory_text,
-            importance=importance,
-            tags=[entity_type.lower(), "canon", "creation"],
-            metadata={
-                "canonical_entity_type": entity_type,
-                "canonical_entity_id": entity_id,
-                "canonical_entity_name": entity_name,
-                **entity_data
-            }
-        )
-        
-        # Also add to vector store for searchability
-        await self.add_to_vector_store(
-            text=f"{entity_type}: {entity_name} - {memory_text}",
-            metadata={
-                "entity_type": entity_type.lower(),
-                "entity_id": entity_id,
-                "entity_name": entity_name,
-                "canonical": True,
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
-            },
-            entity_type=entity_type.lower()
-        )
-        
-        return result
     
-    async def search_canonical_entities(
-        self,
-        query: str,
-        entity_types: List[str] = None,
-        similarity_threshold: float = 0.85
-    ) -> List[Dict[str, Any]]:
-        """
-        Search for canonical entities using the vector store.
-        Used by canon.py for duplicate detection.
-        """
-        if not self.initialized:
-            await self.initialize()
-        
-        filter_dict = {
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "canonical": True
-        }
-        
-        results = []
-        
-        if entity_types:
-            # Search each entity type separately for better accuracy
-            for entity_type in entity_types:
-                type_results = await self.search_vector_store(
-                    query=query,
-                    entity_type=entity_type.lower(),
-                    top_k=3,
-                    filter_dict=filter_dict
-                )
-                
-                # Filter by similarity threshold
-                for result in type_results:
-                    if result.get("similarity", 0) >= similarity_threshold:
-                        result["entity_type"] = entity_type
-                        results.append(result)
-        else:
-            # Search all canonical entities
-            all_results = await self.search_vector_store(
-                query=query,
-                top_k=5,
-                filter_dict=filter_dict
-            )
-            
-            # Filter by similarity threshold
-            results = [r for r in all_results if r.get("similarity", 0) >= similarity_threshold]
-        
-        # Sort by similarity
-        results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-        
-        return results
+    @staticmethod
+    def _as_mem_list(res: Any) -> List[Dict[str, Any]]:
+        if not res:
+            return []
+        if isinstance(res, list):
+            return res
+        if isinstance(res, dict):
+            for key in ("memories", "results", "items"):
+                val = res.get(key)
+                if isinstance(val, list):
+                    return val
+            return []
+        return []
     
-    async def get_canonical_context(
-        self,
-        entity_types: List[str] = None,
-        time_window_hours: int = 24
-    ) -> Dict[str, Any]:
-        """
-        Get canonical context for narrative generation.
-        Combines canonical entities with memories.
-        """
-        if not self.initialized:
-            await self.initialize()
-        
-        context = {
-            "canonical_entities": {},
-            "recent_canonical_events": [],
-            "active_locations": [],
-            "active_npcs": [],
-            "world_state": {},
-            "narrative_context": await self.get_narrative_context()
-        }
-        
-        game_time_helper = _lazy_import_game_time_helper()
-        from db.connection import get_db_connection_context
-
-        current_time = await game_time_helper.get_game_datetime(self.user_id, self.conversation_id)
-        cutoff_time = current_time - timedelta(hours=time_window_hours)
-        
-        async with get_db_connection_context() as conn:
-            # Get recent canonical events
-            events = await conn.fetch("""
-                SELECT event_text, tags, significance, timestamp
-                FROM CanonicalEvents
-                WHERE user_id = $1 AND conversation_id = $2
-                AND timestamp > $3
-                ORDER BY timestamp DESC
-                LIMIT 20
-            """, self.user_id, self.conversation_id, cutoff_time)
-            
-            context["recent_canonical_events"] = [
-                {
-                    "text": e["event_text"],
-                    "tags": json.loads(e["tags"]) if e["tags"] else [],
-                    "significance": e["significance"],
-                    "timestamp": e["timestamp"].isoformat()
-                }
-                for e in events
-            ]
-            
-            # Get active NPCs
-            npcs = await conn.fetch("""
-                SELECT npc_id, npc_name, role, current_location
-                FROM NPCStats
-                WHERE user_id = $1 AND conversation_id = $2
-                AND introduced = TRUE
-            """, self.user_id, self.conversation_id)
-            
-            context["active_npcs"] = [
-                {
-                    "id": npc["npc_id"],
-                    "name": npc["npc_name"],
-                    "role": npc["role"],
-                    "location": npc["current_location"]
-                }
-                for npc in npcs
-            ]
-            
-            # Get active locations
-            locations = await conn.fetch("""
-                SELECT location_name, location_type, description
-                FROM Locations
-                WHERE user_id = $1 AND conversation_id = $2
-                LIMIT 10
-            """, self.user_id, self.conversation_id)
-            
-            context["active_locations"] = [
-                {
-                    "name": loc["location_name"],
-                    "type": loc["location_type"],
-                    "description": loc["description"]
-                }
-                for loc in locations
-            ]
-            
-            # Get current roleplay state
-            roleplay_state = await conn.fetch("""
-                SELECT key, value
-                FROM CurrentRoleplay
-                WHERE user_id = $1 AND conversation_id = $2
-            """, self.user_id, self.conversation_id)
-            
-            for state in roleplay_state:
-                context["world_state"][state["key"]] = state["value"]
-        
-        # Enhance with memory-based insights
-        if context["active_npcs"]:
-            for npc in context["active_npcs"]:
-                # Get NPC's recent memories
-                npc_memories = await self.retrieve_memories(
-                    entity_type="npc",
-                    entity_id=npc["id"],
-                    limit=3
-                )
-                npc["recent_memories"] = npc_memories.get("memories", [])
-                
-                # Get NPC's emotional state
-                emotional_state = await self.get_emotional_state(
-                    entity_type="npc",
-                    entity_id=npc["id"]
-                )
-                npc["emotional_state"] = emotional_state
-        
-        return context
-
-    async def ensure_canon_synced(self) -> bool:
-        """
-        Ensure canon is synced to memory system, with proper error handling.
-        This is called by canon.py when needed.
-        
-        Returns:
-            True if sync successful or already synced
-        """
-        if hasattr(self, '_canon_synced') and self._canon_synced:
-            return True
-        
-        try:
-            from db.connection import get_db_connection_context
-            
-            # Check if canon tables exist
-            async with get_db_connection_context() as conn:
-                tables_exist = await conn.fetchval("""
-                    SELECT COUNT(*) FROM information_schema.tables 
-                    WHERE table_name IN ('npcstats', 'locations', 'events', 'playerjournal')
-                    AND table_schema = 'public'
-                """)
-                
-                if tables_exist == 0:
-                    logger.info("No canon tables found, skipping sync")
-                    self._canon_synced = True
-                    return True
-                
-                # Check if we have any data to sync
-                has_data = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT 1 FROM NPCStats 
-                        WHERE user_id = $1 AND conversation_id = $2
-                        LIMIT 1
-                    )
-                """, self.user_id, self.conversation_id)
-                
-                if has_data:
-                    logger.info("Starting canon to memory sync...")
-                    sync_result = await self.sync_canon_to_memory_safe()
-                    logger.info(f"Canon sync completed: {sync_result}")
-                else:
-                    logger.info("No canon data to sync")
-                
-                self._canon_synced = True
-                return True
-                
-        except Exception as e:
-            logger.warning(f"Canon sync check failed (non-critical): {e}")
-            # Don't fail initialization over this
-            self._canon_synced = False
-            return False
+    def _index_bundle(self, cache_key: str, scope: SceneScope) -> Set[str]:
+        """Index a bundle cache entry for efficient invalidation (class-wide)."""
+        cls = self.__class__
+        # Build the entity set
+        ents = {f"player:{self.user_id}"}
+        if scope.location_id:
+            ents.add(f"location:{scope.location_id}")
+        for nid in scope.npc_ids:
+            ents.add(f"npc:{nid}")
+        for t in scope.topics:
+            ents.add(f"topic:{t}")
+        for lt in scope.lore_tags:
+            ents.add(f"lore:{lt}")
+        # Index each entity
+        for ent in ents:
+            cls._bundle_index[ent].add(cache_key)
+        # Store timestamps
+        now = time.monotonic()
+        cls._bundle_created_at[cache_key] = now  # For TTL
+        cls._bundle_cached_at[cache_key] = now   # For LRU
+        # Return the ents set for storage
+        return ents
     
-    async def validate_canonical_consistency(
-        self,
-        entity_type: str,
-        entity_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def get_scene_bundle(self, scope: SceneScope, token_budget: int = 5000) -> Dict[str, Any]:
         """
-        Validate that a new entity is consistent with existing canon.
-        Uses memory analysis to detect conflicts.
-        """
-        if not self.initialized:
-            await self.initialize()
+        Get a scene-scoped memory bundle for efficient context assembly.
         
-        conflicts = []
-        warnings = []
-        
-        # Search for similar entities
-        search_text = f"{entity_type}: {entity_data.get('name', '')} {entity_data.get('description', '')}"
-        similar_entities = await self.search_canonical_entities(
-            query=search_text,
-            entity_types=[entity_type],
-            similarity_threshold=0.7
-        )
-        
-        if similar_entities:
-            # Use LLM to check for conflicts
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
-            
-            prompt = f"""
-            Check if this new {entity_type} conflicts with existing canon:
-            
-            New Entity:
-            {json.dumps(entity_data, indent=2)}
-            
-            Similar Existing Entities:
-            {json.dumps(similar_entities[:3], indent=2)}
-            
-            Identify:
-            1. Direct conflicts (contradictions)
-            2. Potential issues (inconsistencies)
-            3. Warnings (things to be careful about)
-            
-            Return JSON:
-            {{
-                "has_conflicts": true/false,
-                "conflicts": ["conflict1", ...],
-                "warnings": ["warning1", ...],
-                "suggestions": ["suggestion1", ...]
-            }}
-            """
-            
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-5-nano",
-                    messages=[
-                        {"role": "system", "content": "You are a canon consistency validator."},
-                        {"role": "user", "content": prompt}
-                    ],
-                )
-                
-                result = json.loads(response.choices[0].message.content)
-                
-                if result.get("has_conflicts"):
-                    conflicts.extend(result.get("conflicts", []))
-                warnings.extend(result.get("warnings", []))
-                
-            except Exception as e:
-                logger.error(f"Error validating canonical consistency: {e}")
-        
-        # Check narrative consistency
-        narrative_context = await self.get_narrative_context()
-        if narrative_context.get("potential_conflicts"):
-            for conflict in narrative_context["potential_conflicts"]:
-                warnings.append(f"Potential narrative conflict: {conflict.get('conflict_type')}")
-        
-        return {
-            "is_consistent": len(conflicts) == 0,
-            "conflicts": conflicts,
-            "warnings": warnings,
-            "similar_entities": similar_entities
-        }
-    
-    async def sync_canon_to_memory(self) -> Dict[str, Any]:
-        """
-        Synchronize all canonical data to the memory system.
-        This ensures the memory system has full knowledge of the world state.
-        """
-        if not self.initialized:
-            await self.initialize()
-        
-        from db.connection import get_db_connection_context
-        # Lazy import to avoid circular dependency
-        from lore.core.canon import ensure_canonical_context
-        
-        ctx = ensure_canonical_context({
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        })
-        
-        sync_stats = {
-            "npcs_synced": 0,
-            "locations_synced": 0,
-            "events_synced": 0,
-            "journal_entries_synced": 0,
-            "errors": []
-        }
-        
-        try:
-            async with get_db_connection_context() as conn:
-                # Sync NPCs
-                npcs = await conn.fetch("""
-                    SELECT npc_id, npc_name, role, affiliations, introduced
-                    FROM NPCStats
-                    WHERE user_id = $1 AND conversation_id = $2
-                """, self.user_id, self.conversation_id)
-                
-                for npc in npcs:
-                    try:
-                        await self.store_canonical_entity(
-                            entity_type="npc",
-                            entity_id=npc["npc_id"],
-                            entity_name=npc["npc_name"],
-                            entity_data={
-                                "role": npc["role"],
-                                "affiliations": npc["affiliations"],
-                                "introduced": npc["introduced"]
-                            }
-                        )
-                        sync_stats["npcs_synced"] += 1
-                    except Exception as e:
-                        sync_stats["errors"].append(f"NPC {npc['npc_id']}: {str(e)}")
-                
-                # Sync Locations
-                locations = await conn.fetch("""
-                    SELECT id, location_name, location_type, description
-                    FROM Locations
-                    WHERE user_id = $1 AND conversation_id = $2
-                """, self.user_id, self.conversation_id)
-                
-                for loc in locations:
-                    try:
-                        await self.store_canonical_entity(
-                            entity_type="location",
-                            entity_id=loc["id"],
-                            entity_name=loc["location_name"],
-                            entity_data={
-                                "type": loc["location_type"],
-                                "description": loc["description"]
-                            }
-                        )
-                        sync_stats["locations_synced"] += 1
-                    except Exception as e:
-                        sync_stats["errors"].append(f"Location {loc['id']}: {str(e)}")
-                
-                # Sync Journal Entries
-                journal_entries = await conn.fetch("""
-                    SELECT id, entry_type, entry_text, importance, tags
-                    FROM PlayerJournal
-                    WHERE user_id = $1 AND conversation_id = $2
-                    LIMIT 100
-                """, self.user_id, self.conversation_id)
-                
-                for entry in journal_entries:
-                    try:
-                        importance = "high" if entry["importance"] > 0.7 else "medium" if entry["importance"] > 0.3 else "low"
-                        tags = json.loads(entry["tags"]) if entry["tags"] else []
-                        
-                        await self.store_memory(
-                            entity_type=EntityType.PLAYER,
-                            entity_id=self.user_id,
-                            memory_text=entry["entry_text"],
-                            importance=importance,
-                            tags=tags + ["journal_sync"],
-                            metadata={
-                                "journal_id": entry["id"],
-                                "entry_type": entry["entry_type"]
-                            }
-                        )
-                        sync_stats["journal_entries_synced"] += 1
-                    except Exception as e:
-                        sync_stats["errors"].append(f"Journal {entry['id']}: {str(e)}")
-            
-            logger.info(f"Canon sync completed: {sync_stats}")
-            return sync_stats
-            
-        except Exception as e:
-            logger.error(f"Error during canon sync: {e}")
-            sync_stats["errors"].append(f"General sync error: {str(e)}")
-            return sync_stats
-
-    async def sync_canon_to_memory_safe(self) -> Dict[str, Any]:
-        """
-        Safer version of canon sync that avoids circular imports.
-        
-        Returns:
-            Sync statistics
-        """
-        from db.connection import get_db_connection_context
-        
-        sync_stats = {
-            "npcs_synced": 0,
-            "locations_synced": 0,
-            "events_synced": 0,
-            "journal_entries_synced": 0,
-            "errors": []
-        }
-        
-        try:
-            async with get_db_connection_context() as conn:
-                # Sync NPCs
-                npcs = await conn.fetch("""
-                    SELECT npc_id, npc_name, role, affiliations, introduced
-                    FROM NPCStats
-                    WHERE user_id = $1 AND conversation_id = $2
-                    LIMIT 100
-                """, self.user_id, self.conversation_id)
-                
-                for npc in npcs:
-                    try:
-                        # Check if already synced
-                        existing = await self.search_vector_store(
-                            query=f"npc:{npc['npc_id']}",
-                            entity_type="npc",
-                            top_k=1,
-                            filter_dict={
-                                "entity_id": npc["npc_id"],
-                                "canonical": True
-                            }
-                        )
-                        
-                        if not existing:
-                            await self.store_canonical_entity(
-                                entity_type="npc",
-                                entity_id=npc["npc_id"],
-                                entity_name=npc["npc_name"],
-                                entity_data={
-                                    "role": npc["role"],
-                                    "affiliations": npc["affiliations"],
-                                    "introduced": npc["introduced"]
-                                },
-                                significance=5
-                            )
-                            sync_stats["npcs_synced"] += 1
-                    except Exception as e:
-                        sync_stats["errors"].append(f"NPC {npc['npc_id']}: {str(e)[:100]}")
-                
-                # Sync Locations
-                locations = await conn.fetch("""
-                    SELECT id, location_name, location_type, description
-                    FROM Locations
-                    WHERE user_id = $1 AND conversation_id = $2
-                    LIMIT 100
-                """, self.user_id, self.conversation_id)
-                
-                for loc in locations:
-                    try:
-                        existing = await self.search_vector_store(
-                            query=f"location:{loc['id']}",
-                            entity_type="location",
-                            top_k=1,
-                            filter_dict={
-                                "entity_id": loc["id"],
-                                "canonical": True
-                            }
-                        )
-                        
-                        if not existing:
-                            await self.store_canonical_entity(
-                                entity_type="location",
-                                entity_id=loc["id"],
-                                entity_name=loc["location_name"],
-                                entity_data={
-                                    "type": loc["location_type"],
-                                    "description": loc["description"]
-                                },
-                                significance=5
-                            )
-                            sync_stats["locations_synced"] += 1
-                    except Exception as e:
-                        sync_stats["errors"].append(f"Location {loc['id']}: {str(e)[:100]}")
-                
-                # Sync recent journal entries
-                journal_entries = await conn.fetch("""
-                    SELECT id, entry_type, entry_text, importance, tags
-                    FROM PlayerJournal
-                    WHERE user_id = $1 AND conversation_id = $2
-                    ORDER BY created_at DESC
-                    LIMIT 50
-                """, self.user_id, self.conversation_id)
-                
-                for entry in journal_entries:
-                    try:
-                        # Check if already synced
-                        existing = await self.search_vector_store(
-                            query=f"journal:{entry['id']}",
-                            entity_type="player",
-                            top_k=1,
-                            filter_dict={
-                                "journal_id": entry["id"]
-                            }
-                        )
-                        
-                        if not existing:
-                            importance = "high" if entry["importance"] > 0.7 else "medium" if entry["importance"] > 0.3 else "low"
-                            tags = json.loads(entry["tags"]) if entry["tags"] else []
-                            
-                            await self.store_memory(
-                                entity_type=EntityType.PLAYER,
-                                entity_id=self.user_id,
-                                memory_text=entry["entry_text"],
-                                importance=importance,
-                                tags=tags + ["journal_sync"],
-                                metadata={
-                                    "journal_id": entry["id"],
-                                    "entry_type": entry["entry_type"]
-                                },
-                                add_to_vector_store=True
-                            )
-                            sync_stats["journal_entries_synced"] += 1
-                    except Exception as e:
-                        sync_stats["errors"].append(f"Journal {entry['id']}: {str(e)[:100]}")
-            
-            # Trim errors if too many
-            if len(sync_stats["errors"]) > 10:
-                error_count = len(sync_stats["errors"])
-                sync_stats["errors"] = sync_stats["errors"][:10]
-                sync_stats["errors"].append(f"... and {error_count - 10} more errors")
-            
-            return sync_stats
-            
-        except Exception as e:
-            logger.error(f"Error during canon sync: {e}")
-            sync_stats["errors"].append(f"General sync error: {str(e)}")
-            return sync_stats
-    
-    async def setup_entity(
-        self,
-        entity_type: Union[str, EntityType],
-        entity_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Set up a new entity with initial data.
+        This is the primary method for the new context assembly pipeline.
+        Returns only memories relevant to the current scene scope.
         
         Args:
-            entity_type: Type of entity to set up
-            entity_data: Initial data for the entity
+            scope: Scene scope defining what memories to include
+            token_budget: Maximum token budget for the bundle (default 5000)
             
         Returns:
-            Setup results
+            Dictionary with canon memories, scene memories, linked memories, patterns
         """
         if not self.initialized:
             await self.initialize()
         
-        # Normalize entity type
-        if isinstance(entity_type, EntityType):
-            entity_type = entity_type.value
+        cls = self.__class__
+        cache_key = f"{self.user_id}:{self.conversation_id}:{scope.to_cache_key()}"
         
-        # Route to appropriate setup function
-        if entity_type == "npc":
-            npc_id = await setup_npc(
-                self.user_id,
-                self.conversation_id,
-                entity_data
-            )
-            return {"entity_type": "npc", "entity_id": npc_id, "success": True}
+        # Fast path with separate TTL and LRU tracking
+        cached = cls._bundle_cache.get(cache_key)
+        if cached:
+            created_at = cls._bundle_created_at.get(cache_key, 0.0)
+            # Check TTL based on creation time
+            if time.monotonic() - created_at < cls._bundle_ttl:
+                cls._bundle_cached_at[cache_key] = time.monotonic()  # Touch for LRU
+                logger.debug(f"Bundle cache hit for {cache_key[:50]}...")
+                return cached['bundle']
+            else:
+                logger.debug(f"Bundle cache expired for {cache_key[:50]}...")
+        
+        logger.debug(f"Bundle cache miss for {cache_key[:50]}...")
+        
+        # Prevent duplicate builds across instances
+        async with cls._get_lock(cache_key):
+            cached = cls._bundle_cache.get(cache_key)
+            if cached:
+                created_at = cls._bundle_created_at.get(cache_key, 0.0)
+                if time.monotonic() - created_at < cls._bundle_ttl:
+                    cls._bundle_cached_at[cache_key] = time.monotonic()  # Touch for LRU
+                    return cached['bundle']
             
-        elif entity_type == "player":
-            success = await setup_player(
-                self.user_id,
-                self.conversation_id,
-                entity_data
-            )
-            return {"entity_type": "player", "success": success}
+            bundle = await self._build_scene_bundle(scope, token_budget)
+            payload = bundle.to_dict()
             
-        elif entity_type == "nyx":
-            success = await setup_nyx(
-                self.user_id,
-                self.conversation_id,
-                entity_data
-            )
-            return {"entity_type": "nyx", "success": success}
+            # Index and get the entity set
+            ents = self._index_bundle(cache_key, scope)
             
-        else:
-            return {"error": f"Unsupported entity type for setup: {entity_type}"}
+            # Cache with entity set for proper cleanup (class-wide)
+            cls._bundle_cache[cache_key] = {
+                'bundle': payload,
+                'timestamp': time.time(),
+                'scope': scope,
+                'ents': ents,  # Store exact keys used for reverse index
+            }
+            self._cleanup_bundle_cache()
+            return payload
+    
+    async def get_scene_delta(self, scope: SceneScope, since_timestamp: float) -> Dict[str, Any]:
+        """
+        Get only memories that changed since the given timestamp.
+        """
+        if not self.initialized:
+            await self.initialize()
+    
+        # Guard against invalid timestamps
+        if not since_timestamp or since_timestamp <= 0:
+            since_timestamp = time.time() - 86400  # 24h fallback
+    
+        # Clamp to reasonable recent window (max 7 days ago)
+        max_age = time.time() - (7 * 86400)
+        if since_timestamp < max_age:
+            since_timestamp = max_age
+    
+        since_dt = datetime.fromtimestamp(since_timestamp)
+        iso_since = since_dt.isoformat()
+    
+        tasks = []
+    
+        # Player delta
+        tasks.append(self.retrieve_memories(
+            entity_type=EntityType.PLAYER.value,
+            entity_id=self.user_id,
+            filters={'modified_after': iso_since, 'location': scope.location_id} if scope.location_id else {'modified_after': iso_since},
+            limit=30,
+        ))
+    
+        # NPC deltas
+        for npc_id in scope.npc_ids:
+            tasks.append(self.retrieve_memories(
+                entity_type=EntityType.NPC.value,
+                entity_id=npc_id,
+                filters={'modified_after': iso_since},
+                limit=20,
+            ))
+    
+        # Location/topic/lore deltas via vector store (if supported by filters)
+        vs_filters = {'modified_after': iso_since}
+        if scope.location_id:
+            tasks.append(self.search_vector_store(
+                query=f"location:{scope.location_id}",
+                filter_dict={**vs_filters, 'location': scope.location_id},
+                top_k=15
+            ))
+        for topic in scope.topics:
+            tasks.append(self.search_vector_store(
+                query=topic, filter_dict={**vs_filters, 'tags': topic}, top_k=10
+            ))
+        for lt in scope.lore_tags:
+            tasks.append(self.search_vector_store(
+                query=lt, filter_dict={**vs_filters, 'lore_tags': lt}, top_k=10
+            ))
+    
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+        # Flatten + normalize
+        flat: List[Dict[str, Any]] = []
+        for r in results:
+            if isinstance(r, Exception) or r is None:
+                continue
+            flat.extend(self._as_mem_list(r) if not (isinstance(r, dict) and 'memories' in r)
+                        else r['memories'])
+    
+        # Dedup by memory_id
+        seen = set()
+        unique = []
+        for m in flat:
+            mid = m.get('memory_id') or m.get('id')
+            if mid and mid not in seen:
+                seen.add(mid)
+                unique.append(m)
+    
+        # Split canon vs scene
+        canon = [m for m in unique if m.get('is_canon') or m.get('canonical')]
+        scene = [m for m in unique if not (m.get('is_canon') or m.get('canonical'))]
+    
+        bundle = MemoryBundle(
+            canon_memories=canon,
+            scene_memories=scene,
+            linked_memories=[],
+            emergent_patterns=[],
+            scope=scope,
+            last_changed_at=time.time(),
+        )
+        bundle.bundle_size_tokens = self._estimate_bundle_tokens(bundle)
+        return bundle.to_dict()
+    
+    async def _build_scene_bundle(self, scope: SceneScope, token_budget: int = 5000) -> MemoryBundle:
+        """
+        Build a complete scene bundle from scratch.
+    
+        Uses parallel fetching for efficiency with limits on concurrent searches.
+        """
+        # Cap pathological scopes
+        MAX_NPCS = 20
+        MAX_TOPICS = 10
+        MAX_LORE_TAGS = 10
+    
+        # Parallel fetch all memory types
+        tasks = []
+    
+        # Get player memories
+        tasks.append(self._get_player_memories_for_scope(scope))
+    
+        # Get NPC memories for all NPCs in scope (capped)
+        npc_ids = list(scope.npc_ids)[:MAX_NPCS]
+        if len(scope.npc_ids) > MAX_NPCS:
+            logger.warning(f"Capped NPCs from {len(scope.npc_ids)} to {MAX_NPCS}")
+        for npc_id in npc_ids:
+            tasks.append(self._get_npc_memories_for_scope(npc_id, scope))
+    
+        # Get location memories if location specified
+        if scope.location_id:
+            tasks.append(self._get_location_memories_for_scope(scope))
+    
+        # Get topic-related memories (capped)
+        topics = list(scope.topics)[:MAX_TOPICS]
+        if len(scope.topics) > MAX_TOPICS:
+            logger.warning(f"Capped topics from {len(scope.topics)} to {MAX_TOPICS}")
+        if topics:
+            limited_scope = SceneScope(
+                location_id=scope.location_id,
+                npc_ids=scope.npc_ids,
+                topics=set(topics),
+                lore_tags=scope.lore_tags,
+                time_window_hours=scope.time_window_hours
+            )
+            tasks.append(self._get_topic_memories_for_scope(limited_scope))
+    
+        # Get lore-tagged memories (capped)
+        lore_tags = list(scope.lore_tags)[:MAX_LORE_TAGS]
+        if len(scope.lore_tags) > MAX_LORE_TAGS:
+            logger.warning(f"Capped lore tags from {len(scope.lore_tags)} to {MAX_LORE_TAGS}")
+        if lore_tags:
+            limited_scope = SceneScope(
+                location_id=scope.location_id,
+                npc_ids=scope.npc_ids,
+                topics=scope.topics,
+                lore_tags=set(lore_tags),
+                time_window_hours=scope.time_window_hours
+            )
+            tasks.append(self._get_lore_memories_for_scope(limited_scope))
+    
+        # Execute all fetches in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+        # Process results safely
+        all_memories: List[Dict[str, Any]] = []
+        canon_memories: List[Dict[str, Any]] = []
+    
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Error fetching memories for scope: {result}")
+                continue
+            all_memories.extend(self._as_mem_list(result))
+    
+        # Separate canon from regular memories
+        for memory in all_memories:
+            if memory.get('is_canon') or memory.get('canonical'):
+                canon_memories.append(memory)
+    
+        # Find linked memories and patterns (limited computation)
+        linked_memories = await self._find_linked_memories(all_memories, scope, limit=10)
+        patterns = await self._find_emergent_patterns(all_memories, scope, limit=5)
+    
+        # Build bundle
+        bundle = MemoryBundle(
+            canon_memories=canon_memories[:20],   # Limit canon memories
+            scene_memories=all_memories[:50],     # Limit scene memories
+            linked_memories=linked_memories,
+            emergent_patterns=patterns,
+            scope=scope,
+            last_changed_at=time.time()
+        )
+    
+        # Trim to token budget and finalize token size
+        bundle = self._trim_to_token_budget(bundle, token_budget)
+        bundle.bundle_size_tokens = self._estimate_bundle_tokens(bundle)
+    
+        return bundle
+    
+    async def _get_player_memories_for_scope(self, scope: SceneScope) -> List[Dict[str, Any]]:
+        """Get player memories relevant to the scene scope."""
+        filters = {}
+        
+        # Add time window filter
+        if scope.time_window_hours:
+            cutoff = datetime.now() - timedelta(hours=scope.time_window_hours)
+            filters['created_after'] = cutoff.isoformat()
+        
+        # Add location filter if specified
+        if scope.location_id:
+            filters['location'] = scope.location_id
+        
+        # Get memories
+        memories = await self.retrieve_memories(
+            entity_type=EntityType.PLAYER.value,
+            entity_id=self.user_id,
+            filters=filters,
+            limit=30
+        )
+        
+        return memories.get('memories', [])
+    
+    async def _get_npc_memories_for_scope(self, npc_id: int, scope: SceneScope) -> List[Dict[str, Any]]:
+        """Get NPC memories relevant to the scene scope."""
+        filters = {}
+        
+        # Add time window filter
+        if scope.time_window_hours:
+            cutoff = datetime.now() - timedelta(hours=scope.time_window_hours)
+            filters['created_after'] = cutoff.isoformat()
+        
+        # Get memories
+        memories = await self.retrieve_memories(
+            entity_type=EntityType.NPC.value,
+            entity_id=npc_id,
+            filters=filters,
+            limit=20
+        )
+        
+        return memories.get('memories', [])
+    
+    async def _get_location_memories_for_scope(self, scope: SceneScope) -> List[Dict[str, Any]]:
+        """Get location-specific memories."""
+        res = await self.search_vector_store(
+            query=f"location:{scope.location_id}",
+            filter_dict={'location': scope.location_id},
+            top_k=15
+        )
+        return self._as_mem_list(res)
+    
+    async def _get_topic_memories_for_scope(self, scope: SceneScope) -> List[Dict[str, Any]]:
+        """Get memories related to specified topics."""
+        all_memories = []
+        for topic in scope.topics:
+            res = await self.search_vector_store(
+                query=topic, filter_dict={'tags': topic}, top_k=10
+            )
+            all_memories.extend(self._as_mem_list(res))
+    
+        # Deduplicate by memory_id
+        seen = set()
+        unique = []
+        for mem in all_memories:
+            mid = mem.get('memory_id') or mem.get('id')
+            if mid and mid not in seen:
+                seen.add(mid)
+                unique.append(mem)
+        return unique
+        
+    async def _get_lore_memories_for_scope(self, scope: SceneScope) -> List[Dict[str, Any]]:
+        """Get memories tagged with lore elements."""
+        all_memories = []
+        for lore_tag in scope.lore_tags:
+            res = await self.search_vector_store(
+                query=lore_tag, filter_dict={'lore_tags': lore_tag}, top_k=10
+            )
+            all_memories.extend(self._as_mem_list(res))
+    
+        # Deduplicate
+        seen = set()
+        unique = []
+        for mem in all_memories:
+            mid = mem.get('memory_id') or mem.get('id')
+            if mid and mid not in seen:
+                seen.add(mid)
+                unique.append(mem)
+        return unique
+    
+    async def _find_linked_memories(self, memories: List[Dict], scope: SceneScope, limit: int = 10) -> List[Dict]:
+        """Find memories linked to the current set through relationships."""
+        if not memories:
+            return []
+        
+        # Extract entities mentioned in memories
+        mentioned_entities = set()
+        valid_entity_types = {t.value for t in EntityType}
+        
+        for mem in memories:
+            # Look for entity references in metadata
+            metadata = mem.get('metadata', {})
+            if 'entities' in metadata:
+                for entity in metadata['entities']:
+                    # Normalize entity type
+                    etype = str(entity.get('type', '')).lower()
+                    
+                    # Robust ID parsing
+                    raw = entity.get('id')
+                    if raw is not None:
+                        try:
+                            # Try to parse as integer
+                            eid = int(str(raw))
+                        except (TypeError, ValueError):
+                            # Keep as-is for UUIDs, strings, etc.
+                            eid = raw
+                        
+                        # Only add valid entity types
+                        if etype in valid_entity_types:
+                            mentioned_entities.add((etype, eid))
+        
+        # Find memories involving these entities
+        linked = []
+        for entity_type, entity_id in list(mentioned_entities)[:5]:  # Limit lookups
+            entity_memories = await self.retrieve_memories(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                limit=3
+            )
+            linked.extend(entity_memories.get('memories', []))
+        
+        return linked[:limit]
+    
+    async def _find_emergent_patterns(self, memories: List[Dict], scope: SceneScope, limit: int = 5) -> List[Dict]:
+        """Find emergent patterns in the memory set."""
+        if not memories or len(memories) < 3:
+            return []
+        
+        # Quick pattern analysis
+        patterns = []
+        
+        # Find recurring themes
+        theme_counts = defaultdict(int)
+        emotion_counts = defaultdict(int)
+        
+        for mem in memories:
+            # Count themes
+            for tag in mem.get('tags', []):
+                theme_counts[tag] += 1
+            
+            # Count emotions
+            emotional_state = mem.get('emotional_state', {})
+            for emotion, intensity in emotional_state.items():
+                if intensity > 0.5:
+                    emotion_counts[emotion] += 1
+        
+        # Build pattern objects
+        for theme, count in sorted(theme_counts.items(), key=lambda x: x[1], reverse=True)[:3]:
+            if count >= 2:
+                patterns.append({
+                    'type': 'recurring_theme',
+                    'theme': theme,
+                    'occurrences': count,
+                    'strength': min(1.0, count / len(memories))
+                })
+        
+        for emotion, count in sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True)[:2]:
+            if count >= 2:
+                patterns.append({
+                    'type': 'emotional_pattern',
+                    'emotion': emotion,
+                    'occurrences': count,
+                    'strength': min(1.0, count / len(memories))
+                })
+        
+        return patterns[:limit]
+    
+    def _estimate_bundle_tokens(self, bundle: MemoryBundle) -> int:
+        """Estimate token count using a lenient serializer."""
+        def _dump(x):  # lenient JSON (datetimes, enums, etc.)
+            return json.dumps(x, ensure_ascii=False, default=str)
+        
+        total_chars = 0
+        for section in (bundle.canon_memories, bundle.scene_memories, 
+                       bundle.linked_memories, bundle.emergent_patterns):
+            for item in section:
+                try:
+                    total_chars += len(_dump(item))
+                except Exception:
+                    # Fallback for truly problematic objects
+                    total_chars += len(str(item))
+        return total_chars // 4
+    
+    def _trim_to_token_budget(self, bundle: MemoryBundle, token_budget: int = 5000) -> MemoryBundle:
+        """
+        Trim bundle to fit within token budget.
+        Priority: canon > patterns > scene > linked
+        """
+        # Start with everything
+        result = MemoryBundle(
+            canon_memories=bundle.canon_memories[:],
+            scene_memories=bundle.scene_memories[:],
+            linked_memories=bundle.linked_memories[:],
+            emergent_patterns=bundle.emergent_patterns[:],
+            scope=bundle.scope,
+            last_changed_at=bundle.last_changed_at
+        )
+        
+        # Check if we're already under budget
+        current_tokens = self._estimate_bundle_tokens(result)
+        if current_tokens <= token_budget:
+            return result
+        
+        # Progressive trimming (least important first)
+        # 1. Drop linked memories first
+        if result.linked_memories and current_tokens > token_budget:
+            result.linked_memories = []
+            current_tokens = self._estimate_bundle_tokens(result)
+        
+        # 2. Reduce scene memories
+        if current_tokens > token_budget:
+            # Keep reducing scene memories by half until under budget
+            while len(result.scene_memories) > 5 and current_tokens > token_budget:
+                result.scene_memories = result.scene_memories[:len(result.scene_memories)//2]
+                current_tokens = self._estimate_bundle_tokens(result)
+        
+        # 3. Reduce patterns
+        if current_tokens > token_budget and len(result.emergent_patterns) > 2:
+            result.emergent_patterns = result.emergent_patterns[:2]
+            current_tokens = self._estimate_bundle_tokens(result)
+        
+        # 4. As last resort, trim canon (but keep at least 5)
+        if current_tokens > token_budget and len(result.canon_memories) > 5:
+            result.canon_memories = result.canon_memories[:5]
+        
+        result.bundle_size_tokens = self._estimate_bundle_tokens(result)
+        return result
+    
+    def _cleanup_bundle_cache(self):
+        """Remove expired entries from class-wide bundle cache and enforce size limit."""
+        cls = self.__class__
+        now = time.monotonic()
+        
+        # First pass: remove expired entries (based on creation time)
+        expired = [k for k in list(cls._bundle_cache.keys())
+                   if now - cls._bundle_created_at.get(k, 0.0) > cls._bundle_ttl]
+        
+        for k in expired:
+            entry = cls._bundle_cache.get(k) or {}
+            # Use the stored entity set for proper cleanup
+            ents = entry.get('ents', set())
+            for ent in ents:
+                if ent in cls._bundle_index:
+                    cls._bundle_index[ent].discard(k)
+                    if not cls._bundle_index[ent]:
+                        del cls._bundle_index[ent]
+            cls._bundle_cache.pop(k, None)
+            cls._bundle_cached_at.pop(k, None)
+            cls._bundle_created_at.pop(k, None)
+            cls._bundle_locks.pop(k, None)
+        
+        # Second pass: enforce size limit (true LRU eviction based on last access)
+        if len(cls._bundle_cache) > cls._bundle_max_size:
+            # Sort by last access time (oldest first)
+            sorted_keys = sorted(
+                cls._bundle_cache.keys(),
+                key=lambda k: cls._bundle_cached_at.get(k, 0.0)
+            )
+            # Remove oldest entries until under limit with bounded hysteresis
+            over = len(cls._bundle_cache) - cls._bundle_max_size
+            num_to_remove = min(over + 50, len(sorted_keys))  # Bounded hysteresis
+            to_remove = sorted_keys[:num_to_remove]
+            
+            for k in to_remove:
+                entry = cls._bundle_cache.get(k) or {}
+                ents = entry.get('ents', set())
+                for ent in ents:
+                    if ent in cls._bundle_index:
+                        cls._bundle_index[ent].discard(k)
+                        if not cls._bundle_index[ent]:
+                            del cls._bundle_index[ent]
+                cls._bundle_cache.pop(k, None)
+                cls._bundle_cached_at.pop(k, None)
+                cls._bundle_created_at.pop(k, None)
+                cls._bundle_locks.pop(k, None)
+            
+            if len(to_remove) > 0:
+                logger.info(f"True LRU evicted {len(to_remove)} bundle cache entries")
     
     # ========================================================================
-    # Core Memory Operations
+    # Core Memory Operations (Existing)
     # ========================================================================
     
     async def store_memory(
         self,
-        entity_type: Union[str, EntityType],
+        entity_type: str,
         entity_id: int,
-        memory_text: str,
-        importance: Union[str, 'MemorySignificance'] = "medium",
-        emotional: bool = True,
-        tags: List[str] = None,
-        metadata: Dict[str, Any] = None,
-        use_governance: bool = False,
-        check_canon_consistency: bool = True,
-        enforce_canon: bool = False,
-        **kwargs
+        content: str,
+        memory_type: Optional[str] = None,
+        significance: float = 0.5,
+        emotional_intensity: float = 0.0,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        is_canon: bool = False
     ) -> Dict[str, Any]:
         """
-        Store a new memory with optional canon consistency checking.
+        Store a new memory.
         
         Args:
             entity_type: Type of entity
             entity_id: Entity ID
-            memory_text: The memory content
-            importance: Importance level
-            emotional: Whether to analyze emotional content
-            tags: Optional tags
-            metadata: Optional metadata
-            use_governance: Whether to use Nyx governance
-            check_canon_consistency: Whether to check canon consistency
-            enforce_canon: If True, reject memories that violate canon
-            **kwargs: Additional parameters
+            content: Memory content
+            memory_type: Type of memory
+            significance: Importance (0-1)
+            emotional_intensity: Emotional weight (0-1)
+            tags: Memory tags
+            metadata: Additional metadata
+            is_canon: Whether this is canonical information
             
         Returns:
-            Created memory information
+            Dict with memory_id and success status
         """
         if not self.initialized:
             await self.initialize()
         
-        # Normalize entity type
-        if isinstance(entity_type, str):
-            entity_type = entity_type.lower()
-        else:
-            entity_type = entity_type.value
-        
-        # Check canon consistency if requested
-        if check_canon_consistency and entity_type in ['npc', 'player', 'location', 'event']:
-            consistency = await self.validate_canonical_consistency(
-                entity_type=entity_type,
-                entity_data={
-                    "memory": memory_text,
-                    "entity_id": entity_id,
-                    "tags": tags
-                }
-            )
-            
-            if not consistency["is_consistent"]:
-                logger.warning(
-                    f"Memory may conflict with canon for {entity_type} {entity_id}: "
-                    f"{consistency['conflicts']}"
-                )
-                
-                if enforce_canon:
-                    raise ValueError(
-                        f"Memory violates established canon: {consistency['conflicts']}"
-                    )
-                
-                # Add warning to metadata
-                if metadata is None:
-                    metadata = {}
-                metadata["canon_warnings"] = consistency["conflicts"]
-        
-        # Track telemetry
-        start_time = asyncio.get_event_loop().time()
-        
         try:
-            # Use governance if requested
-            if use_governance and self.nyx_bridge:
-                result = await self.nyx_bridge.remember(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    memory_text=memory_text,
-                    importance=importance,
-                    emotional=emotional,
-                    tags=tags
-                )
-            else:
-                # Use wrapper for simplified interface
-                result = await self.memory_wrapper.remember(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    memory_text=memory_text,
-                    importance=importance,
-                    emotional=emotional,
-                    tags=tags
-                )
+            # Get or create entity manager
+            manager = await self._get_entity_manager(entity_type, entity_id)
             
-            # Add to vector store
-            if self.embedding_service and kwargs.get("add_to_vector_store", True):
-                await self.embedding_service.add_memory(
-                    text=memory_text,
-                    metadata={
-                        "memory_id": result.get("memory_id"),
-                        "entity_type": entity_type,
-                        "entity_id": entity_id,
-                        "importance": importance,
-                        "timestamp": datetime.now().isoformat(),
-                        "canonical": False,  # Regular memories are not canonical
-                        **(metadata or {})
-                    },
-                    entity_type=entity_type
-                )
+            # Ensure metadata exists and apply canon flags before persistence
+            md = dict(metadata or {})
+            if is_canon:
+                md['is_canon'] = True
+                md['canonical'] = True
             
-            # Record telemetry
-            duration = asyncio.get_event_loop().time() - start_time
-            await self.telemetry.record(
-                self.user_id,
-                self.conversation_id,
-                operation="store_memory",
-                success=True,
-                duration=duration,
-                data_size=len(memory_text),
-                metadata={
-                    "entity_type": entity_type, 
-                    "entity_id": entity_id,
-                    "canon_checked": check_canon_consistency
-                }
+            # Store memory
+            memory = await manager.store_memory(
+                content=content,
+                memory_type=memory_type,
+                significance=significance,
+                emotional_intensity=emotional_intensity,
+                tags=tags,
+                metadata=md
             )
             
-            return result
+            # Invalidate affected bundles via both entity and metadata
+            await self._invalidate_caches_for_entity(entity_type, entity_id)
+            self._invalidate_by_metadata(md, tags)
+            
+            return {
+                "memory_id": getattr(memory, "memory_id", None) or getattr(memory, "id", None),
+                "success": True,
+                "entity_type": entity_type,
+                "entity_id": entity_id
+            }
             
         except Exception as e:
-            # Record failure telemetry
-            duration = asyncio.get_event_loop().time() - start_time
-            await self.telemetry.record(
-                self.user_id,
-                self.conversation_id,
-                operation="store_memory",
-                success=False,
-                duration=duration,
-                error=str(e)
-            )
             logger.error(f"Error storing memory: {e}")
-            raise
-
-    async def get_canon_aware_narrative_context(
-        self,
-        include_canon: bool = True,
-        time_window_hours: int = 24
-    ) -> Dict[str, Any]:
-        """
-        Get narrative context that includes both memories and canonical facts.
-        
-        Args:
-            include_canon: Include canonical world state
-            time_window_hours: Time window for recent events
-            
-        Returns:
-            Combined narrative and canonical context
-        """
-        # Get memory-based narrative context
-        narrative_context = await self.get_narrative_context(
-            time_window=timedelta(hours=time_window_hours),
-            include_predictions=True
-        )
-        
-        if not include_canon:
-            return narrative_context
-        
-        # Enhance with canonical context
-        canonical_context = await self.get_canonical_context(
-            time_window_hours=time_window_hours
-        )
-        
-        # Merge contexts intelligently
-        merged_context = {
-            **narrative_context,
-            "canonical": {
-                "entities": canonical_context.get("canonical_entities", {}),
-                "events": canonical_context.get("recent_canonical_events", []),
-                "locations": canonical_context.get("active_locations", []),
-                "npcs": canonical_context.get("active_npcs", []),
-                "world_state": canonical_context.get("world_state", {})
-            }
-        }
-        
-        # Cross-reference memories with canon
-        for entity_key, entity_data in narrative_context.get("entities", {}).items():
-            # Find corresponding canonical data
-            canon_match = None
-            for npc in canonical_context.get("active_npcs", []):
-                if f"npc_{npc['id']}" == entity_key:
-                    canon_match = npc
-                    break
-            
-            if canon_match:
-                entity_data["canonical_info"] = canon_match
-                
-                # Check for discrepancies
-                if canon_match.get("location") != entity_data.get("last_known_location"):
-                    entity_data["location_discrepancy"] = {
-                        "canonical": canon_match.get("location"),
-                        "memory": entity_data.get("last_known_location")
-                    }
-        
-        return merged_context
-
-    async def validate_memory_canon_consistency(
-        self,
-        memory_text: str,
-        entity_type: str,
-        entity_id: int
-    ) -> Dict[str, Any]:
-        """
-        Validate that a memory is consistent with established canon.
-        
-        Args:
-            memory_text: Memory to validate
-            entity_type: Type of entity
-            entity_id: Entity ID
-            
-        Returns:
-            Validation results
-        """
-        from logic.chatgpt_integration import get_openai_client
-        
-        # Get canonical facts about the entity
-        canonical_facts = await self.search_canonical_entities(
-            query=f"{entity_type} {entity_id}",
-            entity_types=[entity_type],
-            similarity_threshold=0.5
-        )
-        
-        if not canonical_facts:
-            return {
-                "is_consistent": True,
-                "message": "No canonical facts to check against"
-            }
-        
-        # Use LLM to check consistency
-        try:
-            client = get_openai_client()
-            
-            facts_summary = "\n".join([
-                f"- {fact.get('text', '')}"
-                for fact in canonical_facts[:5]
-            ])
-            
-            prompt = f"""Check if this memory is consistent with established canon:
+            return {"error": str(e), "success": False}
     
-    Memory: {memory_text}
-    
-    Established canonical facts:
-    {facts_summary}
-    
-    Identify any contradictions or inconsistencies.
-    
-    Return JSON:
-    {{
-        "is_consistent": true/false,
-        "conflicts": ["conflict1", ...],
-        "severity": "minor|moderate|severe"
-    }}
-    """
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You validate narrative consistency."},
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            result["canonical_facts_checked"] = len(canonical_facts)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error validating memory consistency: {e}")
-            return {
-                "is_consistent": True,
-                "message": "Could not validate",
-                "error": str(e)
-            }
-        
     async def retrieve_memories(
         self,
-        entity_type: Union[str, EntityType],
+        entity_type: str,
         entity_id: int,
-        query: str = None,
-        context: Dict[str, Any] = None,
-        limit: int = 5,
-        include_analysis: bool = True,
-        use_governance: bool = False,
-        use_llm_analysis: bool = False,
-        **kwargs
+        query: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        include_analysis: bool = False
     ) -> Dict[str, Any]:
         """
-        Retrieve memories for an entity with comprehensive analysis.
+        Retrieve memories for an entity.
         
         Args:
             entity_type: Type of entity
             entity_id: Entity ID
-            query: Optional search query
-            context: Current context for retrieval
-            limit: Maximum memories to return
-            include_analysis: Whether to include memory analysis
-            use_governance: Whether to use Nyx governance
-            use_llm_analysis: Whether to use LLM for analysis
-            **kwargs: Additional retrieval parameters
+            query: Search query
+            memory_type: Filter by type
+            tags: Filter by tags
+            limit: Maximum results
+            filters: Additional filters
+            include_analysis: Include memory analysis
             
         Returns:
-            Retrieved memories with analysis and context
+            Dict with memories and metadata
         """
         if not self.initialized:
             await self.initialize()
         
-        # Normalize entity type
-        if isinstance(entity_type, str):
-            entity_type = entity_type.lower()
-        else:
-            entity_type = entity_type.value
-        
-        # Check cache
-        cache_key = f"retrieve_{entity_type}_{entity_id}_{query}_{limit}"
-        cached = await self.cache.get(cache_key)
-        if cached and not kwargs.get("bypass_cache", False):
-            return cached
-        
         try:
-            # Use governance if requested
-            if use_governance and self.nyx_bridge:
-                result = await self.nyx_bridge.recall(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    query=query,
-                    context=str(context) if context else None,
-                    limit=limit
-                )
-            # Use LLM analysis if requested
-            elif use_llm_analysis and self.retriever_agent:
-                result = await self.retriever_agent.retrieve_and_analyze(
-                    query=query or "",
-                    entity_types=[entity_type],
-                    top_k=limit,
-                    threshold=kwargs.get("similarity_threshold", 0.7)
-                )
-            else:
-                # Use wrapper for standard retrieval
-                result = await self.memory_wrapper.recall(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    query=query,
-                    context=context,
-                    limit=limit
-                )
+            # Build a stable cache key with user/conversation in prefix
+            prefix = f"mem:{self.user_id}:{self.conversation_id}:"
+            key_payload = {
+                "et": entity_type,
+                "eid": entity_id,
+                "q": query,
+                "mt": memory_type,
+                "tags": sorted(tags or []),
+                "limit": limit,
+                "filters": filters or {},
+                "ia": bool(include_analysis),  # Include analysis flag
+            }
+            cache_key = prefix + hashlib.md5(
+                json.dumps(key_payload, sort_keys=True, default=str).encode()
+            ).hexdigest()
             
-            # Include analysis if requested
+            cached = await self.cache.get(cache_key)
+            if cached:
+                logger.debug(f"Retrieval cache hit for entity {entity_type}:{entity_id}")
+                return cached
+            
+            logger.debug(f"Retrieval cache miss for entity {entity_type}:{entity_id}")
+            
+            # Get entity manager
+            manager = await self._get_entity_manager(entity_type, entity_id)
+            
+            # Retrieve memories
+            if query:
+                memories = await self.search_vector_store(
+                    query=query,
+                    entity_type=entity_type,
+                    top_k=limit,
+                    filter_dict=filters
+                )
+                mem_list = self._as_mem_list(memories)
+            else:
+                # Prefer a query-capable API if available
+                mem_list = None
+                if hasattr(manager, "query_memories"):
+                    res = await manager.query_memories(
+                        filters=filters or {},
+                        limit=limit,
+                        memory_type=memory_type,
+                        tags=tags
+                    )
+                    mem_list = res if isinstance(res, list) else res.get('memories', [])
+                else:
+                    res = await manager.get_recent_memories(limit=limit)
+                    mem_list = res if isinstance(res, list) else res.get('memories', [])
+            
+            # Format response
+            result = {
+                "memories": mem_list or [],
+                "count": len(mem_list or []),
+                "entity_type": entity_type,
+                "entity_id": entity_id
+            }
+            
+            # Add analysis if requested
             if include_analysis and result.get("memories"):
                 result["analysis"] = await self.analyze_memory_set(
                     memories=result["memories"],
@@ -1338,450 +1108,249 @@ class MemoryOrchestrator:
             logger.error(f"Error retrieving memories: {e}")
             return {"error": str(e), "memories": [], "count": 0}
     
-    # ========================================================================
-    # Agent-Based Operations
-    # ========================================================================
-    
-    async def agent_remember(
+    async def update_memory(
         self,
         entity_type: str,
         entity_id: int,
-        memory_text: str,
-        importance: str = "medium",
-        emotional: bool = True,
-        tags: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
-        """
-        Store a memory using the memory agent wrapper.
-        
-        This provides LLM-enhanced memory storage with automatic
-        categorization and analysis.
-        """
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.memory_agent_wrapper.remember(
-            run_context=None,  # Context handled internally
-            entity_type=entity_type,
-            entity_id=entity_id,
-            memory_text=memory_text,
-            importance=importance,
-            emotional=emotional,
-            tags=tags
-        )
-    
-    async def agent_recall(
-        self,
-        entity_type: str,
-        entity_id: int,
-        query: Optional[str] = None,
-        context: Optional[str] = None,
-        limit: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Recall memories using the memory agent wrapper.
-        
-        This provides LLM-enhanced memory retrieval with automatic
-        synthesis and analysis.
-        """
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.memory_agent_wrapper.recall(
-            run_context=None,  # Context handled internally
-            entity_type=entity_type,
-            entity_id=entity_id,
-            query=query,
-            context=context,
-            limit=limit
-        )
-    
-    # ========================================================================
-    # Schema Operations
-    # ========================================================================
-    
-    async def create_schema(
-        self,
-        entity_type: str,
-        entity_id: int,
-        schema_name: str,
-        description: str,
-        category: str = "general",
-        attributes: Dict[str, Any] = None,
-        example_memory_ids: List[int] = None
-    ) -> Dict[str, Any]:
-        """Create a new memory schema."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.schema_manager.create_schema(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            schema_name=schema_name,
-            description=description,
-            category=category,
-            attributes=attributes,
-            example_memory_ids=example_memory_ids
-        )
-    
-    async def detect_schemas(
-        self,
-        entity_type: str,
-        entity_id: int,
-        memory_ids: List[int] = None,
-        tags: List[str] = None
-    ) -> Dict[str, Any]:
-        """Detect schemas from memory patterns."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.schema_manager.detect_schema_from_memories(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            memory_ids=memory_ids,
-            tags=tags
-        )
-    
-    async def apply_schema(
-        self,
         memory_id: int,
-        entity_type: str,
-        entity_id: int,
-        schema_id: int = None,
-        auto_detect: bool = False
+        updates: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Apply a schema to a memory."""
+        """Update an existing memory."""
         if not self.initialized:
             await self.initialize()
         
-        return await self.schema_manager.apply_schema_to_memory(
-            memory_id=memory_id,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            schema_id=schema_id,
-            auto_detect=auto_detect
-        )
+        try:
+            manager = await self._get_entity_manager(entity_type, entity_id)
+            updated = await manager.update_memory(memory_id, updates)
+            
+            # Invalidate caches for both entity and metadata
+            await self._invalidate_caches_for_entity(entity_type, entity_id)
+            self._invalidate_by_metadata(updates.get('metadata'), updates.get('tags'))
+            
+            return {"success": True, "memory_id": memory_id}
+            
+        except Exception as e:
+            logger.error(f"Error updating memory: {e}")
+            return {"error": str(e), "success": False}
     
-    async def evolve_schema(
-        self,
-        schema_id: int,
-        entity_type: str,
-        entity_id: int,
-        conflicts: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Evolve a schema based on conflicting memories."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.schema_manager.evolve_schema_from_conflicts(
-            schema_id=schema_id,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            conflicts=conflicts
-        )
-    
-    # ========================================================================
-    # Semantic Memory Operations
-    # ========================================================================
-    
-    async def create_belief(
-        self,
-        entity_type: str,
-        entity_id: int,
-        belief_text: str,
-        supporting_memory_ids: Optional[List[int]] = None,
-        confidence: float = 0.5,
-        use_governance: bool = False
-    ) -> Dict[str, Any]:
-        """Create a belief for an entity."""
-        if not self.initialized:
-            await self.initialize()
-        
-        if use_governance and self.nyx_bridge:
-            return await self.nyx_bridge.create_belief(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                belief_text=belief_text,
-                confidence=confidence
-            )
-        else:
-            return await self.semantic_manager.create_belief(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                belief_text=belief_text,
-                supporting_memory_ids=supporting_memory_ids,
-                confidence=confidence
-            )
-    
-    async def get_beliefs(
-        self,
-        entity_type: str,
-        entity_id: int,
-        topic: Optional[str] = None,
-        min_confidence: float = 0.0,
-        use_governance: bool = False
-    ) -> List[Dict[str, Any]]:
-        """Get beliefs held by an entity."""
-        if not self.initialized:
-            await self.initialize()
-        
-        if use_governance and self.nyx_bridge:
-            return await self.nyx_bridge.get_beliefs(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                topic=topic
-            )
-        else:
-            return await self.semantic_manager.get_beliefs(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                topic=topic,
-                min_confidence=min_confidence
-            )
-    
-    async def generate_counterfactual(
-        self,
-        memory_id: int,
-        entity_type: str,
-        entity_id: int,
-        variation_type: str = "alternative"
-    ) -> Dict[str, Any]:
-        """Generate a counterfactual memory."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.semantic_manager.generate_counterfactual(
-            memory_id=memory_id,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            variation_type=variation_type
-        )
-    
-    async def build_semantic_network(
-        self,
-        entity_type: str,
-        entity_id: int,
-        central_topic: str,
-        depth: int = 2
-    ) -> Dict[str, Any]:
-        """Build a semantic network around a topic."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.semantic_manager.build_semantic_network(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            central_topic=central_topic,
-            depth=depth
-        )
-    
-    # ========================================================================
-    # NPC-Specific Operations
-    # ========================================================================
-    
-    async def trigger_npc_revelation(
-        self,
-        npc_id: int,
-        trigger: str = None,
-        severity: int = None
-    ) -> Dict[str, Any]:
-        """Trigger a mask slippage event for an NPC."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.mask_manager.generate_mask_slippage(
-            npc_id=npc_id,
-            trigger=trigger,
-            severity=severity
-        )
-    
-    async def get_npc_mask(self, npc_id: int) -> Dict[str, Any]:
-        """Get current mask state for an NPC."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.mask_manager.get_npc_mask(npc_id)
-    
-    async def update_npc_mask_integrity(
-        self,
-        npc_id: int,
-        integrity_change: float,
-        reason: str = None
-    ) -> Dict[str, Any]:
-        """Update an NPC's mask integrity."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.mask_manager.update_mask_integrity(
-            npc_id=npc_id,
-            integrity_change=integrity_change,
-            reason=reason
-        )
-    
-    # ========================================================================
-    # Player-Specific Operations
-    # ========================================================================
-    
-    async def add_journal_entry(
-        self,
-        player_name: str,
-        entry_text: str,
-        entry_type: str = "observation",
-        fantasy_flag: bool = False,
-        intensity_level: int = 0
-    ) -> int:
-        """Add a journal entry for a player."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.memory_wrapper.add_journal_entry(
-            player_name=player_name,
-            entry_text=entry_text,
-            entry_type=entry_type,
-            fantasy_flag=fantasy_flag,
-            intensity_level=intensity_level
-        )
-    
-    async def get_journal_history(
-        self,
-        player_name: str,
-        entry_type: Optional[str] = None,
-        limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        """Get journal history for a player."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.memory_wrapper.get_journal_history(
-            player_name=player_name,
-            entry_type=entry_type,
-            limit=limit
-        )
-    
-    async def get_player_profile(self, player_name: str) -> Dict[str, Any]:
-        """Get comprehensive player profile."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.memory_wrapper.player_profile(player_name)
-    
-    # ========================================================================
-    # Emotional Memory Operations
-    # ========================================================================
-    
-    async def update_emotional_state(
-        self,
-        entity_type: str,
-        entity_id: int,
-        emotion: str,
-        intensity: float = 0.5,
-        trauma_event: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Update an entity's emotional state."""
-        if not self.initialized:
-            await self.initialize()
-        
-        current_emotion = {
-            "primary_emotion": emotion,
-            "intensity": intensity,
-            "secondary_emotions": {},
-            "valence": 0.0,
-            "arousal": 0.0
-        }
-        
-        return await self.emotional_manager.update_entity_emotional_state(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            current_emotion=current_emotion,
-            trauma_event=trauma_event
-        )
-    
-    async def get_emotional_state(
-        self,
-        entity_type: str,
-        entity_id: int
-    ) -> Dict[str, Any]:
-        """Get an entity's current emotional state."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.emotional_manager.get_entity_emotional_state(
-            entity_type=entity_type,
-            entity_id=entity_id
-        )
-    
-    async def process_trauma_triggers(
-        self,
-        entity_type: str,
-        entity_id: int,
-        text: str
-    ) -> Dict[str, Any]:
-        """Check if text triggers traumatic memories."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.emotional_manager.process_traumatic_triggers(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            text=text
-        )
-    
-    # ========================================================================
-    # Flashback and Interference Operations
-    # ========================================================================
-    
-    async def generate_flashback(
-        self,
-        entity_type: Union[str, EntityType],
-        entity_id: int,
-        context: str
-    ) -> Optional[Dict[str, Any]]:
-        """Generate a flashback for an entity."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.flashback_manager.generate_flashback(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            current_context=context
-        )
-    
-    async def create_false_memory(
-        self,
-        entity_type: Union[str, EntityType],
-        entity_id: int,
-        false_text: str,
-        base_memory_ids: List[int] = None
-    ) -> Dict[str, Any]:
-        """Create a false memory for an entity."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.interference_manager.create_false_memory(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            false_memory_text=false_text,
-            related_true_memory_ids=base_memory_ids
-        )
-    
-    async def detect_memory_interference(
+    async def delete_memory(
         self,
         entity_type: str,
         entity_id: int,
         memory_id: int
     ) -> Dict[str, Any]:
-        """Detect interference for a memory."""
+        """Delete a memory."""
         if not self.initialized:
             await self.initialize()
         
-        return await self.interference_manager.detect_memory_interference(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            memory_id=memory_id
-        )
+        try:
+            manager = await self._get_entity_manager(entity_type, entity_id)
+            
+            # Try to get the memory metadata before deletion for cache invalidation
+            prev = None
+            if hasattr(manager, "get_memory"):
+                try:
+                    prev = await manager.get_memory(memory_id)
+                except Exception:
+                    prev = None
+            
+            # Delete the memory
+            await manager.delete_memory(memory_id)
+            
+            # Invalidate caches
+            await self._invalidate_caches_for_entity(entity_type, entity_id)
+            if prev:
+                self._invalidate_by_metadata(prev.get('metadata'), prev.get('tags'))
+            
+            return {"success": True, "memory_id": memory_id}
+            
+        except Exception as e:
+            logger.error(f"Error deleting memory: {e}")
+            return {"error": str(e), "success": False}
     
     # ========================================================================
-    # Vector Store and Embedding Operations
+    # Entity Manager Operations
+    # ========================================================================
+    
+    async def _get_entity_manager(self, entity_type: str, entity_id: int):
+        key = f"{entity_type}_{entity_id}"
+        if key not in self.memory_managers:
+            if entity_type == EntityType.NPC.value:
+                from memory.npc_memory import NPCMemoryManager
+                manager = NPCMemoryManager(
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id,
+                    npc_id=entity_id
+                )
+                await manager.initialize()
+            elif entity_type == EntityType.PLAYER.value:
+                from memory.player_memory import PlayerMemoryManager
+                manager = PlayerMemoryManager(
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
+                )
+                await manager.initialize()
+            else:
+                manager = self.unified_manager  # already initialized in initialize()
+            self.memory_managers[key] = manager
+        return self.memory_managers[key]
+    
+    async def _invalidate_caches_for_entity(self, entity_type: str, entity_id: int):
+        """
+        Invalidate bundle + retrieval caches related to a specific entity.
+        """
+        cls = self.__class__
+    
+        # 1) Evict scene bundles via reverse index (class-wide)
+        ent_key = f"{entity_type.lower()}:{entity_id}"
+        affected = list(cls._bundle_index.get(ent_key, set()))
+        for cache_key in affected:
+            cls._evict_bundle_key(cache_key)
+        cls._bundle_index.pop(ent_key, None)
+    
+        # 2) Evict retrieval caches (narrowed to this user/conversation)
+        prefix = f"mem:{self.user_id}:{self.conversation_id}:"
+        await self.cache.clear_pattern(prefix + "*")
+    
+    def _invalidate_by_metadata(self, metadata: Optional[Dict[str, Any]], tags: Optional[List[str]] = None):
+        """
+        Invalidate caches based on metadata fields (location, topics, lore tags).
+        """
+        cls = self.__class__
+        if not metadata and not tags:
+            return
+    
+        ent_keys = set()
+    
+        # Extract entity keys from metadata
+        if metadata:
+            if metadata.get('location'):
+                ent_keys.add(f"location:{metadata['location']}")
+            for lt in (metadata.get('lore_tags') or []):
+                ent_keys.add(f"lore:{lt}")
+    
+        # Extract from tags
+        for t in (tags or []):
+            ent_keys.add(f"topic:{t}")
+    
+        # Invalidate each affected entity key
+        for ent in ent_keys:
+            affected = list(cls._bundle_index.get(ent, set()))
+            for cache_key in affected:
+                cls._evict_bundle_key(cache_key)
+            cls._bundle_index.pop(ent, None)
+    
+    # ========================================================================
+    # Analysis Operations
+    # ========================================================================
+    
+    async def analyze_memory_set(
+        self,
+        memories: List[Any],
+        entity_type: Optional[str] = None,
+        entity_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Analyze a set of memories for patterns and insights."""
+        if not memories:
+            return {"message": "No memories to analyze"}
+        
+        # Handle both Memory objects and dicts
+        analysis = {
+            "total_count": len(memories),
+            "average_significance": 0,
+            "average_emotional_intensity": 0,
+            "common_tags": {},
+            "memory_types": {},
+            "dominant_emotions": []
+        }
+        
+        emotion_totals = {}
+        
+        for memory in memories:
+            # Handle dict format
+            if isinstance(memory, dict):
+                significance = memory.get("significance", 0)
+                emotional_intensity = memory.get("emotional_intensity", 0)
+                tags = memory.get("tags", [])
+                memory_type = memory.get("type", "unknown")
+                emotional_state = memory.get("emotional_state", {})
+            else:
+                # Handle Memory object
+                significance = getattr(memory, "significance", 0)
+                emotional_intensity = getattr(memory, "emotional_intensity", 0)
+                tags = getattr(memory, "tags", [])
+                memory_type = getattr(memory, "memory_type", "unknown")
+                emotional_state = getattr(memory, "emotional_state", {})
+                if hasattr(memory_type, 'value'):
+                    memory_type = memory_type.value
+            
+            analysis["average_significance"] += significance
+            analysis["average_emotional_intensity"] += emotional_intensity
+            
+            # Count tags
+            for tag in tags:
+                analysis["common_tags"][tag] = analysis["common_tags"].get(tag, 0) + 1
+            
+            # Count memory types
+            analysis["memory_types"][str(memory_type)] = analysis["memory_types"].get(str(memory_type), 0) + 1
+            
+            # Track emotions
+            for emotion, intensity in emotional_state.items():
+                if emotion not in emotion_totals:
+                    emotion_totals[emotion] = 0
+                emotion_totals[emotion] += intensity
+        
+        if len(memories) > 0:
+            analysis["average_significance"] /= len(memories)
+            analysis["average_emotional_intensity"] /= len(memories)
+            
+            # Get top 3 dominant emotions
+            if emotion_totals:
+                sorted_emotions = sorted(emotion_totals.items(), key=lambda x: x[1], reverse=True)
+                analysis["dominant_emotions"] = [
+                    {"emotion": em, "total_intensity": intensity} 
+                    for em, intensity in sorted_emotions[:3]
+                ]
+        
+        return analysis
+    
+    # ========================================================================
+    # Context Enrichment Operations
+    # ========================================================================
+    
+    async def enrich_context(
+        self,
+        user_input: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Enrich context with relevant memories.
+        
+        This is kept for backward compatibility but internally uses scene bundles.
+        """
+        # Create scope from context
+        scope = SceneScope(
+            location_id=context.get('current_location'),
+            npc_ids=set(context.get('active_npcs', [])),
+            topics=set(context.get('topics', [])),
+            lore_tags=set(context.get('lore_tags', []))
+        )
+        
+        # Get scene bundle
+        bundle = await self.get_scene_bundle(scope)
+        
+        # Merge bundle into context
+        context['memories'] = {
+            'canon': bundle.get('canon', []),
+            'scene': bundle.get('scene', []),
+            'linked': bundle.get('linked', []),
+            'patterns': bundle.get('patterns', [])
+        }
+        
+        return context
+    
+    # ========================================================================
+    # Vector Store Operations
     # ========================================================================
     
     async def add_to_vector_store(
@@ -1807,17 +1376,18 @@ class MemoryOrchestrator:
         top_k: int = 5,
         filter_dict: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Search the vector store directly."""
+        """Search the vector store directly with concurrency limiting."""
         if not self.initialized:
             await self.initialize()
-        
-        return await self.embedding_service.search_memories(
-            query_text=query,
-            entity_type=entity_type,
-            top_k=top_k,
-            filter_dict=filter_dict,
-            fetch_content=True
-        )
+    
+        async with self.__class__._sem():
+            return await self.embedding_service.search_memories(
+                query_text=query,
+                entity_type=entity_type,
+                top_k=top_k,
+                filter_dict=filter_dict,
+                fetch_content=True
+            )
     
     async def generate_embedding(self, text: str) -> List[float]:
         """Generate an embedding for text."""
@@ -1827,1203 +1397,95 @@ class MemoryOrchestrator:
         return await self.embedding_service.generate_embedding(text)
     
     # ========================================================================
-    # Context Enrichment Operations
+    # Agent-Based Operations
     # ========================================================================
     
-    async def enrich_context(
+    async def agent_remember(
         self,
-        user_input: str,
-        context: Dict[str, Any]
+        entity_type: str,
+        entity_id: int,
+        memory_text: str,
+        importance: str = "medium",
+        emotional: bool = True,
+        tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Enrich context with relevant memories."""
+        """Store a memory using the memory agent wrapper."""
         if not self.initialized:
             await self.initialize()
         
-        return await enrich_context_with_memories(
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-            user_input=user_input,
-            context=context
-        )
-    
-    # ========================================================================
-    # Narrative Context Operations
-    # ========================================================================
-    
-    async def get_narrative_context(
-        self,
-        focus_entities: List[Tuple[str, int]] = None,
-        time_window: timedelta = None,
-        include_predictions: bool = True
-    ) -> Dict[str, Any]:
-        """Get comprehensive narrative context."""
-        if not self.initialized:
-            await self.initialize()
-        
-        game_time_helper = _lazy_import_game_time_helper()
-        context = {
-            "timestamp": await game_time_helper.get_game_iso_string(self.user_id, self.conversation_id),
-            "entities": {},
-            "relationships": {},
-            "active_schemas": [],
-            "emotional_landscape": {},
-            "recent_events": [],
-            "narrative_threads": [],
-            "potential_conflicts": [],
-            "predictions": []
-        }
-        
-        # Default to all main entities if none specified
-        if not focus_entities:
-            focus_entities = await self._get_active_entities()
-        
-        # Gather context for each entity
-        for entity_type, entity_id in focus_entities:
-            entity_context = await self._get_entity_context(
-                entity_type, entity_id, time_window
-            )
-            context["entities"][f"{entity_type}_{entity_id}"] = entity_context
-            
-            # Add to emotional landscape
-            if entity_context.get("emotional_state"):
-                context["emotional_landscape"][f"{entity_type}_{entity_id}"] = {
-                    "current": entity_context["emotional_state"].get("current_emotion"),
-                    "mood": entity_context["emotional_state"].get("mood")
-                }
-        
-        # Get relationships between entities
-        context["relationships"] = await self._get_entity_relationships(focus_entities)
-        
-        # Get active schemas across all entities
-        for entity_type, entity_id in focus_entities:
-            schemas = await self.schema_manager.get_entity_schemas(
-                entity_type=entity_type,
-                entity_id=entity_id
-            )
-            context["active_schemas"].extend(schemas)
-        
-        # Get recent significant events
-        context["recent_events"] = await self._get_recent_significant_events(time_window)
-        
-        # Identify narrative threads
-        context["narrative_threads"] = await self._identify_narrative_threads()
-        
-        # Detect potential conflicts
-        context["potential_conflicts"] = await self._detect_potential_conflicts(focus_entities)
-        
-        # Generate predictions if requested
-        if include_predictions:
-            context["predictions"] = await self._generate_narrative_predictions(context)
-        
-        # Update active context
-        self.active_context = context
-        
-        return context
-    
-    # ========================================================================
-    # Agent Creation Methods
-    # ========================================================================
-    
-    async def create_memory_analysis_agent(self, custom_instructions: str = "") -> Any:
-        """
-        Create a specialized memory analysis agent following the Nyx pattern.
-        
-        Args:
-            custom_instructions: Additional instructions for the agent
-            
-        Returns:
-            Configured memory analysis agent
-        """
-        try:
-            from agents import Agent, ModelSettings, function_tool, handoff
-            
-            # Check for preset story constraints (similar to Nyx example)
-            preset_constraints = ""
-            if "preset_story_id" in custom_instructions:
-                preset_constraints = """
-==== PRESET STORY ACTIVE ====
-A preset story is active. You must follow all established lore and consistency rules.
-Do not contradict any pre-established facts about this story world.
-"""
-            
-            combined_instructions = f"""{custom_instructions}
-{preset_constraints}
-
-As a Memory Analysis Agent, you must:
-1. Analyze memory patterns and relationships
-2. Identify narrative threads and developments
-3. Detect conflicts and inconsistencies
-4. Generate insights from memory clusters
-5. Predict future narrative directions
-6. Maintain consistency with established lore
-
-Core analytical capabilities:
-- Pattern recognition across temporal and semantic dimensions
-- Emotional trajectory analysis
-- Belief system conflict detection
-- Schema evolution tracking
-- Narrative coherence assessment
-
-Remember: You are analyzing complex narrative memories. Be thorough, insightful, and maintain consistency with any active preset stories.
-"""
-            
-            # Create the agent
-            agent = Agent(
-                name="Memory Analyzer",
-                instructions=combined_instructions,
-                tools=[
-                    self._create_analysis_tool("analyze_memory_patterns"),
-                    self._create_analysis_tool("identify_narrative_threads"),
-                    self._create_analysis_tool("detect_belief_conflicts"),
-                    self._create_analysis_tool("predict_developments"),
-                    self._create_analysis_tool("assess_coherence")
-                ],
-                model="gpt-5-nano",
-                model_settings=ModelSettings(
-                )
-            )
-            
-            return agent
-            
-        except ImportError:
-            logger.warning("Agents SDK not available, using direct OpenAI calls")
-            return None
-    
-    def _create_analysis_tool(self, tool_name: str):
-        """Create a function tool for memory analysis."""
-        from agents import function_tool
-        
-        @function_tool
-        async def analysis_tool(context: Dict[str, Any]) -> Dict[str, Any]:
-            """Generic analysis tool that routes to appropriate method."""
-            if tool_name == "analyze_memory_patterns":
-                return await self.analyze_memory_patterns(
-                    entity_type=context.get("entity_type"),
-                    entity_id=context.get("entity_id"),
-                    topic=context.get("topic")
-                )
-            elif tool_name == "identify_narrative_threads":
-                return {"threads": await self._identify_narrative_threads()}
-            elif tool_name == "detect_belief_conflicts":
-                entities = await self._get_active_entities()
-                return {"conflicts": await self._detect_potential_conflicts(entities)}
-            elif tool_name == "predict_developments":
-                return {"predictions": await self._generate_narrative_predictions(context)}
-            elif tool_name == "assess_coherence":
-                return await self._assess_narrative_coherence(context)
-            else:
-                return {"error": f"Unknown tool: {tool_name}"}
-        
-        analysis_tool.__name__ = tool_name
-        return analysis_tool
-    
-    async def _assess_narrative_coherence(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Assess the coherence of the current narrative using LLM analysis.
-        
-        Args:
-            context: Current narrative context
-            
-        Returns:
-            Coherence assessment results
-        """
-        try:
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
-            
-            # Prepare narrative summary
-            narrative_summary = {
-                "entity_count": len(context.get("entities", {})),
-                "relationship_count": len(context.get("relationships", {})),
-                "recent_events": len(context.get("recent_events", [])),
-                "active_threads": len(await self._identify_narrative_threads()),
-                "conflicts": len(context.get("potential_conflicts", [])),
-                "emotional_states": {
-                    entity: state.get("current", {}).get("primary_emotion", "neutral")
-                    for entity, state in context.get("emotional_landscape", {}).items()
-                }
-            }
-            
-            prompt = f"""Assess the narrative coherence of this roleplay scenario:
-
-{json.dumps(narrative_summary, indent=2)}
-
-Evaluate:
-1. Logical consistency of events
-2. Character motivation alignment
-3. Temporal consistency
-4. Emotional trajectory believability
-5. World-building consistency
-
-Provide scores (0.0-1.0) for each dimension and an overall coherence score.
-
-Return JSON:
-{{
-    "logical_consistency": 0.0-1.0,
-    "character_motivation": 0.0-1.0,
-    "temporal_consistency": 0.0-1.0,
-    "emotional_believability": 0.0-1.0,
-    "world_consistency": 0.0-1.0,
-    "overall_coherence": 0.0-1.0,
-    "issues": ["issue1", ...],
-    "recommendations": ["recommendation1", ...]
-}}
-"""
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You are a narrative coherence analyzer."},
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            result["assessed_at"] = datetime.now().isoformat()
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error assessing narrative coherence: {e}")
-            return {
-                "error": str(e),
-                "overall_coherence": 0.5,
-                "assessed_at": datetime.now().isoformat()
-            }
-    
-    # ========================================================================
-    # Analysis Operations
-    # ========================================================================
-    
-    async def analyze_entity_memories(
-        self,
-        entity_type: Union[str, EntityType],
-        entity_id: int
-    ) -> Dict[str, Any]:
-        """Comprehensive analysis of an entity's memories."""
-        if not self.initialized:
-            await self.initialize()
-        
-        if use_governance := False:  # Can be parameterized
-            return await self.nyx_bridge.analyze_memories(
-                entity_type=entity_type,
-                entity_id=entity_id
-            )
-        else:
-            return await self.integrated_system.analyze_entity_memories(
-                entity_type=entity_type,
-                entity_id=entity_id
-            )
-    
-    async def analyze_memory_patterns(
-        self,
-        entity_type: Union[str, EntityType] = None,
-        entity_id: int = None,
-        topic: str = None
-    ) -> Dict[str, Any]:
-        """Analyze patterns across memories."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.semantic_manager.find_patterns_across_memories(
+        return await self.memory_agent_wrapper.remember(
+            run_context=None,
             entity_type=entity_type,
             entity_id=entity_id,
-            topic=topic
-        ) if entity_type and entity_id else await self._analyze_cross_entity_patterns(topic)
-    
-    # ========================================================================
-    # Maintenance and Telemetry Operations
-    # ========================================================================
-    
-    async def run_maintenance(
-        self,
-        entity_type: str = None,
-        entity_id: int = None,
-        operations: List[str] = None,
-        use_governance: bool = False
-    ) -> Dict[str, Any]:
-        """Run maintenance operations."""
-        if not self.initialized:
-            await self.initialize()
-        
-        if entity_type and entity_id and use_governance and self.nyx_bridge:
-            return await self.nyx_bridge.run_maintenance(
-                entity_type=entity_type,
-                entity_id=entity_id
-            )
-        elif entity_type and entity_id:
-            return await self.integrated_system.run_memory_maintenance(
-                entity_type=entity_type,
-                entity_id=entity_id
-            )
-        else:
-            # Run global maintenance
-            results = {}
-            operations = operations or [
-                "consolidation",
-                "decay",
-                "schema_maintenance",
-                "reconsolidation",
-                "cleanup"
-            ]
-            
-            entities = await self._get_active_entities()
-            
-            for op in operations:
-                if op == "consolidation":
-                    results["consolidation"] = await self._run_consolidation()
-                elif op == "decay":
-                    results["decay"] = await self._run_decay()
-                elif op == "schema_maintenance":
-                    results["schemas"] = await self._run_schema_maintenance()
-                elif op == "reconsolidation":
-                    results["reconsolidation"] = await self._run_reconsolidation_maintenance()
-                elif op == "cleanup":
-                    results["cleanup"] = await self.maintenance.cleanup_old_memories()
-                elif op == "telemetry_cleanup":
-                    results["telemetry_cleanup"] = await self.telemetry.cleanup_old_telemetry(
-                        self.user_id, self.conversation_id
-                    )
-            
-            return results
-    
-    async def get_telemetry_metrics(
-        self,
-        time_window_minutes: int = 15
-    ) -> Dict[str, Any]:
-        """Get telemetry metrics for memory operations."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.telemetry.get_recent_metrics(
-            self.user_id,
-            self.conversation_id,
-            time_window_minutes
+            memory_text=memory_text,
+            importance=importance,
+            emotional=emotional,
+            tags=tags
         )
     
-    async def get_slow_operations(
+    async def agent_recall(
         self,
-        threshold_ms: float = 500,
-        limit: int = 20
-    ) -> List[Dict[str, Any]]:
-        """Get recent slow memory operations."""
+        entity_type: str,
+        entity_id: int,
+        query: Optional[str] = None,
+        context: Optional[str] = None,
+        limit: int = 5
+    ) -> Dict[str, Any]:
+        """Recall memories using the memory agent wrapper."""
         if not self.initialized:
             await self.initialize()
         
-        return await self.telemetry.get_slow_operations(
-            threshold_ms=threshold_ms,
+        return await self.memory_agent_wrapper.recall(
+            run_context=None,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            query=query,
+            context=context,
             limit=limit
         )
     
     # ========================================================================
-    # Advanced LLM-Enhanced Operations
+    # Maintenance Operations (Move to Background)
     # ========================================================================
     
-    async def generate_memory_prompt(
-        self,
-        entity_type: str,
-        entity_id: int,
-        context: Dict[str, Any],
-        prompt_type: str = "recall"
-    ) -> str:
+    async def run_maintenance(self, background: bool = True) -> Dict[str, Any]:
         """
-        Generate an optimized prompt for memory operations using LLM.
+        Run memory maintenance tasks.
         
         Args:
-            entity_type: Type of entity
-            entity_id: Entity ID
-            context: Current context
-            prompt_type: Type of prompt (recall/reflection/analysis)
+            background: If True, enqueue to background worker
             
         Returns:
-            Generated prompt string
+            Status of maintenance tasks
         """
-        try:
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
-            
-            # Get entity's recent memories and state
-            manager = await self._get_entity_manager(entity_type, entity_id)
-            recent_memories = await manager.retrieve_memories(limit=5, conn=None)
-            
-            memory_summary = [
-                m.text[:100] if hasattr(m, 'text') else str(m)[:100]
-                for m in recent_memories
-            ]
-            
-            emotional_state = None
-            if entity_type in ["npc", "player"]:
-                emotional_state = await self.emotional_manager.get_entity_emotional_state(
-                    entity_type=entity_type,
-                    entity_id=entity_id
-                )
-            
-            prompt = f"""Generate an optimal memory {prompt_type} prompt for this entity:
-
-Entity: {entity_type} (ID: {entity_id})
-Recent memories: {json.dumps(memory_summary)}
-Emotional state: {json.dumps(emotional_state) if emotional_state else "N/A"}
-Current context: {json.dumps(context, default=str)[:500]}
-
-Generate a prompt that will:
-1. Trigger relevant memory recall
-2. Maintain narrative consistency
-3. Respect the entity's current emotional state
-4. Encourage rich, detailed responses
-5. Stay true to the entity's established patterns
-
-Return only the prompt text, no explanation.
-"""
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You generate memory prompts for narrative AI systems."},
-                    {"role": "user", "content": prompt}
-                ],
+        if background:
+            # Enqueue to background worker
+            from celery import current_app
+            task = current_app.send_task(
+                'memory.tasks.run_memory_maintenance',
+                args=[self.user_id, self.conversation_id]
             )
-            
-            return response.choices[0].message.content.strip()
-            
-        except Exception as e:
-            logger.error(f"Error generating memory prompt: {e}")
-            # Fallback to simple prompt
-            if prompt_type == "recall":
-                return f"What does {entity_type} {entity_id} remember about recent events?"
-            elif prompt_type == "reflection":
-                return f"How does {entity_type} {entity_id} feel about what has happened?"
-            else:
-                return f"Analyze the memories of {entity_type} {entity_id}"
-    
-    async def synthesize_memory_narrative(
-        self,
-        entity_type: str,
-        entity_id: int,
-        memories: List[Any],
-        perspective: str = "first_person"
-    ) -> str:
-        """
-        Synthesize multiple memories into a coherent narrative using LLM.
+            return {"status": "queued", "task_id": task.id}
         
-        Args:
-            entity_type: Type of entity
-            entity_id: Entity ID
-            memories: List of memories to synthesize
-            perspective: Narrative perspective (first_person/third_person)
-            
-        Returns:
-            Synthesized narrative text
-        """
-        try:
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
-            
-            # Format memories for synthesis
-            memory_texts = []
-            for m in memories[:10]:  # Limit to 10 memories
-                if isinstance(m, dict):
-                    memory_texts.append({
-                        "text": m.get("text", ""),
-                        "significance": m.get("significance", "medium"),
-                        "emotion": m.get("emotional_intensity", 0)
-                    })
-                else:
-                    memory_texts.append({
-                        "text": getattr(m, "text", str(m)),
-                        "significance": getattr(m, "significance", "medium"),
-                        "emotion": getattr(m, "emotional_intensity", 0)
-                    })
-            
-            perspective_instruction = (
-                "Use first-person perspective (I, me, my)" if perspective == "first_person"
-                else "Use third-person perspective"
-            )
-            
-            prompt = f"""Synthesize these memories into a coherent narrative:
-
-Entity: {entity_type} (ID: {entity_id})
-Memories: {json.dumps(memory_texts, indent=2)}
-
-Instructions:
-1. {perspective_instruction}
-2. Maintain chronological order where apparent
-3. Emphasize high-significance memories
-4. Reflect emotional content appropriately
-5. Create smooth transitions between memories
-6. Keep the narrative engaging and character-consistent
-7. Length: 150-250 words
-
-Generate only the narrative text, no meta-commentary.
-"""
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You are a narrative synthesizer for memory systems."},
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            
-            return response.choices[0].message.content.strip()
-            
-        except Exception as e:
-            logger.error(f"Error synthesizing memory narrative: {e}")
-            # Fallback to simple concatenation
-            texts = []
-            for m in memories[:5]:
-                if isinstance(m, dict):
-                    texts.append(m.get("text", ""))
-                else:
-                    texts.append(getattr(m, "text", str(m)))
-            
-            return " ".join(texts)
-    
-    async def generate_memory_questions(
-        self,
-        entity_type: str,
-        entity_id: int,
-        purpose: str = "exploration"
-    ) -> List[str]:
-        """
-        Generate questions to explore an entity's memories using LLM.
+        # Run inline (for backward compatibility)
+        results = {}
         
-        Args:
-            entity_type: Type of entity
-            entity_id: Entity ID
-            purpose: Purpose of questions (exploration/therapy/investigation)
-            
-        Returns:
-            List of generated questions
-        """
-        try:
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
-            
-            # Get entity's memory summary
-            summary = await self.analyze_entity_memories(entity_type, entity_id)
-            
-            prompt = f"""Generate questions to explore this entity's memories:
-
-Entity: {entity_type} (ID: {entity_id})
-Memory summary:
-- Total memories: {summary.get('total_memories', 0)}
-- Common themes: {list(summary.get('common_tags', {}).keys())[:5]}
-- Emotional profile: {summary.get('emotional_profile', {}).get('current_emotion', 'unknown')}
-
-Purpose: {purpose}
-
-Generate 5 insightful questions that will:
-1. Uncover hidden connections between memories
-2. Explore emotional depths
-3. Reveal character motivations
-4. Challenge assumptions
-5. Encourage self-reflection
-
-Return as JSON array of strings.
-"""
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You generate insightful questions for memory exploration."},
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            return result if isinstance(result, list) else result.get("questions", [])
-            
-        except Exception as e:
-            logger.error(f"Error generating memory questions: {e}")
-            # Fallback questions
-            return [
-                "What is your earliest memory?",
-                "What memory brings you the most joy?",
-                "What do you try not to think about?",
-                "What pattern do you see in your experiences?",
-                "What would you change if you could?"
-            ]
-    
-    # ========================================================================
-    # Governance and Integration Operations
-    # ========================================================================
-    
-    async def get_memory_state(self) -> Dict[str, Any]:
-        """Get current memory system state for governance."""
-        if not self.initialized:
-            await self.initialize()
+        # Only run if enough time has passed
+        if (datetime.now() - self.last_maintenance).seconds < 300:  # 5 minutes
+            return {"status": "skipped", "reason": "Too soon since last maintenance"}
         
-        return await self.memory_integration.get_state()
-    
-    async def get_health_metrics(self) -> Dict[str, Any]:
-        """Get health metrics for the memory system."""
-        if not self.initialized:
-            await self.initialize()
+        # Run consolidation
+        results['consolidation'] = await self._run_consolidation()
         
-        return await self.memory_integration.get_health_metrics()
-    
-    async def process_memory_directive(
-        self,
-        directive_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Process a directive from Nyx governance."""
-        if not self.initialized:
-            await self.initialize()
+        # Run decay
+        results['decay'] = await self._run_decay()
         
-        return await self.nyx_bridge.process_memory_directive(directive_data)
-    
-    # ========================================================================
-    # Helper Methods (kept private as before)
-    # ========================================================================
-    
-    def _parse_importance(self, importance: str) -> int:
-        """Parse importance string to MemorySignificance value."""
-        # Lazy import
-        _, _, _, _, MemorySignificance, _ = _lazy_import_core()
+        # Run pattern analysis
+        results['patterns'] = await self._run_pattern_analysis()
         
-        mapping = {
-            "trivial": MemorySignificance.TRIVIAL,
-            "low": MemorySignificance.LOW,
-            "medium": MemorySignificance.MEDIUM,
-            "high": MemorySignificance.HIGH,
-            "critical": MemorySignificance.CRITICAL
-        }
-        result = mapping.get(importance.lower(), MemorySignificance.MEDIUM)
-        return result.value if hasattr(result, 'value') else result
-    
-    async def _get_entity_manager(
-        self,
-        entity_type: str,
-        entity_id: int
-    ) -> 'UnifiedMemoryManager':
-        """Get the appropriate memory manager for an entity."""
-        # Lazy import
-        UnifiedMemoryManager, _, _, _, _, _ = _lazy_import_core()
+        self.last_maintenance = datetime.now()
         
-        key = f"{entity_type}_{entity_id}"
-        
-        if key not in self.managers:
-            if entity_type == "npc":
-                self.managers[key] = NPCMemoryManager(
-                    entity_id, self.user_id, self.conversation_id
-                )
-            elif entity_type == "player":
-                self.managers[key] = PlayerMemoryManager(
-                    "Chase", self.user_id, self.conversation_id  
-                )
-            elif entity_type == "nyx":
-                self.managers[key] = NyxMemoryManager(
-                    self.user_id, self.conversation_id
-                )
-            else:
-                self.managers[key] = UnifiedMemoryManager(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id
-                )
-        
-        return self.managers[key]
-    
-    async def _get_active_entities(self) -> List[Tuple[str, int]]:
-        """Get list of active entities in the current conversation."""
-        entities = []
-        
-        async with get_connection_context() as conn:
-            # Get active NPCs
-            npc_rows = await conn.fetch("""
-                SELECT npc_id FROM NPCStats
-                WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
-            """, self.user_id, self.conversation_id)
-            
-            for row in npc_rows:
-                entities.append(("npc", row["npc_id"]))
-            
-            # Get player
-            player_row = await conn.fetchrow("""
-                SELECT DISTINCT player_name FROM PlayerStats
-                WHERE user_id = $1 AND conversation_id = $2
-                LIMIT 1
-            """, self.user_id, self.conversation_id)
-            
-            if player_row:
-                entities.append(("player", self.user_id))
-            
-            # Always include Nyx
-            entities.append(("nyx", 0))
-        
-        return entities
-    
-    async def _get_entity_context(
-        self,
-        entity_type: str,
-        entity_id: int,
-        time_window: timedelta = None
-    ) -> Dict[str, Any]:
-        """Get comprehensive context for a single entity."""
-        manager = await self._get_entity_manager(entity_type, entity_id)
-        
-        context = {
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "recent_memories": [],
-            "emotional_state": None,
-            "active_schemas": [],
-            "beliefs": [],
-            "key_relationships": []
-        }
-        
-        # Get recent memories
-        context["recent_memories"] = await manager.retrieve_memories(
-            limit=10,
-            conn=None
-        )
-        
-        # Get emotional state if applicable
-        if entity_type in ["npc", "player"]:
-            context["emotional_state"] = await self.emotional_manager.get_entity_emotional_state(
-                entity_type=entity_type,
-                entity_id=entity_id
-            )
-        
-        # Get schemas
-        schemas = await self.schema_manager.get_entity_schemas(
-            entity_type=entity_type,
-            entity_id=entity_id
-        )
-        context["active_schemas"] = schemas[:5]
-        
-        # Get beliefs
-        context["beliefs"] = await self.semantic_manager.get_beliefs(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            limit=5
-        )
-        
-        return context
-    
-    async def _get_entity_relationships(
-        self,
-        entities: List[Tuple[str, int]]
-    ) -> Dict[str, Any]:
-        """Get relationships between entities."""
-        relationships = {}
-        
-        async with get_connection_context() as conn:
-            for i, (type1, id1) in enumerate(entities):
-                for type2, id2 in entities[i+1:]:
-                    row = await conn.fetchrow("""
-                        SELECT link_type, link_level
-                        FROM SocialLinks
-                        WHERE user_id = $1 AND conversation_id = $2
-                        AND ((entity1_type = $3 AND entity1_id = $4 
-                              AND entity2_type = $5 AND entity2_id = $6)
-                          OR (entity1_type = $5 AND entity1_id = $6 
-                              AND entity2_type = $3 AND entity2_id = $4))
-                    """, self.user_id, self.conversation_id,
-                        type1, id1, type2, id2)
-                    
-                    if row:
-                        key = f"{type1}_{id1}_to_{type2}_{id2}"
-                        relationships[key] = {
-                            "type": row["link_type"],
-                            "strength": row["link_level"]
-                        }
-        
-        return relationships
-    
-    async def _get_recent_significant_events(
-        self,
-        time_window: timedelta = None
-    ) -> List[Dict[str, Any]]:
-        """Get recent significant events across all entities."""
-        # Lazy import
-        _, _, _, _, MemorySignificance, _ = _lazy_import_core()
-        
-        if not time_window:
-            time_window = timedelta(hours=24)
-        
-        game_time_helper = _lazy_import_game_time_helper()
-        cutoff = await game_time_helper.get_game_datetime(self.user_id, self.conversation_id) - time_window
-        events = []
-        
-        async with get_connection_context() as conn:
-            rows = await conn.fetch("""
-                SELECT id, entity_type, entity_id, memory_text, 
-                       significance, emotional_intensity, timestamp
-                FROM unified_memories
-                WHERE user_id = $1 AND conversation_id = $2
-                AND timestamp > $3
-                AND significance >= $4
-                ORDER BY timestamp DESC
-                LIMIT 20
-            """, self.user_id, self.conversation_id, cutoff, MemorySignificance.HIGH)
-            
-            for row in rows:
-                events.append({
-                    "id": row["id"],
-                    "entity": f"{row['entity_type']}_{row['entity_id']}",
-                    "text": row["memory_text"],
-                    "significance": row["significance"],
-                    "timestamp": row["timestamp"].isoformat()
-                })
-        
-        return events
-    
-    async def _identify_narrative_threads(self) -> List[Dict[str, Any]]:
-        """Identify active narrative threads from memories using LLM analysis."""
-        try:
-            # Get recent significant memories across all entities
-            recent_events = await self._get_recent_significant_events()
-            if not recent_events:
-                return []
-            
-            # Get OpenAI client
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
-            
-            # Format memories for analysis
-            events_text = "\n".join([
-                f"- [{event['entity']}] {event['text']} (significance: {event['significance']})"
-                for event in recent_events[:20]  # Limit to 20 most recent
-            ])
-            
-            prompt = f"""Analyze these recent narrative events and identify active story threads:
-
-{events_text}
-
-Identify 3-5 major narrative threads that connect these events. For each thread:
-1. Give it a descriptive name
-2. Identify the central conflict or tension
-3. List the entities involved
-4. Assess the current state (building/climax/resolving)
-5. Predict likely next development
-
-Return as JSON array with this structure:
-[{{
-    "thread_name": "...",
-    "central_conflict": "...",
-    "involved_entities": ["entity_type_id", ...],
-    "current_state": "building|climax|resolving",
-    "next_development": "...",
-    "urgency": "low|medium|high"
-}}]
-"""
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You are a narrative analyst identifying story threads in roleplay scenarios."},
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            threads = result if isinstance(result, list) else result.get("threads", [])
-            
-            # Add metadata to each thread
-            for thread in threads:
-                thread["identified_at"] = datetime.now().isoformat()
-                thread["source_event_count"] = len(recent_events)
-            
-            return threads
-            
-        except Exception as e:
-            logger.error(f"Error identifying narrative threads: {e}")
-            return []
-    
-    async def _detect_potential_conflicts(
-        self,
-        entities: List[Tuple[str, int]]
-    ) -> List[Dict[str, Any]]:
-        """Detect potential conflicts between entities."""
-        conflicts = []
-        
-        for i, (type1, id1) in enumerate(entities):
-            beliefs1 = await self.semantic_manager.get_beliefs(
-                entity_type=type1,
-                entity_id=id1,
-                limit=3
-            )
-            
-            for type2, id2 in entities[i+1:]:
-                beliefs2 = await self.semantic_manager.get_beliefs(
-                    entity_type=type2,
-                    entity_id=id2,
-                    limit=3
-                )
-                
-                for b1 in beliefs1:
-                    for b2 in beliefs2:
-                        if self._beliefs_conflict(b1, b2):
-                            conflicts.append({
-                                "entity1": f"{type1}_{id1}",
-                                "entity2": f"{type2}_{id2}",
-                                "belief1": b1["belief"],
-                                "belief2": b2["belief"],
-                                "conflict_type": "belief"
-                            })
-        
-        return conflicts
-    
-    def _beliefs_conflict(self, belief1: Dict, belief2: Dict) -> bool:
-        """Check if two beliefs conflict using LLM analysis."""
-        try:
-            # Get OpenAI client
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
-            
-            text1 = belief1.get("belief", "")
-            text2 = belief2.get("belief", "")
-            
-            # Quick rule-based check first
-            opposites = [
-                ("should", "should not"),
-                ("must", "must not"),
-                ("good", "bad"),
-                ("right", "wrong"),
-                ("always", "never")
-            ]
-            
-            text1_lower = text1.lower()
-            text2_lower = text2.lower()
-            
-            for pos, neg in opposites:
-                if (pos in text1_lower and neg in text2_lower) or (neg in text1_lower and pos in text2_lower):
-                    return True
-            
-            # Use LLM for more nuanced conflict detection
-            prompt = f"""Analyze if these two beliefs are in conflict:
-
-Belief 1: {text1}
-Belief 2: {text2}
-
-Consider:
-1. Direct contradictions
-2. Incompatible values or goals
-3. Mutually exclusive worldviews
-4. Conflicting behavioral prescriptions
-
-Return JSON with structure:
-{{
-    "conflicts": true/false,
-    "conflict_type": "direct|values|worldview|behavioral|none",
-    "severity": "minor|moderate|severe",
-    "explanation": "..."
-}}
-"""
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You are a belief conflict analyzer."},
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            
-            # Return true if conflict detected and severity is moderate or severe
-            return result.get("conflicts", False) and result.get("severity", "minor") in ["moderate", "severe"]
-            
-        except Exception as e:
-            logger.error(f"Error in LLM belief conflict detection: {e}")
-            # Fallback to simple rule-based check
-            text1 = belief1.get("belief", "").lower()
-            text2 = belief2.get("belief", "").lower()
-            
-            opposites = [
-                ("should", "should not"),
-                ("must", "must not"),
-                ("good", "bad"),
-                ("right", "wrong")
-            ]
-            
-            for pos, neg in opposites:
-                if pos in text1 and neg in text2:
-                    return True
-                if neg in text1 and pos in text2:
-                    return True
-            
-            return False
-    
-    async def _generate_narrative_predictions(
-        self,
-        context: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Generate predictions about future narrative developments using LLM analysis."""
-        try:
-            # Get OpenAI client
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
-            
-            # Prepare context summary
-            context_summary = {
-                "entities": {},
-                "relationships": context.get("relationships", {}),
-                "recent_events": context.get("recent_events", [])[:10],
-                "emotional_landscape": context.get("emotional_landscape", {}),
-                "active_schemas": [
-                    {"name": s.get("name"), "description": s.get("description")}
-                    for s in context.get("active_schemas", [])[:5]
-                ],
-                "potential_conflicts": context.get("potential_conflicts", [])
-            }
-            
-            # Simplify entity data
-            for entity_key, entity_data in context.get("entities", {}).items():
-                context_summary["entities"][entity_key] = {
-                    "emotional_state": entity_data.get("emotional_state", {}).get("current_emotion"),
-                    "recent_memories": [
-                        m.get("text", "")[:100] if isinstance(m, dict) else str(m)[:100]
-                        for m in entity_data.get("recent_memories", [])[:3]
-                    ],
-                    "beliefs": [
-                        b.get("belief", "") if isinstance(b, dict) else str(b)
-                        for b in entity_data.get("beliefs", [])[:3]
-                    ]
-                }
-            
-            prompt = f"""Based on this narrative context, predict likely future developments:
-
-CURRENT STATE:
-{json.dumps(context_summary, indent=2)}
-
-Analyze the current narrative state and predict 3-5 likely developments. Consider:
-1. Emotional tensions and their likely resolutions
-2. Unresolved conflicts that may escalate
-3. Character arcs and their trajectories
-4. Schema patterns suggesting future events
-5. Relationship dynamics and potential changes
-
-For each prediction, provide:
-- The predicted event/development
-- Which entities are involved
-- Confidence level (0.0-1.0)
-- Timeframe (immediate/soon/eventual)
-- Trigger conditions
-- Narrative impact (low/medium/high)
-
-Return as JSON array:
-[{{
-    "prediction": "...",
-    "involved_entities": ["entity_type_id", ...],
-    "confidence": 0.0-1.0,
-    "timeframe": "immediate|soon|eventual",
-    "trigger_conditions": ["condition1", ...],
-    "narrative_impact": "low|medium|high",
-    "reasoning": "..."
-}}]
-"""
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You are a narrative prediction system analyzing roleplay scenarios to predict future developments."},
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            
-            # Parse response
-            response_text = response.choices[0].message.content
-            
-            # Try to extract JSON from response
-            import re
-            json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
-            if json_match:
-                predictions = json.loads(json_match.group())
-            else:
-                # Fallback: create basic predictions from emotional states
-                predictions = []
-                for entity, data in context.get("entities", {}).items():
-                    if data.get("emotional_state"):
-                        emotion = data["emotional_state"].get("current_emotion", {})
-                        if emotion.get("intensity", 0) > 0.7:
-                            predictions.append({
-                                "prediction": f"High emotional intensity may lead to impulsive action",
-                                "involved_entities": [entity],
-                                "confidence": 0.7,
-                                "timeframe": "immediate",
-                                "trigger_conditions": ["continued high emotion"],
-                                "narrative_impact": "medium",
-                                "reasoning": "Intense emotions often drive immediate action"
-                            })
-            
-            # Add metadata
-            for pred in predictions:
-                pred["generated_at"] = datetime.now().isoformat()
-                pred["context_hash"] = hash(json.dumps(context_summary, sort_keys=True))
-            
-            return predictions
-            
-        except Exception as e:
-            logger.error(f"Error generating narrative predictions: {e}")
-            # Return simple rule-based predictions as fallback
-            predictions = []
-            for entity, data in context.get("entities", {}).items():
-                if data.get("emotional_state"):
-                    emotion = data["emotional_state"].get("current_emotion", {})
-                    if emotion.get("intensity", 0) > 0.7:
-                        predictions.append({
-                            "prediction": f"High emotional intensity may lead to impulsive action",
-                            "involved_entities": [entity],
-                            "confidence": 0.7,
-                            "timeframe": "immediate",
-                            "trigger_conditions": ["continued high emotion"],
-                            "narrative_impact": "medium",
-                            "reasoning": "Intense emotions often drive immediate action"
-                        })
-            return predictions
-    
-    async def analyze_memory_set(
-        self,
-        memories: List[Any],
-        entity_type: str,
-        entity_id: int
-    ) -> Dict[str, Any]:
-        """Analyze a set of memories for patterns and insights."""
-        if not memories:
-            return {"message": "No memories to analyze"}
-        
-        # Handle both Memory objects and dicts
-        analysis = {
-            "total_count": len(memories),
-            "average_significance": 0,
-            "average_emotional_intensity": 0,
-            "common_tags": {},
-            "temporal_distribution": {},
-            "memory_types": {}
-        }
-        
-        for memory in memories:
-            # Handle dict format
-            if isinstance(memory, dict):
-                significance = memory.get("significance", 0)
-                emotional_intensity = memory.get("emotional_intensity", 0)
-                tags = memory.get("tags", [])
-                memory_type = memory.get("type", "unknown")
-            else:
-                # Handle Memory object
-                significance = getattr(memory, "significance", 0)
-                emotional_intensity = getattr(memory, "emotional_intensity", 0)
-                tags = getattr(memory, "tags", [])
-                memory_type = getattr(memory, "memory_type", "unknown")
-                if hasattr(memory_type, 'value'):
-                    memory_type = memory_type.value
-            
-            analysis["average_significance"] += significance
-            analysis["average_emotional_intensity"] += emotional_intensity
-            
-            for tag in tags:
-                analysis["common_tags"][tag] = analysis["common_tags"].get(tag, 0) + 1
-            
-            analysis["memory_types"][str(memory_type)] = analysis["memory_types"].get(str(memory_type), 0) + 1
-        
-        if len(memories) > 0:
-            analysis["average_significance"] /= len(memories)
-            analysis["average_emotional_intensity"] /= len(memories)
-        
-        return analysis
+        return results
     
     async def _run_consolidation(self) -> Dict[str, Any]:
         """Run memory consolidation for all entities."""
@@ -3032,8 +1494,9 @@ Return as JSON array:
         
         for entity_type, entity_id in entities:
             manager = await self._get_entity_manager(entity_type, entity_id)
-            consolidated = await manager.consolidate_memories()
-            results[f"{entity_type}_{entity_id}"] = len(consolidated)
+            if hasattr(manager, 'consolidate_memories'):
+                consolidated = await manager.consolidate_memories()
+                results[f"{entity_type}_{entity_id}"] = len(consolidated)
         
         return results
     
@@ -3044,159 +1507,119 @@ Return as JSON array:
         
         for entity_type, entity_id in entities:
             manager = await self._get_entity_manager(entity_type, entity_id)
-            decayed = await manager.apply_memory_decay()
-            results[f"{entity_type}_{entity_id}"] = decayed
+            if hasattr(manager, 'apply_memory_decay'):
+                decayed = await manager.apply_memory_decay()
+                results[f"{entity_type}_{entity_id}"] = decayed
         
         return results
     
-    async def _run_schema_maintenance(self) -> Dict[str, Any]:
-        """Run schema maintenance for all entities."""
-        results = {}
-        entities = await self._get_active_entities()
-        
-        for entity_type, entity_id in entities:
-            maintenance_result = await self.schema_manager.run_schema_maintenance(
-                entity_type=entity_type,
-                entity_id=entity_id
-            )
-            results[f"{entity_type}_{entity_id}"] = maintenance_result
-        
-        return results
+    async def _run_pattern_analysis(self) -> Dict[str, Any]:
+        """Run pattern analysis across all memories."""
+        # This is expensive - definitely move to background
+        patterns = await self.analyze_cross_entity_patterns()
+        return {"patterns_found": len(patterns.get('patterns', []))}
     
-    async def _run_reconsolidation_maintenance(self) -> Dict[str, Any]:
-        """Run reconsolidation checks for all entities."""
-        results = {}
-        entities = await self._get_active_entities()
+    async def _get_active_entities(self) -> List[Tuple[str, int]]:
+        """Get list of active entities with memories."""
+        entities = [(EntityType.PLAYER.value, self.user_id)]
         
-        for entity_type, entity_id in entities:
-            reconsolidated = await self.reconsolidation_manager.check_memories_for_reconsolidation(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                max_memories=3
-            )
-            results[f"{entity_type}_{entity_id}"] = len(reconsolidated)
+        # Add active NPCs from context
+        # This would be populated from the NyxContext
+        # For now, return just the player
         
-        return results
+        return entities
     
-    async def _analyze_cross_entity_patterns(self, topic: str = None) -> Dict[str, Any]:
-        """Analyze patterns across all entities using LLM."""
+    # ========================================================================
+    # Cross-Entity Pattern Analysis
+    # ========================================================================
+    
+    async def analyze_cross_entity_patterns(
+        self,
+        topic: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Analyze patterns across multiple entities."""
         try:
             entities = await self._get_active_entities()
-            all_patterns = []
-            entity_memories = {}
             
-            # Collect memories from each entity
+            # Collect memories from all entities
+            all_memories = []
             for entity_type, entity_id in entities:
-                manager = await self._get_entity_manager(entity_type, entity_id)
-                memories = await manager.retrieve_memories(
-                    query=topic,
-                    limit=10,
-                    conn=None
+                memories = await self.retrieve_memories(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    limit=20
                 )
-                
-                entity_key = f"{entity_type}_{entity_id}"
-                entity_memories[entity_key] = [
-                    {
-                        "text": m.text if hasattr(m, 'text') else m.get('text', ''),
-                        "significance": getattr(m, 'significance', 0) if hasattr(m, 'significance') else m.get('significance', 0),
-                        "type": str(getattr(m, 'memory_type', 'unknown')) if hasattr(m, 'memory_type') else m.get('type', 'unknown')
-                    }
-                    for m in memories[:5]  # Limit to 5 per entity
-                ]
+                all_memories.extend(memories.get('memories', []))
             
-            # Use LLM to find cross-entity patterns
-            from logic.chatgpt_integration import get_openai_client
-            client = get_openai_client()
+            # Find patterns
+            patterns = await self._find_emergent_patterns(all_memories, SceneScope(), limit=10)
             
-            prompt = f"""Analyze these memories from different entities to find cross-entity patterns:
-
-{json.dumps(entity_memories, indent=2)}
-
-{"Topic focus: " + topic if topic else "No specific topic focus"}
-
-Identify:
-1. Shared themes across entities
-2. Complementary or conflicting perspectives
-3. Causal relationships between entity experiences
-4. Emergent narrative patterns
-5. Systemic behaviors or cycles
-
-Return JSON:
-{{
-    "shared_themes": [
-        {{
-            "theme": "...",
-            "entities_involved": ["entity_key", ...],
-            "description": "...",
-            "significance": "low|medium|high"
-        }}
-    ],
-    "relationships": [
-        {{
-            "type": "causal|complementary|conflicting",
-            "entity1": "entity_key",
-            "entity2": "entity_key",
-            "description": "..."
-        }}
-    ],
-    "emergent_patterns": [
-        {{
-            "pattern": "...",
-            "description": "...",
-            "entities_affected": ["entity_key", ...],
-            "implications": "..."
-        }}
-    ],
-    "systemic_behaviors": [
-        {{
-            "behavior": "...",
-            "cycle_description": "...",
-            "participating_entities": ["entity_key", ...]
-        }}
-    ]
-}}
-"""
-            
-            response = client.chat.completions.create(
-                model="gpt-5-nano",
-                messages=[
-                    {"role": "system", "content": "You are a cross-entity pattern analyzer for narrative memory systems."},
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            
-            # Add metadata
-            result["analysis_timestamp"] = datetime.now().isoformat()
-            result["entity_count"] = len(entities)
-            result["topic"] = topic
-            result["total_memories_analyzed"] = sum(len(mems) for mems in entity_memories.values())
-            
-            return result
+            return {
+                "patterns": patterns,
+                "entity_count": len(entities),
+                "memory_count": len(all_memories),
+                "topic": topic
+            }
             
         except Exception as e:
             logger.error(f"Error analyzing cross-entity patterns: {e}")
-            # Fallback to simple pattern collection
-            patterns = []
-            entities = await self._get_active_entities()
-            
-            for entity_type, entity_id in entities:
-                entity_patterns = await self.semantic_manager.find_patterns_across_memories(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    topic=topic
-                )
-                patterns.append({
-                    "entity": f"{entity_type}_{entity_id}",
-                    "patterns": entity_patterns
-                })
-            
-            return {
-                "cross_entity_patterns": patterns,
-                "analysis_timestamp": datetime.now().isoformat(),
-                "error": "LLM analysis failed, using fallback"
-            }
+            return {"error": str(e), "patterns": []}
+    
+    # ========================================================================
+    # Specialized Memory Operations
+    # ========================================================================
+    
+    async def create_flashback(
+        self,
+        entity_type: str,
+        entity_id: int,
+        trigger: str
+    ) -> Dict[str, Any]:
+        """Create a flashback memory sequence."""
+        if not self.initialized:
+            await self.initialize()
+        
+        return await self.flashback_manager.create_flashback(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            trigger=trigger
+        )
+    
+    async def apply_mask(
+        self,
+        entity_type: str,
+        entity_id: int,
+        memory_id: int,
+        mask_type: str = "partial"
+    ) -> Dict[str, Any]:
+        """Apply a mask to a memory."""
+        if not self.initialized:
+            await self.initialize()
+        
+        return await self.mask_manager.apply_mask(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            memory_id=memory_id,
+            mask_type=mask_type
+        )
+    
+    async def create_false_memory(
+        self,
+        entity_type: str,
+        entity_id: int,
+        false_text: str,
+        base_memory_ids: Optional[List[int]] = None
+    ) -> Dict[str, Any]:
+        """Create a false memory (for story purposes)."""
+        if not self.initialized:
+            await self.initialize()
+        
+        return await self.interference_manager.create_false_memory(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            false_memory_text=false_text,
+            related_true_memory_ids=base_memory_ids
+        )
     
     # ========================================================================
     # Cleanup
@@ -3206,12 +1629,24 @@ Return JSON:
         """Clean up resources."""
         if self.embedding_service:
             await self.embedding_service.close()
-        
         if self.retriever_agent:
             await self.retriever_agent.close()
         
-        # Clear caches
+        # Clear per-conversation retrieval cache
         await self.cache.clear()
+        
+        # Remove only this conversation's bundles from class-wide cache
+        cls = self.__class__
+        prefix = f"{self.user_id}:{self.conversation_id}:"
+        to_delete = [k for k in list(cls._bundle_cache.keys()) if k.startswith(prefix)]
+        for k in to_delete:
+            cls._evict_bundle_key(k)
+        
+        # Remove this instance from the singleton registry
+        try:
+            del cls._instances[(self.user_id, self.conversation_id)]
+        except KeyError:
+            pass
         
         self.initialized = False
 
