@@ -11,6 +11,42 @@ import logging
 
 from pydantic import BaseModel as _PydanticBaseModel, Field
 
+from story_agent.world_simulation_models import (
+    AgentSafeModel,
+    KVList,
+    NarrativeResponse,          # we'll alias as NyxResponse
+    WorldState as _WorldState,  # already an alias of CompleteWorldState
+    MemoryItem as _MemoryItem,  # good stand-in for MemoryHighlight
+    SliceOfLifeEvent as _SliceOfLifeEvent,  # good stand-in for EmergentEvent
+    NPCDialogue as _NPCDialogue,
+    ChoiceData as _ChoiceData,  # good stand-in for Choice
+)
+
+# Bring in the scene/context types you already defined
+from nyx.nyx_agent.context import (
+    ContextBundle as _ContextBundle,
+    SceneScope as _SceneScope,
+)
+
+# ── Aliases expected by assembly.py ────────────────────────────────────────────
+NyxResponse    = NarrativeResponse
+WorldState     = _WorldState
+MemoryHighlight = _MemoryItem
+EmergentEvent  = _SliceOfLifeEvent
+NPCDialogue    = _NPCDialogue
+Choice         = _ChoiceData
+ContextBundle  = _ContextBundle
+SceneScope     = _SceneScope
+
+# ── Minimal metadata container (assembly expects a symbol named BundleMetadata)
+class BundleMetadata(AgentSafeModel):
+    """Lightweight bundle metadata; stays agent-safe."""
+    schema_version: Optional[int] = None
+    fetch_time: Optional[float] = None
+    link_hints: Dict[str, List[Union[int, str]]] = Field(default_factory=dict)
+    expanded_sections: List[str] = Field(default_factory=list)
+    extras: KVList = Field(default_factory=KVList)
+
 logger = logging.getLogger(__name__)
 
 # =========================
@@ -378,3 +414,16 @@ class UniversalUpdateResult(BaseModel):
     success: bool
     updates_generated: bool
     error: Optional[str] = None
+
+
+__all__ = [
+    "NyxResponse",
+    "WorldState",
+    "MemoryHighlight",
+    "EmergentEvent",
+    "NPCDialogue",
+    "Choice",
+    "ContextBundle",
+    "SceneScope",
+    "BundleMetadata",
+]
