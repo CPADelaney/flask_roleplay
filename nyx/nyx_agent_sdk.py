@@ -26,7 +26,6 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 # ── Core modern orchestrator
 from .nyx_agent.orchestrator import process_user_input as _orchestrator_process
 from .nyx_agent.context import NyxContext, SceneScope
-from .nyx_agent.assembly import assemble_nyx_response, resolve_scene_requests  # fallback assembler
 
 # Fallback agent runtime (loaded lazily; optional in some environments)
 try:
@@ -48,9 +47,12 @@ except Exception:  # pragma: no cover
 
 # Response filter (optional; tone/policy scrubbing)
 try:
-    from .response_filter import ResponseFilter
+    from nyx.response_filter import ResponseFilter  # preferred (matches context.py)
 except Exception:  # pragma: no cover
-    ResponseFilter = None  # type: ignore
+    try:
+        from .response_filter import ResponseFilter  # local fallback
+    except Exception:  # pragma: no cover
+        ResponseFilter = None  # type: ignore
 
 # Optional telemetry / background queue (auto-noop if absent)
 try:
@@ -449,6 +451,8 @@ class NyxAgentSDK:
         """
         Minimal reproduction of the orchestrator flow using public agent APIs.
         Only invoked if the primary path fails and the runtime is available.
+        We avoid importing the class-based assembler; instead we safely coalesce
+        the runner history into a single narrative.
         """
         if not (Runner and RunConfig and RunContextWrapper and nyx_main_agent):
             raise RuntimeError("Fallback agent runtime is unavailable in this environment.")
@@ -464,39 +468,43 @@ class NyxAgentSDK:
 
         result = await Runner.run(nyx_main_agent, message, context=runner_context, run_config=run_config)
 
-        history = []
-        for attr in ("messages", "history", "events"):
-            if hasattr(result, attr):
-                history = getattr(result, attr) or []
-                if history:
-                    break
+        # 1) Extract best-effort text from the run
+        def _extract_text(obj: Any) -> str:
+            for attr in ("final_output", "output_text", "output", "text"):
+                val = getattr(obj, attr, None)
+                if isinstance(val, str) and val.strip():
+                    return val
+            # Try messages/history if present
+            for attr in ("messages", "history", "events"):
+                seq = getattr(obj, attr, None) or []
+                # look for assistant content blocks
+                for ev in seq:
+                    content = ev.get("content") if isinstance(ev, dict) else None
+                    if isinstance(content, list):
+                        for c in content:
+                            if isinstance(c, dict) and c.get("type") in {"output_text", "text"}:
+                                if isinstance(c.get("text"), str):
+                                    return c["text"]
+            # final fallback
+            return str(obj)
 
-        if not history:
-            text = (
-                getattr(result, "final_output", None)
-                or getattr(result, "output", None)
-                or getattr(result, "text", None)
-                or str(result)
-            )
-            history = [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}]
+        narrative = _extract_text(result) or ""
 
-        history = await resolve_scene_requests(history, ctx)
-        assembled = assemble_nyx_response(history)
+        # 2) Minimal image/world placeholders to keep API shape
+        meta = {
+            "world": {},
+            "image": {},
+            "telemetry": {},
+            "universal_updates": False,
+            "path": "fallback",
+            "trace_id": trace_id,
+        }
 
         return NyxResponse(
-            narrative=assembled.get("narrative", "") or "",
-            choices=assembled.get("choices", []) or [],
-            metadata={
-                "world": assembled.get("world", {}) or {},
-                "emergent": assembled.get("emergent", {}) or {},
-                "image": assembled.get("image", {}) or {},
-                "telemetry": assembled.get("telemetry", {}) or {},
-                "nyx_commentary": assembled.get("nyx_commentary"),
-                "universal_updates": assembled.get("universal_updates", False),
-                "path": "fallback",
-                "trace_id": trace_id,
-            },
-            world_state=assembled.get("world", {}) or {},
+            narrative=narrative,
+            choices=[],
+            metadata=meta,
+            world_state={},
             success=True,
             trace_id=trace_id,
             processing_time=(time.time() - t0),
