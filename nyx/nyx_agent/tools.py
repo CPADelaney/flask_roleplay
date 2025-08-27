@@ -20,7 +20,7 @@ from .models import (
     DecideImageGenerationInput,
     UpdateEmotionalStateInput,
     UpdateRelationshipStateInput,
-    ScoreDecisionInput,
+    ScoreDecisionOptionsInput,
     
     # Output models  
     MemoryItem,
@@ -524,7 +524,7 @@ async def detect_conflicts_and_instability(
 @function_tool
 async def score_decision_options(
     ctx: RunContextWrapper,
-    payload: ScoreDecisionInput
+    payload: ScoreDecisionOptionsInput  # Changed
 ) -> Dict[str, Any]:
     """Score decisions with full bundle context"""
     bundle = await _get_bundle(ctx)
