@@ -171,12 +171,17 @@ class MonitoringStats:
                     memory_percent = process.memory_percent()
                     
                     # Record memory info
+                    # connections() can be deprecated; guard and fall back
+                    try:
+                        conn_count = len(process.connections())
+                    except Exception:
+                        conn_count = 0
                     self.memory_measurements.append({
                         "timestamp": time.time(),
                         "rss_mb": memory_info.rss / (1024 * 1024),
                         "vms_mb": memory_info.vms / (1024 * 1024),
                         "percent": memory_percent,
-                        "connections": len(process.connections())
+                        "connections": conn_count
                     })
                     
                     # Keep only the last 100 measurements
