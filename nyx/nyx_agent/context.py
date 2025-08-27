@@ -1235,73 +1235,83 @@ class ContextBroker:
         )
     
     async def _fetch_conflict_section(self, scope: SceneScope) -> BundleSection:
-        """Fetch conflict context using existing orchestrator API and link hints"""
-        if not self.ctx.conflict_synthesizer:
-             return BundleSection(data={}, canonical=False, priority=0)
- 
+        """Fetch conflict context using existing orchestrator API and link hints."""
+        # Resolve synthesizer once and guard
+        synthesizer = getattr(self.ctx, "conflict_synthesizer", None)
+        if not synthesizer:
+            return BundleSection(data={}, canonical=False, priority=0)
+    
         # Fast path: if the synthesizer exposes an optimized scene bundle, use it.
-        if hasattr(self.conflict_synthesizer, 'get_scene_bundle'):
+        if hasattr(synthesizer, "get_scene_bundle"):
             try:
-                bundle = await self.conflict_synthesizer.get_scene_bundle(scope)
+                bundle = await synthesizer.get_scene_bundle(scope)
+                bundle = bundle or {}
                 data = {
                     # Keep your section shape the same:
-                    'active': bundle.get('active', bundle.get('conflicts', [])),
-                    'tensions': bundle.get('tensions', {}),
-                    'opportunities': bundle.get('opportunities', []),
+                    "active": bundle.get("active", bundle.get("conflicts", [])),
+                    "tensions": bundle.get("tensions", {}),
+                    "opportunities": bundle.get("opportunities", []),
                 }
                 return BundleSection(
                     data=data,
-                    canonical=True,          # synthesizer is canon-first
+                    canonical=True,           # synthesizer is canon-first
                     priority=5,
                     last_changed_at=time.time(),
-                    version=f"conflict_opt_{len(data['active'])}"
+                    version=f"conflict_opt_{len(data['active'])}",
                 )
             except Exception as e:
-                logger.error(f"Optimized conflict fetch failed, falling back: {e}")
-
-         conflict_data = {
-             'active': [],
-             'tensions': {},
-             'opportunities': []
-         }
-        
+                logger.error("Optimized conflict fetch failed, falling back: %s", e)
+    
+        # ----- Fallback path (existing APIs) -----
+        conflict_data = {
+            "active": [],
+            "tensions": {},
+            "opportunities": [],
+        }
+    
         try:
             # Use get_conflict_state (existing API)
-            for conflict_id in list(scope.conflict_ids)[:5]:
-                if hasattr(self.ctx.conflict_synthesizer, 'get_conflict_state'):
-                    state = await self.ctx.conflict_synthesizer.get_conflict_state(conflict_id)
+            conflict_ids = list(getattr(scope, "conflict_ids", []))[:5]
+            if hasattr(synthesizer, "get_conflict_state"):
+                for conflict_id in conflict_ids:
+                    state = await synthesizer.get_conflict_state(conflict_id)
                     if state:
-                        conflict_data['active'].append({
-                            'id': conflict_id,
-                            'type': state.get('conflict_type'),
-                            'intensity': state.get('subsystem_data', {}).get('tension', {}).get('level', 0.5),
-                            'stakeholders': state.get('subsystem_data', {}).get('stakeholder', {}).get('stakeholders', [])
+                        subsystem = state.get("subsystem_data", {}) if isinstance(state, dict) else {}
+                        tension = subsystem.get("tension", {}) if isinstance(subsystem, dict) else {}
+                        stakeholder = subsystem.get("stakeholder", {}) if isinstance(subsystem, dict) else {}
+    
+                        conflict_data["active"].append({
+                            "id": conflict_id,
+                            "type": state.get("conflict_type") if isinstance(state, dict) else None,
+                            "intensity": tension.get("level", 0.5),
+                            "stakeholders": stakeholder.get("stakeholders", []),
                         })
-            
+    
             # Build NPC list including link hints for conflict filtering
-            relevant_npcs = set(scope.npc_ids)
-            if 'related_npcs' in scope.link_hints:
-                relevant_npcs.update(scope.link_hints['related_npcs'][:3])
-            
+            relevant_npcs = set(getattr(scope, "npc_ids", []) or [])
+            link_hints = getattr(scope, "link_hints", {}) or {}
+            if isinstance(link_hints, dict) and "related_npcs" in link_hints:
+                related = link_hints.get("related_npcs") or []
+                relevant_npcs.update(related[:3])
+    
             # Get tensions using existing calculate_conflict_tensions
-            if hasattr(self.ctx, 'calculate_conflict_tensions'):
+            if hasattr(self.ctx, "calculate_conflict_tensions"):
                 all_tensions = await self.ctx.calculate_conflict_tensions()
-                # Filter tensions relevant to scene NPCs and linked NPCs
                 if relevant_npcs and all_tensions:
-                    conflict_data['tensions'] = self._filter_tensions_for_npcs(
-                        all_tensions, 
-                        relevant_npcs
+                    conflict_data["tensions"] = self._filter_tensions_for_npcs(
+                        all_tensions,
+                        relevant_npcs,
                     )
-            
+    
         except Exception as e:
-            logger.error(f"Conflict fetch failed: {e}")
-        
+            logger.error("Conflict fetch failed: %s", e)
+    
         return BundleSection(
             data=conflict_data,
             canonical=False,
             priority=5,
             last_changed_at=time.time(),
-            version=f"conflict_{len(conflict_data['active'])}"
+            version=f"conflict_{len(conflict_data['active'])}",
         )
     
     def _filter_tensions_for_npcs(self, all_tensions: Dict[str, float], 
