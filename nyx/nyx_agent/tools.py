@@ -28,7 +28,7 @@ from .models import (
     MemoryStorageResult,
     UserGuidanceResult,
     ImageGenerationDecision,
-    EmotionalStateResult,
+    EmotionalState,
     RelationshipUpdate,
     PerformanceMetrics,
     ActivityRecommendations,
