@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import uuid
 from typing import Dict, List, Any, Optional, Union
@@ -21,6 +20,7 @@ from .models import (
     UpdateEmotionalStateInput,
     UpdateRelationshipStateInput,
     ScoreDecisionOptionsInput,
+    DecisionOption,
 
     # Output models
     MemoryItem,
@@ -28,7 +28,7 @@ from .models import (
     MemoryStorageResult,
     UserGuidanceResult,
     ImageGenerationDecision,
-    EmotionalState,
+    EmotionalStateResult,
     RelationshipUpdate,
     PerformanceMetrics,
     ActivityRecommendationsResult,
@@ -448,14 +448,14 @@ async def calculate_and_update_emotional_state(
     # Update bundle
     bundle.sections['emotional'] = new_state
 
-    # Return a plain dict to avoid reliance on an unknown model type
-    return {
-        "valence": new_state["valence"],
-        "arousal": new_state["arousal"],
-        "dominance": new_state["dominance"],
-        "emotional_label": new_state.get("label", "neutral"),
-        "manifestation": new_state.get("manifestation", "")
-    }
+    # Return consistent modelled output
+    return EmotionalStateResult(
+        valence=new_state["valence"],
+        arousal=new_state["arousal"],
+        dominance=new_state["dominance"],
+        emotional_label=new_state.get("label", "neutral"),
+        manifestation=new_state.get("manifestation", "")
+    ).model_dump()
 
 @function_tool
 async def update_relationship_state(
@@ -531,9 +531,20 @@ async def score_decision_options(
     bundle = await _get_bundle(ctx)
     broker = await _get_context_broker(ctx)
 
+    # Normalize options: support List[str] or List[DecisionOption]
+    normalized: List[str] = []
+    for o in payload.options:
+        if isinstance(o, str):
+            normalized.append(o)
+        elif isinstance(o, DecisionOption):
+            normalized.append(o.id or o.description)
+        else:
+            # Fallback to string repr if an unexpected shape slips in
+            normalized.append(str(o))
+
     # Score each option with multi-factor analysis
     scores = {}
-    for option in payload.options:
+    for option in normalized:
         score = await broker.score_decision(
             option=option,
             bundle=bundle,
@@ -679,7 +690,7 @@ async def get_activity_recommendations(
     ctx: RunContextWrapper,
     scenario_type: str = "general",
     npc_ids: Optional[List[int]] = None
-) -> str:
+) -> Dict[str, Any]:
     """Get activity recommendations using bundle context"""
     bundle = await _get_bundle(ctx, expand_sections=['activities', 'npcs', 'relationships'])
     broker = await _get_context_broker(ctx)
@@ -706,7 +717,7 @@ async def get_activity_recommendations(
         recommendations=recommendations,
         total_available=len(activity_analysis.get('available', [])),
         scenario_context=activity_analysis.get('context', {})
-    ).model_dump_json()
+    ).model_dump()
 
 @function_tool
 async def detect_narrative_patterns(
@@ -785,7 +796,7 @@ async def narrate_daily_routine(
 async def get_user_model_guidance(
     ctx: RunContextWrapper,
     payload: EmptyInput = None
-) -> str:
+) -> Dict[str, Any]:
     """Get user model guidance from bundle's analysis"""
     bundle = await _get_bundle(ctx, expand_sections=['user_model'])
     broker = await _get_context_broker(ctx)
@@ -806,13 +817,13 @@ async def get_user_model_guidance(
         topics_to_explore=guidance.get('topics', []),
         boundaries_detected=guidance.get('boundaries', []),
         engagement_level=guidance.get('engagement', 0.5)
-    ).model_dump_json()
+    ).model_dump()
 
 @function_tool
 async def detect_user_revelations(
     ctx: RunContextWrapper,
     user_input: str
-) -> str:
+) -> Dict[str, Any]:
     """Detect revelations with bundle context"""
     bundle = await _get_bundle(ctx, expand_sections=['user_model', 'memory'])
     broker = await _get_context_broker(ctx)
@@ -825,13 +836,13 @@ async def detect_user_revelations(
 
     # Store significant revelations
     for rev in revelations:
-        if rev['significance'] > 0.7:
+        if rev.get('significance', 0) > 0.7:
             await broker.store_revelation(rev, bundle)
 
-    return json.dumps({
+    return {
         'revelations': revelations,
         'updated_model': bundle.sections.get('user_model', {})
-    })
+    }
 
 # ===== Helper Tools =====
 
