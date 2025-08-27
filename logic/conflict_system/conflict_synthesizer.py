@@ -37,6 +37,12 @@ from agents import function_tool, RunContextWrapper, Runner
 if TYPE_CHECKING:
     from nyx.nyx_agent.context import SceneScope
 
+from logic.conflict_system.background_processor import (
+    get_conflict_scheduler,
+    BackgroundConflictProcessor
+)
+from logic.conflict_system.integration_hooks import ConflictEventHooks
+
 logger = logging.getLogger(__name__)
 
 # Configuration from environment
@@ -208,6 +214,9 @@ class EventType(Enum):
     TEMPLATE_GENERATED = "template_generated"
     HEALTH_CHECK = "health_check"
     STATE_SYNC = "state_sync"
+    DAY_TRANSITION = "day_transition"  # ADD THIS
+    SCENE_ENTER = "scene_enter"  # ADD THIS
+    CONFLICT_SIGNIFICANT_CHANGE = "conflict_significant_change"  # ADD THIS
 
 
 @dataclass
@@ -292,9 +301,15 @@ class ConflictSynthesizer:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self.subsystems: Dict[SubsystemType, Any] = {}
         
-        # Subsystem registry
-        self._subsystems: Dict[SubsystemType, ConflictSubsystem] = {}
+        # ADD: Background processor reference
+        self.scheduler = get_conflict_scheduler()
+        self.processor = self.scheduler.get_processor(user_id, conversation_id)
+        
+        # ADD: Cache for scene context
+        self._scene_cache = {}
+        self._cache_ttl = 300  # 5 minutes
         
         # Event system with bounded queue
         self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=MAX_EVENT_QUEUE)
@@ -344,8 +359,12 @@ class ConflictSynthesizer:
         self._parallel_semaphore = asyncio.Semaphore(MAX_PARALLEL_TASKS)
         self._parallel_timeout = PARALLEL_TIMEOUT
         
+        
         # Background task handles for clean shutdown
         self._bg_tasks: Dict[str, asyncio.Task] = {}
+
+        # Initialize subsystems
+        self._initialize_all_subsystems()
     
     # ========== Subsystem Registration ==========
     
@@ -387,6 +406,7 @@ class ConflictSynthesizer:
             from logic.conflict_system.template_generator import TemplateGeneratorSubsystem
             from logic.conflict_system.edge_case_handler import EdgeCaseHandlerSubsystem
             from logic.conflict_system.slice_of_life_conflict import SliceOfLifeConflictSubsystem
+            from logic.conflict_system.background_grand_conflicts import BackgroundConflictSubsystem
             from logic.conflict_system.enhanced_integration import EnhancedIntegrationSubsystem
             
             subsystems = [
@@ -407,6 +427,10 @@ class ConflictSynthesizer:
             
             for subsystem in subsystems:
                 await self.register_subsystem(subsystem)
+
+            background = BackgroundConflictSubsystem(self.user_id, self.conversation_id)
+            await background.initialize(self)
+            self.subsystems[SubsystemType.BACKGROUND] = background
             
             # Start background tasks with handles
             if not self._processing:
@@ -469,6 +493,151 @@ class ConflictSynthesizer:
             logger.exception(f"Failed to emit event {event.event_id}")
             self._performance_metrics['failures_count'] += 1
             return None
+
+        async conflict_context_for_scene(self, scene_info: Dict[str, Any]) -> Dict[str, Any]:
+            """
+            Get conflict context optimized for current scene.
+            This is the main entry point for NyxContext.
+            """
+            cache_key = f"scene_{hash(frozenset(scene_info.items()))}"
+            
+            # Check cache
+            if cache_key in self._scene_cache:
+                cached = self._scene_cache[cache_key]
+                if datetime.utcnow().timestamp() - cached['timestamp'] < self._cache_ttl:
+                    return cached['data']
+            
+            # Emit scene enter event
+            event = SystemEvent(
+                event_id=f"scene_{datetime.now().timestamp()}",
+                event_type=EventType.SCENE_ENTER,
+                source_subsystem=SubsystemType.ORCHESTRATOR,
+                payload={'scene_context': scene_info},
+                target_subsystems={SubsystemType.BACKGROUND}
+            )
+            
+            responses = await self.emit_event(event)
+            
+            # Collect context from subsystems
+            context = {
+                'conflicts': [],
+                'tensions': {},
+                'opportunities': [],
+                'ambient_effects': [],
+                'world_tension': 0.0
+            }
+            
+            for response in responses:
+                if response.success and response.data:
+                    if response.subsystem == SubsystemType.BACKGROUND:
+                        scene_context = response.data.get('scene_context', {})
+                        context['conflicts'].extend(scene_context.get('active_conflicts', []))
+                        context['ambient_effects'].extend(scene_context.get('ambient_effects', []))
+                        
+                    # Handle other subsystems...
+            
+            # Cache the result
+            self._scene_cache[cache_key] = {
+                'timestamp': datetime.utcnow().timestamp(),
+                'data': context
+            }
+            
+            return context
+        
+        # ADD: Day transition handler
+        async def handle_day_transition(self, new_day: int) -> Dict[str, Any]:
+            """
+            Handle game day transitions with background processing.
+            Triggers updates for all subsystems efficiently.
+            """
+            logger.info(f"Processing day transition to day {new_day}")
+            
+            # Use the integration hook for background processing
+            result = await ConflictEventHooks.on_game_day_transition(
+                self.user_id,
+                self.conversation_id,
+                new_day
+            )
+            
+            # Emit day transition event to all subsystems
+            event = SystemEvent(
+                event_id=f"day_{new_day}_{datetime.now().timestamp()}",
+                event_type=EventType.DAY_TRANSITION,
+                source_subsystem=SubsystemType.ORCHESTRATOR,
+                payload={'new_day': new_day, 'processing_result': result},
+                broadcast=True,  # All subsystems
+                requires_response=False,  # Fire and forget
+                priority=7  # Low priority
+            )
+            
+            # Queue the event for async processing
+            try:
+                self._event_queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning("Event queue full, day transition event dropped")
+            
+            # Clear bundle cache on day transition
+            async with self._bundle_lock:
+                self._bundle_cache.clear()
+                logger.info(f"Cleared bundle cache for day {new_day}")
+            
+            return result
+
+        async def process_background_queue(self, max_items: int = 5) -> List[Dict[str, Any]]:
+            """
+            Process items from the background conflict queue.
+            Called by workers or after sending response.
+            """
+            return await self.processor.process_queued_items(max_items=max_items)
+        
+        def should_generate_content(self, content_type: str, entity_id: int) -> tuple[bool, str]:
+            """
+            Check if we should generate new content (respects limits).
+            """
+            if content_type == 'news':
+                # This will check limits and cooldowns
+                import asyncio
+                return asyncio.run(self.processor.should_generate_news(entity_id))
+            
+            # Add other content types as needed
+            return True, "allowed"
+        
+        # ADD: Scene transition handler
+        async def _handle_scene_transition(self, old_scene, new_scene):
+            """
+            Internal method to handle scene transitions.
+            Runs async to not block the main request.
+            """
+            if old_scene == new_scene:
+                return
+                
+            # Use the integration hook
+            context = await ConflictEventHooks.on_scene_transition(
+                self.user_id,
+                self.conversation_id,
+                old_scene,
+                new_scene
+            )
+            
+            # Emit scene transition event
+            event = SystemEvent(
+                event_id=f"scene_transition_{datetime.now().timestamp()}",
+                event_type=EventType.SCENE_ENTER,
+                source_subsystem=SubsystemType.ORCHESTRATOR,
+                payload={
+                    'old_scene': old_scene,
+                    'new_scene': new_scene,
+                    'context': context
+                },
+                target_subsystems={SubsystemType.BACKGROUND},
+                requires_response=False,
+                priority=6
+            )
+            
+            try:
+                self._event_queue.put_nowait(event)
+            except asyncio.QueueFull:
+                pass  # Non-critical, can drop
     
     async def _process_events(self):
         """Background event processing loop with timeout protection"""
@@ -789,7 +958,20 @@ class ConflictSynthesizer:
         return result
     
     async def process_scene(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Process scene with parallel subsystem handling"""
+        """
+        MODIFIED: Process scene with parallel subsystem handling and transition tracking.
+        """
+        # Convert to scope for tracking
+        scope = {
+            'location': scene_context.get('location'),
+            'npcs': scene_context.get('npcs', []),
+            'topics': scene_context.get('topics', [])
+        }
+        
+        # Check for scene transition
+        if self._last_scene != scope:
+            asyncio.create_task(self._handle_scene_transition(self._last_scene, scope))
+            self._last_scene = scope
         
         # Determine active subsystems
         active = await self._determine_active_subsystems(scene_context)
@@ -808,7 +990,6 @@ class ConflictSynthesizer:
         # Process with parallel handling
         responses = await self.emit_event(event)
         
-        # Handle case where emit_event returns None on failure
         if responses is None:
             logger.warning("Failed to emit scene processing event")
             return {
@@ -818,130 +999,90 @@ class ConflictSynthesizer:
             }
         
         return self._synthesize_scene_result(responses, scene_context)
+
     
     # ==================== SCENE BUNDLE METHODS ====================
     
     async def get_scene_bundle(self, scope: 'SceneScope') -> Dict[str, Any]:
         """
-        Get scene-scoped conflict bundle optimized for context assembly.
-        Returns canonical conflicts first, lightweight data.
+        MODIFIED: Get scene-scoped conflict bundle with background optimization.
         """
-        start_time = time.perf_counter()  # Use monotonic clock for duration
+        # Create cache key from scope
+        cache_key = f"scene_{self.user_id}_{self.conversation_id}_{hash(str(scope))}"
         
-        # Generate stable cache key (non-async)
-        cache_key = self._generate_cache_key(scope)
-        
-        # Check cache with lock for thread safety
+        # Check bundle cache (your existing cache logic)
         async with self._bundle_lock:
             if cache_key in self._bundle_cache:
-                # Move to end for LRU behavior
-                self._bundle_cache.move_to_end(cache_key)
-                cached_bundle, cached_time = self._bundle_cache[cache_key]
-                if time.time() - cached_time < self._bundle_ttl:
-                    # Touch cache entry to update LRU timestamp
-                    self._bundle_cache[cache_key] = (cached_bundle, time.time())
+                bundle, timestamp = self._bundle_cache[cache_key]
+                if time.time() - timestamp < self._bundle_ttl:
                     self._cache_hits += 1
-                    self._performance_metrics['cache_operations'] += 1
-                    return cached_bundle
-                else:
-                    # TTL expired, remove entry
-                    del self._bundle_cache[cache_key]
+                    # ADD: Check if this is a scene transition
+                    if self._last_scene != scope:
+                        asyncio.create_task(self._handle_scene_transition(self._last_scene, scope))
+                        self._last_scene = scope
+                    return bundle
         
         self._cache_misses += 1
+        start = time.time()
         
-        # Fetch conflicts relevant to the scene
-        relevant_conflicts = await self._get_scene_relevant_conflicts(scope)
-        
-        # Calculate accurate last_changed_at from underlying states (0.0 if none)
-        latest_change = max(
-            (s.get('last_updated', 0) for s in relevant_conflicts.values()),
-            default=0.0
-        )
-        
-        # Build scene-scoped bundle
+        # BUILD bundle from subsystems - but use optimized background subsystem
         bundle = {
-            'section': 'conflicts',
-            'data': {
-                'active': [],
-                'tensions': {},
-                'opportunities': [],
-                'slice_of_life_active': False
-            },
-            'canonical': False,
-            'last_changed_at': latest_change,
-            'priority': 1,  # High priority (1 = highest)
-            'version': f"conflict_bundle_{time.time()}",
-            'is_delta': False  # Consistent structure
+            'conflicts': [],
+            'active_tensions': {},
+            'opportunities': [],
+            'ambient_effects': [],
+            'world_tension': 0.0,
+            'canon': {},  # Always put canon first
+            'timestamp': time.time()
         }
         
-        # Pack canonical conflicts first with relevance sorting
-        canonical_conflicts = []
-        non_canonical = []
+        # MODIFIED: Get from optimized background subsystem instead of doing heavy work
+        background_subsystem = self._subsystems.get(SubsystemType.BACKGROUND)
+        if background_subsystem:
+            # Use the optimized manager that has caching
+            if hasattr(background_subsystem, 'manager'):
+                scene_context = {
+                    'location': getattr(scope, 'location_id', None),
+                    'npcs': getattr(scope, 'npc_ids', []),
+                    'conversation_topics': getattr(scope, 'conversation_topics', [])
+                }
+                bg_context = await background_subsystem.manager.get_scene_context(scene_context)
+                
+                # Merge optimized background context
+                bundle['conflicts'].extend(bg_context.get('active_conflicts', []))
+                bundle['ambient_effects'].extend(bg_context.get('ambient_atmosphere', []))
+                bundle['world_tension'] = bg_context.get('world_tension', 0.0)
         
-        for conflict_id, conflict_data in relevant_conflicts.items():
-            # Lightweight conflict summary
-            summary = {
-                'id': conflict_id,
-                'type': conflict_data.get('conflict_type'),
-                'phase': conflict_data.get('phase'),
-                'intensity': conflict_data.get('intensity_level', 0.5),
-                'stakeholders': conflict_data.get('stakeholder_ids', [])[:5],
-                'canonical': self._is_canonical_conflict(conflict_data)
-            }
-            
-            if summary['canonical']:
-                canonical_conflicts.append(summary)
-                bundle['canonical'] = True
-            else:
-                non_canonical.append(summary)
+        # Get other subsystem bundles in parallel (your existing code)
+        tasks = []
+        for subsystem_type, subsystem in self._subsystems.items():
+            if subsystem_type != SubsystemType.BACKGROUND:  # Skip background, we handled it
+                if hasattr(subsystem, 'get_scene_bundle'):
+                    tasks.append(self._get_subsystem_bundle_with_timeout(
+                        subsystem, scope, subsystem_type
+                    ))
         
-        # Sort by relevance: canonical first, then intensity, then phase weight
-        phase_weight = {'climax': 3, 'resolution': 2, 'rising': 1}
-        def _score(item):
-            return (
-                1 if item.get('canonical') else 0,
-                item.get('intensity', 0.0),
-                phase_weight.get(item.get('phase', ''), 0)
-            )
-        ordered = sorted(canonical_conflicts + non_canonical, key=_score, reverse=True)
-        bundle['data']['active'] = ordered[:10]
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, dict):
+                    # Merge results (your existing merge logic)
+                    bundle.update(result)
         
-        # Get tensions for scene NPCs (with proper guard)
-        npc_ids = getattr(scope, "npc_ids", []) or []
-        if npc_ids:
-            bundle['data']['tensions'] = await self._get_npc_tensions(
-                list(npc_ids)[:10]
-            )
-        
-        # Check for slice-of-life opportunities
-        if SubsystemType.SLICE_OF_LIFE in self._subsystems:
-            bundle['data']['slice_of_life_active'] = await self._check_slice_active(scope)
-        
-        # Add emergence hints from link_hints
-        if hasattr(scope, 'link_hints') and scope.link_hints:
-            bundle['data']['opportunities'] = self._find_conflict_opportunities(
-                scope, 
-                relevant_conflicts
-            )
-        
-        # Cache the bundle with lock and size limit
+        # Cache the bundle
         async with self._bundle_lock:
-            # Evict oldest entries if cache is full
-            while len(self._bundle_cache) >= MAX_BUNDLE_CACHE:
-                oldest_key = next(iter(self._bundle_cache))
-                del self._bundle_cache[oldest_key]
-                logger.debug(f"Evicted oldest cache entry: {oldest_key[:20]}...")
-            
             self._bundle_cache[cache_key] = (bundle, time.time())
+            # Evict old entries if cache is too large
+            while len(self._bundle_cache) > 100:
+                self._bundle_cache.popitem(last=False)
         
-        # Track performance using monotonic clock
-        fetch_time = time.perf_counter() - start_time
-        self._performance_metrics['bundle_fetch_times'].append(fetch_time)
-        if len(self._performance_metrics['bundle_fetch_times']) > 100:
-            self._performance_metrics['bundle_fetch_times'].pop(0)
+        # Track performance
+        self._performance_metrics['bundle_fetch_times'].append(time.time() - start)
         
-        if fetch_time > 1.0:
-            logger.warning(f"Slow conflict bundle fetch: {fetch_time:.2f}s")
+        # Check for scene transition
+        if self._last_scene != scope:
+            asyncio.create_task(self._handle_scene_transition(self._last_scene, scope))
+            self._last_scene = scope
         
         return bundle
     
@@ -1468,13 +1609,30 @@ class ConflictSynthesizer:
 _synthesizers: Dict[tuple, ConflictSynthesizer] = {}
 
 async def get_synthesizer(user_id: int, conversation_id: int) -> ConflictSynthesizer:
-    """Get or create synthesizer instance"""
-    key = (user_id, conversation_id)
-    if key not in _synthesizers:
+    """
+    Get or create a synthesizer instance with optimization.
+    """
+    key = f"{user_id}_{conversation_id}"
+    
+    if key not in _synthesizer_instances:
         synthesizer = ConflictSynthesizer(user_id, conversation_id)
-        await synthesizer.initialize_all_subsystems()
-        _synthesizers[key] = synthesizer
-    return _synthesizers[key]
+        await synthesizer.initialize_subsystems()
+        _synthesizer_instances[key] = synthesizer
+        
+        # ADD: Register for day transitions if time system available
+        try:
+            from logic.time_cycle import register_day_transition_handler
+            # Register the synthesizer's day transition handler
+            register_day_transition_handler(
+                user_id,
+                conversation_id,
+                synthesizer.handle_day_transition
+            )
+            logger.info("Registered synthesizer for day transitions")
+        except ImportError:
+            pass  # Time system not available
+    
+    return _synthesizer_instances[key]
 
 
 async def release_synthesizer(user_id: int, conversation_id: int):
