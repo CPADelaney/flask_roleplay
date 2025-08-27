@@ -316,7 +316,12 @@ class BundleSection:
 
 @dataclass
 class ContextBundle:
-    """Scene-scoped context bundle with all relevant data"""
+    """Scene-scoped context bundle with all relevant data.
+    Drop-in with:
+      - sections alias map (e.g., 'memory' → 'memories', 'conflict' → 'conflicts')
+      - pack(..., must_include=...) support (e.g., 'canon')
+      - light helper methods used by tools.py (invalidate_section, add_event, etc.)
+    """
     scene_scope: SceneScope
     npcs: BundleSection
     memories: BundleSection
@@ -326,36 +331,80 @@ class ContextBundle:
     narrative: BundleSection
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
-    
-    def pack(self, token_budget: int = 8000) -> 'PackedContext':
-        """Pack bundle into token-budget-aware context"""
+
+    # ─────────────────────────────
+    # Packing
+    # ─────────────────────────────
+    def pack(self, token_budget: int = 8000, must_include: Optional[List[str]] = None) -> 'PackedContext':
+        """Pack bundle into token-budget-aware context.
+        - canonical sections are guaranteed first
+        - 'must_include' forces specific keys into canonical (e.g. 'canon')
+        """
         packed = PackedContext(token_budget=token_budget)
-        
-        # Priority order: canonical first, then by priority score
+        must_include = set(must_include or [])
+
+        # Map of section name → BundleSection
+        sec_map: Dict[str, BundleSection] = {
+            'npcs': self.npcs,
+            'memories': self.memories,
+            'lore': self.lore,
+            'conflicts': self.conflicts,
+            'world': self.world,
+            'narrative': self.narrative,
+        }
+
+        added: Set[str] = set()
+
+        # Special-case 'canon' so tools can force-in canonical rules/facts.
+        if 'canon' in must_include:
+            canon_payload: Dict[str, Any] = {}
+            # Pull canonical rules from lore (DTO-safe)
+            lore_data = self._as_dict(self.lore.data)
+            rules = lore_data.get('canonical_rules') or []
+            if rules:
+                canon_payload['rules'] = rules
+            # Pull explicit world canon facts if present
+            world_data = self._as_dict(self.world.data)
+            if 'canon' in world_data:
+                canon_payload['world'] = world_data['canon']
+            if canon_payload:
+                packed.add_canonical('canon', canon_payload)
+                added.add('canon')
+
+        # Force-include any sections named in must_include (except 'canon' which is handled above)
+        for name in (must_include - {'canon'}):
+            if name in sec_map and name not in added:
+                packed.add_canonical(name, sec_map[name].data)
+                added.add(name)
+
+        # Now add remaining sections: canonical ones first, then by priority desc
         sections = [
             ('npcs', self.npcs),
             ('memories', self.memories),
             ('lore', self.lore),
             ('conflicts', self.conflicts),
             ('world', self.world),
-            ('narrative', self.narrative)
+            ('narrative', self.narrative),
         ]
-        
-        # Sort by canonical status first, then priority
         sections.sort(key=lambda x: (not x[1].canonical, -x[1].priority))
-        
+
         for name, section in sections:
+            if name in added:
+                continue
             if section.canonical:
                 packed.add_canonical(name, section.data)
             else:
                 packed.try_add(name, section.data)
-        
+
         return packed
-    
+
+    # ─────────────────────────────
+    # Serialization
+    # ─────────────────────────────
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize bundle to JSON-safe dictionary"""
+        """Serialize bundle to JSON-safe dictionary."""
         return {
-            'scene_scope': self.scene_scope.to_dict(),  # Use SceneScope's to_dict
+            'scene_scope': self.scene_scope.to_dict(),
             'npcs': self.npcs.to_dict(),
             'memories': self.memories.to_dict(),
             'lore': self.lore.to_dict(),
@@ -365,10 +414,10 @@ class ContextBundle:
             'metadata': self.metadata,
             'created_at': self.created_at
         }
-    
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> 'ContextBundle':
-        """Deserialize bundle from dictionary"""
+        """Deserialize bundle from dictionary."""
         return cls(
             scene_scope=SceneScope.from_dict(d['scene_scope']),
             npcs=BundleSection.from_dict(d['npcs']),
@@ -380,6 +429,229 @@ class ContextBundle:
             metadata=d.get('metadata', {}),
             created_at=d.get('created_at', time.time())
         )
+
+    # ─────────────────────────────
+    # Compatibility / Helper API
+    # ─────────────────────────────
+    @property
+    def sections(self) -> Dict[str, Any]:
+        """Legacy-friendly view over sections with aliases and synthetic subsections."""
+        # Pull raw/DTO-safe views
+        npcs_dict = self._as_dict(self.npcs.data)
+        mem_dict = self._memory_view_dict()
+        lore_dict = self._as_dict(self.lore.data)
+        conflicts_dict = self._as_dict(self.conflicts.data)
+        world_dict = self._as_dict(self.world.data)
+        narrative_dict = self._as_dict(self.narrative.data)
+
+        # Relationship / emotional / user_model / activities live under metadata as soft sections
+        rel = self.metadata.setdefault('_relationships', {})
+        emo = self.metadata.setdefault('_emotional', {})
+        usr = self.metadata.setdefault('_user_model', {})
+        acts = self.metadata.setdefault('_activities', {})
+        visual_recent = self.metadata.get('visual_recent', [])
+
+        out = {
+            'npcs': npcs_dict,
+            'memories': mem_dict,
+            'memory': mem_dict,            # alias
+            'lore': lore_dict,
+            'conflicts': conflicts_dict,
+            'conflict': conflicts_dict,    # alias
+            'world': world_dict,
+            'narrative': narrative_dict,
+            'location': lore_dict.get('location', {}),  # convenience
+            'relationships': rel,
+            'emotional': emo,
+            'user_model': usr,
+            'activities': acts,
+            'visual': {'recent': visual_recent},
+        }
+        return out
+
+    @property
+    def expanded_sections(self) -> Set[str]:
+        """Names of sections that were explicitly expanded by the broker."""
+        return set(self.metadata.get('expanded_sections', []))
+
+    def mark_section_expanded(self, section: str) -> None:
+        xs = set(self.metadata.get('expanded_sections', []))
+        xs.add(section)
+        self.metadata['expanded_sections'] = sorted(xs)
+
+    def invalidate_section(self, section: str) -> None:
+        """Force a section stale so the broker refreshes it on next load."""
+        norm = {'memory': 'memories', 'conflict': 'conflicts'}.get(section, section)
+        try:
+            target: BundleSection = getattr(self, norm)
+            target.last_changed_at = 0.0  # make stale
+            # remove from expanded set (so tools re-request expansion if needed)
+            xs = set(self.metadata.get('expanded_sections', []))
+            xs.discard(section)
+            xs.discard(norm)
+            self.metadata['expanded_sections'] = sorted(xs)
+        except AttributeError:
+            # unknown section name; ignore
+            pass
+
+    def add_event(self, event: Dict[str, Any]) -> None:
+        """Append an event into the world section and record a pending change."""
+        wd = self._as_dict(self.world.data)
+        events = wd.setdefault('events', [])
+        events.append(event)
+        # reflect back if the section holds a dataclass or dict
+        self._assign_back(self.world, wd)
+        self._pending('world').setdefault('events_added', []).append(event)
+
+    def update_npc_states(self, actions: List[Dict[str, Any]]) -> None:
+        """Apply NPC state deltas to the npcs section."""
+        nd = self._as_dict(self.npcs.data)
+        items = nd.get('npcs', [])
+        by_id = {item.get('id'): item for item in items if isinstance(item, dict)}
+        changed = []
+        for act in actions or []:
+            nid = act.get('id')
+            if nid in by_id:
+                by_id[nid].update(act)
+                changed.append(nid)
+        # write back
+        if changed:
+            self._assign_back(self.npcs, nd)
+            self._pending('npcs').setdefault('updated_ids', []).extend(changed)
+
+    def get_pending_changes(self) -> Dict[str, Any]:
+        """Return and clear accumulated pending changes."""
+        changes = self.metadata.get('_pending_changes', {})
+        # reset after read
+        self.metadata['_pending_changes'] = {}
+        return changes
+
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """Adapter so tools.check_performance_metrics has something sensible."""
+        metrics = self.metadata.get('metrics', {})
+        # Provide stable keys with defaults
+        return {
+            'response_time': metrics.get('response_time', 0),
+            'tokens': metrics.get('tokens', 0),
+            'cache_hits': metrics.get('cache_hits', 0),
+            'cache_misses': metrics.get('cache_misses', 0),
+            'parallel_fetches': metrics.get('parallel_fetches', 0),
+            'bundle_size': metrics.get('bundle_size', 0),
+            'sections_loaded': [k for k, v in {
+                'npcs': bool(self._as_dict(self.npcs.data)),
+                'memories': bool(self._as_dict(self.memories.data)),
+                'lore': bool(self._as_dict(self.lore.data)),
+                'conflicts': bool(self._as_dict(self.conflicts.data)),
+                'world': bool(self._as_dict(self.world.data)),
+                'narrative': bool(self._as_dict(self.narrative.data)),
+            }.items() if v],
+        }
+
+    def get_active_themes(self) -> List[str]:
+        nar = self._as_dict(self.narrative.data)
+        if 'themes' in nar and isinstance(nar['themes'], list):
+            return nar['themes']
+        return self.metadata.get('active_themes', [])
+
+    def get_tension_level(self) -> float:
+        conf = self._as_dict(self.conflicts.data)
+        tens = conf.get('tensions') or {}
+        if isinstance(tens, dict) and 'overall' in tens:
+            return float(tens['overall'])
+        # fallback: avg of numeric values
+        vals = [v for v in (tens.values() if isinstance(tens, dict) else []) if isinstance(v, (int, float))]
+        return float(sum(vals) / len(vals)) if vals else 0.5
+
+    def is_dialogue_heavy(self) -> bool:
+        nar = self._as_dict(self.narrative.data)
+        recent = nar.get('recent') or []
+        if isinstance(recent, list) and len(recent) >= 3:
+            return True
+        atmos = (nar.get('atmosphere') or '').lower()
+        return any(k in atmos for k in ('dialogue', 'banter', 'conversation', 'talky'))
+
+    def mark_image_generated(self) -> None:
+        """Record an image generation timestamp for pacing heuristics."""
+        t = int(time.time())
+        seq = self.metadata.get('visual_recent', [])
+        if not isinstance(seq, list):
+            seq = []
+        seq.append(t)
+        # keep last 10
+        self.metadata['visual_recent'] = seq[-10:]
+
+    def get_graph_context(self, entity_id: Union[str, int]) -> Dict[str, Any]:
+        """Return graph context used by relationship updater."""
+        links = self.metadata.get('graph_links', {})
+        return links.get(str(entity_id), {}) if isinstance(links, dict) else {}
+
+    def get_recent_interactions(self) -> List[Dict[str, Any]]:
+        nar = self._as_dict(self.narrative.data)
+        recent = nar.get('recent')
+        if isinstance(recent, list):
+            return recent
+        return self.metadata.get('recent_interactions', [])
+
+    def get_section_links(self, section: str) -> Dict[str, List[Union[int, str]]]:
+        """Expose link hints per section when available."""
+        hints = self.metadata.get('link_hints', {})
+        entry = hints.get(section, {})
+        return entry if isinstance(entry, dict) else {}
+
+    # ─────────────────────────────
+    # Internal utilities
+    # ─────────────────────────────
+    @staticmethod
+    def _as_dict(data: Any) -> Dict[str, Any]:
+        """Safely normalize BundleSection.data into a plain dict."""
+        if hasattr(data, 'to_dict'):
+            try:
+                return data.to_dict()
+            except Exception:
+                pass
+        if dataclasses.is_dataclass(data):
+            try:
+                return dataclasses.asdict(data)
+            except Exception:
+                pass
+        if isinstance(data, dict):
+            return data
+        # Graceful fallback
+        return {}
+
+    @staticmethod
+    def _assign_back(section: BundleSection, payload: Dict[str, Any]) -> None:
+        """Write a dict payload back into section.data, preserving DTO if present."""
+        # If section.data has a constructor shim, try to reconstruct;
+        # otherwise just store the dict.
+        section.data = payload  # lightweight & safe for JSON paths
+        section.last_changed_at = time.time()
+
+    def _pending(self, key: str) -> Dict[str, Any]:
+        """Get (and create) a pending-changes bucket."""
+        pc = self.metadata.setdefault('_pending_changes', {})
+        return pc.setdefault(key, {})
+
+    def _memory_view_dict(self) -> Dict[str, Any]:
+        """Project the memory section to the shape tools expect:
+           {'memories': [...], 'graph_links': {...}}.
+        """
+        raw = self._as_dict(self.memories.data)
+        # If already in expected shape, return as-is.
+        if 'memories' in raw:
+            out = dict(raw)
+        else:
+            # Combine 'relevant' + 'recent' when using the DTO shape
+            combined = []
+            if isinstance(raw.get('relevant'), list):
+                combined.extend(raw.get('relevant'))
+            if isinstance(raw.get('recent'), list):
+                combined.extend(raw.get('recent'))
+            out = {'memories': combined}
+        # Attach graph links from metadata if present
+        if isinstance(self.metadata.get('graph_links'), dict):
+            out['graph_links'] = self.metadata['graph_links']
+        return out
 
 @dataclass 
 class PackedContext:
@@ -619,6 +891,12 @@ class ContextBroker:
             self.ctx.conversation_id
         )
         logger.info("ContextBroker initialized with optimized conflict system")
+
+    async def expand_bundle_section(self, bundle: ContextBundle, section: str) -> None:
+        name_map = {'memory': 'memories', 'conflict': 'conflicts'}
+        section = name_map.get(section, section)
+        new_section = await self._fetch_section(section, bundle.scene_scope)
+        setattr(bundle, section, new_section)
     
     async def _try_connect_redis(self):
         """Try to connect to Redis with backoff on failure"""
