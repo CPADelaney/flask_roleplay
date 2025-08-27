@@ -1,5 +1,6 @@
 # nyx/nyx_agent/utils.py
 """Utility functions for Nyx Agent SDK"""
+from __future__ import annotations
 
 import json
 import time
@@ -409,10 +410,10 @@ async def enqueue_task(
         )
     return result.id
 
-async def log_performance_metrics(metrics: ContextMetrics):
-    """Log performance metrics to monitoring system"""
-    # Write to DB, Prometheus, or logging
-    logger.info(f"Performance: {metrics.total_time:.2f}s, sections: {metrics.bundle_sections}")
+async def log_performance_metrics(metrics: Any):
+     """Log performance metrics to monitoring system"""
+     # Write to DB, Prometheus, or logging
+     logger.info(f"Performance: {metrics.total_time:.2f}s, sections: {metrics.bundle_sections}")
 
 async def _ensure_world_state_from_ctx(app_ctx: Any):
     """Best-effort world_state fetch that never throws."""
