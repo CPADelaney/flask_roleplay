@@ -124,47 +124,44 @@ from collections import OrderedDict
 
 @dataclass
 class SceneScope:
-    """Defines the scope of relevant context for a scene"""
-    location_id: Optional[str] = None
-    location_name: Optional[str] = None  # Keep both ID and name
+    location_id: Optional[Union[int, str]] = None
+    location_name: Optional[str] = None
     npc_ids: Set[int] = field(default_factory=set)
     topics: Set[str] = field(default_factory=set)
     lore_tags: Set[str] = field(default_factory=set)
     conflict_ids: Set[int] = field(default_factory=set)
     memory_anchors: Set[str] = field(default_factory=set)
-    time_window: Optional[int] = 24  # hours
-    link_hints: Dict[str, List[Union[int, str]]] = field(default_factory=dict)  # Fixed typing
-    
+    # NEW (optional, helps lore bundle anchoring; safe if unused)
+    nation_ids: Set[int] = field(default_factory=set)
+    time_window: Optional[int] = 24
+    link_hints: Dict[str, List[Union[int, str]]] = field(default_factory=dict)
+
     def to_key(self) -> str:
-        """Generate stable hash key for caching"""
         data = {
             'location': self.location_id,
             'npcs': sorted(self.npc_ids),
             'topics': sorted(self.topics),
             'lore': sorted(self.lore_tags),
             'conflicts': sorted(self.conflict_ids),
-            'anchors': sorted(self.memory_anchors)
+            'anchors': sorted(self.memory_anchors),
+            'nations': sorted(self.nation_ids),  # NEW
         }
         return hashlib.md5(json_dumps(data).encode('utf-8')).hexdigest()
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to JSON-safe dictionary"""
         d = asdict(self)
-        # Convert sets to sorted lists for JSON serialization
-        for k in ('npc_ids', 'topics', 'lore_tags', 'conflict_ids', 'memory_anchors'):
+        for k in ('npc_ids', 'topics', 'lore_tags', 'conflict_ids', 'memory_anchors', 'nation_ids'):
             if isinstance(d.get(k), set):
                 d[k] = sorted(d[k])
         return d
-    
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> 'SceneScope':
-        """Create from dictionary, converting lists back to sets"""
-        # Convert lists back to sets
-        for k in ('npc_ids', 'topics', 'lore_tags', 'conflict_ids', 'memory_anchors'):
+        for k in ('npc_ids', 'topics', 'lore_tags', 'conflict_ids', 'memory_anchors', 'nation_ids'):
             if k in d and isinstance(d[k], list):
                 d[k] = set(d[k])
         return cls(**d)
-
+        
 # ===== Strong DTOs for Section Data =====
 
 @dataclass
@@ -1448,61 +1445,85 @@ class ContextBroker:
         )
     
     async def _fetch_lore_section(self, scope: SceneScope) -> BundleSection:
-        """Fetch lore context using link hints"""
+        """Fetch lore context; prefer orchestrator scene bundle when available."""
         if not self.ctx.lore_orchestrator:
             return BundleSection(data=LoreSectionData(location={}, world={}, canonical_rules=[]),
-                               canonical=False, priority=0)
-        
-        location_lore = {}
-        world_lore = {}
-        canonical_rules = []
-        
-        try:
-            # Get location lore
-            if scope.location_id:
-                location_result = await self.ctx.lore_orchestrator.get_location_context(
-                    scope.location_id
+                                 canonical=False, priority=0)
+    
+        # --- Fast path: one RPC for the whole scene ---
+        if hasattr(self.ctx.lore_orchestrator, 'get_scene_bundle'):
+            try:
+                bundle = await self.ctx.lore_orchestrator.get_scene_bundle(scope)
+                data = bundle.get('data', {}) or {}
+                rules_raw = data.get('canonical_rules', []) or []
+    
+                # Coerce canonical_rules to List[str]
+                rules: List[str] = []
+                for r in rules_raw:
+                    if isinstance(r, dict) and 'text' in r:
+                        rules.append(str(r['text']))
+                    elif isinstance(r, str):
+                        rules.append(r)
+    
+                section_data = LoreSectionData(
+                    location=data.get('location', {}) or {},
+                    world=data.get('world', {}) or {},
+                    canonical_rules=rules[:5]
                 )
+    
+                return BundleSection(
+                    data=section_data,
+                    canonical=bool(bundle.get('canonical')) or bool(rules),
+                    priority=6,
+                    last_changed_at=float(bundle.get('last_changed_at', time.time())),
+                    version=bundle.get('version') or f"lore_scene_{int(time.time())}"
+                )
+            except Exception as e:
+                logger.error(f"Lore scene bundle fetch failed, falling back: {e}")
+    
+        # --- Fallback path (legacy calls) ---
+        location_lore, world_lore, canonical_rules = {}, {}, []
+        try:
+            # Location by id OR by name
+            if scope.location_id:
+                if isinstance(scope.location_id, int) and hasattr(self.ctx.lore_orchestrator, '_fetch_location_lore_for_bundle'):
+                    location_result = await self.ctx.lore_orchestrator._fetch_location_lore_for_bundle(scope.location_id)
+                else:
+                    # Treat anything not int as a name
+                    location_result = await self.ctx.lore_orchestrator.get_location_context(str(scope.location_id))
+    
                 if location_result:
                     location_lore = {
-                        'description': location_result.get('description', '')[:200],
-                        'governance': location_result.get('governance', {}),
-                        'culture': location_result.get('culture', {})
+                        'description': (location_result.get('description') or '')[:200],
+                        'governance': location_result.get('governance') or {},
+                        'culture': location_result.get('culture') or {},
                     }
-                    
-                    # Extract tags from location lore for scope
+                    # Surface tags to scope so later calls can use them
                     if 'tags' in location_result:
                         scope.lore_tags.update(location_result['tags'][:10])
-            
-            # Build tag list including link hints
+    
+            # Topic/tag expansion + tag fetch
             tag_seed = list(scope.lore_tags)[:5]
-            # Add related tags from link hints
             if 'related_tags' in scope.link_hints:
                 tag_seed.extend(scope.link_hints['related_tags'][:3])
-            
-            # Get relevant world lore based on tags
-            if tag_seed:
-                if hasattr(self.ctx.lore_orchestrator, 'get_tagged_lore'):
-                    tagged_lore = await self.ctx.lore_orchestrator.get_tagged_lore(
-                        tags=tag_seed
-                    )
-                    world_lore = tagged_lore or {}
-            
-            # Check for canonical lore
+    
+            if tag_seed and hasattr(self.ctx.lore_orchestrator, 'get_tagged_lore'):
+                tagged_lore = await self.ctx.lore_orchestrator.get_tagged_lore(tags=tag_seed)
+                world_lore = tagged_lore or {}
+    
+            # Canon rules
             if hasattr(self.ctx.lore_orchestrator, 'check_canonical_consistency'):
                 canonical = await self.ctx.lore_orchestrator.check_canonical_consistency()
-                canonical_rules = canonical.get('rules', [])[:5]
-            
+                canonical_rules = (canonical.get('rules') or [])[:5]
+    
         except Exception as e:
             logger.error(f"Lore fetch failed: {e}")
-        
-        # Use LoreSectionData for strong typing
+    
         section_data = LoreSectionData(
             location=location_lore,
             world=world_lore,
             canonical_rules=canonical_rules
         )
-        
         return BundleSection(
             data=section_data,
             canonical=bool(canonical_rules),
