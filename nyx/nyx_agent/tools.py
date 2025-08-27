@@ -1,28 +1,28 @@
 # nyx/nyx_agent/tools.py
-"""Refactored tools module for Nyx Agent SDK with ContextBundle architecture"""
+"""Refactored tools module for Nyx Agent SDK with ContextBundle architecture.
+
+Strict JSON Schema–safe:
+- All tool *inputs* use TypedDicts (no Pydantic), avoiding `additionalProperties`.
+- Output models can remain Pydantic; they are not part of the input schema.
+
+Notes:
+- Keep @function_tool strict_json_schema=True (default).
+- If you add new input types, prefer TypedDict (or simple scalars) here.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, TypedDict
+from typing import NotRequired
 
 from agents import function_tool, RunContextWrapper
 
 from .context import NyxContext, ContextBroker, SceneScope, ContextBundle, PackedContext
 from .models import (
-    # Input models
-    EmptyInput,
-    RetrieveMemoriesInput,
-    AddMemoryInput,
-    DecideImageGenerationInput,
-    UpdateEmotionalStateInput,
-    UpdateRelationshipStateInput,
-    ScoreDecisionOptionsInput,
-    DecisionOption,
-
-    # Output models
+    # OUTPUT models only (safe to keep as they don't affect tool param schema)
     MemoryItem,
     MemorySearchResult,
     MemoryStorageResult,
@@ -38,24 +38,77 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-# ===== Bundle Expansion Utilities =====
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ TypedDict INPUT MODELS (strict JSON schema–friendly)                         │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
+
+class EmptyInput(TypedDict):
+    pass
+
+
+class RetrieveMemoriesInput(TypedDict):
+    query: NotRequired[str]
+    limit: int
+
+
+class AddMemoryInput(TypedDict):
+    memory_text: str
+    memory_type: str
+    significance: Union[int, float]
+    entities: NotRequired[List[Union[int, str]]]
+
+
+class DecideImageGenerationInput(TypedDict):
+    scene_text: str
+
+
+class UpdateEmotionalStateInput(TypedDict):
+    triggering_event: str
+    valence_change: Union[int, float]
+    arousal_change: Union[int, float]
+    dominance_change: Union[int, float]
+
+
+class UpdateRelationshipStateInput(TypedDict):
+    entity_id: Union[int, str]
+    trust_change: Union[int, float]
+    attraction_change: Union[int, float]
+    respect_change: Union[int, float]
+    triggering_event: NotRequired[str]
+
+
+class DecisionOptionInput(TypedDict, total=False):
+    # Optional keys; we’ll normalize in code.
+    id: str
+    description: str
+
+
+class ScoreDecisionOptionsInput(TypedDict):
+    options: List[Union[str, DecisionOptionInput]]
+
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Bundle expansion utilities                                                   │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 def _log_task_exc(task: asyncio.Task) -> None:
-    """Log exceptions from background tasks"""
+    """Log exceptions from background tasks."""
     try:
         task.result()
     except Exception:
         logger.exception("Background task failed")
 
+
 async def _get_context_broker(ctx: RunContextWrapper) -> ContextBroker:
-    """Get or create the ContextBroker from wrapped context"""
+    """Get or create the ContextBroker from wrapped context."""
     nyx_ctx = ctx.context if isinstance(ctx.context, NyxContext) else ctx
     if not hasattr(nyx_ctx, 'broker'):
         nyx_ctx.broker = ContextBroker(nyx_ctx)
     return nyx_ctx.broker
 
+
 async def _get_bundle(ctx: RunContextWrapper, expand_sections: Optional[List[str]] = None) -> ContextBundle:
-    """Get the current context bundle, optionally expanding specific sections"""
+    """Get the current context bundle, optionally expanding specific sections."""
     broker = await _get_context_broker(ctx)
     nyx_ctx = ctx.context if isinstance(ctx.context, NyxContext) else ctx
 
@@ -73,31 +126,33 @@ async def _get_bundle(ctx: RunContextWrapper, expand_sections: Optional[List[str
     if expand_sections:
         missing = [s for s in expand_sections if s not in bundle.expanded_sections]
         if missing:
-            await asyncio.gather(
-                *(broker.expand_bundle_section(bundle, s) for s in missing)
-            )
+            await asyncio.gather(*(broker.expand_bundle_section(bundle, s) for s in missing))
 
     # Mirror onto wrapper for compatibility
     setattr(ctx, '_current_bundle', bundle)
     return bundle
+
 
 async def _get_packed_context(
     ctx: RunContextWrapper,
     token_budget: int = 8000,
     must_include: Optional[List[str]] = None
 ) -> PackedContext:
-    """Get packed context optimized for token budget"""
+    """Get packed context optimized for token budget."""
     bundle = await _get_bundle(ctx)
     return bundle.pack(token_budget, must_include or ['canon'])
 
-# ===== Memory Tools (Refactored) =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Memory tools                                                                 │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def retrieve_memories(
     ctx: RunContextWrapper,
     payload: RetrieveMemoriesInput
 ) -> Dict[str, Any]:
-    """Enhanced memory retrieval using ContextBundle's memory section"""
+    """Enhanced memory retrieval using ContextBundle's memory section."""
     bundle = await _get_bundle(ctx, expand_sections=['memory'])
 
     # Extract memory data from bundle (avoid mutation)
@@ -110,17 +165,17 @@ async def retrieve_memories(
     scene_entity_ids = {str(e) for e in getattr(bundle.scene_scope, 'entity_ids', [])}
 
     # If we need more memories, fetch via broker
-    if payload.limit > len(memories):
+    if payload['limit'] > len(memories):
         broker = await _get_context_broker(ctx)
         additional = await broker.fetch_memories(
-            query=payload.query,
-            limit=payload.limit - len(memories),
+            query=payload.get('query'),
+            limit=payload['limit'] - len(memories),
             exclude_ids=[str(m.get('id')) for m in memories]
         )
         memories.extend(additional)
 
     # Apply relevance filtering with graph boost
-    scored_memories = []
+    scored_memories: List[Dict[str, Any]] = []
     for mem in memories:
         base_score = mem.get('relevance', 0.0)
         link_boost = 0.0
@@ -132,14 +187,11 @@ async def retrieve_memories(
             if linked_entities & scene_entity_ids:  # Set intersection
                 link_boost = 0.2  # Emergent connection bonus
 
-        scored_memories.append({
-            **mem,
-            'relevance': min(1.0, base_score + link_boost)
-        })
+        scored_memories.append({**mem, 'relevance': min(1.0, base_score + link_boost)})
 
     # Sort by relevance and limit
     scored_memories.sort(key=lambda m: m['relevance'], reverse=True)
-    final_memories = scored_memories[:payload.limit]
+    final_memories = scored_memories[: payload['limit']]
 
     # Format with confidence markers
     formatted = []
@@ -162,20 +214,21 @@ async def retrieve_memories(
         graph_connections=graph_connections
     ).model_dump()
 
+
 @function_tool
 async def add_memory(
     ctx: RunContextWrapper,
     payload: AddMemoryInput
 ) -> Dict[str, Any]:
-    """Store memory and update context bundle"""
+    """Store memory and update context bundle."""
     broker = await _get_context_broker(ctx)
 
     # Store via broker (handles canon logging)
     result = await broker.store_memory(
-        memory_text=payload.memory_text,
-        memory_type=payload.memory_type,
-        significance=payload.significance,
-        entities=payload.entities  # Link to scene entities
+        memory_text=payload['memory_text'],
+        memory_type=payload['memory_type'],
+        significance=payload['significance'],
+        entities=payload.get('entities', []),  # Link to scene entities
     )
 
     # Invalidate memory section of bundle to force refresh
@@ -189,7 +242,10 @@ async def add_memory(
         linked_entities=result.get('linked_entities', [])
     ).model_dump()
 
-# ===== Narrative Tools (Refactored) =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Narrative tools                                                              │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def tool_narrate_slice_of_life_scene(
@@ -197,7 +253,7 @@ async def tool_narrate_slice_of_life_scene(
     scene_type: str = "routine",
     player_action: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Generate narration using packed context optimized for scene"""
+    """Generate narration using packed context optimized for scene."""
     # Get scene-optimized bundle
     bundle = await _get_bundle(ctx, expand_sections=['npcs', 'location', 'conflict'])
     packed = await _get_packed_context(ctx, token_budget=6000, must_include=['npcs', 'canon'])
@@ -208,7 +264,7 @@ async def tool_narrate_slice_of_life_scene(
     conflicts = bundle.sections.get('conflict', {}).get('active', [])
 
     # Build scene context from bundle (safer NPC ID handling)
-    participants = []
+    participants: List[str] = []
     for npc in npcs[:3]:
         if isinstance(npc, dict):
             npc_id = npc.get('id')
@@ -245,12 +301,13 @@ async def tool_narrate_slice_of_life_scene(
         'governance_approved': True
     }
 
+
 @function_tool
 async def orchestrate_slice_scene(
     ctx: RunContextWrapper,
     scene_type: str = "routine"
 ) -> Dict[str, Any]:
-    """Orchestrate complete scene with all subsystems via ContextBroker"""
+    """Orchestrate complete scene with all subsystems via ContextBroker."""
     broker = await _get_context_broker(ctx)
 
     # Read from underlying NyxContext, not wrapper
@@ -281,13 +338,14 @@ async def orchestrate_slice_scene(
         'choices': scene.get('choices', [])
     }
 
+
 @function_tool
 async def generate_npc_dialogue(
     ctx: RunContextWrapper,
     npc_id: int,
     context_hint: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Generate NPC dialogue with relationship-aware context"""
+    """Generate NPC dialogue with relationship-aware context."""
     # Expand NPC section for specific character
     bundle = await _get_bundle(ctx, expand_sections=['npcs', 'memory'])
     broker = await _get_context_broker(ctx)
@@ -298,10 +356,7 @@ async def generate_npc_dialogue(
     # Find memories involving this NPC (normalize IDs to strings)
     memories = bundle.sections.get('memory', {}).get('memories', [])
     npc_id_str = str(npc_id)
-    npc_memories = [
-        m for m in memories
-        if npc_id_str in [str(e) for e in m.get('entities', [])]
-    ]
+    npc_memories = [m for m in memories if npc_id_str in [str(e) for e in m.get('entities', [])]]
 
     # Generate dialogue with context
     dialogue = await broker.generate_npc_dialogue(
@@ -323,14 +378,17 @@ async def generate_npc_dialogue(
         'reveals_memory': reveals
     }
 
-# ===== World State Tools (Refactored) =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ World state tools                                                            │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def check_world_state(
     ctx: RunContextWrapper,
-    payload: EmptyInput = None
+    payload: EmptyInput
 ) -> Dict[str, Any]:
-    """Get world state from context bundle"""
+    """Get world state from context bundle."""
     bundle = await _get_bundle(ctx, expand_sections=['world'])
     world_data = bundle.sections.get('world', {})
 
@@ -349,12 +407,13 @@ async def check_world_state(
         'canon_facts': world_data.get('canon', {})  # Use {} for consistency
     }
 
+
 @function_tool
 async def generate_emergent_event(
     ctx: RunContextWrapper,
     trigger: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Generate emergent events based on bundle's graph connections"""
+    """Generate emergent events based on bundle's graph connections."""
     broker = await _get_context_broker(ctx)
     bundle = await _get_bundle(ctx)
 
@@ -386,13 +445,14 @@ async def generate_emergent_event(
         'reason': 'No emergent patterns detected'
     }
 
+
 @function_tool
 async def simulate_npc_autonomy(
     ctx: RunContextWrapper,
     npc_id: Optional[int] = None,
     time_skip: Optional[int] = 0
 ) -> Dict[str, Any]:
-    """Simulate NPC actions using bundle's cached NPC state"""
+    """Simulate NPC actions using bundle's cached NPC state."""
     bundle = await _get_bundle(ctx, expand_sections=['npcs'])
     broker = await _get_context_broker(ctx)
 
@@ -419,14 +479,17 @@ async def simulate_npc_autonomy(
         'maintains_canon': True
     }
 
-# ===== Emotional & Relationship Tools (Refactored) =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Emotional & relationship tools                                               │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def calculate_and_update_emotional_state(
     ctx: RunContextWrapper,
     payload: UpdateEmotionalStateInput
 ) -> Dict[str, Any]:
-    """Update emotional state with bundle-aware context"""
+    """Update emotional state with bundle-aware context."""
     bundle = await _get_bundle(ctx, expand_sections=['emotional'])
     broker = await _get_context_broker(ctx)
 
@@ -438,10 +501,10 @@ async def calculate_and_update_emotional_state(
 
     new_state = await broker.update_emotional_state(
         current=current_state,
-        event=payload.triggering_event,
-        valence_delta=payload.valence_change,
-        arousal_delta=payload.arousal_change,
-        dominance_delta=payload.dominance_change,
+        event=payload['triggering_event'],
+        valence_delta=payload['valence_change'],
+        arousal_delta=payload['arousal_change'],
+        dominance_delta=payload['dominance_change'],
         patterns=patterns
     )
 
@@ -457,17 +520,19 @@ async def calculate_and_update_emotional_state(
         manifestation=new_state.get("manifestation", "")
     ).model_dump()
 
+
 @function_tool
 async def update_relationship_state(
     ctx: RunContextWrapper,
     payload: UpdateRelationshipStateInput
 ) -> Dict[str, Any]:
-    """Update relationship using bundle's relationship graph"""
+    """Update relationship using bundle's relationship graph."""
     bundle = await _get_bundle(ctx, expand_sections=['relationships'])
     broker = await _get_context_broker(ctx)
 
-    # Normalize entity ID to string
-    entity_id_str = str(payload.entity_id)
+    # Normalize entity ID to string for bundle storage
+    entity_id = payload['entity_id']
+    entity_id_str = str(entity_id)
 
     # Get relationship from bundle
     relationships = bundle.sections.get('relationships', {})
@@ -475,20 +540,20 @@ async def update_relationship_state(
 
     # Update with graph-aware context
     updated = await broker.update_relationship(
-        entity_id=payload.entity_id,  # Keep original type for broker
+        entity_id=entity_id,  # original type for broker
         current_state=current,
-        trust_delta=payload.trust_change,
-        attraction_delta=payload.attraction_change,
-        respect_delta=payload.respect_change,
-        event=payload.triggering_event,
-        graph_context=bundle.get_graph_context(payload.entity_id)
+        trust_delta=payload['trust_change'],
+        attraction_delta=payload['attraction_change'],
+        respect_delta=payload['respect_change'],
+        event=payload.get('triggering_event'),
+        graph_context=bundle.get_graph_context(entity_id)
     )
 
     # Store in bundle with normalized ID
     relationships[entity_id_str] = updated
 
     return RelationshipUpdate(
-        entity_id=payload.entity_id,
+        entity_id=entity_id,
         new_trust=updated['trust'],
         new_attraction=updated['attraction'],
         new_respect=updated['respect'],
@@ -496,14 +561,17 @@ async def update_relationship_state(
         change_description=updated.get('change_description', '')
     ).model_dump()
 
-# ===== Decision & Conflict Tools (Refactored) =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Decision & conflict tools                                                    │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def detect_conflicts_and_instability(
     ctx: RunContextWrapper,
-    payload: EmptyInput = None
+    payload: EmptyInput
 ) -> Dict[str, Any]:
-    """Detect conflicts using bundle's graph analysis"""
+    """Detect conflicts using bundle's graph analysis."""
     bundle = await _get_bundle(ctx, expand_sections=['conflict', 'npcs'])
     broker = await _get_context_broker(ctx)
 
@@ -522,34 +590,34 @@ async def detect_conflicts_and_instability(
         recommendations=tensions.get('recommendations', [])
     ).model_dump()
 
+
 @function_tool
 async def score_decision_options(
     ctx: RunContextWrapper,
     payload: ScoreDecisionOptionsInput
 ) -> Dict[str, Any]:
-    """Score decisions with full bundle context"""
+    """Score decisions with full bundle context."""
     bundle = await _get_bundle(ctx)
     broker = await _get_context_broker(ctx)
 
-    # Normalize options: support List[str] or List[DecisionOption]
+    # Normalize options: support List[str] or List[DecisionOptionInput]-like dicts
     normalized: List[str] = []
-    for o in payload.options:
+    for o in payload['options']:
         if isinstance(o, str):
             normalized.append(o)
-        elif isinstance(o, DecisionOption):
-            normalized.append(o.id or o.description)
+        elif isinstance(o, dict):
+            normalized.append(o.get('id') or o.get('description') or str(o))
         else:
-            # Fallback to string repr if an unexpected shape slips in
             normalized.append(str(o))
 
     # Score each option with multi-factor analysis
-    scores = {}
+    scores: Dict[str, Dict[str, Any]] = {}
     for option in normalized:
         score = await broker.score_decision(
             option=option,
             bundle=bundle,
             criteria={
-                'canon_consistency': 1.0,  # Top priority
+                'canon_consistency': 1.0,      # Top priority
                 'character_alignment': 0.8,
                 'narrative_impact': 0.7,
                 'emergent_potential': 0.6,
@@ -567,20 +635,23 @@ async def score_decision_options(
         reasoning={k: v['reasoning'] for k, v in scores.items()}
     ).model_dump()
 
-# ===== Image Generation Tools (Refactored) =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Image generation tools                                                       │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def decide_image_generation(
     ctx: RunContextWrapper,
     payload: DecideImageGenerationInput
 ) -> Dict[str, Any]:
-    """Decide on image generation using bundle's scene analysis"""
+    """Decide on image generation using bundle's scene analysis."""
     bundle = await _get_bundle(ctx, expand_sections=['visual'])
     broker = await _get_context_broker(ctx)
 
     # Analyze scene for visual potential
     visual_analysis = await broker.analyze_visual_potential(
-        scene_text=payload.scene_text,
+        scene_text=payload['scene_text'],
         bundle=bundle
     )
 
@@ -608,14 +679,17 @@ async def decide_image_generation(
 
     return result.model_dump()
 
-# ===== System Tools (Refactored) =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ System tools                                                                 │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def generate_universal_updates(
     ctx: RunContextWrapper,
-    payload: EmptyInput = None
+    payload: EmptyInput
 ) -> Dict[str, Any]:
-    """Generate updates across all systems using bundle"""
+    """Generate updates across all systems using bundle."""
     broker = await _get_context_broker(ctx)
     bundle = await _get_bundle(ctx)
 
@@ -635,12 +709,13 @@ async def generate_universal_updates(
         'applied_async': True
     }
 
+
 @function_tool
 async def check_performance_metrics(
     ctx: RunContextWrapper,
-    payload: EmptyInput = None
+    payload: EmptyInput
 ) -> Dict[str, Any]:
-    """Get performance metrics from bundle's telemetry"""
+    """Get performance metrics from bundle's telemetry."""
     bundle = await _get_bundle(ctx)
     metrics = bundle.get_performance_metrics()
 
@@ -654,7 +729,10 @@ async def check_performance_metrics(
         sections_loaded=list(bundle.sections.keys())
     ).model_dump()
 
-# ===== Advanced Narrative Tools =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Advanced narrative tools                                                     │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def generate_ambient_narration(
@@ -662,7 +740,7 @@ async def generate_ambient_narration(
     focus: str = "atmosphere",
     intensity: float = 0.5
 ) -> Dict[str, Any]:
-    """Generate ambient narration from bundle's atmosphere data"""
+    """Generate ambient narration from bundle's atmosphere data."""
     bundle = await _get_bundle(ctx, expand_sections=['location', 'world'])
     broker = await _get_context_broker(ctx)
 
@@ -685,13 +763,14 @@ async def generate_ambient_narration(
         'reflects_systems': narration.get('systems_reflected', [])
     }
 
+
 @function_tool
 async def get_activity_recommendations(
     ctx: RunContextWrapper,
     scenario_type: str = "general",
     npc_ids: Optional[List[int]] = None
 ) -> Dict[str, Any]:
-    """Get activity recommendations using bundle context"""
+    """Get activity recommendations using bundle context."""
     bundle = await _get_bundle(ctx, expand_sections=['activities', 'npcs', 'relationships'])
     broker = await _get_context_broker(ctx)
 
@@ -719,12 +798,13 @@ async def get_activity_recommendations(
         scenario_context=activity_analysis.get('context', {})
     ).model_dump()
 
+
 @function_tool
 async def detect_narrative_patterns(
     ctx: RunContextWrapper,
     lookback_turns: int = 10
 ) -> Dict[str, Any]:
-    """Detect narrative patterns using bundle's graph analysis"""
+    """Detect narrative patterns using bundle's graph analysis."""
     broker = await _get_context_broker(ctx)
     bundle = await _get_bundle(ctx)
 
@@ -742,12 +822,13 @@ async def detect_narrative_patterns(
         'recommendation': patterns.get('next_beat', '')
     }
 
+
 @function_tool
 async def narrate_power_exchange(
     ctx: RunContextWrapper,
     exchange_type: str = "subtle"
 ) -> Dict[str, Any]:
-    """Narrate power dynamics using bundle's relationship data"""
+    """Narrate power dynamics using bundle's relationship data."""
     bundle = await _get_bundle(ctx, expand_sections=['relationships', 'npcs'])
     broker = await _get_context_broker(ctx)
 
@@ -768,12 +849,13 @@ async def narrate_power_exchange(
         'subtext': narration.get('subtext', '')
     }
 
+
 @function_tool
 async def narrate_daily_routine(
     ctx: RunContextWrapper,
     time_period: str = "morning"
 ) -> Dict[str, Any]:
-    """Narrate routine with emergent details from bundle"""
+    """Narrate routine with emergent details from bundle."""
     bundle = await _get_bundle(ctx, expand_sections=['routine', 'npcs'])
     broker = await _get_context_broker(ctx)
 
@@ -790,14 +872,17 @@ async def narrate_daily_routine(
         'mood_influence': routine.get('mood_factor', 0)
     }
 
-# ===== User Model Tools (Refactored) =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ User model tools                                                             │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def get_user_model_guidance(
     ctx: RunContextWrapper,
-    payload: EmptyInput = None
+    payload: EmptyInput
 ) -> Dict[str, Any]:
-    """Get user model guidance from bundle's analysis"""
+    """Get user model guidance from bundle's analysis."""
     bundle = await _get_bundle(ctx, expand_sections=['user_model'])
     broker = await _get_context_broker(ctx)
 
@@ -819,12 +904,13 @@ async def get_user_model_guidance(
         engagement_level=guidance.get('engagement', 0.5)
     ).model_dump()
 
+
 @function_tool
 async def detect_user_revelations(
     ctx: RunContextWrapper,
     user_input: str
 ) -> Dict[str, Any]:
-    """Detect revelations with bundle context"""
+    """Detect revelations with bundle context."""
     bundle = await _get_bundle(ctx, expand_sections=['user_model', 'memory'])
     broker = await _get_context_broker(ctx)
 
@@ -844,7 +930,10 @@ async def detect_user_revelations(
         'updated_model': bundle.sections.get('user_model', {})
     }
 
-# ===== Helper Tools =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Helper tools                                                                 │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 @function_tool
 async def expand_context_section(
@@ -852,7 +941,7 @@ async def expand_context_section(
     section: str,
     depth: str = "standard"
 ) -> Dict[str, Any]:
-    """On-demand expansion of specific context sections"""
+    """On-demand expansion of specific context sections."""
     bundle = await _get_bundle(ctx, expand_sections=[section])
     broker = await _get_context_broker(ctx)
 
@@ -874,12 +963,13 @@ async def expand_context_section(
         'graph_links': normalized_links
     }
 
+
 @function_tool
 async def prefetch_next_context(
     ctx: RunContextWrapper,
     predicted_action: str
 ) -> Dict[str, Any]:
-    """Prefetch context for predicted next action"""
+    """Prefetch context for predicted next action."""
     broker = await _get_context_broker(ctx)
 
     # Predict next scene scope
@@ -889,9 +979,7 @@ async def prefetch_next_context(
     task_id = str(uuid.uuid4())
 
     # Prefetch in background with error handling
-    task = asyncio.create_task(
-        broker.prefetch_bundle(predicted_scope)
-    )
+    task = asyncio.create_task(broker.prefetch_bundle(predicted_scope))
     task.add_done_callback(_log_task_exc)
 
     # Register task for later status queries
@@ -904,13 +992,16 @@ async def prefetch_next_context(
         'task_id': task_id
     }
 
-# ===== Implementation Wrappers =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Implementation wrappers & responses                                          │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 async def generate_universal_updates_impl(
     ctx: Union[RunContextWrapper, Any],
     narrative: str
 ) -> Dict[str, Any]:
-    """Implementation wrapper for universal updates - handles both old and new context"""
+    """Implementation wrapper for universal updates - handles both old and new context."""
     # Handle both RunContextWrapper and direct NyxContext
     if hasattr(ctx, 'context'):
         app_ctx = ctx.context
@@ -921,19 +1012,23 @@ async def generate_universal_updates_impl(
     if not isinstance(ctx, RunContextWrapper):
         ctx = RunContextWrapper(context=app_ctx)
 
+    # Use an empty-typed payload to satisfy the schema (though it’s unused here)
     return await generate_universal_updates(ctx, EmptyInput())
 
-# ===== Optional Envelope Helpers =====
 
 def ok_response(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Wrap successful response in standard envelope"""
+    """Wrap successful response in standard envelope."""
     return {"ok": True, "data": data}
 
+
 def error_response(error: str) -> Dict[str, Any]:
-    """Wrap error response in standard envelope"""
+    """Wrap error response in standard envelope."""
     return {"ok": False, "error": error}
 
-# ===== Compatibility Exports =====
+
+# ╭──────────────────────────────────────────────────────────────────────────────╮
+# │ Compatibility exports                                                        │
+# ╰──────────────────────────────────────────────────────────────────────────────╯
 
 # Keep these for backward compatibility
 generate_image_from_scene = decide_image_generation
