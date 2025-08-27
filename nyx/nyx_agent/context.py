@@ -96,7 +96,6 @@ from lore.lore_orchestrator import (
 )
 
 from .config import Config
-from .tools import detect_conflicts_and_instability
 
 try:
     from story_agent.world_simulation_models import (
