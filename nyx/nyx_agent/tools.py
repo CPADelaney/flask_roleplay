@@ -31,7 +31,7 @@ from .models import (
     EmotionalState,
     RelationshipUpdate,
     PerformanceMetrics,
-    ActivityRecommendations,
+    ActivityRecommendationsResult,
     DecisionScores,
     ConflictDetection,
 )
