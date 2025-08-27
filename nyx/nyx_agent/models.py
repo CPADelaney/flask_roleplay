@@ -249,6 +249,13 @@ class EmptyInput(BaseModel):
     """Empty input for functions that don't require parameters"""
     pass
 
+class UpdateEmotionalStateInput(BaseModel):
+    """Input for updating emotional state based on events"""
+    triggering_event: str
+    valence_change: float = 0.0
+    arousal_change: float = 0.0  
+    dominance_change: float = 0.0
+    
 # ===== Output Models for Tools =====
 class MemorySearchResult(BaseModel):
     memories: List[MemoryItem] = Field(..., description="List of retrieved memories")
