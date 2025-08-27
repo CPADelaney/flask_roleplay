@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, ValidationError
 
 # OpenAI Agents SDK imports
 from agents import Agent, Runner, function_tool, RunContextWrapper
@@ -32,6 +32,20 @@ from lore.core.canon import (
     find_or_create_notable_figure,
     ensure_canonical_context
 )
+
+import json
+
+def _parse_tool_json(model_cls, data):
+    if isinstance(data, model_cls):
+        return data
+    if isinstance(data, str):
+        try:
+            return model_cls.model_validate_json(data)
+        except ValidationError:
+            return model_cls.model_validate(json.loads(data))
+    if isinstance(data, dict):
+        return model_cls.model_validate(data)
+    return None
 
 def _ws_brief(ws: Optional[WorldState]) -> Dict[str, Any]:
     """Small, safe summary of world_state for logs."""
@@ -176,7 +190,7 @@ class AgentSafeModel(BaseModel):
     Pydantic v2 base model that emits a schema with no additionalProperties anywhere.
     This is required for compatibility with OpenAI Agents SDK's strict mode.
     """
-    model_config = ConfigDict() 
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
     
     @classmethod
     def model_json_schema(cls, **kwargs):
@@ -1075,12 +1089,12 @@ async def narrate_slice_of_life_scene(
                     location=canonical_location,
                     context_type=scene.event_type.value,
                     emotion=tone.value
-                ).dict()
+                ).model_dump()
             )
         except Exception as e:
             logger.warning(f"memory_manager.add_memory failed: {e}")
 
-    return narration.model_dump_json()
+    return narration.model_dump()
 
     
 @function_tool
@@ -1146,9 +1160,9 @@ async def generate_npc_dialogue(
             """
             SELECT npc_id, npc_name, dominance, personality_traits
             FROM NPCStats
-            WHERE npc_id = $1
+            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
             """,
-            npc_id,
+            npc_id, context.user_id, context.conversation_id
         )
 
     if not npc:
@@ -1160,7 +1174,7 @@ async def generate_npc_dialogue(
             tone="neutral",
             subtext="",
             body_language="still"
-        ).model_dump_json()
+        ).model_dump()
         logger.info("NPC_DIALOGUE[%s]: exit (fallback)", call_id)
         return out
 
@@ -1278,7 +1292,7 @@ async def generate_npc_dialogue(
                     npc_id=str(npc_id),
                     emotion=tone,
                     context_type=stage.name
-                ).dict()
+                ).model_dump()
             )
         except Exception as e:
             logger.warning("NPC_DIALOGUE[%s]: add_memory failed: %s", call_id, e)
@@ -1287,7 +1301,7 @@ async def generate_npc_dialogue(
         "NPC_DIALOGUE[%s]: exit npc_id=%s requires_response=%s governance_approved=%s",
         call_id, npc_id, dialogue_obj.requires_response, governance_approved
     )
-    return dialogue_obj.model_dump_json()
+    return dialogue_obj.model_dump()
 
 @function_tool
 async def narrate_power_exchange(
@@ -1297,6 +1311,10 @@ async def narrate_power_exchange(
 ) -> str:
     """Generate narration for a power exchange moment with Nyx tracking, memory, and canonical consistency."""
     context = ctx.context
+    governance_active = getattr(context, "governance_active", False)
+    nyx_governance = getattr(context, "nyx_governance", None)
+    relationship_manager = getattr(context, "relationship_manager", None)
+    memory_manager = getattr(context, "memory_manager", None)
     
     # Import canon functions
     from lore.core.canon import (
@@ -1550,11 +1568,11 @@ async def narrate_power_exchange(
                 npc_id=str(exchange.initiator_npc_id),
                 context_type=exchange.exchange_type.value,
                 location=canonical_location if 'canonical_location' in locals() else None
-            ).dict()
+            ).model_dump()
         )
     
     # Return JSON string
-    return narration.model_dump_json()
+    return narration.model_dump()
 
 @function_tool
 async def narrate_daily_routine(
@@ -1608,58 +1626,42 @@ async def narrate_daily_routine(
     )
     
     # Return JSON string
-    return result.model_dump_json()
+    return result.model_dump()
 
 @function_tool
-async def generate_ambient_narration(
-    ctx,
-    focus: str,
-    world_state: WorldState,
-    intensity: float = 0.5
-) -> str:
-    """Generate ambient world narration to establish atmosphere."""
+async def generate_ambient_narration(ctx, focus: str, world_state: WorldState, intensity: float = 0.5) -> str:
     context = ctx.context
-    
-    # Refresh context if needed
     await context.refresh_context()
-    
-    # Determine specific narration based on focus
+
+    # Safely pull parts from world_state
+    mood = getattr(world_state, "world_mood", None)
+    tension = getattr(world_state, "world_tension", None)
+
     if focus == "time_passage":
         time_data = await get_current_time_model(context.user_id, context.conversation_id)
-        if time_data:
-            description = await _narrate_time_passage(context, time_data)
-        else:
-            description = "Time passes..."
+        description = await _narrate_time_passage(context, time_data) if time_data else "Time passes..."
     elif focus == "mood":
-        description = await _narrate_mood_shift(context, world_state.world_mood)
+        description = await _narrate_mood_shift(context, mood) if mood else "The atmosphere tilts, in a way you can't quite name..."
     elif focus == "tension":
-        description = await _narrate_tension(context, world_state.world_tension)
+        description = await _narrate_tension(context, tension) if tension else "A subtle tension hums at the edges of things..."
     elif focus == "addiction":
         description = await _narrate_addiction_presence(context, context.active_addictions)
     elif focus == "ambient":
-        description = await _narrate_ambient_detail(context, world_state)
+        description = await _narrate_ambient_detail(context, world_state) if world_state else "Life drifts on, unhurried."
     else:
-        # General ambient description
-        description = await _generate_ambient_description(
-            context, focus, world_state, intensity
-        )
-    
-    # Determine if it affects mood
+        description = await _generate_ambient_description(context, focus, world_state, intensity)
+
     affects_mood = intensity > 0.7 or focus in ["tension", "power", "control"]
-    
-    # Identify which systems it reflects
     reflects_systems = await _identify_reflected_systems(context, focus, description)
-    
-    result = AmbientNarration(
+
+    return AmbientNarration(
         description=description,
         focus=focus,
         intensity=intensity,
         affects_mood=affects_mood,
         reflects_systems=reflects_systems
-    )
-    
-    # Return JSON string
-    return result.model_dump_json()
+    ).model_dump()
+
 
 @function_tool
 async def narrate_player_action(
@@ -1703,23 +1705,22 @@ async def _generate_scene_description(context, scene, world_state, relationship_
     npc_names = []
     for npc_id, rc in relationship_contexts.items():
         name = None
-        # object path: rc.state.npc_name
         state = getattr(rc, "state", None)
         if state is not None:
             name = getattr(state, "npc_name", None)
-        # dict path: rc["state"]["npc_name"]
         if not name and isinstance(rc, dict):
             name = rc.get("state", {}).get("npc_name")
-        # last-resort fallback
         if not name:
             name = f"NPC {npc_id}"
         npc_names.append(name)
+
+    mood_val = getattr(getattr(world_state, "world_mood", None), "value", "neutral")
 
     prompt = f"""
     Generate a scene description for:
     Location: {scene.location}
     Activity: {scene.description}
-    Mood: {world_state.world_mood.value}
+    Mood: {mood_val}
     NPCs present: {', '.join(npc_names) if npc_names else 'none'}
 
     Make it atmospheric and immersive, 2-3 sentences.
@@ -1731,24 +1732,26 @@ async def _generate_scene_description(context, scene, world_state, relationship_
         model='gpt-5-nano',
     )
     return description.strip()
+
     
 async def _generate_atmosphere(context, scene, world_state):
     """Generate atmospheric description"""
+    mood_val = getattr(getattr(world_state, "world_mood", None), "value", "neutral")
     prompt = f"""
     Generate atmospheric description for:
     Scene: {scene.location}
-    Mood: {world_state.world_mood.value}
-    
+    Mood: {mood_val}
+
     One sentence capturing the feeling of the space.
     """
-    
+
     atmosphere = await generate_text_completion(
         system_prompt="You create atmospheric descriptions",
         user_prompt=prompt,
         model='gpt-5-nano',
     )
-    
     return atmosphere.strip()
+
 
 def _get_dim(rel_state, name: str, default: float = 0):
     """
@@ -1773,14 +1776,16 @@ def _get_dim(rel_state, name: str, default: float = 0):
     return default
 
 def _select_narrative_tone(scene, world_state, relationship_contexts):
-    if world_state.world_tension.power_tension > 0.7:
+    tens = getattr(world_state, "world_tension", None)
+    if tens and getattr(tens, "power_tension", 0) > 0.7:
         return NarrativeTone.COMMANDING
-    if world_state.world_tension.sexual_tension > 0.6:
+    if tens and getattr(tens, "sexual_tension", 0) > 0.6:
         return NarrativeTone.SENSUAL
     for rc in relationship_contexts.values():
         if _get_dim(rc, "intimacy", 0) > 70:
             return NarrativeTone.INTIMATE
     return NarrativeTone.OBSERVATIONAL
+
 
 def _select_scene_focus(scene, player_action):
     """Select scene focus"""
@@ -1945,12 +1950,11 @@ async def _generate_power_moment_aftermath(context, exchange, dynamics):
     return "The moment passes, but its weight lingers..."
 
 async def _generate_player_feelings(context, exchange, dynamics):
-    """Generate player feelings"""
+    sub = getattr(dynamics, "player_submission_level", 0.0) if dynamics else 0.0
     prompt = f"""
     Describe player's feelings during power exchange:
-    Submission level: {dynamics.player_submission_level}
+    Submission level: {sub}
     Exchange type: {exchange.exchange_type.value}
-    
     One sentence of internal experience.
     """
     
@@ -1981,14 +1985,16 @@ async def _calculate_power_consequences(context, exchange, world_state):
     return consequences
 
 async def _generate_routine_description(context, activity, world_state):
-    """Generate routine description"""
-    return f"You go about {activity} in the {world_state.world_mood.value} atmosphere"
+    mood_val = getattr(getattr(world_state, "world_mood", None), "value", "neutral") if world_state else "neutral"
+    return f"You go about {activity} in the {mood_val} atmosphere"
 
 async def _generate_routine_with_dynamics(context, activity, npcs, world_state):
-    """Generate routine with power dynamics"""
-    if world_state.world_tension.power_tension > 0.5:
+    tens = getattr(world_state, "world_tension", None) if world_state else None
+    dyn  = getattr(world_state, "relationship_dynamics", None) if world_state else None
+
+    if tens and getattr(tens, "power_tension", 0) > 0.5:
         return f"Even {activity} carries subtle undertones of control"
-    elif world_state.relationship_dynamics.player_submission_level > 0.5:
+    if dyn and getattr(dyn, "player_submission_level", 0) > 0.5:
         return f"The {activity} follows patterns you've grown accustomed to..."
     return f"A simple moment of {activity}"
 
@@ -1997,15 +2003,14 @@ async def _generate_npc_routine_involvement(context, npc_id, activity):
     return f"Their presence during {activity} feels significant"
 
 async def _identify_control_elements(context, activity, npcs, world_state):
-    """Identify control elements in routine"""
     elements = []
-    if world_state.relationship_dynamics.player_submission_level > 0.5:
+    dyn = getattr(world_state, "relationship_dynamics", None) if world_state else None
+    if dyn and getattr(dyn, "player_submission_level", 0) > 0.5:
         elements.append("The natural order of things")
-    if world_state.relationship_dynamics.player_submission_level > 0.3:
+    if dyn and getattr(dyn, "player_submission_level", 0) > 0.3:
         elements.append("Choices that aren't really choices")
-    if hasattr(world_state.relationship_dynamics, 'acceptance_level'):
-        if world_state.relationship_dynamics.acceptance_level > 0.5:
-            elements.append("The comfort of established patterns")
+    if dyn and hasattr(dyn, "acceptance_level") and getattr(dyn, "acceptance_level", 0) > 0.5:
+        elements.append("The comfort of established patterns")
     return elements
 
 async def _generate_subtle_control_elements(context: NarratorContext, activity: str,
@@ -2033,22 +2038,23 @@ async def _generate_emergent_variations(context, activity, intersections):
 
 async def _generate_ambient_description(context, focus, world_state, intensity):
     """Generate ambient description with GPT"""
+    mood_val = getattr(getattr(world_state, "world_mood", None), "value", "neutral") if world_state else "neutral"
     prompt = f"""
     Generate ambient description for:
     Focus: {focus}
-    Mood: {world_state.world_mood.value}
+    Mood: {mood_val}
     Intensity: {intensity}
-    
+
     One atmospheric sentence.
     """
-    
+
     description = await generate_text_completion(
         system_prompt="You create ambient world descriptions",
         user_prompt=prompt,
         model='gpt-5-nano',
     )
-    
     return description.strip()
+
 
 # Additional calculation and detection functions
 def _calculate_susceptibility(vitals: Dict[str, int], addictions: Dict[str, Any]) -> float:
@@ -2162,36 +2168,30 @@ async def _generate_activity_description(context: NarratorContext, activity: str
 
 async def _determine_integrated_tone(context: NarratorContext, world_state: WorldState,
                                     relationship_contexts: Dict[int, Dict]) -> NarrativeTone:
-    """Determine tone based on ALL systems - vitals, relationships, addictions"""
-    
-    # Base tone from world mood
-    base_tone = _determine_narrative_tone(world_state.world_mood, ActivityType.ROUTINE)
-    
-    # Adjust for vitals
-    if context.current_vitals:
-        if context.current_vitals.get("fatigue", 0) > 80:
-            return NarrativeTone.OBSERVATIONAL
-        elif context.current_vitals.get("hunger", 100) < 20:
-            return NarrativeTone.COMMANDING
-    
-    # Adjust for relationships
+    mood = getattr(world_state, "world_mood", None) if world_state else None
+    base_tone = _determine_narrative_tone(mood or WorldMood.RELAXED, ActivityType.ROUTINE)
+
+    vit = getattr(context, "current_vitals", None) or {}
+    if vit.get("fatigue", 0) > 80:
+        return NarrativeTone.OBSERVATIONAL
+    if vit.get("hunger", 100) < 20:
+        return NarrativeTone.COMMANDING
+
     if relationship_contexts:
-        influences = [rc.get('dimensions', {}).get('influence', 0) 
-                     for rc in relationship_contexts.values() if isinstance(rc, dict)]
+        influences = [
+            (_get_dim(rc, "influence", 0)) for rc in relationship_contexts.values()
+        ]
         if influences:
-            avg_influence = sum(influences) / len(influences)
-            if avg_influence > 50:
-                return NarrativeTone.SUBTLE
-            elif avg_influence > 30:
-                return NarrativeTone.TEASING
-    
-    # Adjust for addictions
-    if context.active_addictions and context.active_addictions.get("has_addictions"):
-        addiction_count = len(context.active_addictions.get("addictions", {}))
-        if addiction_count >= 3:
+            avg = sum(influences) / len(influences)
+            if avg > 50: return NarrativeTone.SUBTLE
+            if avg > 30: return NarrativeTone.TEASING
+
+    if getattr(context, "active_addictions", None) and context.active_addictions.get("has_addictions"):
+        if len(context.active_addictions.get("addictions", {})) >= 3:
             return NarrativeTone.SENSUAL
-    
+
     return base_tone
+
 
 async def _generate_activity_variations(context: NarratorContext, activity: str,
                                        intersections: List[str]) -> List[str]:
@@ -2213,16 +2213,18 @@ async def _narrate_mood_shift(context: NarratorContext, mood: WorldMood) -> str:
     """Narrate a shift in world mood"""
     return f"The atmosphere shifts toward something more {mood.value}..."
 
-async def _narrate_tension(context: NarratorContext, tension: WorldTension) -> str:
-    """Narrate building tension"""
+async def _narrate_tension(context, tension: Optional[WorldTension]) -> str:
+    if not tension:
+        return "A tension you can't quite name gathers and recedes..."
     dominant_tensions = [
-        ("power", tension.power_tension),
-        ("social", tension.social_tension),
-        ("sexual", tension.sexual_tension),
-        ("emotional", tension.emotional_tension)
+        ("power", getattr(tension, "power_tension", 0.0)),
+        ("social", getattr(tension, "social_tension", 0.0)),
+        ("sexual", getattr(tension, "sexual_tension", 0.0)),
+        ("emotional", getattr(tension, "emotional_tension", 0.0)),
     ]
     dominant = max(dominant_tensions, key=lambda x: x[1])
     return f"A {dominant[0]} tension builds, barely perceptible but undeniable..."
+
 
 async def _narrate_addiction_presence(context: NarratorContext, addictions: Dict[str, Any]) -> str:
     """Narrate the presence of addiction effects"""
@@ -2231,8 +2233,8 @@ async def _narrate_addiction_presence(context: NarratorContext, addictions: Dict
     return "Your mind remains clear, for now..."
 
 async def _narrate_ambient_detail(context: NarratorContext, world_state: WorldState) -> str:
-    """Narrate ambient environmental detail"""
-    return f"The world continues its {world_state.world_mood.value} rhythm..."
+    mood_val = getattr(getattr(world_state, "world_mood", None), "value", "neutral") if world_state else "neutral"
+    return f"The world continues its {mood_val} rhythm..."
 
 async def _weave_relationship_event(context: NarratorContext, event: Any) -> str:
     """Weave a relationship event into narration"""
@@ -2321,15 +2323,12 @@ class SliceOfLifeNarrator:
         return self.context.world_director
     
     async def _get_world_state_fast(self) -> Optional[WorldState]:
-        """
-        Prefer the context cache or director bundle; rebuild only if needed.
-        """
         ws = await _get_ws_prefer_bundle(self.context)
         if ws is not None:
             return ws
-        # last resort
         try:
-            ws = await self._get_world_state_fast()
+            # fall back to the director, not to ourselves
+            ws = await self.world_director.get_world_state()
             self.context.current_world_state = ws
             return ws
         except Exception as e:
@@ -2489,105 +2488,189 @@ class SliceOfLifeNarrator:
         return narration.scene_description
     
     async def process_player_input(self, user_input: str) -> Dict[str, Any]:
-        """Process player input and generate appropriate narration with full context"""
+        """Process player input and generate appropriate narration with full context.
+        - Robust to tool return shapes (dict / JSON string / Pydantic model / Agents result with .data)
+        - Null-guards for world_state fields and conflict participants
+        - Uses dict payload for tool calls when world_state is missing
+        """
         await self.initialize()
-        
+    
         # Refresh context with player input
         await self.context.refresh_context(user_input)
-        
+    
+        import json
+    
+        def _to_dict(obj):
+            """Best-effort convert tool/agent outputs to a dict."""
+            if obj is None:
+                return {}
+            if isinstance(obj, dict):
+                return obj
+            # Agents SDK often wraps data on .data
+            data = getattr(obj, "data", None)
+            if data is not None:
+                return _to_dict(data)
+            # Pydantic v2
+            if hasattr(obj, "model_dump"):
+                try:
+                    return obj.model_dump()
+                except Exception:
+                    pass
+            # Legacy JSON-string path
+            if isinstance(obj, str):
+                try:
+                    return json.loads(obj)
+                except Exception:
+                    return {"raw": obj}
+            # Last resort: shallow attr capture
+            try:
+                return {
+                    k: getattr(obj, k)
+                    for k in dir(obj)
+                    if not k.startswith("_") and not callable(getattr(obj, k, None))
+                }
+            except Exception:
+                return {"value": str(obj)}
+    
+        def _get(d_or_obj, key, default=None):
+            """Dict-or-attr getter."""
+            if isinstance(d_or_obj, dict):
+                return d_or_obj.get(key, default)
+            return getattr(d_or_obj, key, default)
+    
+        def _extract_npc_ids_from_ws(ws, limit=3):
+            """Safely extract up to N NPC ids from a world_state.active_npcs of varying shapes."""
+            out = []
+            try:
+                active = getattr(ws, "active_npcs", None) or []
+                for item in list(active)[:limit]:
+                    if isinstance(item, int):
+                        out.append(item)
+                    elif isinstance(item, dict):
+                        nid = item.get("npc_id") or item.get("id")
+                        if isinstance(nid, int):
+                            out.append(nid)
+                        elif isinstance(nid, str) and nid.isdigit():
+                            out.append(int(nid))
+                    else:
+                        nid = getattr(item, "npc_id", None) or getattr(item, "id", None)
+                        if isinstance(nid, int):
+                            out.append(nid)
+                        elif isinstance(nid, str) and nid.isdigit():
+                            out.append(int(nid))
+            except Exception:
+                pass
+            return out
+    
         # NEW: Check if input triggers or affects conflicts
         conflict_triggered = None
-        if self.context.conflict_synthesizer:
-            # Check if this input should trigger a conflict
-            scene_context = {
-                "scene_type": "player_input",
-                "player_action": user_input,
-                "participants": [npc['npc_id'] for npc in self.context.current_world_state.active_npcs[:3]]
-                if self.context.current_world_state else []
-            }
-            
-            conflict_result = await self.context.conflict_synthesizer.process_scene(scene_context)
-            
-            if conflict_result.get('conflicts_detected'):
-                conflict_triggered = conflict_result
-        
+        try:
+            if self.context.conflict_synthesizer:
+                participants = _extract_npc_ids_from_ws(self.context.current_world_state, limit=3) \
+                               if self.context.current_world_state else []
+                scene_context = {
+                    "scene_type": "player_input",
+                    "player_action": user_input,
+                    "participants": participants,
+                }
+                conflict_result = await self.context.conflict_synthesizer.process_scene(scene_context)
+                if conflict_result and conflict_result.get("conflicts_detected"):
+                    conflict_triggered = conflict_result
+        except Exception as e:
+            logger.debug(f"process_player_input: conflict check failed: {e}")
+    
         # Get world state and determine affected NPCs
         world_state = await self._get_world_state_fast()
-        affected_npcs = []
-        
+        world_state_payload = _to_dict(world_state) if world_state is not None else {}
+    
         # Check if input is dialogue
-        if any(keyword in user_input.lower() for keyword in ["say", "tell", "ask", "talk"]):
-            # Dialogue interaction
-            active_npcs = world_state.active_npcs if hasattr(world_state, 'active_npcs') else []
-            if active_npcs:
-                affected_npcs = active_npcs[:2]  # Max 2 NPCs respond
+        affected_npcs: List[int] = []
+        lower = user_input.lower()
+        is_dialogue = any(keyword in lower for keyword in ["say", "tell", "ask", "talk"])
+    
+        if is_dialogue:
+            active = getattr(world_state, "active_npcs", None) if world_state is not None else []
+            # Normalize to up to 2 npc IDs
+            affected_npcs = _extract_npc_ids_from_ws(world_state, limit=2) if active else []
+            if affected_npcs:
                 responses = []
-                
                 for npc_id in affected_npcs:
-                    result = await self.dialogue_writer.run(
-                        messages=[{"role": "user", "content": user_input}],
-                        context=self.context,
-                        tool_calls=[{
-                            "tool": generate_npc_dialogue,
-                            "kwargs": {
-                                "npc_id": npc_id,
-                                "situation": user_input,
-                                "world_state": world_state.model_dump(),
-                                "player_input": user_input
-                            }
-                        }]
-                    )
-                    dialogue = result.data if hasattr(result, 'data') else result
-                    responses.append(dialogue)
-                
-                # Process player action
+                    try:
+                        result = await self.dialogue_writer.run(
+                            messages=[{"role": "user", "content": user_input}],
+                            context=self.context,
+                            tool_calls=[{
+                                "tool": generate_npc_dialogue,
+                                "kwargs": {
+                                    "npc_id": npc_id,
+                                    "situation": user_input,
+                                    "world_state": world_state_payload,
+                                    "player_input": user_input
+                                }
+                            }]
+                        )
+                        dialogue_dict = _to_dict(result)
+                        # Ensure minimal shape
+                        if "npc_id" not in dialogue_dict:
+                            dialogue_dict["npc_id"] = npc_id
+                        responses.append(dialogue_dict)
+                    except Exception as e:
+                        logger.warning(f"dialogue tool failed for npc {npc_id}: {e}")
+                        responses.append({"npc_id": npc_id, "npc_name": "Unknown", "dialogue": "..."})
+    
+                # Process player action (pass the object if available; else the dict payload)
                 action_result = await self._process_player_action(
-                    user_input, world_state, affected_npcs
+                    user_input, world_state if world_state is not None else world_state_payload, affected_npcs
                 )
-                
+    
                 return {
                     "success": True,
                     "type": "dialogue",
                     "npc_responses": responses,
-                    "narrative": action_result.get("acknowledgment", ""),
-                    "world_reaction": action_result.get("world_reaction", ""),
-                    "dynamic_shift": action_result.get("dynamic_shift"),
-                    "governance_approved": action_result.get("governance_approved", True),
-                    "conflict_triggered": conflict_triggered  # NEW
+                    "narrative": _get(action_result, "acknowledgment", ""),
+                    "world_reaction": _get(action_result, "world_reaction", ""),
+                    "dynamic_shift": _get(action_result, "dynamic_shift"),
+                    "governance_approved": _get(action_result, "governance_approved", True),
+                    "conflict_triggered": conflict_triggered,
                 }
-        
+    
         # Process as scene action
-        result = await self.scene_narrator.run(
-            messages=[{"role": "user", "content": user_input}],
-            context=self.context,
-            tool_calls=[{
-                "tool": narrate_player_action,
-                "kwargs": {
-                    "action": user_input,
-                    "world_state": world_state.model_dump()
-                }
-            }]
-        )
-        
-        narration = result.data if hasattr(result, 'data') else result
-        
+        try:
+            result = await self.scene_narrator.run(
+                messages=[{"role": "user", "content": user_input}],
+                context=self.context,
+                tool_calls=[{
+                    "tool": narrate_player_action,
+                    "kwargs": {
+                        "action": user_input,
+                        "world_state": world_state_payload
+                    }
+                }]
+            )
+        except Exception as e:
+            logger.warning(f"scene_narrator tool failed: {e}")
+            result = {}
+    
+        narration = _to_dict(result)
+    
         # Process the action for consequences
         action_result = await self._process_player_action(
-            user_input, world_state, affected_npcs
+            user_input, world_state if world_state is not None else world_state_payload, affected_npcs
         )
-        
+    
         return {
             "success": True,
             "type": "action",
-            "narrative": narration.scene_description,
-            "atmosphere": narration.atmosphere,
-            "world_reaction": action_result.get("world_reaction", ""),
-            "npc_reactions": action_result.get("npc_reactions", []),
-            "dynamic_shift": action_result.get("dynamic_shift"),
-            "governance_approved": action_result.get("governance_approved", True),
-            "system_triggers": narration.system_triggers if hasattr(narration, 'system_triggers') else [],
-            "conflict_triggered": conflict_triggered  # NEW
+            "narrative": narration.get("scene_description", _get(narration, "raw", "")),
+            "atmosphere": narration.get("atmosphere", ""),
+            "world_reaction": _get(action_result, "world_reaction", ""),
+            "npc_reactions": _get(action_result, "npc_reactions", []),
+            "dynamic_shift": _get(action_result, "dynamic_shift"),
+            "governance_approved": _get(action_result, "governance_approved", True),
+            "system_triggers": narration.get("system_triggers", []),
+            "conflict_triggered": conflict_triggered,
         }
+
         
     async def _process_player_action(self, action: str, world_state: Any, affected_npcs: List[int]) -> Dict[str, Any]:
         """Process player action for system consequences"""
@@ -2655,7 +2738,7 @@ class SliceOfLifeNarrator:
                     tags=["player_action"] + [f"npc_{npc_id}" for npc_id in (affected_npcs or [])[:3]],
                     metadata=MemoryMetadata(
                         context_type="player_action"
-                    ).dict()
+                    ).model_dump()
                 )
             except Exception as e:
                 logger.warning(f"Failed to store player action in memory: {e}")
@@ -2670,24 +2753,33 @@ class SliceOfLifeNarrator:
         }
     
     async def narrate_time_transition(self, old_time: str, new_time: str) -> str:
-        """Narrate time passing"""
         world_state = await self._get_world_state_fast()
-        
-        # Refresh context for transition
         await self.context.refresh_context()
-        
-        # Generate transition narration
+    
+        if not world_state:
+            # Minimal graceful fallback
+            return "Time slips forward, softening the edges of the moment."
+    
         result = await self.scene_narrator.run(
             messages=[{"role": "user", "content": "Narrate time passing"}],
             context=self.context,
             tool_calls=[{
                 "tool": generate_ambient_narration,
-                "kwargs": {"focus": "time_passage", "world_state": world_state.model_dump()}
-            }]
+                "kwargs": {"focus": "time_passage", "world_state": world_state.model_dump()},
+            }],
         )
-        
-        ambient = result.data if hasattr(result, 'data') else result
-        return ambient.description
+        ambient = getattr(result, "data", result)
+        # Try to extract description safely
+        if hasattr(ambient, "description"):
+            return ambient.description
+        if isinstance(ambient, dict) and "description" in ambient:
+            return ambient["description"]
+        try:
+            import json
+            return json.loads(ambient).get("description", "Time passes...")
+        except Exception:
+            return "Time passes..."
+
     
     async def orchestrate_scene(self, scene_type: str = "routine", npcs: List[int] = None) -> Dict[str, Any]:
         """Orchestrate a complete scene with multiple elements"""
