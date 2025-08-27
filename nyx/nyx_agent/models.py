@@ -286,6 +286,12 @@ class RelationshipUpdateResult(BaseModel):
     relationship: RelationshipStateOut = Field(..., description="Updated relationship state")
     changes: RelationshipChanges = Field(..., description="Changes applied")
 
+class DecideImageGenerationInput(BaseModel):
+    """Input for deciding whether to generate an image"""
+    scene_text: str
+    context: Optional[str] = None
+    user_preference: Optional[str] = None
+
 class PerformanceMetricsResult(BaseModel):
     metrics: PerformanceNumbers = Field(..., description="Current performance metrics")
     suggestions: List[str] = Field(..., description="Performance improvement suggestions")
