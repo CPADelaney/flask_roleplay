@@ -124,7 +124,48 @@ async def _try_refresh_context(reason: str, *candidates):
                 logger.debug(f"refresh_context failed on {type(c).__name__}: {e}")
     return False
 
+async def _get_ws_prefer_bundle(narr_ctx: "NarratorContext") -> Optional["WorldState"]:
+    """
+    Prefer a cached/bundled world state on the narrator side:
+      1) use narr_ctx.current_world_state if present
+      2) try WorldDirector.get_world_bundle(fast=True) and extract "world_state"
+      3) fallback to WorldDirector.get_world_state()
+    """
+    try:
+        # 1) use what's already on the context (often set by refresh_context)
+        if getattr(narr_ctx, "current_world_state", None) is not None:
+            return narr_ctx.current_world_state
 
+        wd = getattr(narr_ctx, "world_director", None)
+        if wd is None:
+            return None
+
+        # 2) bundle fast path
+        get_bundle = getattr(wd, "get_world_bundle", None)
+        if callable(get_bundle):
+            try:
+                bundle = await get_bundle(fast=True)
+                if isinstance(bundle, dict) and bundle.get("world_state") is not None:
+                    ws = bundle["world_state"]
+                    # Coerce dict → WorldState if needed
+                    if isinstance(ws, dict):
+                        try:
+                            ws = WorldState(**ws)
+                        except Exception:
+                            pass
+                    narr_ctx.current_world_state = ws
+                    return ws
+            except Exception as be:
+                logger.debug(f"slice_of_life bundle fast path failed: {be}", exc_info=True)
+
+        # 3) slow path
+        ws = await wd.get_world_state()
+        narr_ctx.current_world_state = ws
+        return ws
+
+    except Exception as e:
+        logger.warning(f"_get_ws_prefer_bundle failed: {e}", exc_info=True)
+        return None
 
 # ===============================================================================
 # CRITICAL FIX: Agent-Safe Base Model
@@ -778,7 +819,9 @@ async def narrate_slice_of_life_scene(
         except Exception:
             world_state = None
     if world_state is None:
-        world_state = await world_director.get_world_state()
+        world_state = await _get_ws_prefer_bundle(context)
+        if world_state is None and world_director:  # last-ditch fallback
+            world_state = await world_director.get_world_state()
 
     # Synthesize a scene if needed
     if scene is None:
@@ -1086,7 +1129,7 @@ async def generate_npc_dialogue(
     # If callers don't pass world_state, fetch it.
     if world_state is None and world_director:
         try:
-            world_state = await world_director.get_world_state()
+            world_state = await _get_ws_prefer_bundle(context) or await world_director.get_world_state()
             logger.info("NPC_DIALOGUE[%s]: fetched world_state via fallback ws=%s",
                         call_id, _ws_brief(world_state))
         except Exception as e:
@@ -2271,6 +2314,27 @@ class SliceOfLifeNarrator:
     """
     Enhanced Slice-of-Life Narrator with context services integration
     """
+
+    @property
+    def world_director(self):
+        # convenience passthrough so existing self.world_director references work
+        return self.context.world_director
+    
+    async def _get_world_state_fast(self) -> Optional[WorldState]:
+        """
+        Prefer the context cache or director bundle; rebuild only if needed.
+        """
+        ws = await _get_ws_prefer_bundle(self.context)
+        if ws is not None:
+            return ws
+        # last resort
+        try:
+            ws = await self._get_world_state_fast()
+            self.context.current_world_state = ws
+            return ws
+        except Exception as e:
+            logger.warning(f"_get_world_state_fast fallback failed: {e}", exc_info=True)
+            return None
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
@@ -2350,6 +2414,7 @@ class SliceOfLifeNarrator:
             self.performance_monitor = PerformanceMonitor.get_instance(
                 self.user_id, self.conversation_id
             )
+            
 
     async def generate_npc_dialogue(
         self,
@@ -2366,7 +2431,7 @@ class SliceOfLifeNarrator:
 
         if world_state is None:
             try:
-                world_state = await self.world_director.get_world_state()
+                world_state = await self._get_world_state_fast()
                 logger.info("NPC_DIALOGUE_ADAPTER[%s]: fetched ws=%s", call_id, _ws_brief(world_state))
             except Exception as e:
                 logger.warning("NPC_DIALOGUE_ADAPTER[%s]: failed to fetch ws: %s", call_id, e)
@@ -2393,7 +2458,7 @@ class SliceOfLifeNarrator:
         """Generate narration for current world state"""
         await self.context.refresh_context()
         
-        world_state = await self.world_director.get_world_state()
+        world_state = await self._get_world_state_fast()
         
         # Create a scene from world state
         scene = SliceOfLifeEvent(
@@ -2447,7 +2512,7 @@ class SliceOfLifeNarrator:
                 conflict_triggered = conflict_result
         
         # Get world state and determine affected NPCs
-        world_state = await self.world_director.get_world_state()
+        world_state = await self._get_world_state_fast()
         affected_npcs = []
         
         # Check if input is dialogue
@@ -2606,7 +2671,7 @@ class SliceOfLifeNarrator:
     
     async def narrate_time_transition(self, old_time: str, new_time: str) -> str:
         """Narrate time passing"""
-        world_state = await self.world_director.get_world_state()
+        world_state = await self._get_world_state_fast()
         
         # Refresh context for transition
         await self.context.refresh_context()
@@ -2628,7 +2693,7 @@ class SliceOfLifeNarrator:
         """Orchestrate a complete scene with multiple elements"""
         await self.initialize()
         
-        world_state = await self.world_director.get_world_state()
+        world_state = await self._get_world_state_fast()
         npcs = npcs or []
         
         # NEW: Check for conflict involvement
@@ -2820,7 +2885,7 @@ class SliceOfLifeNarrator:
         """Handle interaction with multiple NPCs"""
         await self.initialize()
         
-        world_state = await self.world_director.get_world_state()
+        world_state = await self._get_world_state_fast()
         
         # Create group scene
         scene = SliceOfLifeEvent(
