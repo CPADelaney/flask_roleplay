@@ -40,6 +40,11 @@ from lore.core import canon
 # Add Pydantic imports
 from pydantic import BaseModel, Field, validator
 
+try:
+    from utils.background import enqueue_task  # optional
+except Exception:
+    enqueue_task = None
+
 logger = logging.getLogger(__name__)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -516,7 +521,6 @@ async def get_dynamic_relationship_summary(user_id: int, conversation_id: int) -
             "momentum": float(state.momentum.get_magnitude())  # Ensure float
         }
         summary["most_significant"].append(rel_summary)  # Store as dict, not JSON string
-        summary["most_significant"].append(rel_summary)
         summary["active_patterns"].update(state.history.active_patterns)
         summary["active_archetypes"].update(state.active_archetypes)
     
@@ -670,17 +674,21 @@ async def recommend_events(
                 "name": "generate_event_content",
                 "kwargs": {
                     "event_type": event_type,
-                    "context_data": event_context
+                    "context_data_json": json.dumps(event_context)  # <-- correct name + JSON
                 }
             }]
         )
         
-        # Extract generated content
+        # Extract generated content (parse JSON string safely)
         if result.output:
+            try:
+                gen = json.loads(result.output)
+            except Exception:
+                gen = {"event_type": event_type, "content": str(result.output), "metadata": {}}
             return {
                 "event": event_type,
                 "score": score,
-                "generated_content": result.output,
+                "generated_content": gen,
                 **context
             }
         
@@ -1389,18 +1397,23 @@ async def select_events_with_director(
         )
         
         if result.output:
-            # result.output should be a list of EventRecommendation objects
+            # Normalize to list[dict]
+            if isinstance(result.output, str):
+                recs = json.loads(result.output)
+            elif isinstance(result.output, list):
+                recs = [ (r.dict() if hasattr(r, "dict") else dict(r)) for r in result.output ]
+            else:
+                recs = []
+        
             events = []
-            for event_rec in result.output:
-                if event_rec.score > 0.6:
-                    event_dict = {
-                        "event": event_rec.event,
-                        "score": event_rec.score
-                    }
-                    if event_rec.npc_id:
-                        event_dict["npc_id"] = event_rec.npc_id
+            for rec in recs:
+                score = float(rec.get("score", 0))
+                if score > 0.6:
+                    event_dict = {"event": rec.get("event"), "score": score}
+                    if rec.get("npc_id"):
+                        event_dict["npc_id"] = rec["npc_id"]
                     events.append(event_dict)
-            return events[:3]  # Limit to top 3 events
+            return events[:3]
             
     except Exception as e:
         logger.warning(f"Narrative director failed: {e}")
@@ -1602,7 +1615,7 @@ async def advance_time_with_events(
     Enhanced version using LLM agents for intelligent processing.
     REFACTORED to use dynamic relationships system.
     """
-    from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
+    from npcs.new_npc_creation import NPCCreationHandler
     from logic.narrative_events import (
         check_for_personal_revelations,
         check_for_narrative_moments,
@@ -1695,13 +1708,15 @@ async def advance_time_with_events(
         await npc_handler.detect_relationship_stage_changes(ctx)
 
         # Get dynamic relationship summary instead of old overview
+        relationship_summary = await get_dynamic_relationship_summary(user_id, conversation_id)
         if relationship_summary and relationship_summary.get('total_relationships', 0) > 0:
             events.append(PhaseEventEntry(
                 type="relationship_summary",
                 total_relationships=relationship_summary['total_relationships'],
                 active_patterns=relationship_summary['active_patterns'],
                 active_archetypes=relationship_summary['active_archetypes'],
-                most_significant_json=[json.dumps(ms) for ms in relationship_summary['most_significant']]
+                # store JSON strings as the model expects List[str]
+                most_significant=[json.dumps(ms) for ms in relationship_summary['most_significant']]
             ).dict())
 
         # Check for relationship events using the new dynamic system
@@ -1891,7 +1906,7 @@ async def generate_phase_recap_with_agent(
                 "kwargs": {
                     "phase_events_json": json.dumps(phase_events_list),
                     "current_goals_json": json.dumps(current_goals),
-                    "npc_standings": npc_standings,  # This stays as dict
+                    "npc_standings_json": json.dumps(npc_standings),  # <-- fix key + JSON
                     "vitals_json": json.dumps(vitals.to_dict())
                 }
             }]
@@ -2274,11 +2289,7 @@ async def remove_expired_planned_events(user_id, conversation_id, current_year, 
                             ELSE 0
                         END) < $6)
                 )
-            """, user_id, conversation_id, current_year,
-                current_year, current_month,
-                current_year, current_month, current_day,
-                current_year, current_month, current_day,
-                current_priority)
+            """, user_id, conversation_id, current_year, current_month, current_day, current_priority)
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
         logger.error(f"Database error removing expired events: {e}", exc_info=True)
     except Exception as e:
@@ -3089,6 +3100,13 @@ async def tool_advance_time_with_events(
     user_id = ctx.context.user_id
     conv_id = ctx.context.conversation_id
     result = await advance_time_with_events(user_id, conv_id, activity_type, rng_seed, activity_mood)
+    if enqueue_task:
+        await enqueue_task(
+            task_name="conflict.process_queue",
+            params={"user_id": int(user_id), "conversation_id": str(conversation_id), "max_items": 3},
+            priority="low",
+            delay_seconds=1
+        )
     return json.dumps(result)
 
 @function_tool
