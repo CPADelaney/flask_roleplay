@@ -16,7 +16,6 @@ from uuid import uuid4
 from agents import Agent, Runner
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.model_settings import ModelSettings
-from agents.guardrail import JSONSchema
 
 from nyx.nyx_agent.models import (
     NyxResponse,
@@ -141,7 +140,6 @@ Output format:
         return create_validation_agent(
             model_name=model_name,
             system_prompt=system_prompt,
-            temperature=0.3  # Low temperature for consistency
         )
     
     def _create_character_analysis_agent(self, model_name: str):
@@ -182,7 +180,6 @@ Output format:
         return create_analysis_agent(
             model_name=model_name,
             system_prompt=system_prompt,
-            temperature=0.3
         )
     
     def _create_pattern_detection_agent(self, model_name: str):
@@ -1835,111 +1832,133 @@ def _safe_json(text: str, default=None) -> Dict[str, Any]:
         return default if default is not None else {}
 
 
-def _make_runner(system_prompt: str, model_name: str, temperature: float, json_schema: Optional[Dict] = None) -> Runner:
-    """Common helper to build an Agents SDK runner on OpenAI Responses."""
-    model = OpenAIResponsesModel(
-        model=model_name,
-        settings=ModelSettings(
-            temperature=temperature,
-            max_output_tokens=4096,
-            # Force JSON response format if no schema provided
-            extra_body={"response_format": {"type": "json_object"}} if not json_schema else {}
-        ),
-    )
-    agent = Agent(
+def _make_runner(
+    system_prompt: str,
+    model_name: str,
+    json_schema: Optional[Dict] = None
+) -> Runner:
+    """
+    Build a Runner for the Agents SDK without model-level params like temperature
+    or max_output_tokens. If the SDK supports OutputGuardrail, use it; otherwise,
+    just run without schema enforcement (we'll still _safe_json the reply).
+    """
+    output_guardrail = None
+
+    if json_schema:
+        try:
+            # Preferred modern API; safe to skip if your SDK doesn't have it
+            from agents.guardrail import OutputGuardrail  # type: ignore
+            try:
+                output_guardrail = OutputGuardrail.from_json_schema(
+                    name="nyx_schema",
+                    schema=json_schema,
+                )
+            except TypeError:
+                # older/newer signature variant
+                output_guardrail = OutputGuardrail.from_json_schema(
+                    name="nyx_schema",
+                    json_schema=json_schema,
+                )
+        except Exception:
+            output_guardrail = None  # no guardrail available; proceed without
+
+    # No ModelSettings, no temperature, no max tokens, no response_format
+    model = OpenAIResponsesModel(model=model_name)
+
+    agent_kwargs = dict(
         name="nyx_aux_validator",
         instructions=system_prompt,
         model=model,
-        # Strong JSON guarantee via schema
-        output_schema=JSONSchema(json_schema) if json_schema else None
     )
+    if output_guardrail is not None:
+        agent_kwargs["output_guardrail"] = output_guardrail
+
+    agent = Agent(**agent_kwargs)
     return Runner(agent)
+
 
 
 def create_validation_agent(
     model_name: str,
     system_prompt: str,
-    temperature: float = 0.3
 ):
-    """Create a validation agent with the specified configuration."""
-    runner = _make_runner(system_prompt, model_name, temperature, VALIDATION_JSON_SCHEMA)
-    
+    runner = _make_runner(system_prompt, model_name, VALIDATION_JSON_SCHEMA)
+
     class ValidationAgent:
         def __init__(self, runner: Runner):
             self.runner = runner
-        
+
         async def validate_narrative(self, **kwargs):
             run = await self.runner.run(input=json.dumps(kwargs))
             payload = (getattr(run, "output_parsed", None)
-                      or getattr(run, "output_text", None)
-                      or getattr(run, "output", ""))
+                       or getattr(run, "output_text", None)
+                       or getattr(run, "output", ""))
             return payload if isinstance(payload, dict) else _safe_json(payload, {})
-        
+
         async def validate_choice(self, **kwargs):
             run = await self.runner.run(input=f"Validate choice: {json.dumps(kwargs)}")
             payload = (getattr(run, "output_parsed", None)
-                      or getattr(run, "output_text", None)
-                      or getattr(run, "output", ""))
+                       or getattr(run, "output_text", None)
+                       or getattr(run, "output", ""))
             return payload if isinstance(payload, dict) else _safe_json(payload, {})
-        
+
         async def validate_updates(self, **kwargs):
             run = await self.runner.run(input=f"Validate world updates: {json.dumps(kwargs)}")
             payload = (getattr(run, "output_parsed", None)
-                      or getattr(run, "output_text", None)
-                      or getattr(run, "output", ""))
+                       or getattr(run, "output_text", None)
+                       or getattr(run, "output", ""))
             return payload if isinstance(payload, dict) else _safe_json(payload, {})
-        
+
         async def analyze_ripple_effects(self, **kwargs):
             run = await self.runner.run(input=f"Analyze ripple effects: {json.dumps(kwargs)}")
             payload = (getattr(run, "output_parsed", None)
-                      or getattr(run, "output_text", None)
-                      or getattr(run, "output", ""))
+                       or getattr(run, "output_text", None)
+                       or getattr(run, "output", ""))
             return payload if isinstance(payload, dict) else _safe_json(payload, {})
-    
+
     return ValidationAgent(runner)
 
 
 def create_analysis_agent(
     model_name: str,
     system_prompt: str,
-    temperature: float = 0.5
 ):
-    """Create an analysis agent with the specified configuration."""
-    runner = _make_runner(system_prompt, model_name, temperature, ANALYSIS_JSON_SCHEMA)
-    
+    runner = _make_runner(system_prompt, model_name, ANALYSIS_JSON_SCHEMA)
+
     class AnalysisAgent:
         def __init__(self, runner: Runner):
             self.runner = runner
-        
+
         async def analyze_dialogue(self, **kwargs):
             run = await self.runner.run(input=f"Analyze dialogue consistency: {json.dumps(kwargs)}")
             payload = (getattr(run, "output_parsed", None)
-                      or getattr(run, "output_text", None)
-                      or getattr(run, "output", ""))
+                       or getattr(run, "output_text", None)
+                       or getattr(run, "output", ""))
             return payload if isinstance(payload, dict) else _safe_json(payload, {})
-        
+
         async def analyze_conflict_impact(self, **kwargs):
             run = await self.runner.run(input=f"Analyze conflict impact on character: {json.dumps(kwargs)}")
             payload = (getattr(run, "output_parsed", None)
-                      or getattr(run, "output_text", None)
-                      or getattr(run, "output", ""))
+                       or getattr(run, "output_text", None)
+                       or getattr(run, "output", ""))
             return payload if isinstance(payload, dict) else _safe_json(payload, {})
-        
+
         async def analyze_patterns(self, **kwargs):
             run = await self.runner.run(input=f"Detect patterns in: {json.dumps(kwargs)}")
             payload = (getattr(run, "output_parsed", None)
-                      or getattr(run, "output_text", None)
-                      or getattr(run, "output", ""))
+                       or getattr(run, "output_text", None)
+                       or getattr(run, "output", ""))
             return payload if isinstance(payload, dict) else _safe_json(payload, {})
-        
+
         async def evaluate_connection(self, **kwargs):
             run = await self.runner.run(input=f"Evaluate connection strength: {json.dumps(kwargs)}")
             payload = (getattr(run, "output_parsed", None)
-                      or getattr(run, "output_text", None)
-                      or getattr(run, "output", ""))
+                       or getattr(run, "output_text", None)
+                       or getattr(run, "output", ""))
             return payload if isinstance(payload, dict) else _safe_json(payload, {})
-    
+
     return AnalysisAgent(runner)
+
 
 
 # Convenience factory function
