@@ -770,6 +770,7 @@ class NPCOrchestrator:
             significance=priority
         )
         
+        self._notify_npc_changed(npc_id)
         return result
     
     async def check_npc_current_events(self, npc_id: int) -> List[Dict[str, Any]]:
@@ -857,6 +858,8 @@ class NPCOrchestrator:
             
             if events:
                 results["npc_statuses"][npc_id] = "has_events"
+                # after mark_completed / mark_missed
+                self._notify_npc_changed(npc_id)
                 for event in events:
                     try:
                         if event.get("can_participate"):
@@ -977,6 +980,7 @@ class NPCOrchestrator:
         # Invalidate NPC snapshot cache since relationship changed
         if npc_id in self._snapshot_cache:
             del self._snapshot_cache[npc_id]
+        self._notify_npc_changed(npc_id)
         
         return result
     
@@ -1340,6 +1344,7 @@ class NPCOrchestrator:
         # Invalidate cache
         if npc_id in self._snapshot_cache:
             del self._snapshot_cache[npc_id]
+        self._notify_npc_changed(npc_id)
         
         return {
             'npc_id': npc_id,
