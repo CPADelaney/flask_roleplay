@@ -36,6 +36,8 @@ from agents.run import RunConfig
 from agents.run_context import RunContextWrapper
 from pydantic import BaseModel, Field
 
+from nyx.scene_keys import generate_scene_cache_key 
+
 # Import the specialized manager input/output models
 from lore.managers.education import (
     EducationalSystem, KnowledgeTradition, TeachingContent,
@@ -188,6 +190,9 @@ class LoreOrchestrator:
         self._registry_system = None
         self._canon_validation = None
         self._canonical_context_class = None
+
+        self.nyx_context = None
+        self.context_broker = None
         
         # Manager instances (lazy loaded)
         self._education_manager = None
@@ -325,6 +330,15 @@ class LoreOrchestrator:
         except Exception as e:
             logger.warning(f"Database setup check failed: {e}")
             # Continue anyway - tables may be created on demand
+
+    def attach_nyx_context(self, nyx_context: Any = None, context_broker: Any = None) -> None:
+        """
+        Optional: call this once after constructing to enable cross-system invalidation.
+        Either pass nyx_context (that has .context_broker) or pass context_broker directly.
+        """
+        self.nyx_context = nyx_context
+        self.context_broker = context_broker or getattr(nyx_context, "context_broker", None)
+
     
     def _create_mock_context(self, **attributes) -> Any:
         """
@@ -1170,29 +1184,49 @@ class LoreOrchestrator:
             _mk_scope()
     
         return list(keys)
+
+    async def _invalidate_scope_keys(self, keys: List[str]) -> None:
+        """
+        Try to invalidate scene-scope caches across systems via the ContextBroker.
+        No-ops (but logs) if no broker is attached.
+        """
+        if not keys:
+            return
+        broker = self.context_broker or getattr(self.nyx_context, "context_broker", None)
+        if not broker:
+            logger.debug("No context broker attached; skipping cross-system invalidation")
+            return
+        try:
+            maybe = broker.invalidate_by_scope_keys(keys)
+            if inspect.isawaitable(maybe):
+                await maybe
+        except Exception as e:
+            logger.warning(f"Scope invalidation failed: {e}")
     
     # ===== SCENE BUNDLE HELPER METHODS =====
     
     def _generate_scene_cache_key(self, scope: Any) -> str:
         """
-        Generate a stable cache key for a scene scope.
-    
-        - If the scope exposes Nyx's `to_key()` (already an md5 hex), return it verbatim
-          so keys match the ContextBroker.
-        - Otherwise, build a deterministic string from salient attributes and hash it.
+        Stable, shared scene key:
+          - If scope.to_key() exists, use it (already md5 hex from SceneScope).
+          - Else use nyx.scene_keys.generate_scene_cache_key(scope).
+          - Else fallback to deterministic local hash.
         """
-        # Prefer the broker's exact key to avoid drift
         to_key = getattr(scope, "to_key", None)
         if callable(to_key):
             try:
                 return to_key()
             except Exception:
-                # fall back to local construction
                 pass
     
-        key_parts: List[str] = []
+        # Shared generator (keeps keys identical across Lore/NPC/Context)
+        try:
+            return generate_scene_cache_key(scope)
+        except Exception:
+            pass
     
-        # location: accept id or name
+        # Last-resort fallback (kept from your original logic)
+        key_parts: List[str] = []
         loc_id = getattr(scope, "location_id", None)
         if loc_id is not None:
             key_parts.append(f"loc_{loc_id}")
@@ -1201,7 +1235,6 @@ class LoreOrchestrator:
             if loc_name:
                 key_parts.append(f"locname_{str(loc_name).lower()}")
     
-        # helper to push list-like fields in a stable way
         def _push_list(label: str, values: Any, head: int, coerce=str) -> None:
             if not values:
                 return
@@ -2744,6 +2777,8 @@ class LoreOrchestrator:
             self._scene_bundle_cache.pop(scope_key, None)
             # Clear monotonic timestamp by cache key
             self._bundle_cached_at.pop(scope_key, None)
+
+        await self._invalidate_scope_keys(scope_keys)
         
         return True
     
@@ -2935,6 +2970,13 @@ async def evolve_world(user_id: int, conversation_id: int, event_description: st
     ctx = orchestrator._create_mock_context()
     return await orchestrator.evolve_world_with_event(ctx, event_description, **kwargs)
 
+async def on_element_updated(self, element_type: str, element_id: int, element_data: Dict[str, Any]):
+    """
+    Call this whenever lore is created/updated/deleted outside of record_lore_change().
+    Computes affected scope keys and notifies the ContextBroker to invalidate bundles.
+    """
+    keys = self._get_affected_scope_keys(element_type, element_id, element_data or {})
+    await self._invalidate_scope_keys(keys)
 
 # ===== MODULE INITIALIZATION =====
 
