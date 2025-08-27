@@ -10,10 +10,13 @@ import asyncio
 import logging
 import json
 import time
+import os
+import hashlib
 import random
 from typing import Dict, List, Any, Optional, Union, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field, is_dataclass, asdict
 from datetime import datetime, timezone, timedelta
+from collections import OrderedDict
 
 from story_agent.world_simulation_models import (
     # Core enums/models
@@ -316,6 +319,33 @@ def _kvlist(data):
     # scalar
     return [{"key": "value", "value": _val(data)}]
 
+# Helpers used later in this module
+def kvlist_from_obj(obj: Any) -> List[Dict[str, Any]]:
+    """Public wrapper for _kvlist to make call sites clearer."""
+    return _kvlist(obj)
+
+def kvdict(kv_like: Any) -> Dict[str, Any]:
+    """
+    Convert a KV-ish payload (List[KeyValue] | List[dict{'key','value'}] | dict) to a plain dict.
+    Falls back to {} if not recognized.
+    """
+    if kv_like is None:
+        return {}
+    if isinstance(kv_like, dict):
+        return kv_like
+    out: Dict[str, Any] = {}
+    try:
+        for item in kv_like:
+            if hasattr(item, "key") and hasattr(item, "value"):
+                out[str(item.key)] = item.value
+            elif isinstance(item, dict) and "key" in item and "value" in item:
+                out[str(item["key"])] = item["value"]
+    except Exception:
+        return {}
+    return out
+
+def _as_dict_maybe_model(x: Any) -> Dict[str, Any]:
+    return x.model_dump() if hasattr(x, "model_dump") else (x if isinstance(x, dict) else {})
 
 # ===============================================================================
 # Complete World Director Context with ALL Systems
@@ -639,61 +669,61 @@ class CompleteWorldDirectorContext:
                 calendar_names=_kvlist(self.calendar_names or {}),
                 calendar_events=_kvlist(calendar_events),
     
-                visible_stats=_kvlist(visible_stats),
-                hidden_stats=_kvlist(hidden_stats),
-                active_stat_combinations=_kvlist(stat_combinations),
-                stat_thresholds_active=_kvlist(stat_thresholds),
+                visible_stats=visible_stats,                 # dict
+                hidden_stats=hidden_stats,                   # dict
+                active_stat_combinations=stat_combinations,  # list[dict]
+                stat_thresholds_active=stat_thresholds,      # dict
     
-                recent_memories=_kvlist([m.to_dict() if hasattr(m, "to_dict") else _to_model_dict(m) for m in recent_memories]),
+                recent_memories=[m.to_dict() if hasattr(m, "to_dict") else _to_model_dict(m) for m in (recent_memories or [])],
                 semantic_abstractions=[],
-                active_flashbacks=_kvlist([flashback] if flashback else []),
-                pending_reveals=_kvlist(pending_reveals),
+                active_flashbacks=[flashback] if flashback else [],
+                pending_reveals=pending_reveals or [],
                 pending_dreams=[],
-                recent_revelations=_kvlist([revelation] if revelation else []),
+                recent_revelations=[revelation] if revelation else [],
                 inner_monologues=[],
     
-                active_rules=_kvlist(triggered_rules),
+                active_rules=triggered_rules or [],
                 triggered_effects=[],
                 pending_effects=[],
     
-                player_inventory=_kvlist(inventory_result.get("items", [])),
+                player_inventory=inventory_result.get("items", []),
                 recent_item_changes=[],
     
-                active_npcs=_kvlist(npcs),
-                npc_masks=_kvlist({npc["npc_id"]: npc.get("mask", {}) for npc in npcs if "npc_id" in npc}),
-                npc_narrative_stages=_kvlist({npc["npc_id"]: npc.get("narrative_stage", "") for npc in npcs if "npc_id" in npc}),
-    
+                active_npcs=npcs,  # list[dict]
+                npc_masks={npc["npc_id"]: npc.get("mask", {}) for npc in npcs if "npc_id" in npc},
+                npc_narrative_stages={npc["npc_id"]: npc.get("narrative_stage", "") for npc in npcs if "npc_id" in npc},
+   
                 relationship_states=[],
                 relationship_dynamics=_to_model_dict(relationship_dynamics),
-                relationship_overview=_kvlist(rel_overview) if rel_overview else None,
-                pending_relationship_events=_kvlist(rel_events.get("events", [])),
+                relationship_overview=rel_overview or {},
+                pending_relationship_events=rel_events.get("events", []),
     
-                addiction_status=_kvlist(addiction_status),
-                active_cravings=_kvlist(active_cravings),
+                addiction_status=addiction_status or {},
+                active_cravings=active_cravings or [],
                 addiction_contexts=[],
     
                 player_money=100,
-                currency_system=_kvlist(currency_system),
+                currency_system=currency_system or {},
                 recent_transactions=[],
     
                 # enums -> string value
-                world_mood=(world_mood.value if hasattr(world_mood, "value") else world_mood),
+                world_mood=world_mood,
     
                 # model -> dict
                 world_tension=_to_model_dict(world_tension),
     
-                tension_factors=_kvlist(tensions),
-                environmental_factors=_kvlist({
+                tension_factors=tensions,
+                environmental_factors={
                     "conflict_manifestations": conflict_manifestations,
                     "conflict_complexity": conflict_state.get("complexity_score", 0),
-                }),
+                },
     
                 # schema expects a string here in your tool JSON
-                location_data=str(location_data) if location_data else "",
+                location_data=_to_model_dict(location_data) if location_data else "",
     
                 # use KV for flex fields
-                ongoing_events=_kvlist(active_conflicts),
-                available_activities=_kvlist(available_activities),
+                ongoing_events=active_conflicts,
+                available_activities=available_activities,
     
                 event_history=[],
                 nyx_directives=[],
@@ -827,27 +857,9 @@ class CompleteWorldDirectorContext:
                 conflict_state = {}
     
         # available_activities from world_state (already normalized as KV list in builder)
-        available_activities = []
-        try:
-            # your builder uses KV list for available_activities
-            aa = getattr(world_state, "available_activities", None) or []
-            # normalize KV -> list[dict] where possible
-            for entry in aa:
-                if isinstance(entry, dict):
-                    # KV shape: {"key": something, "value": <json or scalar>}
-                    if "key" in entry and "value" in entry:
-                        try:
-                            v = entry["value"]
-                            if isinstance(v, str):
-                                v = json.loads(v)
-                            if isinstance(v, dict):
-                                available_activities.append(v)
-                        except Exception:
-                            pass
-                    else:
-                        available_activities.append(entry)
-        except Exception:
-            pass
+        available_activities = getattr(world_state, "available_activities", []) or []
+        if not isinstance(available_activities, list):
+            available_activities = []
     
         # optional: emergent patterns (spawn in background to keep this call snappy)
         patterns_result = None
@@ -1415,9 +1427,9 @@ async def generate_complete_slice_of_life_event(
                 scene_context = {
                     "scene_type": "slice_of_life",
                     "location": world_state.location_data,
-                    "participants": [npc['npc_id'] for npc in world_state.active_npcs[:3]],
-                    "world_mood": world_state.world_mood.value,
-                    "time_of_day": world_state.current_time.time_of_day
+                    "participants": [npc.get('npc_id') for npc in (world_state.active_npcs or [])[:3] if isinstance(npc, dict)],
+                    "world_mood": getattr(world_state.world_mood, "value", world_state.world_mood),
+                    "time_of_day": (world_state.current_time.get('time_of_day') if isinstance(world_state.current_time, dict) else getattr(world_state.current_time, 'time_of_day', 'unknown'))
                 }
                 
                 conflict_result = await context.conflict_synthesizer.process_scene(scene_context)
@@ -1431,10 +1443,10 @@ async def generate_complete_slice_of_life_event(
                             event_name="Tensions Surface",
                             description=conflict_result['manifestations'][0],
                             event_type="conflict_manifestation",
-                            location=world_state.location_data.get('current_location', 'unknown'),
-                            year=world_state.current_time.year,
-                            month=world_state.current_time.month,
-                            day=world_state.current_time.day
+                            location=(world_state.location_data.get('current_location') if isinstance(world_state.location_data, dict) else (world_state.location_data or 'unknown')),
+                            year=(world_state.current_time.get('year') if isinstance(world_state.current_time, dict) else getattr(world_state.current_time, 'year', 1)),
+                            month=(world_state.current_time.get('month') if isinstance(world_state.current_time, dict) else getattr(world_state.current_time, 'month', 1)),
+                            day=(world_state.current_time.get('day') if isinstance(world_state.current_time, dict) else getattr(world_state.current_time, 'day', 1))
                         )
                         
                         await log_canonical_event(
@@ -1482,7 +1494,7 @@ async def generate_complete_slice_of_life_event(
             return craving_event
         
         # 2. Check for pending dreams
-        if world_state.world_mood == WorldMood.DREAMLIKE or random.random() < 0.05:
+        if (world_state.world_mood == WorldMood.DREAMLIKE or getattr(world_state.world_mood, "value", None) == getattr(WorldMood.DREAMLIKE, "value", None)) or random.random() < 0.05:
             dream_result = await add_dream_sequence(
                 context.user_id, context.conversation_id
             )
@@ -1497,6 +1509,7 @@ async def generate_complete_slice_of_life_event(
                         description=dream_event.get('description', ''),
                         event_type="dream",
                         location="dream_realm"
+                        # optional dating omitted here
                     )
                     
                     await log_canonical_event(
@@ -1521,7 +1534,7 @@ async def generate_complete_slice_of_life_event(
                     event_name=revelation_event.get('title', 'Revelation'),
                     description=revelation_event.get('description', ''),
                     event_type="revelation",
-                    location=world_state.location_data.get('current_location', 'unknown')
+                    location=(world_state.location_data.get('current_location') if isinstance(world_state.location_data, dict) else (world_state.location_data or 'unknown'))
                 )
                 
                 await log_canonical_event(
@@ -1614,9 +1627,9 @@ Output as JSON with complete detail for emergent gameplay."""
             if world_state.location_data:
                 location_name = await find_or_create_location(
                     context.canonical_context, conn,
-                    location_name=world_state.location_data.get('current_location', 'Unknown Location'),
-                    description=world_state.location_data.get('description', 'A place in the world'),
-                    location_type=world_state.location_data.get('type', 'general')
+                    location_name=(world_state.location_data.get('current_location') if isinstance(world_state.location_data, dict) else (world_state.location_data or 'Unknown Location')),
+                    description=(world_state.location_data.get('description') if isinstance(world_state.location_data, dict) else 'A place in the world'),
+                    location_type=(world_state.location_data.get('type') if isinstance(world_state.location_data, dict) else 'general')
                 )
             else:
                 location_name = 'Unknown Location'
@@ -1709,7 +1722,11 @@ async def generate_addiction_craving_event(
 ) -> Dict[str, Any]:
     """Generate an addiction-craving event via LLM"""
     context = ctx.context
-    data = craving_data.model_dump(exclude_none=True)
+    # Accept pydantic model OR plain dict
+    if hasattr(craving_data, "model_dump"):
+        data = craving_data.model_dump(exclude_none=True)
+    else:
+        data = dict(craving_data) if isinstance(craving_data, dict) else {}
 
     # Lazy load
     chatgpt_funcs = _get_chatgpt_functions()
@@ -1771,7 +1788,10 @@ async def generate_dream_event(
     """Generate a dream sequence event"""
     context = ctx.context
     world_state = context.current_world_state
-    data = dream_data.model_dump(exclude_none=True)
+    if hasattr(dream_data, "model_dump"):
+        data = dream_data.model_dump(exclude_none=True)
+    else:
+        data = dict(dream_data) if isinstance(dream_data, dict) else {}
 
     # Lazy load
     chatgpt_funcs = _get_chatgpt_functions()
@@ -1858,7 +1878,10 @@ async def generate_revelation_event(
 ) -> Dict[str, Any]:
     """Generate a personal revelation event"""
     context = ctx.context
-    data = revelation_data.model_dump(exclude_none=True)
+    if hasattr(revelation_data, "model_dump"):
+        data = revelation_data.model_dump(exclude_none=True)
+    else:
+        data = dict(revelation_data) if isinstance(revelation_data, dict) else {}
 
     # Lazy load
     chatgpt_funcs = _get_chatgpt_functions()
@@ -1923,7 +1946,6 @@ Output as JSON with introspective narrative."""
         }
 
 @function_tool
-@function_tool
 async def process_complete_player_choice(
     ctx: RunContextWrapper[CompleteWorldDirectorContext],
     choice_data: ChoiceData
@@ -1980,10 +2002,10 @@ async def process_complete_player_choice(
                 event_name=f"Player Choice: {choice_data.text[:50]}{'...' if len(choice_data.text) > 50 else ''}",
                 description=f"Player chose: {choice_data.text}",
                 location=canonical_location,
-                year=context.current_world_state.current_time.get('year', 1) if context.current_world_state else 1,
-                month=context.current_world_state.current_time.get('month', 1) if context.current_world_state else 1,
-                day=context.current_world_state.current_time.get('day', 1) if context.current_world_state else 1,
-                time_of_day=str(context.current_world_state.current_time.get('time_of_day', 'Unknown')) if context.current_world_state else 'Unknown'
+                year=(context.current_world_state.current_time.get('year', 1) if isinstance(context.current_world_state.current_time, dict) else getattr(context.current_world_state.current_time, 'year', 1)) if context.current_world_state else 1,
+                month=(context.current_world_state.current_time.get('month', 1) if isinstance(context.current_world_state.current_time, dict) else getattr(context.current_world_state.current_time, 'month', 1)) if context.current_world_state else 1,
+                day=(context.current_world_state.current_time.get('day', 1) if isinstance(context.current_world_state.current_time, dict) else getattr(context.current_world_state.current_time, 'day', 1)) if context.current_world_state else 1,
+                time_of_day=str(context.current_world_state.current_time.get('time_of_day', 'Unknown') if isinstance(context.current_world_state.current_time, dict) else getattr(context.current_world_state.current_time, 'time_of_day', 'Unknown')) if context.current_world_state else 'Unknown'
             )
             
             await log_canonical_event(
@@ -2736,6 +2758,7 @@ class CompleteWorldDirector:
             result = await Runner.run(self.agent, prompt, context=self.context)
             
             # Store result canonically
+            moment_event_id = None
             moment_content = result.messages[-1].content if result and result.messages else None
             if moment_content:
                 async with get_db_connection_context() as conn:
