@@ -363,8 +363,7 @@ class ConflictSynthesizer:
         # Background task handles for clean shutdown
         self._bg_tasks: Dict[str, asyncio.Task] = {}
 
-        # Initialize subsystems
-        self._initialize_all_subsystems()
+        self._last_scene = None
     
     # ========== Subsystem Registration ==========
     
@@ -384,7 +383,7 @@ class ConflictSynthesizer:
             return False
         
     async def initialize_all_subsystems(self):
-        """Initialize all default subsystems and start background workers."""
+        """Initialize all default subsystems and start background workers (idempotent)."""
         try:
             from logic.conflict_system.tension_tracking import TensionSubsystem
             from logic.conflict_system.stakeholder_management import StakeholderSubsystem
@@ -416,14 +415,18 @@ class ConflictSynthesizer:
                 EnhancedIntegrationSubsystem(self.user_id, self.conversation_id),
             ]
     
+            # (Re)register only if not already present
             for s in subsystems:
-                await self.register_subsystem(s)
+                if s.subsystem_type not in self._subsystems:
+                    await self.register_subsystem(s)
     
-            # start background loops once
-            if not self._processing:
+            # Start background workers exactly once
+            if 'events' not in self._bg_tasks or self._bg_tasks['events'].done():
                 self._bg_tasks['events'] = asyncio.create_task(self._process_events())
+            if 'cleanup' not in self._bg_tasks or self._bg_tasks['cleanup'].done():
                 self._bg_tasks['cleanup'] = asyncio.create_task(self._periodic_cache_cleanup())
     
+            logger.info("Conflict subsystems initialized")
         except Exception:
             logger.exception("Failed to initialize subsystems")
             raise
@@ -432,31 +435,25 @@ class ConflictSynthesizer:
     # ========== Event System ==========
     
     async def emit_event(self, event: SystemEvent) -> Optional[List[SubsystemResponse]]:
-        """Emit an event to relevant subsystems"""
+        """Emit an event to relevant subsystems with sane backpressure and side-effect limits."""
         try:
-            # Add to history with bounded size
+            # Bounded history
             self._event_history.append(event)
             if len(self._event_history) > MAX_EVENT_HISTORY:
                 self._event_history = self._event_history[-MAX_EVENT_HISTORY:]
-            
-            # Handle synchronous events differently from async events
+    
             if event.requires_response:
-                # Process synchronously, do NOT enqueue the event itself
                 responses = await self._process_event_parallel(event)
-                
-                # Track successful processing
                 if responses is not None:
                     self._performance_metrics['events_processed'] += 1
-                
-                # Enqueue side effects (best-effort, non-blocking, with cap)
+    
+                # Best-effort side effects
                 if responses:
                     side_count = 0
                     for r in responses:
-                        if side_count >= MAX_SIDE_EFFECTS_PER_EVENT:
-                            logger.warning(f"Capping side effects at {MAX_SIDE_EFFECTS_PER_EVENT} for event {event.event_id}")
-                            break
                         for se in r.side_effects:
                             if side_count >= MAX_SIDE_EFFECTS_PER_EVENT:
+                                logger.warning(f"Side-effect cap reached for {event.event_id}")
                                 break
                             try:
                                 self._event_queue.put_nowait(se)
@@ -464,19 +461,19 @@ class ConflictSynthesizer:
                             except asyncio.QueueFull:
                                 logger.warning(f"Event queue full, dropping side effect {se.event_id}")
                                 self._performance_metrics['failures_count'] += 1
-                
+                    if side_count:
+                        logger.debug(f"Enqueued {side_count} side effects for {event.event_id}")
                 return responses
-            
-            # Async-only events: enqueue and return
+    
+            # Async fire-and-forget
             try:
                 self._event_queue.put_nowait(event)
             except asyncio.QueueFull:
                 logger.warning(f"Event queue full, dropping event {event.event_id}")
                 self._performance_metrics['failures_count'] += 1
                 return None
-            
             return None
-            
+    
         except Exception:
             logger.exception(f"Failed to emit event {event.event_id}")
             self._performance_metrics['failures_count'] += 1
@@ -644,55 +641,59 @@ class ConflictSynthesizer:
         
         self._processing = False
     
+    async def _get_subsystem_bundle_with_timeout(
+        self,
+        subsystem: ConflictSubsystem,
+        scope: 'SceneScope',
+        subsystem_type: SubsystemType
+    ) -> Dict[str, Any]:
+        """Call subsystem.get_scene_bundle(scope) with orchestrator timeout & accounting."""
+        if not hasattr(subsystem, "get_scene_bundle"):
+            return {}
+        try:
+            result = await asyncio.wait_for(
+                subsystem.get_scene_bundle(scope),
+                timeout=self._parallel_timeout
+            )
+            return result if isinstance(result, dict) else {}
+        except asyncio.TimeoutError:
+            logger.warning(f"{subsystem_type.value}.get_scene_bundle timed out")
+            self._performance_metrics['timeouts_count'] += 1
+            self._performance_metrics['subsystem_timeouts'][subsystem_type.value] += 1
+            return {}
+        except Exception as e:
+            logger.debug(f"{subsystem_type.value} bundle fetch failed: {e}")
+            self._performance_metrics['failures_count'] += 1
+            self._performance_metrics['subsystem_failures'][subsystem_type.value] += 1
+            return {}
+    
+  
     async def _process_event_parallel(self, event: SystemEvent) -> List[SubsystemResponse]:
+        """Process event in parallel across subsystems with detailed tracking."""
         start_time = time.perf_counter()
-        # COPY the list before extending
+    
+        # Handlers subscribed to this event
         handler_subsystems = list(self._event_handlers.get(event.event_type, []))
+    
+        # Targeted subsystems (if any)
         if event.target_subsystems:
             handler_subsystems.extend(list(event.target_subsystems))
-        
-        # Send to each handler
-        for subsystem_type in set(handler_subsystems):
-            if subsystem_type in self._subsystems:
-                subsystem = self._subsystems[subsystem_type]
-                try:
-                    response = await subsystem.handle_event(event)
-                    responses.append(response)
-                except Exception:
-                    logger.exception(f"Error in {subsystem_type} handling event")
-                    self._performance_metrics['failures_count'] += 1
-                    self._performance_metrics['subsystem_failures'][subsystem_type.value] += 1
-        
-        return responses
     
-    async def _process_event_parallel(self, event: SystemEvent) -> List[SubsystemResponse]:
-        """Process event in parallel across subsystems with detailed tracking"""
-        start_time = time.perf_counter()  # Use monotonic clock for duration
-        
-        # Get handlers for this event type
-        handler_subsystems = self._event_handlers.get(event.event_type, [])
-        
-        # Add targeted subsystems if specified
-        if event.target_subsystems:
-            handler_subsystems.extend(event.target_subsystems)
-        
-        # Create parallel tasks with mapping for tracking
+        # Create tasks
         task_map: Dict[asyncio.Task, SubsystemType] = {}
         for subsystem_type in set(handler_subsystems):
-            if subsystem_type in self._subsystems:
-                subsystem = self._subsystems[subsystem_type]
-                task = asyncio.create_task(
-                    self._handle_with_semaphore(subsystem, event)
-                )
-                task_map[task] = subsystem_type
-        
+            subsystem = self._subsystems.get(subsystem_type)
+            if not subsystem:
+                continue
+            task = asyncio.create_task(self._handle_with_semaphore(subsystem, event))
+            task_map[task] = subsystem_type
+    
         if not task_map:
             return []
-        
-        # Wait with timeout and proper cleanup
+    
         done, pending = await asyncio.wait(task_map.keys(), timeout=self._parallel_timeout)
-        
-        # Log and cancel pending tasks cleanly
+    
+        # Cancel pending with accounting
         for task in pending:
             subsystem_type = task_map[task]
             logger.warning(f"Subsystem {subsystem_type.value} timed out on event {event.event_id}")
@@ -703,8 +704,8 @@ class ConflictSynthesizer:
                 await task
             except asyncio.CancelledError:
                 pass
-        
-        # Collect successful responses
+    
+        # Collect results
         responses: List[SubsystemResponse] = []
         for task in done:
             subsystem_type = task_map[task]
@@ -712,9 +713,7 @@ class ConflictSynthesizer:
                 result = task.result()
                 if isinstance(result, SubsystemResponse):
                     responses.append(result)
-                    # Track unsuccessful responses
                     if not result.success:
-                        logger.warning(f"Subsystem {subsystem_type.value} returned failure on {event.event_id}")
                         self._performance_metrics['failures_count'] += 1
                         self._performance_metrics['subsystem_failures'][subsystem_type.value] += 1
                 else:
@@ -725,18 +724,18 @@ class ConflictSynthesizer:
                 logger.exception(f"Subsystem {subsystem_type.value} crashed on {event.event_id}")
                 self._performance_metrics['failures_count'] += 1
                 self._performance_metrics['subsystem_failures'][subsystem_type.value] += 1
-        
-        # Track performance using monotonic clock
-        process_time = time.perf_counter() - start_time
-        self._performance_metrics['parallel_process_times'].append(process_time)
+    
+        # Perf tracking
+        elapsed = time.perf_counter() - start_time
+        self._performance_metrics['parallel_process_times'].append(elapsed)
         if len(self._performance_metrics['parallel_process_times']) > 100:
             self._performance_metrics['parallel_process_times'].pop(0)
-        
-        if pending:
-            logger.info(f"Parallel processing: {len(done)} completed, {len(pending)} timed out in {process_time:.3f}s")
-        
-        return responses
     
+        if pending:
+            logger.info(f"Parallel processing: {len(done)} completed, {len(pending)} timed out in {elapsed:.3f}s")
+    
+        return responses
+        
     async def _handle_with_semaphore(self, subsystem: ConflictSubsystem, 
                                     event: SystemEvent) -> SubsystemResponse:
         """Handle event with semaphore control for parallel limiting"""
@@ -917,24 +916,28 @@ class ConflictSynthesizer:
     
     async def process_scene(self, scene_context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        MODIFIED: Process scene with parallel subsystem handling and transition tracking.
+        Process a scene with parallel subsystem handling and transition tracking.
         """
-        # Convert to scope for tracking
-        scope = {
+        # Ensure first-call safety
+        if not hasattr(self, "_last_scene"):
+            self._last_scene = None
+    
+        # Convert to a lightweight scope signature for transition detection
+        scope_sig = {
             'location': scene_context.get('location'),
-            'npcs': scene_context.get('npcs', []),
-            'topics': scene_context.get('topics', [])
+            'npcs': scene_context.get('npcs', []) or [],
+            'topics': scene_context.get('topics', []) or []
         }
-        
-        # Check for scene transition
-        if self._last_scene != scope:
-            asyncio.create_task(self._handle_scene_transition(self._last_scene, scope))
-            self._last_scene = scope
-        
-        # Determine active subsystems
+    
+        # Async transition notification if scope changed
+        if self._last_scene != scope_sig:
+            asyncio.create_task(self._handle_scene_transition(self._last_scene, scope_sig))
+            self._last_scene = scope_sig
+    
+        # Determine which subsystems should be active (LLM-routed w/ fallback)
         active = await self._determine_active_subsystems(scene_context)
-        
-        # Build routing event
+    
+        # Build and emit routing event
         event = SystemEvent(
             event_id=f"scene_{datetime.now().timestamp()}",
             event_type=EventType.STATE_SYNC,
@@ -944,10 +947,8 @@ class ConflictSynthesizer:
             requires_response=True,
             priority=5,
         )
-        
-        # Process with parallel handling
+    
         responses = await self.emit_event(event)
-        
         if responses is None:
             logger.warning("Failed to emit scene processing event")
             return {
@@ -955,7 +956,7 @@ class ConflictSynthesizer:
                 'processed': False,
                 'error': 'Event emission failed'
             }
-        
+    
         return self._synthesize_scene_result(responses, scene_context)
 
     
@@ -966,11 +967,11 @@ class ConflictSynthesizer:
         Scene-scoped conflict bundle with stable cache key, normalized shape, and safe merges.
         Keeps your background fast-path and parallel subsystem fetches.
         """
-        # --- ensure helper attrs exist ---
+        # First-call safety for transitions
         if not hasattr(self, "_last_scene"):
             self._last_scene = None
     
-        # --- stable cache key (prefer scope.to_cache_key; else canonicalized JSON) ---
+        # Stable cache key (prefer scope.to_cache_key; else canonical JSON)
         try:
             scene_key = scope.to_cache_key()
         except Exception:
@@ -985,7 +986,7 @@ class ConflictSynthesizer:
     
         cache_key = f"scene:{self.user_id}:{self.conversation_id}:{scene_key}:conflicts"
     
-        # --- cache fast path ---
+        # Cache fast path + LRU touch
         async with self._bundle_lock:
             entry = self._bundle_cache.get(cache_key)
             if entry:
@@ -995,14 +996,13 @@ class ConflictSynthesizer:
                     if self._last_scene != scope:
                         asyncio.create_task(self._handle_scene_transition(self._last_scene, scope))
                         self._last_scene = scope
-                    # LRU touch
                     self._bundle_cache.move_to_end(cache_key)
                     return bundle
     
         self._cache_misses += 1
         start = time.time()
     
-        # --- base bundle (keep your keys) ---
+        # Base bundle
         bundle = {
             "conflicts": [],
             "active_tensions": {},
@@ -1011,33 +1011,32 @@ class ConflictSynthesizer:
             "world_tension": 0.0,
             "canon": {},
             "timestamp": time.time(),
-            # new: helps deltas
             "last_changed_at": 0.0,
         }
     
-        # ---------- Background fast-path ----------
+        # Background fast-path (guarded)
         background_subsystem = self._subsystems.get(SubsystemType.BACKGROUND)
         if background_subsystem and hasattr(background_subsystem, "manager"):
             try:
                 scene_context = {
                     "location": getattr(scope, "location_id", None),
                     "npcs": getattr(scope, "npc_ids", []) or [],
-                    # use 'topics', not 'conversation_topics'
                     "conversation_topics": getattr(scope, "topics", []) or [],
                 }
-                bg_context = await background_subsystem.manager.get_scene_context(scene_context)
-                bundle["conflicts"].extend(bg_context.get("active_conflicts", []) or [])
-                bundle["ambient_effects"].extend(bg_context.get("ambient_atmosphere", []) or [])
-                bundle["world_tension"] = float(bg_context.get("world_tension", 0.0) or 0.0)
-                # try to propagate change time if available
-                bundle["last_changed_at"] = max(
-                    bundle["last_changed_at"],
-                    float(bg_context.get("last_changed_at", 0.0) or 0.0),
-                )
+                # Hard guard: skip call if everything is empty
+                if scene_context["location"] or scene_context["npcs"] or scene_context["conversation_topics"]:
+                    bg_context = await background_subsystem.manager.get_scene_context(scene_context)
+                    bundle["conflicts"].extend(bg_context.get("active_conflicts", []) or [])
+                    bundle["ambient_effects"].extend(bg_context.get("ambient_atmosphere", []) or [])
+                    bundle["world_tension"] = float(bg_context.get("world_tension", 0.0) or 0.0)
+                    bundle["last_changed_at"] = max(
+                        bundle["last_changed_at"],
+                        float(bg_context.get("last_changed_at", 0.0) or 0.0),
+                    )
             except Exception as e:
                 logger.debug(f"Background scene context failed (non-fatal): {e}")
     
-        # ---------- Enrich from current conflict states (cheap, scoped) ----------
+        # Enrich from in-memory conflict states (cheap, scoped)
         try:
             conflicts_dict = await self._get_scene_relevant_conflicts(scope)
         except Exception as e:
@@ -1065,7 +1064,6 @@ class ConflictSynthesizer:
             })
             latest_change = max(latest_change, float(state.get("last_updated", 0.0) or 0.0))
         if active_from_state:
-            # merge with bg conflicts, dedupe by id if present
             seen, merged = set(), []
             for item in (bundle["conflicts"] + active_from_state):
                 cid = item.get("id")
@@ -1077,7 +1075,7 @@ class ConflictSynthesizer:
             bundle["conflicts"] = merged
             bundle["last_changed_at"] = max(bundle["last_changed_at"], latest_change)
     
-        # ---------- Quick tensions/opportunities ----------
+        # Quick tensions / opportunities
         npc_ids = getattr(scope, "npc_ids", []) or []
         if npc_ids and not bundle["active_tensions"]:
             try:
@@ -1091,7 +1089,7 @@ class ConflictSynthesizer:
             except Exception:
                 bundle["opportunities"] = []
     
-        # ---------- Parallel subsystem mini-bundles (non-background) ----------
+        # Parallel subsystem mini-bundles (non-background)
         tasks = []
         for subsystem_type, subsystem in self._subsystems.items():
             if subsystem_type == SubsystemType.BACKGROUND:
@@ -1103,10 +1101,9 @@ class ConflictSynthesizer:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for result in results:
                 if isinstance(result, dict):
-                    # be careful not to stomp; merge known keys explicitly
                     if "conflicts" in result:
                         bundle["conflicts"].extend(result.get("conflicts") or [])
-                    if "active" in result:  # some subsystems may already use 'active'
+                    if "active" in result:
                         bundle["conflicts"].extend(result.get("active") or [])
                     if "active_tensions" in result:
                         bundle["active_tensions"].update(result.get("active_tensions") or {})
@@ -1126,33 +1123,27 @@ class ConflictSynthesizer:
                             bundle["last_changed_at"] = max(bundle["last_changed_at"], float(result["last_changed_at"]))
                         except Exception:
                             pass
-                # ignore exceptions; already returned via return_exceptions=True
+                # exceptions are ignored due to return_exceptions=True
     
-        # ---------- Normalize shape expected by NyxContext ----------
-        # Provide backwards-compat keys without double-allocating
+        # Normalize shape expected by NyxContext
         bundle["active"] = bundle.get("conflicts", [])
         bundle["tensions"] = bundle.get("active_tensions", {})
-        # keep opportunities list trimmed
         bundle["opportunities"] = (bundle.get("opportunities") or [])[:5]
     
-        # ---------- Cache store + LRU cap ----------
+        # Cache store + LRU cap
         async with self._bundle_lock:
             self._bundle_cache[cache_key] = (bundle, time.time())
-            # LRU touch
-            if hasattr(self._bundle_cache, "move_to_end"):
-                self._bundle_cache.move_to_end(cache_key)
-            # size cap (env-backed)
+            self._bundle_cache.move_to_end(cache_key)
             max_cache = int(os.getenv("CONFLICT_BUNDLE_CACHE_MAX", "256"))
             while len(self._bundle_cache) > max_cache:
-                # pop oldest
                 self._bundle_cache.popitem(last=False)
     
-        # perf metric
+        # Perf metric
         self._performance_metrics["bundle_fetch_times"].append(time.time() - start)
         if len(self._performance_metrics["bundle_fetch_times"]) > 200:
             self._performance_metrics["bundle_fetch_times"].pop(0)
     
-        # handle scene transition
+        # Transition hook
         if self._last_scene != scope:
             asyncio.create_task(self._handle_scene_transition(self._last_scene, scope))
             self._last_scene = scope
@@ -1165,17 +1156,14 @@ class ConflictSynthesizer:
         Get only conflicts that changed since timestamp.
         Scope-aware fast path for incremental updates.
         """
-        # Get only relevant conflicts for this scope
         relevant = await self._get_scene_relevant_conflicts(scope)
-        
-        # Check if any relevant conflicts changed
+    
         latest_change = max(
-            (s.get('last_updated', 0) for s in relevant.values()),
-            default=0
+            (float(s.get('last_updated', 0) or 0) for s in relevant.values()),
+            default=0.0
         )
-        
-        if latest_change <= since_ts:
-            # Nothing changed in scope, return empty delta
+    
+        if latest_change <= (since_ts or 0.0):
             return {
                 'section': 'conflicts',
                 'data': {},
@@ -1185,8 +1173,7 @@ class ConflictSynthesizer:
                 'version': f"conflict_bundle_{time.time()}",
                 'is_delta': True
             }
-        
-        # Something changed, fetch fresh bundle
+    
         bundle = await self.get_scene_bundle(scope)
         bundle['is_delta'] = True
         return bundle
