@@ -14,7 +14,8 @@ from collections import OrderedDict
 from uuid import uuid4
 
 from agents import Agent, Runner
-from agents.models.openai_responses import OpenAIResponsesModel, ModelSettings
+from agents.models.openai_responses import OpenAIResponsesModel
+from agents.model_settings import ModelSettings
 from agents.guardrail import JSONSchema
 
 from nyx.nyx_agent.models import (
