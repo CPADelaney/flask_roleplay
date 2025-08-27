@@ -1024,6 +1024,304 @@ def memory_consolidate_task(conversation_id: str, recent_memories: Optional[List
             return {"ok": False, "error": str(e)}
     return run_async_in_worker_loop(_run())
 
+# tasks.py
+
+@celery_app.task
+def lore_evolution_task(params):
+    """
+    Background task to evolve lore based on events.
+    """
+    async def evolve_lore():
+        with trace(workflow_name="lore_evolution_background"):
+            try:
+                affected_entities = params.get('affected_entities', [])
+                
+                if not affected_entities:
+                    logger.info("No entities to evolve, skipping lore evolution")
+                    return {"status": "success", "message": "No entities to process"}
+                
+                processed_count = 0
+                
+                for entity in affected_entities:
+                    try:
+                        user_id = entity.get('user_id')
+                        conversation_id = entity.get('conversation_id')
+                        event_description = entity.get('event', 'World state evolution')
+                        
+                        if not user_id or not conversation_id:
+                            continue
+                        
+                        # Use the lore orchestrator's actual method
+                        from lore.lore_orchestrator import get_lore_orchestrator
+                        
+                        orchestrator = await get_lore_orchestrator(user_id, conversation_id)
+                        
+                        # Create mock context for the governance decorator
+                        ctx = orchestrator._create_mock_context()
+                        
+                        # Use the actual evolve_world_with_event method
+                        evolution_result = await orchestrator.evolve_world_with_event(
+                            ctx,
+                            event_description=event_description,
+                            affected_location_id=entity.get('location_id')
+                        )
+                        
+                        if evolution_result:
+                            logger.info(f"Lore evolved for entity {entity}: {evolution_result.get('affected_elements', [])}")
+                            processed_count += 1
+                    
+                    except Exception as e:
+                        logger.error(f"Failed to evolve lore for entity {entity}: {e}")
+                
+                return {
+                    "status": "success",
+                    "entities_processed": processed_count
+                }
+                
+            except Exception as e:
+                logger.error(f"Lore evolution error: {e}", exc_info=True)
+                return {"status": "error", "error": str(e)}
+    
+    return run_async_in_worker_loop(evolve_lore())
+
+
+@celery_app.task
+def update_conflict_tensions_task(params):
+    """
+    Background task to update conflict states and recalculate tensions.
+    """
+    async def update_tensions():
+        with trace(workflow_name="conflict_tension_update"):
+            try:
+                active_conflicts = params.get('active_conflicts', [])
+                
+                # Get a single synthesizer for efficiency
+                from logic.conflict_system.conflict_synthesizer import get_synthesizer
+                
+                # Need at least one conflict to get user/conversation context
+                if active_conflicts:
+                    # Get context from first conflict
+                    async with get_db_connection_context() as conn:
+                        first_conflict = await conn.fetchrow(
+                            """SELECT user_id, conversation_id 
+                               FROM Conflicts WHERE conflict_id = $1""",
+                            active_conflicts[0]
+                        )
+                        if not first_conflict:
+                            return {"status": "error", "error": "No conflicts found"}
+                        
+                        user_id = first_conflict['user_id']
+                        conversation_id = first_conflict['conversation_id']
+                else:
+                    # Get any active conflicts
+                    async with get_db_connection_context() as conn:
+                        result = await conn.fetchrow(
+                            """SELECT user_id, conversation_id 
+                               FROM Conflicts 
+                               WHERE is_active = true 
+                               LIMIT 1"""
+                        )
+                        if not result:
+                            return {"status": "success", "message": "No active conflicts"}
+                        
+                        user_id = result['user_id']
+                        conversation_id = result['conversation_id']
+                
+                # Get synthesizer
+                synthesizer = await get_synthesizer(user_id, conversation_id)
+                
+                # Process state sync to update tensions
+                from logic.conflict_system.conflict_synthesizer import SystemEvent, EventType, SubsystemType
+                
+                event = SystemEvent(
+                    event_id=f"tension_update_{time.time()}",
+                    event_type=EventType.STATE_SYNC,
+                    source_subsystem=SubsystemType.BACKGROUND,
+                    payload={'update_tensions': True},
+                    target_subsystems={SubsystemType.TENSION},
+                    requires_response=False
+                )
+                
+                await synthesizer.emit_event(event)
+                
+                return {
+                    "status": "success",
+                    "message": "Tension update triggered"
+                }
+                
+            except Exception as e:
+                logger.error(f"Conflict tension update error: {e}", exc_info=True)
+                return {"status": "error", "error": str(e)}
+    
+    return run_async_in_worker_loop(update_tensions())
+
+
+@celery_app.task
+def process_universal_updates_task(params):
+    """
+    Background task to process universal world state updates.
+    """
+    async def process_updates():
+        with trace(workflow_name="universal_updates_background"):
+            try:
+                response_data = params.get('response', {})
+                conversation_id = params.get('conversation_id')
+                
+                if not conversation_id:
+                    return {"status": "error", "error": "No conversation_id provided"}
+                
+                # Get user_id from conversation
+                async with get_db_connection_context() as conn:
+                    result = await conn.fetchrow(
+                        """SELECT user_id FROM CurrentRoleplay 
+                           WHERE conversation_id = $1 AND key = 'UserId'""",
+                        conversation_id
+                    )
+                    if result and result['user_id']:
+                        user_id = result['user_id']
+                    else:
+                        # Try getting from NPCStats as fallback
+                        result = await conn.fetchrow(
+                            "SELECT DISTINCT user_id FROM NPCStats WHERE conversation_id = $1",
+                            conversation_id
+                        )
+                        if not result:
+                            return {"status": "error", "error": "Conversation not found"}
+                        user_id = result['user_id']
+                
+                # Build universal update structure
+                updates_to_apply = {}
+                
+                # Extract relevant updates from response
+                if 'world_state' in response_data:
+                    updates_to_apply['world_state'] = response_data['world_state']
+                
+                if 'emergent_events' in response_data:
+                    updates_to_apply['emergent_events'] = response_data['emergent_events']
+                
+                if 'npc_dialogue' in response_data:
+                    updates_to_apply['npc_updates'] = response_data['npc_dialogue']
+                
+                # The actual implementation uses UniversalUpdaterContext
+                from logic.universal_updater_agent import UniversalUpdaterContext, apply_universal_updates_async
+                
+                try:
+                    updater_context = UniversalUpdaterContext(user_id, conversation_id)
+                    await updater_context.initialize()
+                    
+                    await apply_universal_updates_async(
+                        updater_context,
+                        user_id,
+                        conversation_id,
+                        updates_to_apply,
+                        None  # Connection will be created internally
+                    )
+                    
+                    logger.info(f"Universal updates applied for conversation {conversation_id}")
+                    
+                    return {
+                        "status": "success",
+                        "conversation_id": conversation_id,
+                        "updates_applied": len(updates_to_apply)
+                    }
+                except ImportError:
+                    # Fallback to simpler updater if available
+                    from logic.universal_updater import apply_universal_updates_async
+                    
+                    async with get_db_connection_context() as conn:
+                        await apply_universal_updates_async(
+                            user_id,
+                            conversation_id,
+                            updates_to_apply,
+                            conn
+                        )
+                    
+                    return {
+                        "status": "success",
+                        "conversation_id": conversation_id,
+                        "updates_applied": len(updates_to_apply)
+                    }
+                
+            except Exception as e:
+                logger.error(f"Universal update error: {e}", exc_info=True)
+                return {"status": "error", "error": str(e)}
+    
+    return run_async_in_worker_loop(process_updates())
+
+
+@celery_app.task  
+def npc_background_think_task(params):
+    """
+    Individual NPC background processing - update snapshot and relationships.
+    """
+    async def npc_think():
+        with trace(workflow_name="npc_background_think"):
+            try:
+                npc_id = params.get('npc_id')
+                if not npc_id:
+                    return {"status": "error", "error": "No NPC ID provided"}
+                
+                # Get NPC's context
+                async with get_db_connection_context() as conn:
+                    npc_data = await conn.fetchrow("""
+                        SELECT user_id, conversation_id, current_location
+                        FROM NPCStats 
+                        WHERE npc_id = $1
+                    """, npc_id)
+                    
+                    if not npc_data:
+                        return {"status": "error", "error": f"NPC {npc_id} not found"}
+                
+                from npcs.npc_orchestrator import NPCOrchestrator
+                
+                orchestrator = NPCOrchestrator(
+                    npc_data['user_id'], 
+                    npc_data['conversation_id']
+                )
+                await orchestrator.initialize()
+                
+                # Refresh NPC snapshot (this updates cache)
+                snapshot = await orchestrator.get_npc_snapshot(
+                    npc_id, 
+                    force_refresh=True, 
+                    light=False  # Full snapshot for background processing
+                )
+                
+                # Run perception update if NPC is in a location
+                if npc_data['current_location']:
+                    await orchestrator.update_npc_perception(
+                        npc_id, 
+                        npc_data['current_location']
+                    )
+                
+                # Update relationship dynamics
+                await orchestrator.update_npc_relationships(npc_id)
+                
+                # Check for scheming opportunities
+                if snapshot.dominance > 70 or snapshot.cruelty > 60:
+                    # This NPC might be scheming
+                    async with get_db_connection_context() as conn:
+                        await conn.execute("""
+                            UPDATE NPCStats 
+                            SET scheming_level = LEAST(scheming_level + 5, 100),
+                                last_updated = NOW()
+                            WHERE npc_id = $1
+                        """, npc_id)
+                
+                return {
+                    "status": "success",
+                    "npc_id": npc_id,
+                    "npc_name": snapshot.name,
+                    "status": snapshot.status,
+                    "scheming": snapshot.scheming_level > 50
+                }
+                
+            except Exception as e:
+                logger.error(f"NPC think error for {params}: {e}", exc_info=True)
+                return {"status": "error", "error": str(e)}
+    
+    return run_async_in_worker_loop(npc_think())
+
 
 @celery_app.task(name="npc.background_think")
 def npc_background_think_task(npc_id: int, context: Optional[Dict[str, Any]] = None):
