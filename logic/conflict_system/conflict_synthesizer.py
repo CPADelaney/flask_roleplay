@@ -1005,86 +1005,202 @@ class ConflictSynthesizer:
     
     async def get_scene_bundle(self, scope: 'SceneScope') -> Dict[str, Any]:
         """
-        MODIFIED: Get scene-scoped conflict bundle with background optimization.
+        Scene-scoped conflict bundle with stable cache key, normalized shape, and safe merges.
+        Keeps your background fast-path and parallel subsystem fetches.
         """
-        # Create cache key from scope
-        cache_key = f"scene_{self.user_id}_{self.conversation_id}_{hash(str(scope))}"
-        
-        # Check bundle cache (your existing cache logic)
+        # --- ensure helper attrs exist ---
+        if not hasattr(self, "_last_scene"):
+            self._last_scene = None
+    
+        # --- stable cache key (prefer scope.to_cache_key; else canonicalized JSON) ---
+        try:
+            scene_key = scope.to_cache_key()
+        except Exception:
+            key_str = json.dumps({
+                "loc": getattr(scope, "location_id", None),
+                "npcs": sorted(list(getattr(scope, "npc_ids", []) or [])),
+                "topics": sorted(list(getattr(scope, "topics", []) or [])),
+                "lore": sorted(list(getattr(scope, "lore_tags", []) or [])),
+                "window": getattr(scope, "time_window_hours", 24),
+            }, sort_keys=True, default=str)
+            scene_key = hashlib.md5(key_str.encode()).hexdigest()
+    
+        cache_key = f"scene:{self.user_id}:{self.conversation_id}:{scene_key}:conflicts"
+    
+        # --- cache fast path ---
         async with self._bundle_lock:
-            if cache_key in self._bundle_cache:
-                bundle, timestamp = self._bundle_cache[cache_key]
-                if time.time() - timestamp < self._bundle_ttl:
+            entry = self._bundle_cache.get(cache_key)
+            if entry:
+                bundle, ts = entry
+                if time.time() - ts < self._bundle_ttl:
                     self._cache_hits += 1
-                    # ADD: Check if this is a scene transition
                     if self._last_scene != scope:
                         asyncio.create_task(self._handle_scene_transition(self._last_scene, scope))
                         self._last_scene = scope
+                    # LRU touch
+                    self._bundle_cache.move_to_end(cache_key)
                     return bundle
-        
+    
         self._cache_misses += 1
         start = time.time()
-        
-        # BUILD bundle from subsystems - but use optimized background subsystem
+    
+        # --- base bundle (keep your keys) ---
         bundle = {
-            'conflicts': [],
-            'active_tensions': {},
-            'opportunities': [],
-            'ambient_effects': [],
-            'world_tension': 0.0,
-            'canon': {},  # Always put canon first
-            'timestamp': time.time()
+            "conflicts": [],
+            "active_tensions": {},
+            "opportunities": [],
+            "ambient_effects": [],
+            "world_tension": 0.0,
+            "canon": {},
+            "timestamp": time.time(),
+            # new: helps deltas
+            "last_changed_at": 0.0,
         }
-        
-        # MODIFIED: Get from optimized background subsystem instead of doing heavy work
+    
+        # ---------- Background fast-path ----------
         background_subsystem = self._subsystems.get(SubsystemType.BACKGROUND)
-        if background_subsystem:
-            # Use the optimized manager that has caching
-            if hasattr(background_subsystem, 'manager'):
+        if background_subsystem and hasattr(background_subsystem, "manager"):
+            try:
                 scene_context = {
-                    'location': getattr(scope, 'location_id', None),
-                    'npcs': getattr(scope, 'npc_ids', []),
-                    'conversation_topics': getattr(scope, 'conversation_topics', [])
+                    "location": getattr(scope, "location_id", None),
+                    "npcs": getattr(scope, "npc_ids", []) or [],
+                    # use 'topics', not 'conversation_topics'
+                    "conversation_topics": getattr(scope, "topics", []) or [],
                 }
                 bg_context = await background_subsystem.manager.get_scene_context(scene_context)
-                
-                # Merge optimized background context
-                bundle['conflicts'].extend(bg_context.get('active_conflicts', []))
-                bundle['ambient_effects'].extend(bg_context.get('ambient_atmosphere', []))
-                bundle['world_tension'] = bg_context.get('world_tension', 0.0)
-        
-        # Get other subsystem bundles in parallel (your existing code)
+                bundle["conflicts"].extend(bg_context.get("active_conflicts", []) or [])
+                bundle["ambient_effects"].extend(bg_context.get("ambient_atmosphere", []) or [])
+                bundle["world_tension"] = float(bg_context.get("world_tension", 0.0) or 0.0)
+                # try to propagate change time if available
+                bundle["last_changed_at"] = max(
+                    bundle["last_changed_at"],
+                    float(bg_context.get("last_changed_at", 0.0) or 0.0),
+                )
+            except Exception as e:
+                logger.debug(f"Background scene context failed (non-fatal): {e}")
+    
+        # ---------- Enrich from current conflict states (cheap, scoped) ----------
+        try:
+            conflicts_dict = await self._get_scene_relevant_conflicts(scope)
+        except Exception as e:
+            conflicts_dict = {}
+            logger.debug(f"_get_scene_relevant_conflicts failed: {e}")
+    
+        active_from_state, latest_change = [], 0.0
+        for cid, state in (conflicts_dict or {}).items():
+            level = self._extract(state,
+                                  ("intensity_level",),
+                                  ("subsystem_responses", "tension", "level"),
+                                  default=0.5) or 0.5
+            stk = self._extract(state,
+                                ("stakeholder_ids",),
+                                ("subsystem_responses", "stakeholder", "ids"),
+                                default=[]) or []
+            active_from_state.append({
+                "id": cid,
+                "type": state.get("conflict_type"),
+                "intensity": max(0.0, min(1.0, float(level))),
+                "stakeholders": stk,
+                "phase": state.get("phase") or (state.get("subsystem_responses", {})
+                                                .get("phase", {}).get("phase")),
+                "canonical": bool(self._is_canonical_conflict(state)),
+            })
+            latest_change = max(latest_change, float(state.get("last_updated", 0.0) or 0.0))
+        if active_from_state:
+            # merge with bg conflicts, dedupe by id if present
+            seen, merged = set(), []
+            for item in (bundle["conflicts"] + active_from_state):
+                cid = item.get("id")
+                if cid is not None and cid in seen:
+                    continue
+                if cid is not None:
+                    seen.add(cid)
+                merged.append(item)
+            bundle["conflicts"] = merged
+            bundle["last_changed_at"] = max(bundle["last_changed_at"], latest_change)
+    
+        # ---------- Quick tensions/opportunities ----------
+        npc_ids = getattr(scope, "npc_ids", []) or []
+        if npc_ids and not bundle["active_tensions"]:
+            try:
+                bundle["active_tensions"] = await self._get_npc_tensions(npc_ids) or {}
+            except Exception as e:
+                logger.debug(f"_get_npc_tensions failed: {e}")
+    
+        if not bundle["opportunities"]:
+            try:
+                bundle["opportunities"] = self._find_conflict_opportunities(scope, conflicts_dict)[:5]
+            except Exception:
+                bundle["opportunities"] = []
+    
+        # ---------- Parallel subsystem mini-bundles (non-background) ----------
         tasks = []
         for subsystem_type, subsystem in self._subsystems.items():
-            if subsystem_type != SubsystemType.BACKGROUND:  # Skip background, we handled it
-                if hasattr(subsystem, 'get_scene_bundle'):
-                    tasks.append(self._get_subsystem_bundle_with_timeout(
-                        subsystem, scope, subsystem_type
-                    ))
-        
+            if subsystem_type == SubsystemType.BACKGROUND:
+                continue
+            if hasattr(subsystem, "get_scene_bundle"):
+                tasks.append(self._get_subsystem_bundle_with_timeout(subsystem, scope, subsystem_type))
+    
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for result in results:
                 if isinstance(result, dict):
-                    # Merge results (your existing merge logic)
-                    bundle.update(result)
-        
-        # Cache the bundle
+                    # be careful not to stomp; merge known keys explicitly
+                    if "conflicts" in result:
+                        bundle["conflicts"].extend(result.get("conflicts") or [])
+                    if "active" in result:  # some subsystems may already use 'active'
+                        bundle["conflicts"].extend(result.get("active") or [])
+                    if "active_tensions" in result:
+                        bundle["active_tensions"].update(result.get("active_tensions") or {})
+                    if "tensions" in result:
+                        bundle["active_tensions"].update(result.get("tensions") or {})
+                    if "opportunities" in result:
+                        bundle["opportunities"].extend(result.get("opportunities") or [])
+                    if "ambient_effects" in result:
+                        bundle["ambient_effects"].extend(result.get("ambient_effects") or [])
+                    if "world_tension" in result:
+                        try:
+                            bundle["world_tension"] = max(bundle["world_tension"], float(result["world_tension"]))
+                        except Exception:
+                            pass
+                    if "last_changed_at" in result:
+                        try:
+                            bundle["last_changed_at"] = max(bundle["last_changed_at"], float(result["last_changed_at"]))
+                        except Exception:
+                            pass
+                # ignore exceptions; already returned via return_exceptions=True
+    
+        # ---------- Normalize shape expected by NyxContext ----------
+        # Provide backwards-compat keys without double-allocating
+        bundle["active"] = bundle.get("conflicts", [])
+        bundle["tensions"] = bundle.get("active_tensions", {})
+        # keep opportunities list trimmed
+        bundle["opportunities"] = (bundle.get("opportunities") or [])[:5]
+    
+        # ---------- Cache store + LRU cap ----------
         async with self._bundle_lock:
             self._bundle_cache[cache_key] = (bundle, time.time())
-            # Evict old entries if cache is too large
-            while len(self._bundle_cache) > 100:
+            # LRU touch
+            if hasattr(self._bundle_cache, "move_to_end"):
+                self._bundle_cache.move_to_end(cache_key)
+            # size cap (env-backed)
+            max_cache = int(os.getenv("CONFLICT_BUNDLE_CACHE_MAX", "256"))
+            while len(self._bundle_cache) > max_cache:
+                # pop oldest
                 self._bundle_cache.popitem(last=False)
-        
-        # Track performance
-        self._performance_metrics['bundle_fetch_times'].append(time.time() - start)
-        
-        # Check for scene transition
+    
+        # perf metric
+        self._performance_metrics["bundle_fetch_times"].append(time.time() - start)
+        if len(self._performance_metrics["bundle_fetch_times"]) > 200:
+            self._performance_metrics["bundle_fetch_times"].pop(0)
+    
+        # handle scene transition
         if self._last_scene != scope:
             asyncio.create_task(self._handle_scene_transition(self._last_scene, scope))
             self._last_scene = scope
-        
+    
         return bundle
+
     
     async def get_scene_delta(self, scope: 'SceneScope', since_ts: float) -> Dict[str, Any]:
         """
