@@ -318,7 +318,7 @@ class NyxAgentSDK:
                 }
             })
         
-        # Conflict tension updates
+        # Conflict tension updates (existing)
         conflicts_dict = bundle.conflicts.data or {}
         if context.should_run_task("conflict_tension_calculation"):
             active_ids = [c["id"] for c in conflicts_dict.get("active", []) if isinstance(c, dict) and "id" in c]
@@ -326,6 +326,30 @@ class NyxAgentSDK:
                 "task": "conflict.update_tensions",
                 "params": {"active_conflicts": active_ids}
             })
+
+        # ✅ NEW: Conflict background processing queue (optimized conflict system)
+        broker = getattr(context, "context_broker", None)
+        processor = getattr(broker, "conflict_processor", None) if broker else None
+        if processor:
+            # Schedule only if there's likely work; be defensive about attribute presence.
+            has_pending = True
+            try:
+                queue = getattr(processor, "_processing_queue", None)
+                # If queue exposes __len__, check it; otherwise assume pending to avoid missing work.
+                if queue is not None and hasattr(queue, "__len__"):
+                    has_pending = len(queue) > 0
+            except Exception:
+                has_pending = True
+
+            if has_pending:
+                maintenance_tasks.append({
+                    "task": "conflict.process_queue",
+                    "params": {
+                        "user_id": int(context.user_id),
+                        "conversation_id": conversation_id,
+                        "max_items": 3
+                    }
+                })
         
         # Universal state updates
         maintenance_tasks.append({
