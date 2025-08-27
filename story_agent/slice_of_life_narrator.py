@@ -35,6 +35,22 @@ from lore.core.canon import (
 
 import json
 
+
+def val(obj, path: str, default=None):
+    try:
+        cur = obj
+        for p in path.split('.'):
+            if isinstance(cur, dict):
+                cur = cur.get(p)
+            else:
+                cur = getattr(cur, p, None)
+            if cur is None:
+                return default
+        return cur
+    except Exception:
+        return default
+
+
 def _parse_tool_json(model_cls, data):
     if isinstance(data, model_cls):
         return data
@@ -81,10 +97,8 @@ def _apply_world_state_influence(
         return tone, requires_response, effects
 
     try:
-        mood = getattr(world_state, "world_mood", None)
-        mood_val = getattr(mood, "value", None)
-        tension = getattr(world_state, "world_tension", None)
-        power_t = getattr(tension, "power_tension", 0.0) if tension is not None else 0.0
+        mood_val = val(world_state, "world_mood.value", None)
+        power_t = val(world_state, "world_tension.power_tension", 0.0)
 
         # Example, visible adjustments:
         # - High power tension nudges the NPC to demand a response.
@@ -1776,10 +1790,11 @@ def _get_dim(rel_state, name: str, default: float = 0):
     return default
 
 def _select_narrative_tone(scene, world_state, relationship_contexts):
-    tens = getattr(world_state, "world_tension", None)
-    if tens and getattr(tens, "power_tension", 0) > 0.7:
+    pt = val(world_state, "world_tension.power_tension", 0.0)
+    st = val(world_state, "world_tension.sexual_tension", 0.0)
+    if pt > 0.7:
         return NarrativeTone.COMMANDING
-    if tens and getattr(tens, "sexual_tension", 0) > 0.6:
+    if st > 0.6:
         return NarrativeTone.SENSUAL
     for rc in relationship_contexts.values():
         if _get_dim(rc, "intimacy", 0) > 70:
@@ -1977,24 +1992,23 @@ async def _calculate_power_consequences(context, exchange, world_state):
     """Calculate power exchange consequences"""
     consequences = []
     consequences.append(
-        KeyValue(key="submission_increase", value=str(0.1 * exchange.intensity))
+        KeyValue(key="submission_increase", value=0.1 * exchange.intensity)
     )
-    consequences.append(
-        KeyValue(key="tension_change", value="0.05")
-    )
+    consequences.append(KeyValue(key="tension_change", value=0.05))
     return consequences
 
 async def _generate_routine_description(context, activity, world_state):
-    mood_val = getattr(getattr(world_state, "world_mood", None), "value", "neutral") if world_state else "neutral"
+    mood_val = val(world_state, "world_mood.value", "neutral")
     return f"You go about {activity} in the {mood_val} atmosphere"
 
-async def _generate_routine_with_dynamics(context, activity, npcs, world_state):
-    tens = getattr(world_state, "world_tension", None) if world_state else None
-    dyn  = getattr(world_state, "relationship_dynamics", None) if world_state else None
 
-    if tens and getattr(tens, "power_tension", 0) > 0.5:
+async def _generate_routine_with_dynamics(context, activity, npcs, world_state):
+    pt = val(world_state, "world_tension.power_tension", 0.0)
+    submission = val(world_state, "relationship_dynamics.player_submission_level", 0)
+
+    if pt > 0.5:
         return f"Even {activity} carries subtle undertones of control"
-    if dyn and getattr(dyn, "player_submission_level", 0) > 0.5:
+    if submission > 0.5:
         return f"The {activity} follows patterns you've grown accustomed to..."
     return f"A simple moment of {activity}"
 
@@ -2004,12 +2018,13 @@ async def _generate_npc_routine_involvement(context, npc_id, activity):
 
 async def _identify_control_elements(context, activity, npcs, world_state):
     elements = []
-    dyn = getattr(world_state, "relationship_dynamics", None) if world_state else None
-    if dyn and getattr(dyn, "player_submission_level", 0) > 0.5:
+    submission = val(world_state, "relationship_dynamics.player_submission_level", 0)
+    acceptance = val(world_state, "relationship_dynamics.acceptance_level", 0)
+    if submission > 0.5:
         elements.append("The natural order of things")
-    if dyn and getattr(dyn, "player_submission_level", 0) > 0.3:
+    if submission > 0.3:
         elements.append("Choices that aren't really choices")
-    if dyn and hasattr(dyn, "acceptance_level") and getattr(dyn, "acceptance_level", 0) > 0.5:
+    if acceptance > 0.5:
         elements.append("The comfort of established patterns")
     return elements
 
@@ -2038,7 +2053,7 @@ async def _generate_emergent_variations(context, activity, intersections):
 
 async def _generate_ambient_description(context, focus, world_state, intensity):
     """Generate ambient description with GPT"""
-    mood_val = getattr(getattr(world_state, "world_mood", None), "value", "neutral") if world_state else "neutral"
+    mood_val = val(world_state, "world_mood.value", "neutral")
     prompt = f"""
     Generate ambient description for:
     Focus: {focus}
