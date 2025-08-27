@@ -23,6 +23,8 @@ from npcs.npc_memory import NPCMemoryManager
 from npcs.npc_perception import EnvironmentPerception
 from npcs.npc_relationship import NPCRelationshipManager
 
+from nyx.scene_keys import generate_scene_cache_key
+
 # Import preset NPC handler
 from npcs.preset_npc_handler import PresetNPCHandler
 
@@ -46,6 +48,7 @@ from db.connection import get_db_connection_context
 from lore.core.canon import log_canonical_event
 
 logger = logging.getLogger(__name__)
+NPCS_SECTION_SUFFIX = "|npcs"
 
 
 @dataclass(slots=True)
@@ -102,7 +105,7 @@ class NPCOrchestrator:
         # Convert to int for consistency with SDK
         self.user_id = int(user_id) if isinstance(user_id, str) else user_id
         self.conversation_id = int(conversation_id) if isinstance(conversation_id, str) else conversation_id
-        
+    
         # Configuration
         self.config = config or {}
         
@@ -132,9 +135,9 @@ class NPCOrchestrator:
         
         # Caching for performance (configurable TTLs)
         self._snapshot_cache: Dict[int, Tuple[NPCSnapshot, datetime]] = {}
-        self._snapshot_ttl = timedelta(seconds=self.config.get('snapshot_ttl', 30))
+        self._snapshot_ttl = timedelta(seconds=float(self.config.get('snapshot_ttl', 30)))
         self._bundle_cache: Dict[str, Tuple[Dict, float]] = {}
-        self._bundle_ttl = self.config.get('bundle_ttl', 60.0)  # seconds
+        self._bundle_ttl = float(self.config.get('bundle_ttl', 60.0))  # seconds
         
         # In-flight deduplication for snapshots
         self._inflight: Dict[int, asyncio.Task] = {}
@@ -151,10 +154,11 @@ class NPCOrchestrator:
         self._location_index: Dict[str, Set[int]] = defaultdict(set)
         self._npc_status: Dict[int, NPCStatus] = {}
         
-        # Canon configuration
-        self.enable_canon = True
-        self.auto_canonize = True  # Auto-canonize significant events
+        # Canon configuration (now actually read from config)
+        self.enable_canon = bool(self.config.get('enable_canon', True))
+        self.auto_canonize = bool(self.config.get('auto_canonize', True))
         self.canon_cache: Dict[str, List[Dict]] = {}
+        self._bundle_index: Dict[int, Set[str]] = defaultdict(set)
         
         # Performance metrics
         self.metrics = {
@@ -212,16 +216,14 @@ class NPCOrchestrator:
         return [{"id": r["npc_id"], "name": r["npc_name"]} for r in rows]
     
     # ==================== SCENE BUNDLE METHODS ====================
+    from nyx.scene_keys import generate_scene_cache_key
     
+    SECTION_SUFFIX = "|npcs"  # pipe avoids any collision with md5 hex
+
     async def get_scene_bundle(self, scope: 'SceneScope') -> Dict[str, Any]:
-        """
-        Get scene-scoped NPC bundle with canonical facts first.
-        Optimized for context assembly pipeline.
-        """
         start_time = time.time()
-        
-        # Check bundle cache first
-        cache_key = f"{scope.to_key()}_npcs"
+        scene_key = generate_scene_cache_key(scope)
+        cache_key = f"{scene_key}{SECTION_SUFFIX}"
         if cache_key in self._bundle_cache:
             cached_bundle, cached_time = self._bundle_cache[cache_key]
             if time.time() - cached_time < self._bundle_ttl:
@@ -361,6 +363,25 @@ class NPCOrchestrator:
         )
         
         return bundle
+
+    def _notify_npc_changed(self, npc_id: int):
+        self._last_update_times[npc_id] = time.time()
+        # drop cached bundles listing this NPC
+        for ck in list(self._bundle_index.get(npc_id, set())):
+            self._bundle_cache.pop(ck, None)
+        self._bundle_index.pop(npc_id, None)
+    
+    # helper: invalidate NPC bundles for a *scene* key (called by ContextBroker)
+    def invalidate_npc_bundles_for_scene_key(self, scene_key: str):
+        key = f"{scene_key}{SECTION_SUFFIX}"
+        if key in self._bundle_cache:
+            self._bundle_cache.pop(key, None)
+        # also prune from reverse index
+        for nid, keys in list(self._bundle_index.items()):
+            if key in keys:
+                keys.discard(key)
+                if not keys:
+                    self._bundle_index.pop(nid, None)
     
     def _prune_bundle_cache(self):
         """Remove expired entries from bundle cache"""
