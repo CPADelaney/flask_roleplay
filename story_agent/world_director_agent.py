@@ -704,6 +704,254 @@ class CompleteWorldDirectorContext:
             # Return minimal valid state
             return self._get_fallback_world_state()
 
+    async def get_world_bundle(self, *, fast: bool = False) -> Dict[str, Any]:
+        """
+        World-scoped bundle with stable cache key, TTL, and safe merges.
+        - fast=True: reuses current_world_state if present; avoids heavy calls where possible.
+        - Returns:
+          {
+            "world_state": CompleteWorldState,
+            "patterns": Optional[EmergentPatternsResult],
+            "conflict_state": Optional[dict],
+            "available_activities": List[dict],
+            "summary": {...},          # normalized quick fields
+            "last_changed_at": float,  # heuristic watermark for deltas
+            "timestamp": float,
+          }
+        """
+        # ---- one-time lazy fields ----
+        if not hasattr(self, "_wbundle_lock"):
+            self._wbundle_lock = asyncio.Lock()
+        if not hasattr(self, "_wbundle_cache"):
+            self._wbundle_cache = OrderedDict()
+        if not hasattr(self, "_wbundle_ttl"):
+            self._wbundle_ttl = int(os.getenv("WORLD_BUNDLE_TTL", "10"))  # seconds
+        if not hasattr(self, "_wbundle_max"):
+            self._wbundle_max = int(os.getenv("WORLD_BUNDLE_CACHE_MAX", "64"))
+        if not hasattr(self, "_wbundle_last_scope"):
+            self._wbundle_last_scope = None
+    
+        # ---- lightweight scope for keying ----
+        # Prefer existing state to avoid heavy calls just to form a key
+        loc = None
+        top_npcs = []
+        tod = None
+        try:
+            if self.current_world_state:
+                # location_data may be dict or string per your builder
+                if isinstance(self.current_world_state.location_data, dict):
+                    loc = self.current_world_state.location_data.get("current_location") or "unknown"
+                elif isinstance(self.current_world_state.location_data, str):
+                    loc = self.current_world_state.location_data or "unknown"
+                # grab up to 5 stable identifiers if available
+                for npc in (self.current_world_state.active_npcs or [])[:5]:
+                    cid = npc.get("canonical_id") or npc.get("npc_id") or npc.get("npc_name")
+                    if cid is not None:
+                        top_npcs.append(str(cid))
+                ct = self.current_world_state.current_time
+                if isinstance(ct, dict):
+                    tod = str(ct.get("time_of_day") or "afternoon")
+                    y, m, d = ct.get("year", 0), ct.get("month", 0), ct.get("day", 0)
+                else:
+                    tod = str(getattr(ct, "time_of_day", "afternoon"))
+                    y, m, d = getattr(ct, "year", 0), getattr(ct, "month", 0), getattr(ct, "day", 0)
+                day_bucket = f"{y:04d}-{m:02d}-{d:02d}"
+            else:
+                # fallback: very cheap time read for bucket
+                ct = await get_current_time_model(self.user_id, self.conversation_id)
+                tod = str(getattr(ct, "time_of_day", "afternoon"))
+                day_bucket = f"{getattr(ct, 'year', 0):04d}-{getattr(ct, 'month', 0):02d}-{getattr(ct, 'day', 0):02d}"
+                loc = "unknown"
+        except Exception:
+            day_bucket, tod, loc = "0000-00-00", "afternoon", "unknown"
+    
+        # cheap peek at conflict system to help key accuracy (skip if fast)
+        conflicts_key = {"total": 0, "complexity": 0}
+        if not fast and self.conflict_synthesizer:
+            try:
+                cs = await self.conflict_synthesizer.get_system_state()
+                met = (cs or {}).get("metrics", {})
+                conflicts_key = {
+                    "total": int(met.get("total_conflicts", 0) or 0),
+                    "complexity": float(met.get("complexity_score", 0) or 0.0),
+                }
+            except Exception:
+                pass
+    
+        scope = {
+            "u": self.user_id,
+            "c": self.conversation_id,
+            "day": day_bucket,
+            "tod": tod,
+            "loc": loc or "unknown",
+            "npcs": sorted(top_npcs)[:5],
+            "conf": conflicts_key,
+            "fast": bool(fast),
+            # bump this version if you change how bundle is composed
+            "v": 2,
+        }
+        scope_key_json = json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        scope_hash = hashlib.md5(scope_key_json.encode("utf-8")).hexdigest()
+        cache_key = f"world:{scope_hash}"
+    
+        # ---- cache fast path ----
+        async with self._wbundle_lock:
+            hit = self._wbundle_cache.get(cache_key)
+            if hit:
+                bundle, ts = hit
+                if time.time() - ts < self._wbundle_ttl:
+                    # touch for LRU
+                    self._wbundle_cache.move_to_end(cache_key, last=True)
+                    # background transition work if scope changed
+                    if self._wbundle_last_scope != scope:
+                        asyncio.create_task(self._handle_world_transition(self._wbundle_last_scope, scope))
+                        self._wbundle_last_scope = scope
+                    return bundle
+    
+        # ---- (re)build bundle ----
+        start = time.time()
+    
+        # world_state: reuse if fast, else fully rebuild
+        if fast and self.current_world_state:
+            world_state = self.current_world_state
+        else:
+            world_state = await self._build_complete_world_state()
+            self.current_world_state = world_state  # keep your normal flow
+    
+        # conflict state (optional; best-effort)
+        conflict_state = {}
+        if self.conflict_synthesizer:
+            try:
+                conflict_state = await self.conflict_synthesizer.get_system_state() or {}
+            except Exception:
+                conflict_state = {}
+    
+        # available_activities from world_state (already normalized as KV list in builder)
+        available_activities = []
+        try:
+            # your builder uses KV list for available_activities
+            aa = getattr(world_state, "available_activities", None) or []
+            # normalize KV -> list[dict] where possible
+            for entry in aa:
+                if isinstance(entry, dict):
+                    # KV shape: {"key": something, "value": <json or scalar>}
+                    if "key" in entry and "value" in entry:
+                        try:
+                            v = entry["value"]
+                            if isinstance(v, str):
+                                v = json.loads(v)
+                            if isinstance(v, dict):
+                                available_activities.append(v)
+                        except Exception:
+                            pass
+                    else:
+                        available_activities.append(entry)
+        except Exception:
+            pass
+    
+        # optional: emergent patterns (spawn in background to keep this call snappy)
+        patterns_result = None
+        try:
+            from agents import RunContextWrapper
+            # fire-and-wait unless fast=True, then fire-and-forget
+            coro = check_all_emergent_patterns(RunContextWrapper(self))
+            if fast:
+                asyncio.create_task(coro)  # caller can get patterns on next call
+            else:
+                patterns_result = await coro
+        except Exception:
+            patterns_result = None
+    
+        # summary block (normalized quick access)
+        def _safe(obj, path, default=None):
+            try:
+                cur = obj
+                for p in path:
+                    if isinstance(cur, dict):
+                        cur = cur.get(p)
+                    else:
+                        cur = getattr(cur, p)
+                return cur if cur is not None else default
+            except Exception:
+                return default
+    
+        mood = _safe(world_state, ["world_mood"])  # enum or str already handled in builder
+        world_tension = _safe(world_state, ["world_tension"])  # dict-like via _to_model_dict in builder
+        location_str = ""
+        ld = getattr(world_state, "location_data", "")
+        if isinstance(ld, dict):
+            location_str = ld.get("current_location") or str(ld)
+        elif isinstance(ld, str):
+            location_str = ld
+    
+        # heuristic last_changed_at watermark: prefer conflict metrics or now
+        last_changed_at = float(time.time())
+        try:
+            mt = (conflict_state.get("metrics") or {})
+            if "last_updated" in mt:
+                last_changed_at = max(last_changed_at, float(mt["last_updated"] or 0.0))
+        except Exception:
+            pass
+    
+        bundle = {
+            "world_state": world_state,
+            "patterns": patterns_result,
+            "conflict_state": conflict_state,
+            "available_activities": available_activities,
+            "summary": {
+                "mood": getattr(mood, "value", mood),
+                "tension_overall": (world_tension or {}).get("overall_tension", 0.0) if isinstance(world_tension, dict) else 0.0,
+                "location": location_str or "unknown",
+                "time_of_day": scope["tod"],
+                "active_conflicts": int((conflict_state.get("metrics") or {}).get("total_conflicts", 0)),
+                "conflict_complexity": float((conflict_state.get("metrics") or {}).get("complexity_score", 0.0)),
+            },
+            "last_changed_at": last_changed_at,
+            "timestamp": time.time(),
+        }
+    
+        # ---- store in cache + LRU cap ----
+        async with self._wbundle_lock:
+            self._wbundle_cache[cache_key] = (bundle, time.time())
+            self._wbundle_cache.move_to_end(cache_key, last=True)
+            while len(self._wbundle_cache) > self._wbundle_max:
+                self._wbundle_cache.popitem(last=False)
+    
+            if self._wbundle_last_scope != scope:
+                asyncio.create_task(self._handle_world_transition(self._wbundle_last_scope, scope))
+                self._wbundle_last_scope = scope
+    
+        # light perf accounting if you want it
+        try:
+            (self.performance_monitor or PerformanceMonitor(self.user_id, self.conversation_id)) \
+                .record("world_bundle_ms", (time.time() - start) * 1000.0)
+        except Exception:
+            pass
+    
+        return bundle
+    
+    
+    async def _handle_world_transition(self, old_scope: Optional[dict], new_scope: dict):
+        """
+        Hook invoked on day/time-of-day/location/NPC scope change.
+        Great place to prefetch patterns or nudge other caches; non-fatal on error.
+        """
+        try:
+            # Prefetch patterns in the new scope in background
+            from agents import RunContextWrapper
+            asyncio.create_task(check_all_emergent_patterns(RunContextWrapper(self)))
+    
+            # Optional: ask the conflict system to pre-warm the likely next scene
+            if self.conflict_synthesizer:
+                scene_ctx = {
+                    "scene_type": "world_transition",
+                    "time_of_day": new_scope.get("tod"),
+                    "location": new_scope.get("loc"),
+                    "participants": new_scope.get("npcs", []),
+                }
+                asyncio.create_task(self.conflict_synthesizer.process_scene(scene_ctx))
+        except Exception as e:
+            logger.debug(f"_handle_world_transition non-fatal: {e}")
             
     async def _get_complete_npc_data(self) -> List[Dict[str, Any]]:
         """Get NPCs with ALL their data using canonical system for consistency"""
@@ -987,48 +1235,60 @@ class CompleteWorldDirectorContext:
             return None
 
     async def check_for_conflict_triggers(self) -> List[Dict[str, Any]]:
-        """Check if current world state should trigger new conflicts"""
-        triggers = []
-        
-        if not self.context or not self.context.conflict_synthesizer:
+        """Check if current world state should trigger new conflicts (context-safe)."""
+        triggers: List[Dict[str, Any]] = []
+        if not self.conflict_synthesizer:
             return triggers
-        
-        state = self.context.current_world_state
-        
-        # Check tension levels
-        if state.tension_factors.get('conflict', 0) < 0.3:  # Low conflict tension
-            if state.tension_factors.get('relationship', 0) > 0.6:
+    
+        state = self.current_world_state
+        if not state:
+            return triggers
+    
+        # tension_factors may be KV list in your model; support both shapes
+        def _tension(name: str) -> float:
+            tf = getattr(state, "tension_factors", None) or {}
+            if isinstance(tf, dict):
+                return float(tf.get(name, 0.0))
+            # KV fallback
+            try:
+                for kv in tf:
+                    if isinstance(kv, dict) and kv.get("key") == name:
+                        v = kv.get("value")
+                        return float(v if isinstance(v, (int, float)) else 0.0)
+            except Exception:
+                pass
+            return 0.0
+    
+        if _tension("conflict") < 0.3 and _tension("relationship") > 0.6:
+            triggers.append({
+                "type": "relationship_conflict",
+                "reason": "High relationship tension with low conflict activity",
+                "suggested_type": "social"
+            })
+    
+        for combo in (getattr(state, "active_stat_combinations", None) or []):
+            if isinstance(combo, dict) and combo.get("name") == "Breaking Point":
                 triggers.append({
-                    "type": "relationship_conflict",
-                    "reason": "High relationship tension with low conflict activity",
-                    "suggested_type": "social"
-                })
-        
-        # Check for stat combinations that suggest conflict
-        for combo in state.active_stat_combinations:
-            if combo.get('name') == 'Breaking Point':
-                triggers.append({
-                    "type": "breaking_point_conflict", 
+                    "type": "breaking_point_conflict",
                     "reason": "Player at breaking point",
                     "suggested_type": "personal"
                 })
-        
-        # Check NPC stages for conflict potential
-        advanced_npcs = [
-            npc for npc in state.active_npcs
-            if npc.get('narrative_stage') in ['Veil Thinning', 'Full Revelation']
-        ]
-        
+    
+        advanced_npcs = []
+        for npc in (getattr(state, "active_npcs", None) or []):
+            if isinstance(npc, dict) and npc.get("narrative_stage") in ["Veil Thinning", "Full Revelation"]:
+                advanced_npcs.append(npc)
         if len(advanced_npcs) > 1:
             triggers.append({
                 "type": "multi_npc_conflict",
                 "reason": f"{len(advanced_npcs)} NPCs at advanced stages",
                 "suggested_type": "social",
                 "is_multiparty": True,
-                "participants": [npc['npc_id'] for npc in advanced_npcs]
+                "participants": [n.get("npc_id") for n in advanced_npcs if "npc_id" in n]
             })
-        
+    
         return triggers
+            
     
     async def _safe_check_narrative_moments(self) -> List[Dict[str, Any]]:
         """Safely check narrative moments"""
@@ -2453,7 +2713,8 @@ class CompleteWorldDirector:
                 return {"error": "Context not initialized"}
             
             # Rebuild world state to capture all changes
-            self.context.current_world_state = await self.context._build_complete_world_state()
+            bundle = await self.context.get_world_bundle(fast=False)
+            self.context.current_world_state = bundle["world_state"]
             
             # Check all emergent patterns
             patterns = await check_all_emergent_patterns(
@@ -2836,21 +3097,34 @@ class CompleteWorldDirector:
             }
 
     async def get_world_state(self) -> Any:
-        """Get the current world state, rebuilding if necessary"""
+        """Get the current world state, preferring the cached bundle; rebuild if needed."""
         try:
             await self.initialize()
-            
+    
             if not self.context:
                 logger.warning("Context not initialized when getting world state")
                 return self._get_fallback_world_state()
-            
-            # Always rebuild to ensure fresh state
-            self.context.current_world_state = await self.context._build_complete_world_state()
-            return self.context.current_world_state
-            
+    
+            # Prefer the world bundle (fast path).
+            try:
+                get_bundle = getattr(self.context, "get_world_bundle", None)
+                if callable(get_bundle):
+                    bundle = await get_bundle(fast=True)
+                    if isinstance(bundle, dict):
+                        ws = bundle.get("world_state")
+                        if ws is not None:
+                            self.context.current_world_state = ws
+                            return ws
+            except Exception as be:
+                logger.warning(f"get_world_bundle fast path failed; falling back to rebuild: {be}", exc_info=True)
+    
+            # Slow path: rebuild from all systems.
+            ws = await self.context._build_complete_world_state()
+            self.context.current_world_state = ws
+            return ws
+    
         except Exception as e:
             logger.error(f"Error getting world state: {e}", exc_info=True)
-            # Return a minimal fallback state
             return self._get_fallback_world_state()
     
     def _get_fallback_world_state(self):
