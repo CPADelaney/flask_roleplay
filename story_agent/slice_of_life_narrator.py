@@ -1643,7 +1643,7 @@ async def narrate_daily_routine(
     return result.model_dump()
 
 @function_tool
-async def generate_ambient_narration(ctx, focus: str, world_state: WorldState, intensity: float = 0.5) -> str:
+async def generate_ambient_narration(ctx, focus: str, world_state: WorldState, intensity: float = 0.5) -> Dict[str, Any]:
     context = ctx.context
     await context.refresh_context()
 
