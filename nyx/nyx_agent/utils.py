@@ -380,24 +380,25 @@ async def enqueue_task(
     priority: str = "default",
     delay_seconds: int = 0
 ) -> str:
-    """Enqueue task to Celery"""
+    """Enqueue task to Celery with proper task names"""
     from celery import current_app
     
-    # Map task names to Celery task paths
+    # Map to actual task names
     task_map = {
         'memory.consolidate': 'tasks.nyx_memory_maintenance_task',
-        'npc.background_think': 'tasks.run_npc_learning_cycle_task',
-        'lore.evolve': 'tasks.lore_evolution_task',  # Need to create
-        'conflict.update_tensions': 'tasks.update_conflict_tensions_task',  # Need to create
-        'world.update_universal': 'tasks.process_universal_updates_task',  # Need to create
+        'npc.background_think': 'tasks.npc_background_think_task',
+        'lore.evolve': 'tasks.lore_evolution_task',
+        'conflict.update_tensions': 'tasks.update_conflict_tensions_task',
+        'world.update_universal': 'tasks.process_universal_updates_task',
     }
     
     celery_task = task_map.get(task_name, task_name)
     queue = {'high': 'high', 'low': 'low_priority'}.get(priority, 'default')
     
+    # Send task with params as single argument
     result = current_app.send_task(
         celery_task,
-        args=[params],
+        args=[params],  # Pass params as first arg
         queue=queue,
         countdown=delay_seconds
     )
