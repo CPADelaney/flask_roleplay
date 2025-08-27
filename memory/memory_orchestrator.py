@@ -10,7 +10,7 @@ import asyncio
 import json
 import hashlib
 import time
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, Union
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
@@ -378,6 +378,20 @@ class MemoryOrchestrator:
             return []
         return []
     
+    def _coerce_scope(self, scope: Any) -> SceneScope:
+        if isinstance(scope, SceneScope):
+            return scope
+        # graceful adapter for NyxContext.SceneScope or dicts
+        def _get(obj, attr, default=None):
+            return getattr(obj, attr, default) if not isinstance(obj, dict) else obj.get(attr, default)
+        return SceneScope(
+            location_id=_get(scope, "location_id") or _get(scope, "location"),
+            npc_ids=set(_get(scope, "npc_ids", []) or []),
+            topics=set(_get(scope, "topics", []) or []),
+            lore_tags=set(_get(scope, "lore_tags", []) or []),
+            time_window_hours=_get(scope, "time_window", _get(scope, "time_window_hours", 24)) or 24,
+        )
+    
     def _index_bundle(self, cache_key: str, scope: SceneScope) -> Set[str]:
         """Index a bundle cache entry for efficient invalidation (class-wide)."""
         cls = self.__class__
@@ -401,7 +415,7 @@ class MemoryOrchestrator:
         # Return the ents set for storage
         return ents
     
-    async def get_scene_bundle(self, scope: SceneScope, token_budget: int = 5000) -> Dict[str, Any]:
+    async def get_scene_bundle(self, scope: Any, token_budget: int = 5000) -> Dict[str, Any]:
         """
         Get a scene-scoped memory bundle for efficient context assembly.
         
@@ -417,6 +431,8 @@ class MemoryOrchestrator:
         """
         if not self.initialized:
             await self.initialize()
+
+        scope = self._coerce_scope(scope)
         
         cls = self.__class__
         cache_key = f"{self.user_id}:{self.conversation_id}:{scope.to_cache_key()}"
@@ -686,10 +702,19 @@ class MemoryOrchestrator:
         return memories.get('memories', [])
     
     async def _get_location_memories_for_scope(self, scope: SceneScope) -> List[Dict[str, Any]]:
-        """Get location-specific memories."""
+        """Get location-specific memories with a hard guard to avoid no-op vector calls."""
+        # Guard: no location → no search (saves a semaphore slot & avoids empty queries)
+        loc = getattr(scope, "location_id", None)
+        if not loc:
+            return []
+    
+        q = f"location:{loc}".strip()
+        if not q or q == "location:":
+            return []
+    
         res = await self.search_vector_store(
-            query=f"location:{scope.location_id}",
-            filter_dict={'location': scope.location_id},
+            query=q,
+            filter_dict={'location': loc},
             top_k=15
         )
         return self._as_mem_list(res)
@@ -837,48 +862,107 @@ class MemoryOrchestrator:
     
     def _trim_to_token_budget(self, bundle: MemoryBundle, token_budget: int = 5000) -> MemoryBundle:
         """
-        Trim bundle to fit within token budget.
+        Trim bundle to fit within token budget deterministically.
         Priority: canon > patterns > scene > linked
+        Selection within each group is deterministic (score-based), which improves cache reuse.
+    
+        Scoring rules:
+          - Memories: sort by (significance desc, created_at desc)
+          - Patterns: sort by (strength desc, occurrences desc)
         """
-        # Start with everything
+    
+        def _parse_ts(v: Any) -> float:
+            """Try to normalize a created_at/created/timestamp value into a float seconds epoch."""
+            if isinstance(v, (int, float)):
+                return float(v)
+            if isinstance(v, str):
+                try:
+                    # best effort; tolerate 'Z' and offsets
+                    from datetime import datetime
+                    v2 = v.replace('Z', '+00:00')  # naive ISO fix
+                    return datetime.fromisoformat(v2).timestamp()
+                except Exception:
+                    return 0.0
+            return 0.0
+    
+        def _mem_score(mem: Dict[str, Any]) -> Tuple[float, float]:
+            sig = float(mem.get("significance", 0.0) or 0.0)
+            ts = _parse_ts(mem.get("created_at") or mem.get("created") or mem.get("timestamp"))
+            return (sig, ts)
+    
+        def _pat_score(p: Dict[str, Any]) -> Tuple[float, float]:
+            return (float(p.get("strength", 0.0) or 0.0), float(p.get("occurrences", 0) or 0))
+    
+        # Start from copies so we never mutate the incoming bundle in-place
         result = MemoryBundle(
-            canon_memories=bundle.canon_memories[:],
-            scene_memories=bundle.scene_memories[:],
-            linked_memories=bundle.linked_memories[:],
-            emergent_patterns=bundle.emergent_patterns[:],
+            canon_memories=list(bundle.canon_memories or []),
+            scene_memories=list(bundle.scene_memories or []),
+            linked_memories=list(bundle.linked_memories or []),
+            emergent_patterns=list(bundle.emergent_patterns or []),
             scope=bundle.scope,
             last_changed_at=bundle.last_changed_at
         )
-        
-        # Check if we're already under budget
+    
+        # Deterministic ordering inside each section
+        result.canon_memories.sort(key=_mem_score, reverse=True)
+        result.scene_memories.sort(key=_mem_score, reverse=True)
+        result.linked_memories.sort(key=_mem_score, reverse=True)
+        result.emergent_patterns.sort(key=_pat_score, reverse=True)
+    
+        # Fast path
         current_tokens = self._estimate_bundle_tokens(result)
         if current_tokens <= token_budget:
+            result.bundle_size_tokens = current_tokens
             return result
-        
-        # Progressive trimming (least important first)
-        # 1. Drop linked memories first
+    
+        # 1) Drop linked memories first (lowest priority)
         if result.linked_memories and current_tokens > token_budget:
             result.linked_memories = []
             current_tokens = self._estimate_bundle_tokens(result)
-        
-        # 2. Reduce scene memories
-        if current_tokens > token_budget:
-            # Keep reducing scene memories by half until under budget
-            while len(result.scene_memories) > 5 and current_tokens > token_budget:
-                result.scene_memories = result.scene_memories[:len(result.scene_memories)//2]
-                current_tokens = self._estimate_bundle_tokens(result)
-        
-        # 3. Reduce patterns
-        if current_tokens > token_budget and len(result.emergent_patterns) > 2:
+            if current_tokens <= token_budget:
+                result.bundle_size_tokens = current_tokens
+                return result
+    
+        # 2) Deterministically trim scene memories by taking top-K
+        if result.scene_memories and current_tokens > token_budget:
+            # Binary shrink to preserve the most relevant items deterministically
+            lo, hi = 5, len(result.scene_memories)  # keep at least 5 if possible
+            # If already under 5, hi==lo in which case we'll fall through
+            best = result.scene_memories[:]
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                candidate = result.scene_memories[:mid]
+                tmp = MemoryBundle(
+                    canon_memories=result.canon_memories,
+                    scene_memories=candidate,
+                    linked_memories=result.linked_memories,
+                    emergent_patterns=result.emergent_patterns,
+                    scope=result.scope,
+                    last_changed_at=result.last_changed_at
+                )
+                tok = self._estimate_bundle_tokens(tmp)
+                if tok <= token_budget:
+                    best = candidate
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            result.scene_memories = best
+            current_tokens = self._estimate_bundle_tokens(result)
+    
+        # 3) Trim patterns to the strongest few if still over budget
+        if result.emergent_patterns and current_tokens > token_budget:
+            # keep the top-2 strongest patterns deterministically
             result.emergent_patterns = result.emergent_patterns[:2]
             current_tokens = self._estimate_bundle_tokens(result)
-        
-        # 4. As last resort, trim canon (but keep at least 5)
-        if current_tokens > token_budget and len(result.canon_memories) > 5:
+    
+        # 4) Last resort: trim canon, but keep the top-5 most significant/most recent
+        if result.canon_memories and current_tokens > token_budget and len(result.canon_memories) > 5:
             result.canon_memories = result.canon_memories[:5]
-        
-        result.bundle_size_tokens = self._estimate_bundle_tokens(result)
+            current_tokens = self._estimate_bundle_tokens(result)
+    
+        result.bundle_size_tokens = current_tokens
         return result
+
     
     def _cleanup_bundle_cache(self):
         """Remove expired entries from class-wide bundle cache and enforce size limit."""
@@ -949,34 +1033,32 @@ class MemoryOrchestrator:
     ) -> Dict[str, Any]:
         """
         Store a new memory.
-        
-        Args:
-            entity_type: Type of entity
-            entity_id: Entity ID
-            content: Memory content
-            memory_type: Type of memory
-            significance: Importance (0-1)
-            emotional_intensity: Emotional weight (0-1)
-            tags: Memory tags
-            metadata: Additional metadata
-            is_canon: Whether this is canonical information
-            
-        Returns:
-            Dict with memory_id and success status
+    
+        Ensures canonical flags are set consistently in metadata and that
+        cache invalidation keys (location, lore_tags, tags) are preserved
+        so ContextBroker invalidations work as expected.
         """
         if not self.initialized:
             await self.initialize()
-        
+    
         try:
             # Get or create entity manager
             manager = await self._get_entity_manager(entity_type, entity_id)
-            
-            # Ensure metadata exists and apply canon flags before persistence
-            md = dict(metadata or {})
+    
+            # Copy metadata so we never mutate the caller's dict
+            md: Dict[str, Any] = dict(metadata or {})
+    
+            # Canonical flags expected by downstream consumers / invalidators
             if is_canon:
                 md['is_canon'] = True
                 md['canonical'] = True
-            
+    
+            # IMPORTANT: do not strip 'location' or 'lore_tags' if present.
+            # These are used by _invalidate_by_metadata to evict the right scene bundles.
+            # Example of what we deliberately keep if provided by caller:
+            #   md.get('location')  -> "tavern-13"
+            #   md.get('lore_tags') -> ["arcane", "old_gods"]
+    
             # Store memory
             memory = await manager.store_memory(
                 content=content,
@@ -986,51 +1068,50 @@ class MemoryOrchestrator:
                 tags=tags,
                 metadata=md
             )
-            
-            # Invalidate affected bundles via both entity and metadata
+    
+            # Invalidate affected caches using both entity and metadata signals
             await self._invalidate_caches_for_entity(entity_type, entity_id)
             self._invalidate_by_metadata(md, tags)
-            
+    
             return {
                 "memory_id": getattr(memory, "memory_id", None) or getattr(memory, "id", None),
                 "success": True,
                 "entity_type": entity_type,
                 "entity_id": entity_id
             }
-            
+    
         except Exception as e:
             logger.error(f"Error storing memory: {e}")
             return {"error": str(e), "success": False}
+
+
+    def _as_et_str(et: Union[str, Enum]) -> str:
+        try:
+            # handle memory_orchestrator.EntityType and any Enum
+            return et.value.lower() if isinstance(et, Enum) else str(et).lower()
+        except Exception:
+            return str(et).lower()
     
     async def retrieve_memories(
         self,
-        entity_type: str,
-        entity_id: int,
+        entity_type: Union[str, Enum],
+        entity_id: Union[int, str],
         query: Optional[str] = None,
         memory_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
-        include_analysis: bool = False
+        include_analysis: bool = False,
+        **kwargs,  # ← swallow unknown flags like use_llm_analysis
     ) -> Dict[str, Any]:
-        """
-        Retrieve memories for an entity.
-        
-        Args:
-            entity_type: Type of entity
-            entity_id: Entity ID
-            query: Search query
-            memory_type: Filter by type
-            tags: Filter by tags
-            limit: Maximum results
-            filters: Additional filters
-            include_analysis: Include memory analysis
-            
-        Returns:
-            Dict with memories and metadata
-        """
         if not self.initialized:
             await self.initialize()
+    
+        # Accept old param names (e.g., use_llm_analysis)
+        if not include_analysis and isinstance(kwargs.get("use_llm_analysis"), bool):
+            include_analysis = kwargs["use_llm_analysis"]
+    
+        entity_type = _as_et_str(entity_type)
         
         try:
             # Build a stable cache key with user/conversation in prefix
@@ -1669,3 +1750,6 @@ async def get_memory_orchestrator(user_id: int, conversation_id: int) -> MemoryO
         MemoryOrchestrator instance
     """
     return await MemoryOrchestrator.get_instance(user_id, conversation_id)
+
+recall = agent_recall
+remember = agent_remember
