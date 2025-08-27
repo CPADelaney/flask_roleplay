@@ -383,10 +383,10 @@ async def enqueue_task(
     """Enqueue task to Celery with proper task names"""
     from celery import current_app
     
-    # Map to actual task names
     task_map = {
         'memory.consolidate': 'tasks.nyx_memory_maintenance_task',
-        'npc.background_think': 'tasks.npc_background_think_task',
+        'npc.background_think': 'tasks.npc_background_think_task',  # Light, per-NPC
+        'npc.learning_cycle': 'tasks.run_npc_learning_cycle_task',  # Heavy, all NPCs
         'lore.evolve': 'tasks.lore_evolution_task',
         'conflict.update_tensions': 'tasks.update_conflict_tensions_task',
         'world.update_universal': 'tasks.process_universal_updates_task',
@@ -395,13 +395,18 @@ async def enqueue_task(
     celery_task = task_map.get(task_name, task_name)
     queue = {'high': 'high', 'low': 'low_priority'}.get(priority, 'default')
     
-    # Send task with params as single argument
-    result = current_app.send_task(
-        celery_task,
-        args=[params],  # Pass params as first arg
-        queue=queue,
-        countdown=delay_seconds
-    )
+    # Handle tasks with/without params differently
+    if task_name == 'npc.learning_cycle':
+        # This task takes no params
+        result = current_app.send_task(celery_task, queue=queue, countdown=delay_seconds)
+    else:
+        # These tasks take params
+        result = current_app.send_task(
+            celery_task,
+            args=[params],
+            queue=queue,
+            countdown=delay_seconds
+        )
     return result.id
 
 async def log_performance_metrics(metrics: ContextMetrics):
