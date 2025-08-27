@@ -121,6 +121,7 @@ SECTION_NAMES = ('npcs', 'memories', 'lore', 'conflicts', 'world', 'narrative')
 
 import re
 from collections import OrderedDict
+from nyx.scene_keys import generate_scene_cache_key
 
 @dataclass
 class SceneScope:
@@ -131,22 +132,13 @@ class SceneScope:
     lore_tags: Set[str] = field(default_factory=set)
     conflict_ids: Set[int] = field(default_factory=set)
     memory_anchors: Set[str] = field(default_factory=set)
-    # NEW (optional, helps lore bundle anchoring; safe if unused)
-    nation_ids: Set[int] = field(default_factory=set)
+    nation_ids: Set[int] = field(default_factory=set)  # optional, helps lore anchoring
     time_window: Optional[int] = 24
     link_hints: Dict[str, List[Union[int, str]]] = field(default_factory=dict)
 
     def to_key(self) -> str:
-        data = {
-            'location': self.location_id,
-            'npcs': sorted(self.npc_ids),
-            'topics': sorted(self.topics),
-            'lore': sorted(self.lore_tags),
-            'conflicts': sorted(self.conflict_ids),
-            'anchors': sorted(self.memory_anchors),
-            'nations': sorted(self.nation_ids),  # NEW
-        }
-        return hashlib.md5(json_dumps(data).encode('utf-8')).hexdigest()
+        # Single canonical key path for all systems
+        return generate_scene_cache_key(self)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -161,7 +153,6 @@ class SceneScope:
             if k in d and isinstance(d[k], list):
                 d[k] = set(d[k])
         return cls(**d)
-        
 # ===== Strong DTOs for Section Data =====
 
 @dataclass
@@ -927,6 +918,29 @@ class ContextBroker:
         self._redis_failures += 1
         backoff = min(300, 2 ** self._redis_failures) + random.uniform(0, 1)
         self._redis_backoff_until = time.time() + backoff
+
+    async def invalidate_by_scope_keys(self, scope_keys: List[str], sections: Optional[List[str]] = None):
+        """
+        Purge cached bundles (LRU + Redis) for given scene keys.
+        If NPC orchestrator is present, also purge its per-NPC scene bundles.
+        """
+        sections = sections or list(SECTION_NAMES)
+        for sk in scope_keys:
+            # memory LRU
+            self.bundle_cache.pop(sk, None)
+            # redis
+            if self.redis_client and time.time() >= self._redis_backoff_until:
+                try:
+                    await self.redis_client.delete(f"nyx:bundle:{sk}")
+                except Exception as e:
+                    logger.warning(f"Redis delete failed for {sk}: {e}")
+                    self._set_redis_backoff()
+            # NPC bundles
+            if self.ctx.npc_orchestrator:
+                try:
+                    self.ctx.npc_orchestrator.invalidate_npc_bundles_for_scene_key(sk)
+                except Exception as e:
+                    logger.warning(f"NPC invalidation failed for {sk}: {e}")
     
     async def _build_npc_alias_cache(self):
         """Build name→id mapping for efficient NPC lookup"""
@@ -1923,12 +1937,11 @@ class NyxContext:
             logger.error(f"Failed to initialize Lore Orchestrator: {e}")
     
     async def _init_npc_orchestrator(self):
-        """Initialize NPC orchestrator"""
         try:
             self.npc_orchestrator = NPCOrchestrator(
                 self.user_id,
                 self.conversation_id,
-                enable_canon=True
+                config={"enable_canon": True}
             )
             await self.npc_orchestrator.initialize()
             logger.info("NPC Orchestrator initialized")
