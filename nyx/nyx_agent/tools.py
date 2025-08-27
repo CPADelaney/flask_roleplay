@@ -19,7 +19,7 @@ from .models import (
     AddMemoryInput,
     DecideImageGenerationInput,
     UpdateEmotionalStateInput,
-    UpdateRelationshipInput,
+    UpdateRelationshipStateInput,
     ScoreDecisionInput,
     
     # Output models  
@@ -459,7 +459,7 @@ async def calculate_and_update_emotional_state(
 @function_tool
 async def update_relationship_state(
     ctx: RunContextWrapper,
-    payload: UpdateRelationshipInput
+    payload: UpdateRelationshipStateInput  # Changed
 ) -> Dict[str, Any]:
     """Update relationship using bundle's relationship graph"""
     bundle = await _get_bundle(ctx, expand_sections=['relationships'])
