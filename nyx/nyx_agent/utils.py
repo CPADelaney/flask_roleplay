@@ -374,6 +374,40 @@ async def _ensure_world_state(app_ctx):
     ctx2 = getattr(wd, "context", None)
     return getattr(ctx2, "current_world_state", None) if ctx2 else None
 
+async def enqueue_task(
+    task_name: str,
+    params: Dict[str, Any],
+    priority: str = "default",
+    delay_seconds: int = 0
+) -> str:
+    """Enqueue task to Celery"""
+    from celery import current_app
+    
+    # Map task names to Celery task paths
+    task_map = {
+        'memory.consolidate': 'tasks.nyx_memory_maintenance_task',
+        'npc.background_think': 'tasks.run_npc_learning_cycle_task',
+        'lore.evolve': 'tasks.lore_evolution_task',  # Need to create
+        'conflict.update_tensions': 'tasks.update_conflict_tensions_task',  # Need to create
+        'world.update_universal': 'tasks.process_universal_updates_task',  # Need to create
+    }
+    
+    celery_task = task_map.get(task_name, task_name)
+    queue = {'high': 'high', 'low': 'low_priority'}.get(priority, 'default')
+    
+    result = current_app.send_task(
+        celery_task,
+        args=[params],
+        queue=queue,
+        countdown=delay_seconds
+    )
+    return result.id
+
+async def log_performance_metrics(metrics: ContextMetrics):
+    """Log performance metrics to monitoring system"""
+    # Write to DB, Prometheus, or logging
+    logger.info(f"Performance: {metrics.total_time:.2f}s, sections: {metrics.bundle_sections}")
+
 async def _ensure_world_state_from_ctx(app_ctx: Any):
     """Best-effort world_state fetch that never throws."""
     ws = getattr(app_ctx, "current_world_state", None)
