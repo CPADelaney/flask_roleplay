@@ -42,6 +42,9 @@ from enum import Enum
 from collections import defaultdict, OrderedDict
 import redis.asyncio as redis  # Modern redis async client
 
+from logic.conflict_system.conflict_synthesizer import get_synthesizer
+from logic.conflict_system.background_processor import get_conflict_scheduler
+
 # Try to use faster JSON library
 try:
     import orjson
@@ -577,6 +580,18 @@ class ContextBroker:
             'world': 15.0,
             'narrative': 30.0
         }
+
+        # Optimized conflict components
+        self.conflict_synthesizer = None
+        self.conflict_scheduler = get_conflict_scheduler()
+        self.conflict_processor = None
+        try:
+            self.conflict_processor = self.conflict_scheduler.get_processor(
+                self.ctx.user_id,
+                self.ctx.conversation_id
+            )
+        except Exception as e:
+            logger.warning(f"Conflict processor unavailable: {e}")
         
         # Performance metrics
         self.metrics = {
@@ -600,6 +615,11 @@ class ContextBroker:
         """Initialize broker with optional Redis for distributed caching"""
         await self._try_connect_redis()
         await self._build_npc_alias_cache()
+        self.conflict_synthesizer = await get_synthesizer(
+            self.ctx.user_id,
+            self.ctx.conversation_id
+        )
+        logger.info("ContextBroker initialized with optimized conflict system")
     
     async def _try_connect_redis(self):
         """Try to connect to Redis with backoff on failure"""
@@ -1217,13 +1237,33 @@ class ContextBroker:
     async def _fetch_conflict_section(self, scope: SceneScope) -> BundleSection:
         """Fetch conflict context using existing orchestrator API and link hints"""
         if not self.ctx.conflict_synthesizer:
-            return BundleSection(data={}, canonical=False, priority=0)
-        
-        conflict_data = {
-            'active': [],
-            'tensions': {},
-            'opportunities': []
-        }
+             return BundleSection(data={}, canonical=False, priority=0)
+ 
+        # Fast path: if the synthesizer exposes an optimized scene bundle, use it.
+        if hasattr(self.conflict_synthesizer, 'get_scene_bundle'):
+            try:
+                bundle = await self.conflict_synthesizer.get_scene_bundle(scope)
+                data = {
+                    # Keep your section shape the same:
+                    'active': bundle.get('active', bundle.get('conflicts', [])),
+                    'tensions': bundle.get('tensions', {}),
+                    'opportunities': bundle.get('opportunities', []),
+                }
+                return BundleSection(
+                    data=data,
+                    canonical=True,          # synthesizer is canon-first
+                    priority=5,
+                    last_changed_at=time.time(),
+                    version=f"conflict_opt_{len(data['active'])}"
+                )
+            except Exception as e:
+                logger.error(f"Optimized conflict fetch failed, falling back: {e}")
+
+         conflict_data = {
+             'active': [],
+             'tensions': {},
+             'opportunities': []
+         }
         
         try:
             # Use get_conflict_state (existing API)
@@ -1613,6 +1653,24 @@ class NyxContext:
             logger.info("World systems initialized")
         except Exception as e:
             logger.error(f"Failed to initialize world systems: {e}")
+
+    async def handle_day_transition(self, new_day: int):
+        """Handle game day transitions: notify conflicts & clear scene caches."""
+        logger.info(f"NyxContext handling day transition to {new_day}")
+        try:
+            if self.conflict_synthesizer and hasattr(self.conflict_synthesizer, 'handle_day_transition'):
+                await self.conflict_synthesizer.handle_day_transition(new_day)
+        except Exception as e:
+            logger.warning(f"Conflict day transition hook failed: {e}")
+
+        try:
+            if self.context_broker:
+                # reset the LRU and let Redis keys expire naturally
+                self.context_broker.bundle_cache = LRUCache(capacity=128)
+        except Exception as e:
+            logger.warning(f"Failed to clear broker caches: {e}")
+
+        logger.info("Day transition complete")
     
     async def build_context_for_input(self, user_input: str, context_data: Dict[str, Any] = None) -> PackedContext:
         """Main entry point: build optimized context for user input"""
