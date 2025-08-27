@@ -1,471 +1,614 @@
 # nyx/nyx_agent_sdk.py
 """
-Nyx Agent SDK - Refactored for Scene-Scoped Context Assembly
-Main changes:
-- Parallel orchestrator fetching via scene bundles
-- Context persistence and caching
-- Background task offloading
-- ContextBundle-based agent invocation
+Nyx Agent SDK — durable 'final stop' over the modern nyx.nyx_agent stack.
+
+Capabilities:
+- Primary path: nyx.nyx_agent.orchestrator.process_user_input
+- Resilience: fallback to direct agent run if orchestrator fails
+- Bidirectional moderation: optional pre-input and post-output guardrails
+- Streaming: best-effort chunking for responsive UIs
+- Cache warmup: pre-load scene bundles for faster first responses
+- Hooks: telemetry + background task systems (no-op if not installed)
+- Extras: per-conversation concurrency guard, short idempotency cache,
+          timeouts + single retry, optional response filtering & post hooks
 """
 
+from __future__ import annotations
+
 import asyncio
-import json
+import hashlib
 import logging
 import time
-from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime, timedelta
+import uuid
 from dataclasses import dataclass, field
-import hashlib
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig
+# ── Core modern orchestrator
+from .nyx_agent.orchestrator import process_user_input as _orchestrator_process
+from .nyx_agent.context import NyxContext, SceneScope
+from .nyx_agent.assembly import assemble_nyx_response, resolve_scene_requests  # fallback assembler
 
-from nyx.nyx_agent_sdk.context import NyxContext, SceneScope, ContextBundle, PackedContext
-from nyx.nyx_agent_sdk.models import NyxResponse, ContextMetrics
-from nyx.nyx_agent_sdk.assembly import assemble_nyx_response
-from nyx.nyx_agent_sdk.prompts import get_system_prompt
-from nyx.nyx_agent_sdk.config import NyxConfig
-from ..utils.performance import log_performance_metrics
-from ..utils.background import enqueue_task  # Background task queue
+# Fallback agent runtime (loaded lazily; optional in some environments)
+try:
+    from agents import Runner, RunConfig, ModelSettings, RunContextWrapper
+    from .nyx_agent.agents import nyx_main_agent, DEFAULT_MODEL_SETTINGS
+except Exception:  # pragma: no cover
+    Runner = None
+    RunConfig = None
+    ModelSettings = None
+    RunContextWrapper = None
+    nyx_main_agent = None
+    DEFAULT_MODEL_SETTINGS = None
+
+# Guardrails (optional)
+try:
+    from .nyx_agent.guardrails import content_moderation_guardrail
+except Exception:  # pragma: no cover
+    content_moderation_guardrail = None
+
+# Response filter (optional; tone/policy scrubbing)
+try:
+    from .response_filter import ResponseFilter
+except Exception:  # pragma: no cover
+    ResponseFilter = None  # type: ignore
+
+# Optional telemetry / background queue (auto-noop if absent)
+try:
+    from .utils.performance import log_performance_metrics as _log_perf
+except Exception:  # pragma: no cover
+    _log_perf = None
+
+try:
+    from .utils.background import enqueue_task as _enqueue_task
+except Exception:  # pragma: no cover
+    _enqueue_task = None
 
 logger = logging.getLogger(__name__)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Config & response models
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class NyxSDKConfig:
+    """Runtime knobs for the SDK adapter."""
+    # Moderation
+    pre_moderate_input: bool = False
+    post_moderate_output: bool = False
+    redact_on_moderation_block: bool = True
+
+    # Timeouts & retry
+    request_timeout_seconds: float = 45.0
+    retry_on_failure: bool = True
+    retry_delay_seconds: float = 0.75
+
+    # Concurrency & caching
+    rate_limit_per_conversation: bool = True
+    result_cache_ttl_seconds: int = 10  # idempotency window
+
+    # Streaming emulation
+    streaming_chunk_size: int = 320  # characters per chunk
+
+    # Telemetry & filtering
+    enable_telemetry: bool = True
+    enable_response_filter: bool = True
+
+
+@dataclass
+class NyxResponse:
+    """Compatibility envelope for app layers that expect a simple object."""
+    narrative: str
+    choices: List[Any] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    world_state: Dict[str, Any] = field(default_factory=dict)
+    success: bool = True
+    trace_id: Optional[str] = None
+    processing_time: Optional[float] = None
+    error: Optional[str] = None
+    # convenience fields pulled forward if present
+    image: Optional[Dict[str, Any]] = None
+    universal_updates: bool = False
+    telemetry: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "narrative": self.narrative,
+            "choices": self.choices,
+            "metadata": self.metadata,
+            "world_state": self.world_state,
+            "success": self.success,
+            "trace_id": self.trace_id,
+            "processing_time": self.processing_time,
+            "error": self.error,
+            "image": self.image,
+            "universal_updates": self.universal_updates,
+            "telemetry": self.telemetry,
+        }
+
+    @classmethod
+    def from_orchestrator(cls, result: Dict[str, Any]) -> "NyxResponse":
+        meta = result.get("metadata", {}) or {}
+        image = meta.get("image")
+        world = meta.get("world") or {}
+        return cls(
+            narrative=result.get("response", "") or "",
+            choices=meta.get("choices", []) or [],
+            metadata=meta,
+            world_state=world,
+            success=bool(result.get("success", False)),
+            trace_id=result.get("trace_id"),
+            processing_time=result.get("processing_time"),
+            error=result.get("error"),
+            image=image if isinstance(image, dict) else None,
+            universal_updates=bool(meta.get("universal_updates", False)),
+            telemetry=meta.get("telemetry", {}) or {},
+        )
+
+
+# Post-assembly hook signature
+PostHook = Callable[[NyxResponse], Awaitable[NyxResponse]]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SDK – primary adapter with resilience, streaming, warmup, and hooks
+# ──────────────────────────────────────────────────────────────────────────────
+
 class NyxAgentSDK:
     """
-    Refactored SDK with scene-scoped context assembly and performance optimizations.
+    High-level entry that:
+      1) tries the modern orchestrator,
+      2) falls back to a direct agent run if something breaks,
+      3) adds moderation, streaming, telemetry, warmup, and background hooks,
+      4) guards concurrency and dedups duplicate sends briefly.
     """
-    
-    def __init__(self, config: NyxConfig):
-        self.config = config
-        self.agent = None  # Lazy load
-        self.persistent_contexts: Dict[str, NyxContext] = {}
-        
-    async def initialize_agent(self):
-        """Lazy initialize the agent when first needed."""
-        if self.agent is None:
-            from .agent import create_nyx_agent
-            self.agent = await create_nyx_agent(self.config)
-    
+
+    def __init__(self, config: Optional[NyxSDKConfig] = None):
+        self.config = config or NyxSDKConfig()
+        self._locks: Dict[str, asyncio.Lock] = {}
+        self._result_cache: Dict[str, Tuple[float, NyxResponse]] = {}
+        self._post_hooks: List[PostHook] = []
+        self._filter = ResponseFilter() if (ResponseFilter and self.config.enable_response_filter) else None
+        # optional per-conversation context kept only when explicitly warmed
+        self._warm_contexts: Dict[str, NyxContext] = {}
+
+    # ── lifecycle -------------------------------------------------------------
+
+    async def initialize_agent(self) -> None:
+        """Kept for historical symmetry; orchestrator builds its own agents."""
+        return None
+
+    async def cleanup_conversation(self, conversation_id: str) -> None:
+        """Free rate-limit lock, cached results, and any warmed context for a conversation."""
+        self._locks.pop(conversation_id, None)
+        self._warm_contexts.pop(conversation_id, None)
+        keys = [k for k in self._result_cache if k.startswith(f"{conversation_id}|")]
+        for k in keys:
+            self._result_cache.pop(k, None)
+
+    async def warmup_cache(self, conversation_id: str, location: str) -> None:
+        """
+        Pre-warm LRU/Redis scene-bundle caches for a given location (faster first response).
+        """
+        ctx = NyxContext(user_id=0, conversation_id=int(conversation_id))
+        await ctx.initialize()
+        scope = SceneScope(location_id=location)
+        try:
+            await ctx.context_broker.load_or_fetch_bundle(scene_scope=scope)
+            self._warm_contexts[conversation_id] = ctx
+            logger.info("Warmup complete for conversation=%s location=%s", conversation_id, location)
+        except Exception:
+            logger.debug("warmup_cache failed (non-fatal)", exc_info=True)
+
+    # ── hooks -----------------------------------------------------------------
+
+    def register_post_hook(self, hook: PostHook) -> None:
+        """Allow other Nyx modules to enrich/transform the final response."""
+        self._post_hooks.append(hook)
+
+    # ── main entrypoints ------------------------------------------------------
+
     async def process_user_input(
         self,
         message: str,
         conversation_id: str,
         user_id: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> NyxResponse:
         """
-        Main entry point - now with scene-scoped parallel context assembly.
+        Final-stop pipeline:
+        1) (opt) pre-moderation on input
+        2) per-conversation rate-limit + idempotency cache
+        3) orchestrator call with timeout (+ single retry)
+        4) normalize to NyxResponse
+        5) (opt) post-moderation on output
+        6) (opt) response filter
+        7) (opt) post hooks
+        8) (opt) telemetry + background tasks
         """
-        start_time = time.time()
-        
+        t0 = time.time()
+        trace_id = uuid.uuid4().hex[:8]
+        meta = metadata or {}
+
+        # rate-limit per conversation (optional)
+        lock = None
+        if self.config.rate_limit_per_conversation:
+            lock = self._locks.setdefault(conversation_id, asyncio.Lock())
+            await lock.acquire()  # release in finally
+
+        # idempotency cache (short horizon)
+        cache_key = self._cache_key(conversation_id, user_id, message, meta)
+        cached = self._read_cache(cache_key)
+        if cached:
+            cached.processing_time = cached.processing_time or (time.time() - t0)
+            if lock and lock.locked():
+                lock.release()
+            return cached
+
         try:
-            # Initialize agent if needed
-            await self.initialize_agent()
-            
-            # Get or create persistent context for this conversation
-            context = await self._get_or_create_context(
-                conversation_id=conversation_id,
-                user_id=user_id
-            )
-            
-            # PHASE 1: Scene-Scoped Context Assembly (Parallel)
-            logger.info(f"Computing scene scope for input: {message[:100]}...")
-            
-            # Compute what's relevant for this turn
-            scene_scope = await context.context_broker.compute_scene_scope(
-                user_input=message,
-                current_state=context.current_context  # Use current_context, not get_current_state()
-            )
-            
-            # Log scope for debugging
-            logger.debug(f"Scene scope: {scene_scope}")
-            
-            # PHASE 2: Fetch or Load Context Bundle (Cached + Parallel)
-            # ContextBroker handles all caching/staleness internally
-            bundle = await context.context_broker.load_or_fetch_bundle(
-                scene_scope=scene_scope
-            )
-            
-            # PHASE 3: Pack Context for LLM (Canon-First, Token-Aware)
-            packed_context = await self._pack_context_for_agent(
-                bundle=bundle,
-                message=message,
-                token_budget=self.config.max_context_tokens
-            )
-            
-            # PHASE 4: Invoke Agent with Packed Context
-            agent_response = await self._invoke_agent(
-                message=message,
-                packed_context=packed_context,
-                conversation_id=conversation_id,
-                context=context  # Pass for tool access
-            )
-            
-            # PHASE 5: Assemble Final Response
-            nyx_response = await self._assemble_response(
-                agent_response=agent_response,
-                bundle=bundle,
-                context=context,
-                user_input=message
-            )
-            
-            # PHASE 6: Background Tasks (Non-Blocking)
-            await self._schedule_background_maintenance(
-                context=context,
-                bundle=bundle,
-                response=nyx_response,
-                conversation_id=conversation_id
-            )
-            
-            # Performance metrics
-            elapsed = time.time() - start_time
-            logger.info(f"Response generated in {elapsed:.2f}s")
-            
-            await self._log_metrics(
-                elapsed=elapsed,
-                bundle_size=(
-                    len(packed_context.canonical)
-                    + len(packed_context.optional)
-                    + len(packed_context.summarized)
-                )
-            )
-            
-            return nyx_response
-            
-        except Exception as e:
-            logger.error(f"Error processing user input: {e}", exc_info=True)
-            return self._create_error_response(str(e))
-    
-    async def _get_or_create_context(
-        self,
-        conversation_id: str,
-        user_id: str
-    ) -> NyxContext:
-        """
-        Retrieve persistent context or create new one.
-        Key optimization: Reuse context across turns instead of recreating.
-        """
-        if conversation_id in self.persistent_contexts:
-            context = self.persistent_contexts[conversation_id]
-            logger.debug(f"Reusing persistent context for {conversation_id}")
-        else:
-            # First time - full initialization
-            context = NyxContext(
-                conversation_id=int(conversation_id),
-                user_id=int(user_id)
-            )
-            await context.initialize()
-            self.persistent_contexts[conversation_id] = context
-            logger.info(f"Created new context for {conversation_id}")
-        
-        return context
-    
+            # 1) PRE moderation (optional)
+            if self.config.pre_moderate_input and content_moderation_guardrail:
+                try:
+                    verdict = await content_moderation_guardrail(message)
+                    if verdict and verdict.get("blocked"):
+                        safe_text = verdict.get("safe_text") or "Your message couldn't be processed."
+                        resp = self._blocked_response(safe_text, trace_id, t0, stage="pre", details=verdict)
+                        self._write_cache(cache_key, resp)
+                        return resp
+                    else:
+                        meta = {**meta, "moderation_pre": verdict}
+                except Exception:
+                    logger.debug("pre-moderation failed (non-fatal)", exc_info=True)
 
-    
-    async def _pack_context_for_agent(
+            # 2) Primary path with timeout + retry
+            result = await self._call_orchestrator_with_timeout(
+                message=message,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                meta=meta,
+            )
+            resp = NyxResponse.from_orchestrator(result)
+            resp.processing_time = resp.processing_time or (time.time() - t0)
+            resp.trace_id = resp.trace_id or trace_id
+
+            # 3) POST moderation (optional)
+            if self.config.post_moderate_output and content_moderation_guardrail:
+                try:
+                    verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
+                    resp.metadata["moderation_post"] = verdict
+                    if verdict and verdict.get("blocked"):
+                        if self.config.redact_on_moderation_block:
+                            resp.narrative = verdict.get("safe_text") or "Content redacted."
+                            resp.metadata["moderated"] = True
+                        else:
+                            resp = self._blocked_response("Content cannot be displayed.", trace_id, t0, stage="post", details=verdict)
+                except Exception:
+                    logger.debug("post-moderation failed (non-fatal)", exc_info=True)
+
+            # 4) Response filter (optional)
+            if self._filter and resp.narrative:
+                try:
+                    filtered = self._filter.filter_text(resp.narrative)
+                    if filtered != resp.narrative:
+                        resp.narrative = filtered
+                        resp.metadata.setdefault("filters", {})["response_filter"] = True
+                except Exception:
+                    logger.debug("ResponseFilter failed softly", exc_info=True)
+
+            # 5) Post hooks (optional)
+            if self._post_hooks:
+                for hook in self._post_hooks:
+                    try:
+                        resp = await hook(resp)
+                    except Exception:
+                        logger.debug("post_hook failed softly", exc_info=True)
+
+            # 6) Telemetry + background queue (optional)
+            await self._maybe_log_perf(resp)
+            await self._maybe_enqueue_maintenance(resp, conversation_id)
+
+            # 7) Cache and return
+            self._write_cache(cache_key, resp)
+            return resp
+
+        except Exception as e:
+            logger.error("orchestrator path failed; attempting fallback. err=%s", e, exc_info=True)
+            try:
+                resp = await self._fallback_direct_run(
+                    message=message,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    metadata=meta,
+                    trace_id=trace_id,
+                    t0=t0,
+                )
+
+                # Post moderation/filter/hooks even on fallback
+                if self.config.post_moderate_output and content_moderation_guardrail:
+                    try:
+                        verdict = await content_moderation_guardrail(resp.narrative, is_output=True)
+                        resp.metadata["moderation_post"] = verdict
+                        if verdict and verdict.get("blocked"):
+                            if self.config.redact_on_moderation_block:
+                                resp.narrative = verdict.get("safe_text") or "Content redacted."
+                                resp.metadata["moderated"] = True
+                            else:
+                                resp = self._blocked_response("Content cannot be displayed.", trace_id, t0, stage="post", details=verdict)
+                    except Exception:
+                        logger.debug("post-moderation failed (non-fatal)", exc_info=True)
+
+                if self._filter and resp.narrative:
+                    try:
+                        filtered = self._filter.filter_text(resp.narrative)
+                        if filtered != resp.narrative:
+                            resp.narrative = filtered
+                            resp.metadata.setdefault("filters", {})["response_filter"] = True
+                    except Exception:
+                        logger.debug("ResponseFilter failed softly", exc_info=True)
+
+                if self._post_hooks:
+                    for hook in self._post_hooks:
+                        try:
+                            resp = await hook(resp)
+                        except Exception:
+                            logger.debug("post_hook failed softly", exc_info=True)
+
+                await self._maybe_log_perf(resp)
+                await self._maybe_enqueue_maintenance(resp, conversation_id)
+
+                self._write_cache(cache_key, resp)
+                return resp
+
+            except Exception as e2:
+                logger.error("fallback path also failed", exc_info=True)
+                resp = self._error_response(str(e2), trace_id, t0)
+                self._write_cache(cache_key, resp)
+                return resp
+
+        finally:
+            if lock and lock.locked():
+                lock.release()
+
+    async def stream_user_input(
         self,
-        bundle: ContextBundle,
         message: str,
-        token_budget: int
-    ) -> PackedContext:
-        """
-        Pack the context bundle for the LLM with canon-first priority.
-        """
-        # Use bundle's pack method with token budget (sync)
-        packed = bundle.pack(token_budget=token_budget)
-        
-        # Add the user input as canonical
-        packed.add_canonical('user_input', message)
-        
-        # Add any additional critical context
-        world_dict = bundle.world.data if isinstance(bundle.world.data, dict) else {}
-        npcs_dict = (
-            bundle.npcs.data.to_dict() if hasattr(bundle.npcs.data, "to_dict") else bundle.npcs.data
-        ) or {}
-        packed.add_canonical('scene_state', {
-            "time": world_dict.get("time"),
-            "mood": world_dict.get("mood"),
-            "weather": world_dict.get("weather"),
-            "events": world_dict.get("events", []),
-            "active_npcs": sorted(list(bundle.scene_scope.npc_ids)) if bundle.scene_scope else [],
-        })
-        
-        logger.debug(f"Packed context with canonical/optional/summarized sections")
-        return packed
-    
-    async def _invoke_agent(
-        self,
-        message: str,
-        packed_context: PackedContext,
         conversation_id: str,
-        context: NyxContext
-    ) -> Dict[str, Any]:
+        user_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Invoke the main agent with packed context.
+        Best-effort streaming. If future runtimes expose true token streaming,
+        integrate here. For now, emulate by chunking final text.
+        Yields event dicts: {"type": "...", ...}
         """
-        # Build system prompt with context
-        system_prompt = self._build_system_prompt(packed_context)
-        
-        # Create messages
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=message)
-        ]
-        
-        # Configure agent with tools that can fetch more context on-demand
-        config = RunnableConfig(
-            configurable={
-                "conversation_id": conversation_id,
-                "context_broker": context.context_broker,  # For on-demand expansion
-                "packed_context": packed_context
-            },
-            callbacks=[],
-            metadata={"sdk_version": "2.0"}
-        )
-        
-        # Invoke agent
-        logger.info("Invoking Nyx agent...")
-        result = await self.agent.ainvoke(
-            {"messages": messages},
-            config=config
-        )
-        
-        return result
-    
-    def _build_system_prompt(self, packed_context: PackedContext) -> str:
-        """
-        Build the system prompt with packed context sections.
-        """
-        base_prompt = get_system_prompt()
-        
-        # Format context compactly for the prompt
-        import json
-        context_str = json.dumps(packed_context.to_dict(), ensure_ascii=False)
-        
-        full_prompt = f"{base_prompt}\n\n{context_str}"
-        return full_prompt
-    
-    async def _assemble_response(
+        t0 = time.time()
+        yield {"type": "start", "conversation_id": conversation_id, "user_id": user_id}
+
+        resp = await self.process_user_input(message, conversation_id, user_id, metadata)
+        text = resp.narrative or ""
+        chunk = max(64, self.config.streaming_chunk_size)
+
+        i = 0
+        while i < len(text):
+            yield {"type": "token", "text": text[i : i + chunk]}
+            i += chunk
+
+        yield {
+            "type": "end",
+            "success": resp.success,
+            "trace_id": resp.trace_id,
+            "processing_time": resp.processing_time or (time.time() - t0),
+            "metadata": resp.metadata,
+        }
+
+    # ── internals -------------------------------------------------------------
+
+    async def _call_orchestrator_with_timeout(
         self,
-        agent_response: Dict[str, Any],
-        bundle: ContextBundle,
-        context: NyxContext,
-        user_input: str
+        message: str,
+        conversation_id: str,
+        user_id: str,
+        meta: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Call orchestrator with timeout and (optional) single retry."""
+        try:
+            return await asyncio.wait_for(
+                _orchestrator_process(
+                    user_id=int(user_id),
+                    conversation_id=int(conversation_id),
+                    user_input=message,
+                    context_data=meta,
+                ),
+                timeout=self.config.request_timeout_seconds,
+            )
+        except Exception as first_error:
+            logger.warning("orchestrator call failed: %s", first_error)
+            if not self.config.retry_on_failure:
+                raise
+            await asyncio.sleep(self.config.retry_delay_seconds)
+            logger.info("retrying orchestrator once…")
+            return await asyncio.wait_for(
+                _orchestrator_process(
+                    user_id=int(user_id),
+                    conversation_id=int(conversation_id),
+                    user_input=message,
+                    context_data=meta,
+                ),
+                timeout=self.config.request_timeout_seconds,
+            )
+
+    async def _fallback_direct_run(
+        self,
+        message: str,
+        conversation_id: str,
+        user_id: str,
+        metadata: Dict[str, Any],
+        trace_id: str,
+        t0: float,
     ) -> NyxResponse:
         """
-        Assemble the final response with all enrichments.
+        Minimal reproduction of the orchestrator flow using public agent APIs.
+        Only invoked if the primary path fails and the runtime is available.
         """
-        # Use existing assembler with bundle instead of dict
-        response = await assemble_nyx_response(
-            agent_output=agent_response,
-            context_bundle=bundle,
-            context=context,
-            user_input=user_input
-        )
-        
-        # Add performance metadata
-        response.metadata["scene_key"] = bundle.scene_scope.to_key() if hasattr(bundle, 'scene_scope') else None
-        
-        return response
-    
-    async def _schedule_background_maintenance(
-        self,
-        context: NyxContext,
-        bundle: ContextBundle,
-        response: NyxResponse,
-        conversation_id: str
-    ):
-        """
-        Schedule heavy maintenance tasks to run after response is sent.
-        These don't block the user response!
-        """
-        maintenance_tasks = []
-        
-        # Memory consolidation and pattern analysis
-        if getattr(context, "memory_orchestrator", None) and hasattr(context.memory_orchestrator, "needs_consolidation") and context.memory_orchestrator.needs_consolidation():
-            maintenance_tasks.append({
-                "task": "memory.consolidate",
-                "params": {
-                    "conversation_id": conversation_id,
-                    "recent_memories": (
-                        (bundle.memories.data.to_dict() if hasattr(bundle.memories.data, "to_dict") else bundle.memories.data) or {}
-                    ).get("recent", [])
-                }
-            })
-        
-        # NPC background thinking/scheming
-        active_npcs = sorted(list(bundle.scene_scope.npc_ids)) if bundle.scene_scope else []
-        for npc_id in active_npcs:
-            maintenance_tasks.append({
-                "task": "npc.background_think",
-                "params": {
-                    "npc_id": npc_id,
-                    # Workers can refetch full NPC context by id; keep payload tiny.
-                    "context": {}
-                }
-            })
-        
-        # Lore evolution checks
-        lore_dict = (
-            bundle.lore.data.to_dict() if hasattr(bundle.lore.data, "to_dict") else bundle.lore.data
-        ) or {}
-        if lore_dict.get("evolution_pending"):
-            maintenance_tasks.append({
-                "task": "lore.evolve",
-                "params": {
-                    "affected_entities": lore_dict.get("affected_entities", [])
-                }
-            })
-        
-        # Conflict tension updates (existing)
-        conflicts_dict = bundle.conflicts.data or {}
-        if context.should_run_task("conflict_tension_calculation"):
-            active_ids = [c["id"] for c in conflicts_dict.get("active", []) if isinstance(c, dict) and "id" in c]
-            maintenance_tasks.append({
-                "task": "conflict.update_tensions",
-                "params": {"active_conflicts": active_ids}
-            })
+        if not (Runner and RunConfig and RunContextWrapper and nyx_main_agent):
+            raise RuntimeError("Fallback agent runtime is unavailable in this environment.")
 
-        # ✅ NEW: Conflict background processing queue (optimized conflict system)
-        broker = getattr(context, "context_broker", None)
-        processor = getattr(broker, "conflict_processor", None) if broker else None
-        if processor:
-            # Schedule only if there's likely work; be defensive about attribute presence.
-            has_pending = True
-            try:
-                queue = getattr(processor, "_processing_queue", None)
-                # If queue exposes __len__, check it; otherwise assume pending to avoid missing work.
-                if queue is not None and hasattr(queue, "__len__"):
-                    has_pending = len(queue) > 0
-            except Exception:
-                has_pending = True
+        ctx = NyxContext(user_id=int(user_id), conversation_id=int(conversation_id))
+        await ctx.initialize()
+        ctx.current_context = (metadata or {}).copy()
+        ctx.current_context["user_input"] = message
 
-            if has_pending:
-                maintenance_tasks.append({
-                    "task": "conflict.process_queue",
-                    "params": {
-                        "user_id": int(context.user_id),
-                        "conversation_id": conversation_id,
-                        "max_items": 3
-                    }
-                })
-        
-        # Universal state updates
-        maintenance_tasks.append({
-            "task": "world.update_universal",
-            "params": {
-                "response": response.to_dict(),
-                "conversation_id": conversation_id
-            }
-        })
-        
-        # Enqueue all tasks (non-blocking)
-        for task in maintenance_tasks:
-            await enqueue_task(
-                task_name=task["task"],
-                params=task["params"],
-                priority="low",
-                delay_seconds=1  # Small delay to ensure response is sent first
+        safe_settings = ModelSettings(strict_tools=False, response_format=None)
+        run_config = RunConfig(model_settings=safe_settings, workflow_name="Nyx Fallback")
+        runner_context = RunContextWrapper(ctx)
+
+        result = await Runner.run(nyx_main_agent, message, context=runner_context, run_config=run_config)
+
+        history = []
+        for attr in ("messages", "history", "events"):
+            if hasattr(result, attr):
+                history = getattr(result, attr) or []
+                if history:
+                    break
+
+        if not history:
+            text = (
+                getattr(result, "final_output", None)
+                or getattr(result, "output", None)
+                or getattr(result, "text", None)
+                or str(result)
             )
-        
-        logger.info(f"Scheduled {len(maintenance_tasks)} background maintenance tasks")
-    
-    async def _log_metrics(
-        self,
-        elapsed: float,
-        bundle_size: int
-    ):
-        """Log performance metrics for monitoring."""
-        metrics = ContextMetrics(
-            total_time=elapsed,
-            bundle_sections=bundle_size,
-            timestamp=datetime.utcnow()
-        )
-        
-        await log_performance_metrics(metrics)
-        
-        # Alert if response time exceeds threshold
-        if elapsed > 30:
-            logger.warning(f"Response time ({elapsed:.2f}s) exceeded 30s threshold")
-        elif elapsed < 10:
-            logger.info(f"🚀 Fast response achieved: {elapsed:.2f}s")
-    
-    def _create_error_response(self, error_message: str) -> NyxResponse:
-        """Create a fallback error response."""
+            history = [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}]
+
+        history = await resolve_scene_requests(history, ctx)
+        assembled = assemble_nyx_response(history)
+
         return NyxResponse(
-            narrative="*Nyx's form flickers momentarily* Something interfered with our connection...",
-            choices=[],
+            narrative=assembled.get("narrative", "") or "",
+            choices=assembled.get("choices", []) or [],
+            metadata={
+                "world": assembled.get("world", {}) or {},
+                "emergent": assembled.get("emergent", {}) or {},
+                "image": assembled.get("image", {}) or {},
+                "telemetry": assembled.get("telemetry", {}) or {},
+                "nyx_commentary": assembled.get("nyx_commentary"),
+                "universal_updates": assembled.get("universal_updates", False),
+                "path": "fallback",
+                "trace_id": trace_id,
+            },
+            world_state=assembled.get("world", {}) or {},
+            success=True,
+            trace_id=trace_id,
+            processing_time=(time.time() - t0),
+        )
+
+    async def _maybe_log_perf(self, resp: NyxResponse) -> None:
+        if not (self.config.enable_telemetry and _log_perf):
+            return
+        try:
+            await _log_perf(
+                {
+                    "total_time": resp.processing_time,
+                    "timestamp": time.time(),
+                    "bundle_sections": None,  # orchestrator owns granular logs
+                    "success": resp.success,
+                }
+            )
+        except Exception:
+            logger.debug("telemetry logging failed (non-fatal)", exc_info=True)
+
+    async def _maybe_enqueue_maintenance(self, resp: NyxResponse, conversation_id: str) -> None:
+        """Lightweight background nudge; orchestrator already does the heavy lifting."""
+        if not _enqueue_task:
+            return
+        try:
+            await _enqueue_task(
+                task_name="world.update_universal",
+                params={"response": resp.to_dict(), "conversation_id": str(conversation_id)},
+                priority="low",
+                delay_seconds=1,
+            )
+        except Exception:
+            logger.debug("enqueue_task failed (non-fatal)", exc_info=True)
+
+    def _blocked_response(self, safe_text: str, trace_id: str, t0: float, stage: str, details: Optional[Dict[str, Any]]) -> NyxResponse:
+        return NyxResponse(
+            narrative=safe_text,
+            metadata={"moderation_blocked": True, "stage": stage, "details": details or {}},
+            success=False,
+            trace_id=trace_id,
+            processing_time=(time.time() - t0),
+        )
+
+    def _error_response(self, error_message: str, trace_id: str, t0: float) -> NyxResponse:
+        return NyxResponse(
+            narrative="*Nyx’s form flickers* Something interfered with our connection…",
             metadata={"error": error_message},
-            world_state={},
-            success=False
+            success=False,
+            trace_id=trace_id,
+            processing_time=(time.time() - t0),
+            error=error_message,
         )
-    
-    async def cleanup_conversation(self, conversation_id: str):
-        """
-        Clean up persistent context when conversation ends.
-        """
-        if conversation_id in self.persistent_contexts:
-            context = self.persistent_contexts[conversation_id]
-            if hasattr(context, "cleanup") and callable(getattr(context, "cleanup")):
-                await context.cleanup()
-            del self.persistent_contexts[conversation_id]
-            logger.info(f"Cleaned up context for {conversation_id}")
-    
-    async def warmup_cache(self, conversation_id: str, location: str):
-        """
-        Pre-warm caches for a location to make first response faster.
-        """
-        # Create a temporary context for warmup
-        context = NyxContext(
-            conversation_id=int(conversation_id),
-            user_id=0  # Use 0 for warmup context
-        )
-        await context.initialize()
-        
-        # Pre-fetch common scene scopes
-        base_scope = SceneScope(
-            location_id=location,
-            npc_ids=set(),
-            topics=set(),
-            lore_tags=set()
-        )
-        
-        # Fetch and cache (ContextBroker handles caching internally)
-        await context.context_broker.load_or_fetch_bundle(scene_scope=base_scope)
-        
-        logger.info(f"Cache warmed for location: {location}")
+
+    def _cache_key(self, conversation_id: str, user_id: str, message: str, meta: Dict[str, Any]) -> str:
+        # Ignore volatile metadata keys starting with underscore
+        stable_meta = {k: v for k, v in (meta or {}).items() if not str(k).startswith("_")}
+        h = hashlib.sha256()
+        h.update(message.encode("utf-8"))
+        h.update(str(sorted(stable_meta.items())).encode("utf-8"))
+        return f"{conversation_id}|{user_id}|{h.hexdigest()[:16]}"
+
+    def _read_cache(self, key: str) -> Optional[NyxResponse]:
+        ttl = self.config.result_cache_ttl_seconds
+        if ttl <= 0:
+            return None
+        entry = self._result_cache.get(key)
+        if not entry:
+            return None
+        ts, resp = entry
+        if (time.time() - ts) <= ttl:
+            return resp
+        self._result_cache.pop(key, None)
+        return None
+
+    def _write_cache(self, key: str, resp: NyxResponse) -> None:
+        ttl = self.config.result_cache_ttl_seconds
+        if ttl <= 0:
+            return
+        self._result_cache[key] = (time.time(), resp)
 
 
-# Backward compatibility wrapper
+# ──────────────────────────────────────────────────────────────────────────────
+# Legacy-compatible runner
+# ──────────────────────────────────────────────────────────────────────────────
+
 class NyxAgentRunner:
-    """Legacy interface wrapper for backward compatibility."""
-    
-    def __init__(self, config: Optional[NyxConfig] = None):
-        self.sdk = NyxAgentSDK(config or NyxConfig())
-    
+    """Legacy interface wrapper retaining the historical `.run()` surface."""
+
+    def __init__(self, config: Optional[NyxSDKConfig] = None):
+        self.sdk = NyxAgentSDK(config)
+
     async def run(
         self,
         user_input: str,
         conversation_id: str,
         user_id: str,
-        **kwargs
+        **kwargs,
     ) -> NyxResponse:
-        """Legacy run method."""
         return await self.sdk.process_user_input(
             message=user_input,
             conversation_id=conversation_id,
             user_id=user_id,
-            metadata=kwargs
+            metadata=kwargs or {},
         )
-    
-    async def initialize(self):
-        """Legacy initialization."""
+
+    async def initialize(self) -> None:
         await self.sdk.initialize_agent()
 
 
-# Module exports
 __all__ = [
-    'NyxAgentSDK',
-    'NyxAgentRunner',  # For backward compatibility
+    "NyxSDKConfig",
+    "NyxAgentSDK",
+    "NyxAgentRunner",
+    "NyxResponse",
 ]
