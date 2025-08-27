@@ -32,8 +32,8 @@ from .models import (
     RelationshipUpdate,
     PerformanceMetrics,
     ActivityRecommendationsResult,
-    DecisionScores,
-    ConflictDetection,
+    DecisionScoringResult,
+    ConflictDetectionResult,
 )
 
 logger = logging.getLogger(__name__)
