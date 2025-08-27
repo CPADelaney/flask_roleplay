@@ -1,14 +1,23 @@
 # nyx/nyx_agent/models.py
-"""Pydantic models for Nyx Agent SDK"""
+"""Unified Pydantic models for Nyx Agent SDK
+- Harmonized to match tools.py (source of truth)
+- Back-compat aliases preserved for older names used elsewhere
+"""
+
+from __future__ import annotations
 
 from typing import Dict, List, Any, Optional, Tuple, Union, Literal
-from pydantic import BaseModel as _PydanticBaseModel, Field, ConfigDict
 import logging
+
+from pydantic import BaseModel as _PydanticBaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# ===== Base Model with Schema Sanitization =====
-def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+# =========================
+# Base & Schema Sanitization
+# =========================
+
+def _sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     """Remove additionalProperties / unevaluatedProperties and normalize 'required'."""
     import copy
     s = copy.deepcopy(schema)
@@ -35,21 +44,27 @@ def sanitize_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     walk(s)
     return s
 
+
 class BaseModel(_PydanticBaseModel):
+    """Pydantic base with JSON-schema cleanup to avoid 'additionalProperties' issues."""
     @classmethod
     def model_json_schema(cls, *args, **kwargs):
         try:
             schema = super().model_json_schema(*args, **kwargs)
             if 'additionalProperties' in str(schema):
-                logger.warning(f"Model {cls.__name__} has additionalProperties in schema")
-            return sanitize_json_schema(schema)
+                logger.debug("Model %s exported schema with additionalProperties", cls.__name__)
+            return _sanitize_json_schema(schema)
         except Exception as e:
-            logger.error(f"Schema generation failed for {cls.__name__}: {e}")
+            logger.error("Schema generation failed for %s: %s", cls.__name__, e)
             raise
 
-StrictBaseModel = BaseModel  # Alias for compatibility
 
-# ===== Utility Types =====
+StrictBaseModel = BaseModel  # compatibility alias
+
+# =============
+# Utility Types
+# =============
+
 JsonScalar = Union[str, int, float, bool, None]
 JsonValue = Union[JsonScalar, List[JsonScalar]]
 
@@ -60,341 +75,6 @@ class KVPair(BaseModel):
 class KVList(BaseModel):
     items: List[KVPair] = Field(default_factory=list)
 
-# ===== Core Data Models =====
-class MemoryItem(BaseModel):
-    id: Optional[str] = Field(None, description="Memory ID if available")
-    text: str = Field(..., description="Memory text")
-    relevance: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score 0-1")
-    tags: List[str] = Field(default_factory=list, description="Memory tags")
-
-class EmotionalChanges(BaseModel):
-    valence_change: float
-    arousal_change: float
-    dominance_change: float
-
-class ScoreComponents(BaseModel):
-    context: float
-    emotional: float
-    pattern: float
-    relationship: float
-
-class PerformanceNumbers(BaseModel):
-    memory_mb: float
-    cpu_percent: float
-    avg_response_time: float
-    success_rate: float
-
-class ConflictItem(BaseModel):
-    type: str
-    severity: float
-    description: str
-    entities: Optional[List[str]] = None
-    blocked_objectives: Optional[List[str]] = None
-
-class InstabilityItem(BaseModel):
-    type: str
-    severity: float
-    description: str
-    recommendation: Optional[str] = None
-
-class ActivityRec(BaseModel):
-    name: str
-    description: str
-    requirements: List[str]
-    duration: str
-    intensity: str
-    partner_id: Optional[str] = None
-
-class RelationshipStateOut(BaseModel):
-    trust: float
-    power_dynamic: float
-    emotional_bond: float
-    interaction_count: int
-    last_interaction: float
-    type: str
-
-class RelationshipChanges(BaseModel):
-    trust: float
-    power: float
-    bond: float
-
-class DecisionMetadata(BaseModel):
-    data: KVList = Field(default_factory=KVList, description="Additional metadata")
-
-class DecisionOption(BaseModel):
-    id: str = Field(..., description="Option ID")
-    description: str = Field(..., description="Option description")
-    metadata: DecisionMetadata = Field(default_factory=DecisionMetadata)
-
-class ScoredOption(BaseModel):
-    option: DecisionOption
-    score: float
-    components: ScoreComponents
-    is_fallback: Optional[bool] = False
-
-# ===== Structured Output Models =====
-class NarrativeResponse(BaseModel):
-    """Structured output for Nyx's narrative responses"""
-    narrative: str = Field(..., description="The main narrative response as Nyx")
-    tension_level: int = Field(0, description="Current narrative tension level (0-10)")
-    generate_image: bool = Field(False, description="Whether an image should be generated for this scene")
-    image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
-    environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
-    time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
-    universal_updates: Optional[KVList] = Field(None, description="Universal updates extracted from narrative")
-    world_mood: Optional[str] = Field(None, description="Current world mood")
-    ongoing_events: Optional[List[str]] = Field(None, description="Active slice-of-life events")
-    available_activities: Optional[List[str]] = Field(None, description="Available player activities")
-    npc_schedules: Optional[KVList] = None
-    time_of_day: Optional[str] = Field(None, description="Current time period")
-    emergent_opportunities: Optional[List[str]] = Field(None, description="Emergent narrative opportunities")
-
-class MemoryReflection(BaseModel):
-    """Structured output for memory reflections"""
-    reflection: str = Field(..., description="The reflection text")
-    confidence: float = Field(..., description="Confidence level in the reflection (0.0-1.0)")
-    topic: Optional[str] = Field(None, description="Topic of the reflection")
-
-class ContentModeration(BaseModel):
-    """Output for content moderation guardrail"""
-    is_appropriate: bool = Field(..., description="Whether the content is appropriate")
-    reasoning: str = Field(..., description="Reasoning for the decision")
-    suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
-
-class EmotionalStateUpdate(BaseModel):
-    """Structured output for emotional state changes"""
-    valence: float = Field(..., description="Positive/negative emotion (-1 to 1)")
-    arousal: float = Field(..., description="Emotional intensity (0 to 1)")
-    dominance: float = Field(..., description="Control level (0 to 1)")
-    primary_emotion: str = Field(..., description="Primary emotion label")
-    reasoning: str = Field(..., description="Why the emotional state changed")
-
-class ScenarioDecision(BaseModel):
-    """Structured output for scenario management decisions"""
-    action: str = Field(..., description="Action to take (advance, maintain, escalate, de-escalate)")
-    next_phase: str = Field(..., description="Next scenario phase")
-    tasks: List[KVList] = Field(default_factory=list, description="Tasks to execute")
-    npc_actions: List[KVList] = Field(default_factory=list, description="NPC actions to take")
-    time_advancement: bool = Field(False, description="Whether to advance time after this phase")
-
-class RelationshipUpdate(BaseModel):
-    """Structured output for relationship changes"""
-    trust_change: float = Field(0.0, description="Change in trust level")
-    power_dynamic_change: float = Field(0.0, description="Change in power dynamic")
-    emotional_bond_change: float = Field(0.0, description="Change in emotional bond")
-    relationship_type: str = Field(..., description="Type of relationship")
-
-class ImageGenerationDecision(BaseModel):
-    """Decision about whether to generate an image"""
-    should_generate: bool = Field(..., description="Whether an image should be generated")
-    score: float = Field(0.0, description="Confidence score for the decision")
-    image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
-    reasoning: str = Field(..., description="Reasoning for the decision")
-
-# ===== Input Models for Tools =====
-class RetrieveMemoriesInput(BaseModel):
-    query: str = Field(..., description="Search query to find memories")
-    limit: int = Field(5, description="Maximum number of memories to return", ge=1, le=20)
-
-class AddMemoryInput(BaseModel):
-    memory_text: str = Field(..., description="The content of the memory")
-    memory_type: str = Field("observation", description="Type of memory")
-    significance: int = Field(5, description="Importance of memory (1-10)", ge=1, le=10)
-
-class DetectUserRevelationsInput(BaseModel):
-    user_message: str = Field(..., description="The user's message to analyze")
-
-class GenerateImageFromSceneInput(BaseModel):
-    scene_description: str = Field(..., description="Description of the scene")
-    characters: List[str] = Field(..., description="List of characters in the scene")
-    style: str = Field("realistic", description="Style for the image")
-
-class CalculateEmotionalStateInput(BaseModel):
-    context: KVList = Field(..., description="Current interaction context")
-
-class UpdateRelationshipStateInput(BaseModel):
-    entity_id: str = Field(..., description="ID of the entity (NPC or user)")
-    trust_change: float = Field(0.0, description="Change in trust level", ge=-1.0, le=1.0)
-    power_change: float = Field(0.0, description="Change in power dynamic", ge=-1.0, le=1.0)
-    bond_change: float = Field(0.0, description="Change in emotional bond", ge=-1.0, le=1.0)
-
-class GetActivityRecommendationsInput(BaseModel):
-    scenario_type: str = Field(..., description="Type of current scenario")
-    npc_ids: List[str] = Field(..., description="List of present NPC IDs")
-
-class BeliefDataModel(BaseModel):
-    entity_id: str = Field("nyx", description="Entity ID")
-    type: str = Field("general", description="Belief type")
-    content: KVList = Field(default_factory=KVList, description="Belief content")
-    query: Optional[str] = Field(None, description="Query for belief search")
-
-class ManageBeliefsInput(BaseModel):
-    action: Literal["get", "update", "query"] = Field(..., description="Action to perform")
-    belief_data: BeliefDataModel = Field(..., description="Data for the belief operation")
-
-class ScoreDecisionOptionsInput(BaseModel):
-    options: List[DecisionOption] = Field(..., description="List of possible decisions/actions")
-    decision_context: KVList = Field(..., description="Context for making the decision")
-
-class DetectConflictsAndInstabilityInput(BaseModel):
-    scenario_state: KVList = Field(..., description="Current scenario state")
-
-class GenerateUniversalUpdatesInput(BaseModel):
-    narrative: str = Field(..., description="The narrative text to process")
-
-class DecideImageInput(BaseModel):
-    scene_text: str = Field(..., description="Scene description to evaluate")
-
-class EmptyInput(BaseModel):
-    """Empty input for functions that don't require parameters"""
-    pass
-
-class UpdateEmotionalStateInput(BaseModel):
-    """Input for updating emotional state based on events"""
-    triggering_event: str
-    valence_change: float = 0.0
-    arousal_change: float = 0.0  
-    dominance_change: float = 0.0
-    
-# ===== Output Models for Tools =====
-class MemorySearchResult(BaseModel):
-    memories: List[MemoryItem] = Field(..., description="List of retrieved memories")
-    formatted_text: str = Field(..., description="Formatted memory text")
-
-class MemoryStorageResult(BaseModel):
-    memory_id: str = Field(..., description="ID of stored memory")
-    success: bool = Field(..., description="Whether memory was stored successfully")
-
-class UserGuidanceResult(BaseModel):
-    top_kinks: List[Tuple[str, float]] = Field(..., description="Top user preferences with levels")
-    behavior_patterns: KVList = Field(..., description="Identified behavior patterns")
-    suggested_intensity: float = Field(..., description="Suggested interaction intensity")
-    reflections: List[str] = Field(..., description="User model reflections")
-
-class RevelationDetectionResult(BaseModel):
-    revelations: List[KVList] = Field(..., description="Detected revelations")
-    has_revelations: bool = Field(..., description="Whether any revelations were found")
-
-class ImageGenerationResult(BaseModel):
-    success: bool = Field(..., description="Whether image was generated")
-    image_url: Optional[str] = Field(None, description="URL of generated image")
-    error: Optional[str] = Field(None, description="Error message if failed")
-
-class EmotionalCalculationResult(BaseModel):
-    valence: float = Field(..., description="New valence value")
-    arousal: float = Field(..., description="New arousal value")
-    dominance: float = Field(..., description="New dominance value")
-    primary_emotion: str = Field(..., description="Primary emotion label")
-    changes: EmotionalChanges = Field(..., description="Changes applied")
-    state_updated: Optional[bool] = Field(None, description="Whether state was persisted")
-
-class RelationshipUpdateResult(BaseModel):
-    entity_id: str = Field(..., description="Entity ID")
-    relationship: RelationshipStateOut = Field(..., description="Updated relationship state")
-    changes: RelationshipChanges = Field(..., description="Changes applied")
-
-class DecideImageGenerationInput(BaseModel):
-    """Input for deciding whether to generate an image"""
-    scene_text: str
-    context: Optional[str] = None
-    user_preference: Optional[str] = None
-
-class PerformanceMetricsResult(BaseModel):
-    metrics: PerformanceNumbers = Field(..., description="Current performance metrics")
-    suggestions: List[str] = Field(..., description="Performance improvement suggestions")
-    actions_taken: List[str] = Field(..., description="Remediation actions taken")
-    health: str = Field(..., description="Overall system health status")
-
-class ActivityRecommendationsResult(BaseModel):
-    recommendations: List[ActivityRec] = Field(..., description="Recommended activities")
-    total_available: int = Field(..., description="Total number of available activities")
-
-class BeliefManagementResult(BaseModel):
-    result: Union[str, KVList] = Field(..., description="Operation result")
-    error: Optional[str] = Field(None, description="Error message if failed")
-
-class DecisionScoringResult(BaseModel):
-    scored_options: List[ScoredOption] = Field(..., description="Options with scores")
-    best_option: DecisionOption = Field(..., description="Highest scoring option")
-    confidence: float = Field(..., description="Confidence in best option")
-
-class ConflictDetectionResult(BaseModel):
-    conflicts: List[ConflictItem] = Field(..., description="Detected conflicts")
-    instabilities: List[InstabilityItem] = Field(..., description="Detected instabilities")
-    overall_stability: float = Field(..., description="Overall stability score (0-1)")
-    stability_note: str = Field(..., description="Explanation of stability score")
-    requires_intervention: bool = Field(..., description="Whether intervention is needed")
-
-class UniversalUpdateResult(BaseModel):
-    success: bool = Field(..., description="Whether updates were generated")
-    updates_generated: bool = Field(..., description="Whether any updates were found")
-    error: Optional[str] = Field(None, description="Error message if failed")
-
-# ===== State Models =====
-class EmotionalState(BaseModel):
-    valence: float = Field(0.0, description="Positive/negative emotion (-1 to 1)", ge=-1.0, le=1.0)
-    arousal: float = Field(0.5, description="Emotional intensity (0 to 1)", ge=0.0, le=1.0)
-    dominance: float = Field(0.7, description="Control level (0 to 1)", ge=0.0, le=1.0)
-
-class RelationshipState(BaseModel):
-    trust: float = Field(0.5, description="Trust level (0-1)", ge=0.0, le=1.0)
-    power_dynamic: float = Field(0.5, description="Power dynamic (0-1)", ge=0.0, le=1.0)
-    emotional_bond: float = Field(0.3, description="Emotional bond strength (0-1)", ge=0.0, le=1.0)
-    interaction_count: int = Field(0, description="Number of interactions", ge=0)
-    last_interaction: float = Field(..., description="Timestamp of last interaction")
-    type: str = Field("neutral", description="Relationship type")
-
-class PerformanceMetrics(BaseModel):
-    total_actions: int = Field(0, ge=0)
-    successful_actions: int = Field(0, ge=0)
-    failed_actions: int = Field(0, ge=0)
-    response_times: List[float] = Field(default_factory=list)
-    memory_usage: float = Field(0.0, ge=0.0)
-    cpu_usage: float = Field(0.0, ge=0.0, le=100.0)
-    error_rates: KVList = Field(default_factory=lambda: KVList(items=[
-        KVPair(key="total", value=0),
-        KVPair(key="recovered", value=0),
-        KVPair(key="unrecovered", value=0)
-    ]))
-
-class LearningMetrics(BaseModel):
-    pattern_recognition_rate: float = Field(0.0, ge=0.0, le=1.0)
-    strategy_improvement_rate: float = Field(0.0, ge=0.0, le=1.0)
-    adaptation_success_rate: float = Field(0.0, ge=0.0, le=1.0)
-
-# ===== Open World / Slice-of-life Models =====
-class NarrateSliceInput(BaseModel):
-    scene_type: str = Field("routine", description="Slice-of-life scene type")
-
-class EmergentEventInput(BaseModel):
-    event_type: Optional[str] = Field(None, description="Optional event type hint")
-
-class SimulateAutonomyInput(BaseModel):
-    hours: int = Field(1, ge=1, le=24, description="Hours to advance")
-
-# ===== Composite Models =====
-class ScenarioManagementRequest(BaseModel):
-    user_id: int = Field(..., description="User ID")
-    conversation_id: int = Field(..., description="Conversation ID")
-    scenario_id: Optional[str] = Field(None, description="Scenario ID")
-    type: str = Field("general", description="Scenario type")
-    participants: List[KVList] = Field(default_factory=list, description="Scenario participants")
-    objectives: List[KVList] = Field(default_factory=list, description="Scenario objectives")
-
-class RelationshipInteractionData(BaseModel):
-    user_id: int = Field(..., description="User ID")
-    conversation_id: int = Field(..., description="Conversation ID")
-    participants: List[KVList] = Field(..., description="Interaction participants")
-    interaction_type: str = Field(..., description="Type of interaction")
-    outcome: str = Field(..., description="Interaction outcome")
-    emotional_impact: Optional[KVList] = Field(None, description="Emotional impact data")
-
-# Rebuild forward references
-KVPair.model_rebuild()
-ScoredOption.model_rebuild()
-DecisionOption.model_rebuild()
-
-# Helper functions for conversion
 def dict_to_kvlist(d: dict) -> KVList:
     return KVList(items=[KVPair(key=k, value=v) for k, v in d.items()])
 
@@ -402,13 +82,299 @@ def kvlist_to_dict(kv: KVList) -> dict:
     return {pair.key: pair.value for pair in kv.items}
 
 def strict_output(model_cls):
-    """Return the Pydantic model class as-is."""
+    """Return the Pydantic model class as-is (hook for SDK strict outputs)."""
     import inspect
     if not inspect.isclass(model_cls):
         raise TypeError("strict_output expects a Pydantic model class")
     try:
         _ = model_cls.model_json_schema()
-        logger.debug("strict_output: schema ready for %s", getattr(model_cls, "__name__", model_cls))
     except Exception:
         logger.debug("strict_output: schema build skipped for %r", model_cls, exc_info=True)
     return model_cls
+
+# =====================
+# Core domain structures
+# =====================
+
+class MemoryItem(BaseModel):
+    id: Optional[str] = Field(None, description="Memory ID if available")
+    text: str = Field(..., description="Memory text")
+    relevance: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score 0-1")
+    tags: List[str] = Field(default_factory=list, description="Memory tags")
+    entities: Optional[List[Union[str, int]]] = Field(None, description="Linked entity IDs (optional)")
+
+class EmotionalState(BaseModel):
+    """Simple VAD state used by tools."""
+    valence: float = Field(0.0, ge=-1.0, le=1.0, description="Positive/negative emotion")
+    arousal: float = Field(0.5, ge=0.0, le=1.0, description="Emotional intensity")
+    dominance: float = Field(0.7, ge=0.0, le=1.0, description="Control level")
+
+# =================
+# Inputs (tools.py)
+# =================
+
+class EmptyInput(BaseModel):
+    """Empty input for functions that don't require parameters"""
+    pass
+
+class RetrieveMemoriesInput(BaseModel):
+    query: str = Field(..., description="Search query to find memories")
+    limit: int = Field(5, ge=1, le=20, description="Maximum number of memories to return")
+
+class AddMemoryInput(BaseModel):
+    memory_text: str = Field(..., description="The content of the memory")
+    memory_type: str = Field("observation", description="Type of memory")
+    significance: int = Field(5, ge=1, le=10, description="Importance of memory (1-10)")
+    entities: Optional[List[Union[str, int]]] = Field(None, description="Linked entities for graph context")
+
+class DecideImageGenerationInput(BaseModel):
+    """Input for deciding whether to generate an image"""
+    scene_text: str
+    context: Optional[str] = None
+    user_preference: Optional[str] = None
+
+# For back-compat with older references:
+class DecideImageInput(DecideImageGenerationInput):
+    pass
+
+class UpdateEmotionalStateInput(BaseModel):
+    """Input for updating emotional state based on events"""
+    triggering_event: str
+    valence_change: float = 0.0
+    arousal_change: float = 0.0
+    dominance_change: float = 0.0
+
+class UpdateRelationshipStateInput(BaseModel):
+    """Tools expect trust/attraction/respect deltas + optional event"""
+    entity_id: Union[str, int]
+    trust_change: float = Field(0.0, ge=-1.0, le=1.0)
+    attraction_change: float = Field(0.0, ge=-1.0, le=1.0)
+    respect_change: float = Field(0.0, ge=-1.0, le=1.0)
+    triggering_event: Optional[str] = None
+
+class DecisionOption(BaseModel):
+    id: str = Field(..., description="Option ID")
+    description: str = Field(..., description="Option description")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class ScoreDecisionOptionsInput(BaseModel):
+    options: List[str] | List[DecisionOption] = Field(..., description="Options to score")
+    decision_context: KVList = Field(default_factory=KVList, description="Context for making the decision")
+
+# Optional inputs referenced elsewhere (compat)
+class DetectUserRevelationsInput(BaseModel):
+    user_message: str = Field(..., description="The user's message to analyze")
+
+class GetActivityRecommendationsInput(BaseModel):
+    scenario_type: str = Field("general", description="Type of current scenario")
+    npc_ids: List[Union[str, int]] = Field(default_factory=list, description="List of present NPC IDs")
+
+# ==================
+# Outputs (tools.py)
+# ==================
+
+class MemorySearchResult(BaseModel):
+    memories: List[MemoryItem] = Field(..., description="List of retrieved memories")
+    formatted_text: str = Field(..., description="Formatted memory text")
+    graph_connections: int = Field(0, description="How many memories had graph links")
+
+class MemoryStorageResult(BaseModel):
+    memory_id: str = Field(..., description="ID of stored memory")
+    success: bool = Field(..., description="Whether memory was stored successfully")
+    linked_entities: List[Union[str, int]] = Field(default_factory=list, description="Entities linked to the memory")
+
+class UserGuidanceResult(BaseModel):
+    """What the user-analysis tool returns in tools.py"""
+    preferred_approach: str = Field(..., description="High-level guidance on approach")
+    tone_suggestions: List[str] = Field(default_factory=list)
+    topics_to_explore: List[str] = Field(default_factory=list)
+    boundaries_detected: List[str] = Field(default_factory=list)
+    engagement_level: float = Field(0.5, ge=0.0, le=1.0)
+
+class ImageGenerationDecision(BaseModel):
+    """Decision about whether to generate an image (tools.py shape)"""
+    should_generate: bool = Field(..., description="Whether an image should be generated")
+    scene_score: float = Field(0.0, description="Heuristic score for the scene")
+    prompt: Optional[str] = Field(None, description="Prompt to use if generating")
+    reason: str = Field("", description="Reasoning")
+    style_hints: List[str] = Field(default_factory=list)
+
+    # Back-compat computed aliases (older code expected 'score'/'image_prompt'/'reasoning')
+    @property
+    def score(self) -> float:
+        return self.scene_score
+
+    @property
+    def image_prompt(self) -> Optional[str]:
+        return self.prompt
+
+    @property
+    def reasoning(self) -> str:
+        return self.reason
+
+class EmotionalStateResult(BaseModel):
+    """tools.calculate_and_update_emotional_state expected shape"""
+    valence: float
+    arousal: float
+    dominance: float
+    emotional_label: str = Field("neutral")
+    manifestation: str = Field("", description="How it shows up")
+
+# Back-compat alias used by some older code
+class EmotionalCalculationResult(EmotionalStateResult):
+    pass
+
+class RelationshipUpdate(BaseModel):
+    """tools.update_relationship_state expected shape"""
+    entity_id: Union[str, int]
+    new_trust: float
+    new_attraction: float
+    new_respect: float
+    relationship_level: str = Field("neutral")
+    change_description: str = Field("")
+
+# Compatibility wrapper used by some legacy paths
+class RelationshipStateOut(BaseModel):
+    trust: float
+    power_dynamic: Optional[float] = None
+    emotional_bond: Optional[float] = None
+    interaction_count: Optional[int] = 0
+    last_interaction: Optional[float] = 0.0
+    type: str = "neutral"
+
+class RelationshipChanges(BaseModel):
+    trust: float = 0.0
+    power: float = 0.0
+    bond: float = 0.0
+
+class RelationshipUpdateResult(BaseModel):
+    entity_id: Union[str, int]
+    relationship: RelationshipStateOut
+    changes: RelationshipChanges
+
+class PerformanceMetrics(BaseModel):
+    """tools.check_performance_metrics expected shape"""
+    response_time_ms: int = 0
+    tokens_used: int = 0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    parallel_fetches: int = 0
+    bundle_size_kb: int = 0
+    sections_loaded: List[str] = Field(default_factory=list)
+
+class ActivityRec(BaseModel):
+    name: str
+    description: str
+    requirements: List[str] = Field(default_factory=list)
+    duration: str = "unknown"
+    intensity: str = "medium"
+    partner_id: Optional[Union[str, int]] = None
+
+class ActivityRecommendations(BaseModel):
+    recommendations: List[ActivityRec] = Field(default_factory=list)
+    total_available: int = 0
+    scenario_context: Dict[str, Any] = Field(default_factory=dict)
+
+# Back-compat name (earlier file used ...Result)
+class ActivityRecommendationsResult(ActivityRecommendations):
+    pass
+
+class DecisionScores(BaseModel):
+    """Return type used by tools.score_decision_options"""
+    options: Dict[str, float] = Field(default_factory=dict, description="option -> score")
+    recommended: Optional[str] = None
+    reasoning: Dict[str, Any] = Field(default_factory=dict)
+
+# Back-compat name
+class DecisionScoringResult(DecisionScores):
+    pass
+
+class ConflictDetection(BaseModel):
+    """Return type used by tools.detect_conflicts_and_instability"""
+    active_conflicts: List[Dict[str, Any]] = Field(default_factory=list)
+    potential_conflicts: List[Dict[str, Any]] = Field(default_factory=list)
+    tension_level: float = 0.5
+    hot_spots: List[Dict[str, Any]] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+
+# Back-compat name
+class ConflictDetectionResult(ConflictDetection):
+    pass
+
+# =======================
+# Narrative / Misc (used)
+# =======================
+
+class NarrativeResponse(BaseModel):
+    """Structured output sometimes used by higher layers (or tests)"""
+    narrative: str = Field(..., description="The main narrative response as Nyx")
+    tension_level: int = Field(0, description="Current narrative tension level (0-10)")
+    generate_image: bool = Field(False, description="Whether an image should be generated for this scene")
+    image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
+    environment_description: Optional[str] = None
+    time_advancement: bool = False
+    universal_updates: Optional[KVList] = None
+    world_mood: Optional[str] = None
+    ongoing_events: Optional[List[str]] = None
+    available_activities: Optional[List[str]] = None
+    npc_schedules: Optional[KVList] = None
+    time_of_day: Optional[str] = None
+    emergent_opportunities: Optional[List[str]] = None
+
+class MemoryReflection(BaseModel):
+    reflection: str
+    confidence: float
+    topic: Optional[str] = None
+
+class ContentModeration(BaseModel):
+    is_appropriate: bool
+    reasoning: str
+    suggested_adjustment: Optional[str] = None
+
+# Optional shapes some code references (rare / compat)
+class ScenarioDecision(BaseModel):
+    action: str
+    next_phase: str
+    tasks: List[KVList] = Field(default_factory=list)
+    npc_actions: List[KVList] = Field(default_factory=list)
+    time_advancement: bool = False
+
+# ============================
+# Legacy/alt names kept around
+# ============================
+
+# Older inputs which some paths still import:
+class GenerateImageFromSceneInput(BaseModel):
+    scene_description: str
+    characters: List[str]
+    style: str = "realistic"
+
+class CalculateEmotionalStateInput(BaseModel):
+    context: KVList
+
+class ManageBeliefsInput(BaseModel):
+    action: Literal["get", "update", "query"]
+    belief_data: KVList = Field(default_factory=KVList)
+
+class DetectConflictsAndInstabilityInput(BaseModel):
+    scenario_state: KVList = Field(default_factory=KVList)
+
+class GenerateUniversalUpdatesInput(BaseModel):
+    narrative: str
+
+# Legacy "Result" wrappers that some code may still expect:
+class ImageGenerationResult(BaseModel):
+    success: bool
+    image_url: Optional[str] = None
+    error: Optional[str] = None
+
+class PerformanceMetricsResult(BaseModel):
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    suggestions: List[str] = Field(default_factory=list)
+    actions_taken: List[str] = Field(default_factory=list)
+    health: str = "unknown"
+
+class UniversalUpdateResult(BaseModel):
+    success: bool
+    updates_generated: bool
+    error: Optional[str] = None
