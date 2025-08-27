@@ -409,10 +409,14 @@ class LoreOrchestrator:
         # Build task list based on scope
         tasks = []
         
-        if hasattr(scope, 'location_id') and scope.location_id:
-            tasks.append(('location', self._fetch_location_lore_for_bundle(scope.location_id)))
-            tasks.append(('religions', self._fetch_religions_for_location(scope.location_id)))
-            tasks.append(('myths', self._fetch_myths_for_location(scope.location_id)))
+        loc_ref = getattr(scope, 'location_id', None)
+        if isinstance(loc_ref, int):
+            tasks.append(('location', self._fetch_location_lore_for_bundle(loc_ref)))
+            tasks.append(('religions', self._fetch_religions_for_location(loc_ref)))
+            tasks.append(('myths', self._fetch_myths_for_location(loc_ref)))
+        elif isinstance(loc_ref, str) and loc_ref:
+            # Name-only: fetch the location context, skip id-dependent tables
+            tasks.append(('location', self.get_location_context(loc_ref)))
         
         if hasattr(scope, 'lore_tags') and scope.lore_tags:
             tasks.append(('world', self._fetch_world_lore_for_bundle(list(scope.lore_tags)[:10])))
@@ -814,21 +818,30 @@ class LoreOrchestrator:
             self._pool = await asyncpg.create_pool(dsn=DB_DSN)
         return self._pool
 
-    async def get_location_context(self, location_name: str) -> Dict[str, Any]:
+    async def get_location_context(self, location_ref: Union[int, str]) -> Dict[str, Any]:
         """
-        Retrieve a lightweight location context by name.
-        Used by legacy call sites that expect a dict with key fields.
+        Retrieve a lightweight location context by id OR name.
         """
         try:
             async with get_db_connection_context() as conn:
-                row = await conn.fetchrow("""
-                    SELECT location_id, location_name, description,
-                           nation_id, governance, culture, population,
-                           canonical_rules, tags
-                    FROM Locations
-                    WHERE location_name = $1
-                    LIMIT 1
-                """, location_name)
+                if isinstance(location_ref, int):
+                    row = await conn.fetchrow("""
+                        SELECT location_id, location_name, description,
+                               nation_id, governance, culture, population,
+                               canonical_rules, tags
+                        FROM Locations
+                        WHERE location_id = $1
+                        LIMIT 1
+                    """, location_ref)
+                else:
+                    row = await conn.fetchrow("""
+                        SELECT location_id, location_name, description,
+                               nation_id, governance, culture, population,
+                               canonical_rules, tags
+                        FROM Locations
+                        WHERE location_name = $1
+                        LIMIT 1
+                    """, location_ref)
     
                 if not row:
                     return {}
@@ -845,7 +858,6 @@ class LoreOrchestrator:
                     'tags': row['tags'] or []
                 }
     
-                # Optional enrichments to mirror bundle fetches (best-effort)
                 landmarks = await conn.fetch("""
                     SELECT landmark_id, name, significance
                     FROM Landmarks
@@ -879,7 +891,7 @@ class LoreOrchestrator:
                 return data
     
         except Exception as e:
-            logger.debug(f"get_location_context failed for '{location_name}': {e}")
+            logger.debug(f"get_location_context failed for '{location_ref}': {e}")
             return {}
         
     async def _get_changes_since(
@@ -954,96 +966,264 @@ class LoreOrchestrator:
         element_data: Dict[str, Any]
     ) -> List[str]:
         """
-        Determine which scope keys are affected by a change.
-        
-        Args:
-            element_type: Type of element
-            element_id: ID of element
-            element_data: Element data
-            
-        Returns:
-            List of affected scope keys
+        Determine which scene-scope cache keys are affected by a lore change.
+    
+        Heuristics:
+          - Always generate a "direct" scope for the changed entity (e.g., loc, nation, conflict).
+          - Also generate combined scopes from any linkage fields present in element_data:
+            location_id(s), nation_id(s), conflict_id(s), lore_tags/tags, topics, stakeholders, etc.
+          - No I/O here: this is intentionally synchronous and best-effort.
         """
-        scope_keys = []
-        
-        # Generate scope keys based on element type
-        if element_type == 'location':
-            # This affects scopes that include this location
-            scope = type('Scope', (), {
-                'location_id': element_id,
-                'npc_ids': set(),
-                'lore_tags': set(),
-                'topics': set(),
-                'conflict_ids': set(),
-                'nation_ids': set(),
-                'link_hints': {}
+        keys: Set[str] = set()
+    
+        def _mk_scope(
+            location_id: Optional[int] = None,
+            nation_ids: Optional[Iterable[int]] = None,
+            conflict_ids: Optional[Iterable[int]] = None,
+            lore_tags: Optional[Iterable[str]] = None,
+            topics: Optional[Iterable[str]] = None,
+            npc_ids: Optional[Iterable[int]] = None,
+        ) -> None:
+            scope = type("Scope", (), {
+                "location_id": location_id,
+                "npc_ids": set(int(x) for x in (npc_ids or []) if x is not None),
+                "lore_tags": set(str(x) for x in (lore_tags or []) if x),
+                "topics": set(str(x).lower() for x in (topics or []) if x),
+                "conflict_ids": set(int(x) for x in (conflict_ids or []) if x is not None),
+                "nation_ids": set(int(x) for x in (nation_ids or []) if x is not None),
+                "link_hints": {},
             })()
-            scope_keys.append(self._generate_scene_cache_key(scope))
-            
-        elif element_type == 'nation':
-            # Affects scopes that include this nation
-            scope = type('Scope', (), {
-                'location_id': None,
-                'npc_ids': set(),
-                'lore_tags': set(),
-                'topics': set(),
-                'conflict_ids': set(),
-                'nation_ids': {element_id},
-                'link_hints': {}
-            })()
-            scope_keys.append(self._generate_scene_cache_key(scope))
-            
-        # Add more sophisticated scope detection based on relationships
-        # For example, if a myth changes, find all locations that reference it
-        
-        return scope_keys
+            keys.add(self._generate_scene_cache_key(scope))
+    
+        # Convenience extractors (robust to naming variance)
+        def _ints(value) -> List[int]:
+            if value is None:
+                return []
+            if isinstance(value, (set, tuple, list)):
+                out = []
+                for v in value:
+                    try:
+                        out.append(int(v))
+                    except Exception:
+                        pass
+                return out
+            try:
+                return [int(value)]
+            except Exception:
+                return []
+    
+        def _strs(value) -> List[str]:
+            if value is None:
+                return []
+            if isinstance(value, (set, tuple, list)):
+                return [str(v) for v in value if v is not None]
+            return [str(value)]
+    
+        # Generic link material found in element_data
+        loc_id = element_data.get("location_id")
+        loc_ids = set(_ints(element_data.get("location_ids"))) | ({int(loc_id)} if loc_id is not None else set())
+    
+        nation_ids = set(_ints(
+            element_data.get("nation_ids") or
+            element_data.get("nations") or
+            element_data.get("nation_id")
+        ))
+    
+        conflict_ids = set(_ints(
+            element_data.get("conflict_ids") or
+            element_data.get("conflict_id")
+        ))
+    
+        tags = set(_strs(
+            element_data.get("lore_tags") or
+            element_data.get("tags")
+        ))
+    
+        topics = set(_strs(
+            element_data.get("topics") or
+            element_data.get("topic")
+        ))
+    
+        # Stakeholders may carry nation/location/npc hints (various shapes)
+        stakeholders = element_data.get("stakeholders") or []
+        for s in stakeholders:
+            if isinstance(s, dict):
+                stype = str(s.get("type", "")).lower()
+                sid = s.get("id") or s.get("nation_id") or s.get("npc_id") or s.get("location_id")
+                try:
+                    sid_int = int(sid) if sid is not None else None
+                except Exception:
+                    sid_int = None
+    
+                if stype in {"nation", "state", "faction"} and sid_int is not None:
+                    nation_ids.add(sid_int)
+                elif stype in {"location", "city", "region"} and sid_int is not None:
+                    loc_ids.add(sid_int)
+                elif stype in {"npc", "character", "person"} and sid_int is not None:
+                    # we don't anchor scopes on NPCs in the lore orchestrator, but keep to combine if needed
+                    pass
+            elif isinstance(s, str):
+                # Accept formats like "nation:12", "location:7", "npc:55"
+                m = re.match(r"(nation|state|faction|location|city|region|npc|character|person):(\d+)", s.lower())
+                if m:
+                    stype, sid = m.groups()
+                    sid = int(sid)
+                    if stype in {"nation", "state", "faction"}:
+                        nation_ids.add(sid)
+                    elif stype in {"location", "city", "region"}:
+                        loc_ids.add(sid)
+                    # npc ignored for now (see note above)
+    
+        # Element-type specific anchors + sensible combos
+        et = element_type.lower()
+    
+        if et == "location":
+            _mk_scope(location_id=element_id)
+            if nation_ids:
+                _mk_scope(location_id=element_id, nation_ids=nation_ids)
+                _mk_scope(nation_ids=nation_ids)
+            if tags:
+                _mk_scope(location_id=element_id, lore_tags=tags)
+                _mk_scope(lore_tags=tags)
+            if topics:
+                _mk_scope(location_id=element_id, topics=topics)
+    
+        elif et == "nation":
+            _mk_scope(nation_ids=[element_id])
+            if loc_ids:
+                for lid in list(loc_ids)[:10]:
+                    _mk_scope(location_id=lid, nation_ids=[element_id])
+            if conflict_ids:
+                for cid in list(conflict_ids)[:10]:
+                    _mk_scope(conflict_ids=[cid])
+                    _mk_scope(nation_ids=[element_id], conflict_ids=[cid])
+            if tags:
+                _mk_scope(lore_tags=tags)
+    
+        elif et == "religion":
+            # Prefer scopes where this religion clearly manifests
+            if nation_ids:
+                for nid in list(nation_ids)[:5]:
+                    _mk_scope(nation_ids=[nid])
+            if loc_ids:
+                for lid in list(loc_ids)[:8]:
+                    _mk_scope(location_id=lid)
+            if tags:
+                _mk_scope(lore_tags=tags)
+    
+        elif et == "myth":
+            # Myths usually attach to a location; also propagate tags
+            if loc_ids:
+                for lid in list(loc_ids)[:8]:
+                    _mk_scope(location_id=lid)
+                    if tags:
+                        _mk_scope(location_id=lid, lore_tags=tags)
+            if tags:
+                _mk_scope(lore_tags=tags)
+    
+        elif et == "conflict":
+            _mk_scope(conflict_ids=[element_id])
+            if nation_ids:
+                for nid in list(nation_ids)[:5]:
+                    _mk_scope(nation_ids=[nid], conflict_ids=[element_id])
+            if loc_ids:
+                for lid in list(loc_ids)[:5]:
+                    _mk_scope(location_id=lid, conflict_ids=[element_id])
+            if tags:
+                _mk_scope(lore_tags=tags)
+    
+        elif et in {"world_lore", "world", "global"}:
+            if tags:
+                _mk_scope(lore_tags=tags)
+            if topics:
+                _mk_scope(topics=topics)
+    
+        elif et in {"event", "historical_event"}:
+            if loc_ids:
+                for lid in list(loc_ids)[:8]:
+                    _mk_scope(location_id=lid)
+            if nation_ids:
+                for nid in list(nation_ids)[:5]:
+                    _mk_scope(nation_ids=[nid])
+            if conflict_ids:
+                for cid in list(conflict_ids)[:10]:
+                    _mk_scope(conflict_ids=[cid])
+    
+        else:
+            # Fallback: infer from whatever link hints we do have
+            if loc_ids:
+                for lid in list(loc_ids)[:8]:
+                    _mk_scope(location_id=lid)
+            if nation_ids:
+                for nid in list(nation_ids)[:5]:
+                    _mk_scope(nation_ids=[nid])
+            if conflict_ids:
+                for cid in list(conflict_ids)[:10]:
+                    _mk_scope(conflict_ids=[cid])
+            if tags:
+                _mk_scope(lore_tags=tags)
+            if topics:
+                _mk_scope(topics=topics)
+    
+        # Always generate one ultra-generic anchor if nothing was inferred
+        if not keys:
+            _mk_scope()
+    
+        return list(keys)
     
     # ===== SCENE BUNDLE HELPER METHODS =====
     
     def _generate_scene_cache_key(self, scope: Any) -> str:
+        """
+        Generate a stable cache key for a scene scope.
+    
+        - If the scope exposes Nyx's `to_key()` (already an md5 hex), return it verbatim
+          so keys match the ContextBroker.
+        - Otherwise, build a deterministic string from salient attributes and hash it.
+        """
+        # Prefer the broker's exact key to avoid drift
         to_key = getattr(scope, "to_key", None)
         if callable(to_key):
-            return hashlib.md5(to_key().encode()).hexdigest()
+            try:
+                return to_key()
+            except Exception:
+                # fall back to local construction
+                pass
     
-        key_parts = []
-        
-        # Only add location if not None
-        if getattr(scope, 'location_id', None) is not None:
-            key_parts.append(f"loc_{scope.location_id}")
-        
-        if hasattr(scope, 'npc_ids') and scope.npc_ids:
-            s = sorted(scope.npc_ids)
-            npc_str = "_".join(str(nid) for nid in s[:5])
-            # Add count to avoid collisions from truncation
-            key_parts.append(f"npcs_{npc_str}+n={len(s)}")
-        
-        if hasattr(scope, 'lore_tags') and scope.lore_tags:
-            s = sorted(scope.lore_tags)
-            tag_str = "_".join(s[:5])
-            # Add count to avoid collisions
-            key_parts.append(f"tags_{tag_str}+n={len(s)}")
-        
-        if hasattr(scope, 'topics') and scope.topics:
-            s = sorted(scope.topics)
-            topic_str = "_".join(s[:3])
-            # Add count to avoid collisions
-            key_parts.append(f"topics_{topic_str}+n={len(s)}")
-        
-        if hasattr(scope, 'nation_ids') and scope.nation_ids:
-            s = sorted(scope.nation_ids)
-            nation_str = "_".join(str(nid) for nid in s[:3])
-            key_parts.append(f"nations_{nation_str}+n={len(s)}")
-        
-        if hasattr(scope, 'conflict_ids') and scope.conflict_ids:
-            s = sorted(scope.conflict_ids)
-            conflict_str = "_".join(str(cid) for cid in s[:3])
-            key_parts.append(f"conflicts_{conflict_str}+n={len(s)}")
-        
+        key_parts: List[str] = []
+    
+        # location: accept id or name
+        loc_id = getattr(scope, "location_id", None)
+        if loc_id is not None:
+            key_parts.append(f"loc_{loc_id}")
+        else:
+            loc_name = getattr(scope, "location_name", None)
+            if loc_name:
+                key_parts.append(f"locname_{str(loc_name).lower()}")
+    
+        # helper to push list-like fields in a stable way
+        def _push_list(label: str, values: Any, head: int, coerce=str) -> None:
+            if not values:
+                return
+            try:
+                lst = list(values)
+            except TypeError:
+                return
+            lst = sorted(lst)
+            head_vals = [coerce(v) for v in lst[:head]]
+            key_parts.append(f"{label}_{'_'.join(head_vals)}+n={len(lst)}")
+    
+        _push_list("npcs", getattr(scope, "npc_ids", []), head=5, coerce=lambda v: str(int(v)))
+        _push_list("tags", getattr(scope, "lore_tags", []), head=5, coerce=str)
+        _push_list("topics", getattr(scope, "topics", []), head=3, coerce=lambda v: str(v).lower())
+        _push_list("nations", getattr(scope, "nation_ids", []), head=3, coerce=lambda v: str(int(v)))
+        _push_list("conflicts", getattr(scope, "conflict_ids", []), head=3, coerce=lambda v: str(int(v)))
+    
         if not key_parts:
             key_parts.append("empty")
     
         key_string = "|".join(key_parts)
-        return hashlib.md5(key_string.encode()).hexdigest()
+        return hashlib.md5(key_string.encode("utf-8")).hexdigest()
     
     def _get_cached_bundle(self, cache_key: str) -> Optional[Dict[str, Any]]:
         """Get a cached bundle if it exists and is fresh (no memoization)."""
