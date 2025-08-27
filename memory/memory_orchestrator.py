@@ -1084,7 +1084,7 @@ class MemoryOrchestrator:
             logger.error(f"Error storing memory: {e}")
             return {"error": str(e), "success": False}
 
-
+    @staticmethod
     def _as_et_str(et: Union[str, Enum]) -> str:
         try:
             # handle memory_orchestrator.EntityType and any Enum
@@ -1111,7 +1111,7 @@ class MemoryOrchestrator:
         if not include_analysis and isinstance(kwargs.get("use_llm_analysis"), bool):
             include_analysis = kwargs["use_llm_analysis"]
     
-        entity_type = _as_et_str(entity_type)
+        entity_type = self._as_et_str(entity_type)
         
         try:
             # Build a stable cache key with user/conversation in prefix
@@ -1751,5 +1751,50 @@ async def get_memory_orchestrator(user_id: int, conversation_id: int) -> MemoryO
     """
     return await MemoryOrchestrator.get_instance(user_id, conversation_id)
 
-recall = agent_recall
-remember = agent_remember
+async def recall(
+    user_id: int,
+    conversation_id: int,
+    entity_type: Union[str, Enum],
+    entity_id: Union[int, str],
+    query: Optional[str] = None,
+    context: Optional[str] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    """Module-level recall that grabs the orchestrator and calls its agent_recall."""
+    orchestrator = await get_memory_orchestrator(user_id, conversation_id)
+    return await orchestrator.agent_recall(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        query=query,
+        context=context,
+        limit=limit,
+    )
+
+
+async def remember(
+    user_id: int,
+    conversation_id: int,
+    entity_type: Union[str, Enum],
+    entity_id: Union[int, str],
+    memory_text: str,
+    importance: str = "medium",
+    emotional: bool = True,
+    tags: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Module-level remember that grabs the orchestrator and calls its agent_remember."""
+    orchestrator = await get_memory_orchestrator(user_id, conversation_id)
+    return await orchestrator.agent_remember(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        memory_text=memory_text,
+        importance=importance,
+        emotional=emotional,
+        tags=tags,
+    )
+
+__all__ = [
+    "MemoryOrchestrator",
+    "get_memory_orchestrator",
+    "recall",
+    "remember",
+]
