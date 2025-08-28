@@ -1,13 +1,45 @@
 # routes/nyx_agent_routes_sdk.py
+"""
+Nyx Agent Routes - Refactored to use the new modular SDK architecture.
+Maintains API compatibility while leveraging the new nyx_agent_sdk final stop.
+"""
 
 import logging
 import json
 import time
-import contextlib
-from quart import Blueprint, request, jsonify, session
-from typing import Dict, Any, Optional
+import asyncio
+from typing import Dict, Any, Optional, AsyncGenerator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
-from nyx.nyx_agent_sdk import process_user_input, generate_reflection, initialize_agents
+from quart import Blueprint, request, jsonify, session, Response
+from quart.wrappers import Response as QuartResponse
+
+# New SDK imports - using the 'final stop'
+from nyx.nyx_agent_sdk import (
+    NyxAgentSDK, 
+    NyxSDKConfig,
+    NyxResponse as SDKResponse
+)
+
+# Direct orchestrator imports for specialized functions
+from nyx.nyx_agent.orchestrator import (
+    generate_reflection,
+    manage_relationships,
+    manage_scenario
+)
+
+# Context management
+from nyx.nyx_agent.context import NyxContext
+
+# Models
+from nyx.nyx_agent.models import (
+    MemoryReflection,
+    RelationshipUpdate,
+    ScenarioDecision
+)
+
+# Existing system integrations (kept as-is)
 from logic.time_cycle import should_advance_time, advance_time_with_events
 from logic.dynamic_relationships import (
     OptimizedRelationshipManager,
@@ -19,205 +51,316 @@ from logic.dynamic_relationships import (
 )
 from logic.addiction_system_sdk import process_addiction_effects, get_addiction_status
 from logic.rule_enforcement import enforce_all_rules_on_player
+
+# Performance and caching
 from utils.performance import PerformanceTracker, timed_function
 from utils.caching import NPC_CACHE, MEMORY_CACHE
 from db.connection import get_db_connection_context
 from agents import RunContextWrapper
 
+logger = logging.getLogger(__name__)
+
 nyx_agent_bp = Blueprint("nyx_agent_bp", __name__)
 
-# Initialize the agent system when the Flask app starts
-_nyx_initialized = False
+# ===== SDK Configuration =====
+
+@dataclass
+class RouteConfig:
+    """Configuration for route behavior"""
+    enable_streaming: bool = True
+    enable_moderation: bool = False  # Set to True in production
+    cache_warmup_on_start: bool = True
+    max_response_length: int = 4000
+    enable_telemetry: bool = True
+
+# Global SDK instance
+_sdk_instance: Optional[NyxAgentSDK] = None
+_route_config = RouteConfig()
+
+def get_sdk() -> NyxAgentSDK:
+    """Get or create the global SDK instance"""
+    global _sdk_instance
+    if _sdk_instance is None:
+        sdk_config = NyxSDKConfig(
+            pre_moderate_input=_route_config.enable_moderation,
+            post_moderate_output=_route_config.enable_moderation,
+            enable_telemetry=_route_config.enable_telemetry,
+            streaming_chunk_size=320,
+            request_timeout_seconds=45.0,
+            retry_on_failure=True,
+            result_cache_ttl_seconds=10  # Short idempotency window
+        )
+        _sdk_instance = NyxAgentSDK(sdk_config)
+        logger.info("NyxAgentSDK initialized with config: %s", sdk_config)
+    return _sdk_instance
+
+# ===== Main Routes =====
 
 @nyx_agent_bp.before_app_request
-async def initialize_once():
-    """
-    Initialize the Nyx agent system exactly once.
-    """
-    global _nyx_initialized
-    if not _nyx_initialized:
-        await initialize_agents()
-        logging.info("Nyx agent system initialized")
-        _nyx_initialized = True
+async def sdk_warmup():
+    """Warm up the SDK on first request if configured"""
+    if _route_config.cache_warmup_on_start:
+        sdk = get_sdk()
+        # The SDK handles its own initialization internally
+        logger.debug("SDK warmed up for request")
 
 @nyx_agent_bp.route("/nyx_response", methods=["POST"])
 @timed_function(name="nyx_response")
 async def nyx_response():
     """
-    Enhanced endpoint that processes user input through unified pipeline
-    and returns a complete response using the OpenAI Agents SDK.
+    Main endpoint for Nyx responses using the new SDK architecture.
+    Maintains backward compatibility with existing API contract.
     """
     tracker = PerformanceTracker("nyx_response")
     tracker.start_phase("initialization")
     
     try:
+        # Validate session
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
 
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         user_input = data.get("user_input", "").strip()
         conversation_id = data.get("conversation_id")
         
-        # Validate required params
         if not user_input or not conversation_id:
             return jsonify({"error": "Missing required parameters"}), 400
         
         tracker.end_phase()
         
-        # Process context information
+        # Build context metadata
         tracker.start_phase("context_building")
-        context = {
+        metadata = {
             "location": data.get("location", "Unknown"),
             "time_of_day": data.get("time_of_day", "Morning"),
             "npc_present": data.get("npc_present", []),
             "player_name": data.get("player_name", "Chase"),
+            "activity_type": data.get("activity_type", "conversation"),
             "timestamp": time.time()
         }
         
-        # Add any additional context from request
+        # Merge any additional context
         if data.get("additional_context"):
-            context.update(data["additional_context"])
+            metadata.update(data["additional_context"])
+        
+        # Add reflection flag if enabled
+        if data.get('reflection_enabled'):
+            metadata['enable_reflection'] = True
         tracker.end_phase()
         
-        # Process input through unified pipeline
+        # Process through the SDK
         tracker.start_phase("agent_processing")
-        from logic.chatgpt_integration import get_chatgpt_response
+        sdk = get_sdk()
         
-        response_data = await get_chatgpt_response(
-            conversation_id=conversation_id,
-            aggregator_text="",
-            user_input=user_input,
-            reflection_enabled=data.get('reflection_enabled', False),
-            use_nyx_integration=True,
-            context=context  # Pass context if get_chatgpt_response accepts it
+        # Optional: Warm cache for this conversation/location
+        if metadata.get("location"):
+            asyncio.create_task(
+                sdk.warmup_cache(str(conversation_id), metadata["location"])
+            )
+        
+        # Main SDK call
+        sdk_response: SDKResponse = await sdk.process_user_input(
+            message=user_input,
+            conversation_id=str(conversation_id),
+            user_id=str(user_id),
+            metadata=metadata
         )
-        
-        # Transform to expected format
-        if response_data['type'] == 'function_call':
-            response_text = response_data['function_args'].get('narrative', '')
-            generate_image = response_data['function_args'].get('image_generation', {}).get('generate', False)
-            image_prompt = response_data['function_args'].get('image_generation', {}).get('reason', '')
-            time_advancement = response_data['function_args'].get('time_advancement', False)
-            environment_update = response_data['function_args'].get('environment_update')
-            tension_level = response_data['function_args'].get('tension_level')
-        else:
-            response_text = response_data.get('response', '')
-            generate_image = False
-            image_prompt = None
-            time_advancement = False
-            environment_update = None
-            tension_level = None
-        
-        # Build response object to match existing interface
-        response = {
-            "message": response_text,
-            "generate_image": generate_image,
-            "image_prompt": image_prompt,
-            "time_advancement": time_advancement,
-            "environment_update": environment_update,
-            "tension_level": tension_level
-        }
         tracker.end_phase()
         
         # Post-processing steps
         tracker.start_phase("post_processing")
         
-        # 1. Check for time advancement
-        activity_type = data.get("activity_type", "conversation")
+        # 1. Time advancement check
         time_result = await process_time_advancement(
             user_id, 
             conversation_id, 
-            activity_type, 
+            metadata.get("activity_type", "conversation"),
             data,
-            response.get("time_advancement", False)
+            sdk_response.metadata.get("time_advancement", False)
         )
         
-        # 2. Check for relationship events using new dynamic system
-        relationship_events = await process_relationship_events(user_id, conversation_id, data)
+        # 2. Relationship events
+        relationship_events = await process_relationship_events(
+            user_id, 
+            conversation_id, 
+            data
+        )
         
-        # 3. Process rule enforcement
+        # 3. Rule enforcement
         rule_results = enforce_all_rules_on_player()
         
-        # 4. Check addiction system
-        addiction_status = await get_addiction_status(user_id, conversation_id, context["player_name"])
-        addiction_effects = None
-        if addiction_status and addiction_status.get("has_addictions"):
-            addiction_effects = await process_addiction_effects(
-                user_id, conversation_id, context["player_name"], addiction_status
-            )
-        tracker.end_phase()
-
-        # 5. Update narrative arcs   
+        # 4. Addiction system
+        addiction_effects = await check_addiction_effects(
+            user_id,
+            conversation_id,
+            metadata.get("player_name", "Chase")
+        )
+        
+        # 5. Narrative arc updates
         try:
             from nyx.scene_manager_sdk import update_narrative_arcs_for_interaction
             await update_narrative_arcs_for_interaction(
-                user_id, conversation_id, user_input, response["message"]
+                user_id, 
+                conversation_id, 
+                user_input, 
+                sdk_response.narrative
             )
         except Exception as e:
-            logging.warning(f"Error updating narrative arcs: {e}")    
+            logger.warning(f"Narrative arc update failed: {e}")
         
-        # Build complete response
+        tracker.end_phase()
+        
+        # Build API response
         tracker.start_phase("response_building")
         api_response = {
-            "message": response["message"],
+            "message": sdk_response.narrative,
+            "success": sdk_response.success,
             "time_result": time_result,
             "confirm_needed": time_result.get("would_advance", False) and not data.get("confirm_time_advance", False),
             "relationship_events": relationship_events,
             "rule_effects": rule_results,
-            "performance_metrics": tracker.get_metrics()
+            "performance_metrics": {
+                **tracker.get_metrics(),
+                "sdk_telemetry": sdk_response.telemetry
+            }
         }
         
-        # Add optional elements
+        # Add optional elements from SDK response
+        if sdk_response.image:
+            api_response["should_generate_image"] = True
+            api_response["image_prompt"] = sdk_response.image.get("prompt")
+        
+        if sdk_response.world_state:
+            api_response["world_state"] = sdk_response.world_state
+        
+        if sdk_response.choices:
+            api_response["choices"] = sdk_response.choices
+        
+        if sdk_response.metadata.get("environment_update"):
+            api_response["environment_update"] = sdk_response.metadata["environment_update"]
+        
+        if sdk_response.metadata.get("tension_level") is not None:
+            api_response["tension_level"] = sdk_response.metadata["tension_level"]
+        
+        if sdk_response.metadata.get("nyx_commentary"):
+            api_response["nyx_commentary"] = sdk_response.metadata["nyx_commentary"]
+        
         if addiction_effects:
             api_response["addiction_effects"] = addiction_effects
-            
-        if response.get("generate_image", False):
-            api_response["should_generate_image"] = True
-            api_response["image_prompt"] = response.get("image_prompt")
-            
-        if response.get("environment_update"):
-            api_response["environment_update"] = response.get("environment_update")
-            
-        if response.get("tension_level") is not None:
-            api_response["tension_level"] = response.get("tension_level")
-        tracker.end_phase()
         
+        if sdk_response.error:
+            api_response["error"] = sdk_response.error
+        
+        if sdk_response.trace_id:
+            api_response["trace_id"] = sdk_response.trace_id
+        
+        tracker.end_phase()
         return jsonify(api_response)
         
     except Exception as e:
-        # End current phase if one is active
         if tracker.current_phase:
             tracker.end_phase()
-            
-        logging.exception("[nyx_response] Error")
+        
+        logger.exception("[nyx_response] Error")
         return jsonify({
+            "success": False,
             "error": str(e),
             "performance": tracker.get_metrics()
         }), 500
+
+@nyx_agent_bp.route("/nyx_response_stream", methods=["POST"])
+@timed_function(name="nyx_response_stream")
+async def nyx_response_stream():
+    """
+    Streaming endpoint for real-time response delivery.
+    Returns Server-Sent Events (SSE) stream.
+    """
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+    
+    data = await request.get_json() or {}
+    user_input = data.get("user_input", "").strip()
+    conversation_id = data.get("conversation_id")
+    
+    if not user_input or not conversation_id:
+        return jsonify({"error": "Missing required parameters"}), 400
+    
+    # Build metadata
+    metadata = {
+        "location": data.get("location", "Unknown"),
+        "time_of_day": data.get("time_of_day", "Morning"),
+        "npc_present": data.get("npc_present", []),
+        "player_name": data.get("player_name", "Chase"),
+        "activity_type": data.get("activity_type", "conversation"),
+        "timestamp": time.time()
+    }
+    
+    if data.get("additional_context"):
+        metadata.update(data["additional_context"])
+    
+    async def generate():
+        """SSE generator"""
+        sdk = get_sdk()
+        
+        try:
+            # Stream the response
+            async for chunk in sdk.stream_user_input(
+                message=user_input,
+                conversation_id=str(conversation_id),
+                user_id=str(user_id),
+                metadata=metadata
+            ):
+                yield f"data: {json.dumps(chunk)}\n\n"
+            
+            # Send completion event
+            yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+    
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+            "Connection": "keep-alive"
+        }
+    )
 
 @nyx_agent_bp.route("/nyx_reflection", methods=["POST"])
 @timed_function(name="nyx_reflection")
 async def nyx_reflection():
     """
     Generate a reflection from Nyx on a specific topic.
+    Uses the orchestrator directly for specialized reflection generation.
     """
     try:
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
 
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conversation_id = data.get("conversation_id")
         topic = data.get("topic")
         
-        # Generate reflection
-        reflection = await generate_reflection(user_id, conversation_id, topic)
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id"}), 400
+        
+        # Use orchestrator directly for reflection
+        reflection = await generate_reflection(
+            user_id=int(user_id),
+            conversation_id=int(conversation_id),
+            topic=topic
+        )
         
         return jsonify(reflection)
         
     except Exception as e:
-        logging.exception("[nyx_reflection] Error")
+        logger.exception("[nyx_reflection] Error")
         return jsonify({"error": str(e)}), 500
 
 @nyx_agent_bp.route("/nyx_introspection", methods=["GET"])
@@ -241,8 +384,12 @@ async def nyx_introspection():
         if cached_result:
             return jsonify(cached_result)
         
-        # Generate reflection with introspection focus
-        introspection = await generate_reflection(user_id, int(conversation_id), "self_understanding")
+        # Generate introspective reflection
+        introspection = await generate_reflection(
+            user_id=int(user_id),
+            conversation_id=int(conversation_id),
+            topic="self_understanding"
+        )
         
         # Cache result
         MEMORY_CACHE.set(cache_key, introspection, 300)  # 5 minute TTL
@@ -250,185 +397,123 @@ async def nyx_introspection():
         return jsonify(introspection)
         
     except Exception as e:
-        logging.exception("[nyx_introspection] Error")
+        logger.exception("[nyx_introspection] Error")
         return jsonify({"error": str(e)}), 500
 
-# Helper functions
-async def process_time_advancement(
-    user_id: int, 
-    conversation_id: int, 
-    activity_type: str, 
-    data: Dict[str, Any],
-    agent_requested_advancement: bool = False
-) -> Dict[str, Any]:
-    """Process time advancement with proper verification."""
-    # Check if activity should advance time or if the agent requested advancement
-    advance_info = await should_advance_time(activity_type)
-    should_advance = advance_info["should_advance"] or agent_requested_advancement
-    
-    # Default time result
-    time_result = {
-        "time_advanced": False,
-        "would_advance": False,
-        "periods": 0,
-        "confirm_needed": False
-    }
-    
-    # Handle direct confirmation
-    if data.get("confirm_time_advance", False) and should_advance:
-        # Actually perform time advance
-        time_result = await advance_time_with_events(
-            user_id, conversation_id, activity_type
-        )
-    elif should_advance:
-        time_result = {
-            "time_advanced": False,
-            "would_advance": True,
-            "periods": advance_info["periods"],
-            "confirm_needed": True
+@nyx_agent_bp.route("/nyx_manage_scenario", methods=["POST"])
+@timed_function(name="nyx_manage_scenario")
+async def nyx_manage_scenario():
+    """
+    Manage scenario progression using the orchestrator.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+        
+        data = await request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id"}), 400
+        
+        scenario_data = {
+            "user_id": int(user_id),
+            "conversation_id": int(conversation_id),
+            **data.get("scenario_context", {})
         }
-    
-    return time_result
+        
+        result = await manage_scenario(scenario_data)
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.exception("[nyx_manage_scenario] Error")
+        return jsonify({"error": str(e)}), 500
+
+@nyx_agent_bp.route("/nyx_manage_relationships", methods=["POST"])
+@timed_function(name="nyx_manage_relationships")
+async def nyx_manage_relationships():
+    """
+    Manage relationship updates using the orchestrator.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+        
+        data = await request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id"}), 400
+        
+        interaction_data = {
+            "user_id": int(user_id),
+            "conversation_id": int(conversation_id),
+            **data.get("interaction", {})
+        }
+        
+        result = await manage_relationships(interaction_data)
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.exception("[nyx_manage_relationships] Error")
+        return jsonify({"error": str(e)}), 500
 
 @nyx_agent_bp.route("/nyx_memory_maintenance", methods=["POST"])
 @timed_function(name="nyx_memory_maintenance")
 async def nyx_memory_maintenance():
     """
-    Manually trigger memory maintenance for Nyx.
+    Trigger memory maintenance for the conversation.
     """
     try:
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
 
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conversation_id = data.get("conversation_id")
         if not conversation_id:
             return jsonify({"error": "Missing conversation_id"}), 400
         
-        # Call the memory maintenance function from SDK
-        from nyx.memory_integration_sdk import perform_memory_maintenance
+        # Create a context and run memory consolidation
+        ctx = NyxContext(user_id=int(user_id), conversation_id=int(conversation_id))
+        await ctx.initialize()
         
-        # Run maintenance
-        result = await perform_memory_maintenance(user_id, conversation_id)
-        
-        # Clear caches
-        MEMORY_CACHE.remove_pattern(f"introspection:{user_id}:{conversation_id}")
-        
-        return jsonify({"status": "Memory maintenance completed", "result": result})
+        # Access memory orchestrator for maintenance
+        if ctx.memory_orchestrator:
+            from memory.memory_orchestrator import EntityType
+            
+            # Consolidate memories
+            result = await ctx.memory_orchestrator.consolidate_memories(
+                entity_type=EntityType.PLAYER,
+                entity_id=user_id,
+                force=True
+            )
+            
+            # Clear relevant caches
+            MEMORY_CACHE.remove_pattern(f"introspection:{user_id}:{conversation_id}")
+            MEMORY_CACHE.remove_pattern(f"memories:{user_id}:*")
+            
+            # Also clear SDK cache for this conversation
+            sdk = get_sdk()
+            await sdk.cleanup_conversation(str(conversation_id))
+            
+            return jsonify({
+                "status": "Memory maintenance completed",
+                "consolidated_count": result.get("consolidated", 0),
+                "pruned_count": result.get("pruned", 0)
+            })
+        else:
+            return jsonify({
+                "status": "Memory orchestrator not available",
+                "error": "Memory system offline"
+            }), 503
         
     except Exception as e:
-        logging.exception("[nyx_memory_maintenance] Error")
+        logger.exception("[nyx_memory_maintenance] Error")
         return jsonify({"error": str(e)}), 500
 
-async def process_relationship_events(
-    user_id: int, 
-    conversation_id: int, 
-    data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Process relationship events using the new dynamic relationships system."""
-    result = {
-        "events": [],
-        "interaction_results": None
-    }
-    
-    # Create context wrapper for tools
-    ctx = RunContextWrapper(context={
-        'user_id': user_id,
-        'conversation_id': conversation_id
-    })
-    
-    # Process any relationship interactions from the current activity
-    if data.get("relationship_interaction"):
-        interaction = data["relationship_interaction"]
-        
-        # Use the new process_relationship_interaction_tool
-        interaction_result = await process_relationship_interaction_tool(
-            ctx=ctx,
-            entity1_type=interaction.get("entity1_type", "player"),
-            entity1_id=interaction.get("entity1_id", 1),  # Assuming player ID is 1
-            entity2_type=interaction.get("entity2_type", "npc"),
-            entity2_id=interaction.get("entity2_id"),
-            interaction_type=interaction.get("interaction_type", "conversation"),
-            context=interaction.get("context", "casual"),
-            check_for_event=True
-        )
-        
-        result["interaction_results"] = interaction_result
-        
-        # Check if an event was generated
-        if interaction_result.get("event"):
-            result["events"].append(interaction_result["event"])
-    
-    # Poll for any pending relationship events
-    poll_result = await poll_relationship_events_tool(ctx=ctx, timeout=0.1)
-    if poll_result.get("has_event"):
-        result["events"].append(poll_result["event"])
-    
-    # If we need to drain multiple events (batch processing)
-    if data.get("drain_all_events", False):
-        drain_result = await drain_relationship_events_tool(ctx=ctx, max_events=10)
-        if drain_result.get("events"):
-            result["events"].extend([e["event"] for e in drain_result["events"]])
-    
-    # Process any event choices
-    if data.get("event_choice") and data.get("event_id"):
-        # Handle event choice application
-        # This would need to be implemented based on your event handling logic
-        choice_result = await apply_relationship_event_choice(
-            user_id,
-            conversation_id,
-            data["event_id"],
-            data["event_choice"]
-        )
-        result["choice_result"] = choice_result
-    
-    return result
-
-async def apply_relationship_event_choice(
-    user_id: int,
-    conversation_id: int,
-    event_id: str,
-    choice_id: str
-) -> Dict[str, Any]:
-    """Apply the effects of a relationship event choice."""
-    # This is a placeholder - you'll need to implement based on your event structure
-    # The new system generates events with choices that have potential_impacts
-    
-    # For now, return a basic structure
-    return {
-        "success": True,
-        "event_id": event_id,
-        "choice_id": choice_id,
-        "message": "Choice applied successfully"
-    }
-
-@contextlib.asynccontextmanager
-async def get_db_transaction(user_id, conv_id):
-    """Context manager for database transactions."""
-    async with get_db_connection_context() as conn:
-        try:
-            yield conn
-            await conn.commit()
-        except Exception as e:
-            logging.error(f"Transaction error: {e}")
-            raise
-
-async def store_message(user_id, conv_id, sender, content, structured_content=None):
-    """Store a message in the database."""
-    async with get_db_transaction(user_id, conv_id) as conn:
-        async with conn.cursor() as cursor:
-            await cursor.execute("""
-                INSERT INTO messages (conversation_id, sender, content, structured_content)
-                VALUES (%s, %s, %s, %s)
-            """, (
-                conv_id,
-                sender,
-                content,
-                json.dumps(structured_content) if structured_content else None
-            ))
-
-# New route for getting relationship summaries
 @nyx_agent_bp.route("/relationship_summary", methods=["GET"])
 @timed_function(name="relationship_summary")
 async def get_relationship_summary():
@@ -448,7 +533,7 @@ async def get_relationship_summary():
         if not all([conversation_id, entity2_id]):
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Create context wrapper
+        # Create context wrapper for relationship tools
         ctx = RunContextWrapper(context={
             'user_id': user_id,
             'conversation_id': conversation_id
@@ -466,5 +551,189 @@ async def get_relationship_summary():
         return jsonify(summary)
         
     except Exception as e:
-        logging.exception("[get_relationship_summary] Error")
+        logger.exception("[get_relationship_summary] Error")
         return jsonify({"error": str(e)}), 500
+
+@nyx_agent_bp.route("/nyx_health", methods=["GET"])
+async def nyx_health():
+    """Health check endpoint for the Nyx agent system."""
+    try:
+        sdk = get_sdk()
+        
+        # Basic health checks
+        health_status = {
+            "status": "healthy",
+            "sdk_initialized": sdk is not None,
+            "timestamp": time.time(),
+            "config": {
+                "moderation_enabled": _route_config.enable_moderation,
+                "streaming_enabled": _route_config.enable_streaming,
+                "telemetry_enabled": _route_config.enable_telemetry
+            }
+        }
+        
+        return jsonify(health_status)
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 503
+
+# ===== Helper Functions =====
+
+async def process_time_advancement(
+    user_id: int, 
+    conversation_id: int, 
+    activity_type: str, 
+    data: Dict[str, Any],
+    agent_requested_advancement: bool = False
+) -> Dict[str, Any]:
+    """Process time advancement with proper verification."""
+    advance_info = await should_advance_time(activity_type)
+    should_advance = advance_info["should_advance"] or agent_requested_advancement
+    
+    time_result = {
+        "time_advanced": False,
+        "would_advance": False,
+        "periods": 0,
+        "confirm_needed": False
+    }
+    
+    if data.get("confirm_time_advance", False) and should_advance:
+        time_result = await advance_time_with_events(
+            user_id, conversation_id, activity_type
+        )
+    elif should_advance:
+        time_result = {
+            "time_advanced": False,
+            "would_advance": True,
+            "periods": advance_info["periods"],
+            "confirm_needed": True
+        }
+    
+    return time_result
+
+async def process_relationship_events(
+    user_id: int, 
+    conversation_id: int, 
+    data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Process relationship events using the dynamic relationships system."""
+    result = {
+        "events": [],
+        "interaction_results": None
+    }
+    
+    ctx = RunContextWrapper(context={
+        'user_id': user_id,
+        'conversation_id': conversation_id
+    })
+    
+    if data.get("relationship_interaction"):
+        interaction = data["relationship_interaction"]
+        
+        interaction_result = await process_relationship_interaction_tool(
+            ctx=ctx,
+            entity1_type=interaction.get("entity1_type", "player"),
+            entity1_id=interaction.get("entity1_id", 1),
+            entity2_type=interaction.get("entity2_type", "npc"),
+            entity2_id=interaction.get("entity2_id"),
+            interaction_type=interaction.get("interaction_type", "conversation"),
+            context=interaction.get("context", "casual"),
+            check_for_event=True
+        )
+        
+        result["interaction_results"] = interaction_result
+        
+        if interaction_result.get("event"):
+            result["events"].append(interaction_result["event"])
+    
+    poll_result = await poll_relationship_events_tool(ctx=ctx, timeout=0.1)
+    if poll_result.get("has_event"):
+        result["events"].append(poll_result["event"])
+    
+    if data.get("drain_all_events", False):
+        drain_result = await drain_relationship_events_tool(ctx=ctx, max_events=10)
+        if drain_result.get("events"):
+            result["events"].extend([e["event"] for e in drain_result["events"]])
+    
+    if data.get("event_choice") and data.get("event_id"):
+        choice_result = await apply_relationship_event_choice(
+            user_id,
+            conversation_id,
+            data["event_id"],
+            data["event_choice"]
+        )
+        result["choice_result"] = choice_result
+    
+    return result
+
+async def apply_relationship_event_choice(
+    user_id: int,
+    conversation_id: int,
+    event_id: str,
+    choice_id: str
+) -> Dict[str, Any]:
+    """Apply the effects of a relationship event choice."""
+    return {
+        "success": True,
+        "event_id": event_id,
+        "choice_id": choice_id,
+        "message": "Choice applied successfully"
+    }
+
+async def check_addiction_effects(
+    user_id: int,
+    conversation_id: int,
+    player_name: str
+) -> Optional[Dict[str, Any]]:
+    """Check and process addiction effects."""
+    try:
+        addiction_status = await get_addiction_status(user_id, conversation_id, player_name)
+        if addiction_status and addiction_status.get("has_addictions"):
+            return await process_addiction_effects(
+                user_id, conversation_id, player_name, addiction_status
+            )
+    except Exception as e:
+        logger.warning(f"Addiction check failed: {e}")
+    return None
+
+@asynccontextmanager
+async def get_db_transaction(user_id: int, conv_id: int):
+    """Context manager for database transactions."""
+    async with get_db_connection_context() as conn:
+        async with conn.transaction():
+            yield conn
+
+async def store_message(
+    user_id: int, 
+    conv_id: int, 
+    sender: str, 
+    content: str, 
+    structured_content: Optional[Dict[str, Any]] = None
+):
+    """Store a message in the database."""
+    async with get_db_transaction(user_id, conv_id) as conn:
+        await conn.execute("""
+            INSERT INTO messages (conversation_id, sender, content, structured_content, created_at)
+            VALUES ($1, $2, $3, $4, NOW())
+        """, 
+        conv_id,
+        sender,
+        content,
+        json.dumps(structured_content) if structured_content else None
+    )
+
+# ===== Error Handlers =====
+
+@nyx_agent_bp.errorhandler(Exception)
+async def handle_exception(e: Exception):
+    """Global error handler for the blueprint."""
+    logger.exception("Unhandled exception in nyx_agent routes")
+    return jsonify({
+        "success": False,
+        "error": "An internal error occurred",
+        "details": str(e) if logger.isEnabledFor(logging.DEBUG) else None
+    }), 500
