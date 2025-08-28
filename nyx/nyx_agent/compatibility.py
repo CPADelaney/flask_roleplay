@@ -356,7 +356,7 @@ async def determine_image_generation_impl(ctx, response_text: str) -> str:
                 reasoning="Unable to determine image generation need",
             ).model_dump_json()
 
-async def generate_base_response(ctx: NyxContext, user_input: str, context: Dict[str, Any]) -> NarrativeResponse:
+async def generate_base_response(ctx: NyxContext, user_input: str, context: Dict[str, Any]) -> NyxResponse:
     """Generate base narrative response - for compatibility."""
     from .utils import (
         add_nyx_hosting_style,
@@ -369,7 +369,7 @@ async def generate_base_response(ctx: NyxContext, user_input: str, context: Dict
     narrator_response = await ctx.slice_of_life_narrator.process_player_input(user_input) if ctx.slice_of_life_narrator else ""
     nyx_enhanced = await add_nyx_hosting_style(narrator_response, world_state) if world_state else {"narrative": narrator_response}
 
-    return NarrativeResponse(
+    return NyxResponse(
         narrative=nyx_enhanced["narrative"],
         tension_level=calculate_world_tension(world_state) if world_state else 0,
         generate_image=should_generate_image_for_scene(world_state) if world_state else False,
