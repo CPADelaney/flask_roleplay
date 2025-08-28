@@ -6,12 +6,13 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
-from nyx.nyx_agent_sdk import add_memory
+# Fixed imports - using the new nyx_agent module
+from nyx.nyx_agent import (
+    add_memory,
+    AddMemoryInput,
+)
+from agents import RunContextWrapper
 from nyx.user_model_sdk import UserModelManager
-from memory.memory_nyx_integration import MemoryNyxBridge
-
-from nyx.core.memory_core import MemoryCreateParams, add_memory
-import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class NyxSyncDaemon:
     def __init__(self, db_dsn=DB_DSN):
         self.db_dsn = db_dsn
         self.interval_seconds = 60  # configurable polling time
-        self._last_sync_time: Optional[datetime.datetime] = None
+        self._last_sync_time: Optional[datetime] = None
         self._sync_status: Dict[str, Any] = {
             "out_of_sync": False,
             "last_sync": None,
@@ -39,7 +40,7 @@ class NyxSyncDaemon:
                 logger.error(f"Sync cycle failed: {e}")
                 self._sync_status["sync_errors"].append({
                     "error": str(e),
-                    "time": datetime.datetime.now().isoformat()
+                    "time": datetime.now().isoformat()
                 })
                 # Keep only last 10 errors
                 self._sync_status["sync_errors"] = self._sync_status["sync_errors"][-10:]
@@ -79,7 +80,7 @@ class NyxSyncDaemon:
                 self._systems_synced += 1
 
             # Update sync status
-            self._last_sync_time = datetime.datetime.now()
+            self._last_sync_time = datetime.now()
             self._sync_status["last_sync"] = self._last_sync_time.isoformat()
             self._sync_status["out_of_sync"] = False
 
@@ -93,7 +94,7 @@ class NyxSyncDaemon:
         """Return current sync status for the workspace adapter"""
         # Check if we're out of sync (no sync in last 5 minutes)
         if self._last_sync_time:
-            time_since_sync = datetime.datetime.now() - self._last_sync_time
+            time_since_sync = datetime.now() - self._last_sync_time
             if time_since_sync.total_seconds() > 300:  # 5 minutes
                 self._sync_status["out_of_sync"] = True
         else:
@@ -108,7 +109,7 @@ class NyxSyncDaemon:
             return {
                 "synced_count": self._systems_synced,
                 "success": True,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
             logger.error(f"Background sync failed: {e}")
@@ -144,24 +145,20 @@ class NyxSyncDaemon:
                 f"{payload.get('description', '')}"
             )
     
-            # -------- insert memory --------
-            ctx = await self._get_context(user_id)   # returns RunContextWrapper
-    
-            params = MemoryCreateParams(
-                memory_text  = memory_text,
-                memory_type  = "abstraction",
-                memory_scope = "game",
-                memory_level = "abstraction",
-                significance = 7,
-                tags         = ["strategy", strategy_type],
-                metadata     = {
-                    "strategy_id"   : strategy_id,
-                    "strategy_name" : strategy_name,
-                    "timestamp"     : datetime.datetime.now().isoformat(),
-                    "fidelity"      : 0.95,
-                },
-            )
-            await add_memory(ctx, params)
+            # -------- Get context and wrap it properly --------
+            ctx = await self._get_context(user_id)
+            wrapped_ctx = RunContextWrapper(context=ctx)
+            
+            # -------- Create memory input using new API --------
+            memory_input = {
+                'memory_text': memory_text,
+                'memory_type': 'abstraction',
+                'significance': 7,
+                'entities': [strategy_id]  # Link to strategy entity
+            }
+            
+            # -------- Store memory using new API --------
+            await add_memory(wrapped_ctx, memory_input)
     
             # -------- log in DB --------
             await conn.execute(
@@ -178,6 +175,7 @@ class NyxSyncDaemon:
             )
 
     async def inject_scene(self, scene_row, conn):
+        """Inject scene template as memory for all active users"""
         prompt_template = scene_row['prompt_template']
         scene_title = scene_row['title'] or "Untitled Scene"
         intensity = scene_row['intensity_level'] or 5
@@ -188,24 +186,46 @@ class NyxSyncDaemon:
 
         for user in user_ids:
             user_id = user['user_id']
+            
+            # Get context and wrap it
             ctx = await self._get_context(user_id)
-
-            await add_memory(
-                ctx,
-                f"New scene template loaded: {scene_title}\n{prompt_template}",
-                memory_type="template",
-                significance=6
-            )
+            wrapped_ctx = RunContextWrapper(context=ctx)
+            
+            # Create memory input
+            memory_input = {
+                'memory_text': f"New scene template loaded: {scene_title}\n{prompt_template}",
+                'memory_type': 'template',
+                'significance': 6,
+                'entities': []
+            }
+            
+            # Store memory
+            await add_memory(wrapped_ctx, memory_input)
 
     async def _get_context(self, user_id):
-        return await UserModelManager.get_instance(user_id, conversation_id=1)  # placeholder
+        """Get or create NyxContext for a user"""
+        # Since we need a conversation_id, we'll use a default one for system operations
+        # In production, you might want to track this differently
+        from nyx.nyx_agent.context import NyxContext
+        
+        conversation_id = 1  # System conversation ID
+        ctx = NyxContext(user_id=user_id, conversation_id=conversation_id)
+        await ctx.initialize()
+        return ctx
 
     async def _get_kink_profile(self, user_id):
-        model = await UserModelManager.get_instance(user_id, conversation_id=1)
-        profile = await model.get_kink_profile()
-        return profile
-        
-async def run_noise_classification(self, conn):
+        """Get user's kink profile from UserModelManager"""
+        try:
+            model = await UserModelManager.get_instance(user_id, conversation_id=1)
+            profile = await model.get_kink_profile()
+            return profile
+        except Exception as e:
+            logger.warning(f"Could not get kink profile for user {user_id}: {e}")
+            return {}
+
+# Additional helper functions for noise classification (if needed)
+async def run_noise_classification(conn):
+    """Run noise classification on recent responses"""
     rows = await conn.fetch("""
         SELECT id, nyx_response FROM nyx1_response_noise
         WHERE marked_for_review = FALSE AND dismissed = FALSE
@@ -213,7 +233,7 @@ async def run_noise_classification(self, conn):
     """)
     
     for row in rows:
-        score = self.classify_noise(row['nyx_response'])
+        score = classify_noise(row['nyx_response'])
 
         if score > 0.8:
             await conn.execute("""
@@ -222,7 +242,8 @@ async def run_noise_classification(self, conn):
                 WHERE id = $1
             """, row['id'], score)
 
-async def classify_noise(self, text: str) -> float:
+def classify_noise(text: str) -> float:
+    """Simple noise classification based on keywords"""
     keywords = ["uh", "maybe", "sorry", "idk", "unsure", "could", "perhaps"]
     matches = sum(1 for k in keywords if k in text.lower())
     return min(1.0, matches / 3.0)
