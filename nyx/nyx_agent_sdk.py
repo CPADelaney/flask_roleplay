@@ -614,9 +614,40 @@ class NyxAgentRunner:
         await self.sdk.initialize_agent()
 
 
-__all__ = [
-    "NyxSDKConfig",
-    "NyxAgentSDK",
-    "NyxAgentRunner",
-    "NyxResponse",
-]
+ __all__ = [
+     "NyxSDKConfig",
+     "NyxAgentSDK",
+     "NyxAgentRunner",
+     "NyxResponse",
+    "process_user_input",
+ ]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Back-compat top-level function (what routes.story_routes expects)
+# ──────────────────────────────────────────────────────────────────────────────
+async def process_user_input(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Thin wrapper so legacy imports like
+        from nyx.nyx_agent_sdk import process_user_input
+    continue to work. Returns an orchestrator-shaped dict.
+    """
+    sdk = NyxAgentSDK()
+    resp = await sdk.process_user_input(
+        message=user_input,
+        conversation_id=str(conversation_id),
+        user_id=str(user_id),
+        metadata=context_data or {},
+    )
+    return {
+        "response": resp.narrative,
+        "success": resp.success,
+        "metadata": resp.metadata,
+        "trace_id": resp.trace_id,
+        "processing_time": resp.processing_time,
+        "error": resp.error,
+    }
