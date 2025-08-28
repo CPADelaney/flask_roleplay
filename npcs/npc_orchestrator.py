@@ -824,17 +824,61 @@ class NPCOrchestrator:
                     self._npc_status[npc_id] = NPCStatus.BUSY
         
         return npc_events
+
+    async def update_beliefs_on_knowledge_discovery(
+        self,
+        npc_id: int,
+        knowledge_type: str,
+        knowledge_id: int
+    ) -> Dict[str, Any]:
+        """Forward knowledge updates into the belief system."""
+        try:
+            return await self._belief_system.update_beliefs_on_knowledge_discovery(
+                npc_id=int(npc_id),
+                knowledge_type=knowledge_type,
+                knowledge_id=int(knowledge_id),
+            )
+        except Exception as e:
+            logger.exception("update_beliefs_on_knowledge_discovery failed: %s", e)
+            return {"beliefs_updated": False, "error": str(e)}
+
+    async def report_world_event_for_beliefs(
+        self,
+        text: str,
+        event_type: str,
+        npc_ids: List[int],
+        factuality: float = 1.0,
+    ) -> Dict[str, Any]:
+        """
+        Convenience bridge into the belief system from any other subsystem.
+        Example:
+            await orchestrator.report_world_event_for_beliefs(
+                "A riot broke out in the market", "riot", [12, 15, 22], 0.9
+            )
+        """
+        try:
+            return await self._belief_system.process_event_for_beliefs(
+                None,  # ctx
+                event_text=text,
+                event_type=event_type,
+                npc_ids=[int(n) for n in npc_ids],
+                factuality=float(factuality),
+            )
+        except Exception as e:
+            logger.exception("report_world_event_for_beliefs failed: %s", e)
+            return {"event_processed": False, "error": str(e)}
+
     
     async def process_calendar_events_for_all_npcs(self) -> Dict[str, Any]:
-        """Process current calendar events for all NPCs."""
+        """Process current calendar events for all NPCs (and form beliefs from witnessed events)."""
         results = {
             "processed_events": [],
             "missed_events": [],
             "npc_statuses": {}
         }
-        
+    
         calendar = await self._get_calendar_system()
-        
+    
         # Fetch real in-game time once
         try:
             async with get_db_connection_context() as conn:
@@ -847,12 +891,12 @@ class NPCOrchestrator:
         except Exception as e:
             logger.exception(f"Failed to read CurrentRoleplay time: {e}")
             time_map = {}
-        
+    
         year = int(time_map.get("Year", 1))
         month = int(time_map.get("Month", 1))
         day = int(time_map.get("Day", 1))
         time_of_day = time_map.get("TimeOfDay", "Morning")
-        
+    
         # Auto-process missed events using real game time
         try:
             await calendar["auto_process"](
@@ -862,7 +906,10 @@ class NPCOrchestrator:
             )
         except Exception as e:
             logger.exception(f"Auto-process missed events failed: {e}")
-        
+    
+        # Deduper so we form beliefs once per event id
+        seen_event_ids: Set[Any] = set()
+    
         # Check current events for each NPC
         for npc_id in list(self._active_npcs):
             try:
@@ -870,11 +917,12 @@ class NPCOrchestrator:
             except Exception as e:
                 logger.exception(f"check_npc_current_events failed for NPC {npc_id}: {e}")
                 continue
-            
+    
             if events:
                 results["npc_statuses"][npc_id] = "has_events"
                 # after mark_completed / mark_missed
                 self._notify_npc_changed(npc_id)
+    
                 for event in events:
                     try:
                         if event.get("can_participate"):
@@ -907,8 +955,58 @@ class NPCOrchestrator:
                         logger.exception(
                             f"Failed to process calendar event {event.get('event_id')} for NPC {npc_id}: {e}"
                         )
-        
+    
+                    # === Belief-system witness hook (deduped by event_id) ===
+                    try:
+                        ev_id = event.get("event_id")
+                        if ev_id in seen_event_ids:
+                            continue
+                        seen_event_ids.add(ev_id)
+    
+                        event_text = event.get("event_name", "Event")
+                        event_type = (event.get("event_type") or "calendar_event").lower()
+                        loc = event.get("location")
+    
+                        # Who likely witnessed this event? Start with same-location NPCs.
+                        witness_ids: List[int] = []
+                        if loc:
+                            nearby = self._location_index.get(loc)
+                            if nearby:
+                                witness_ids = list(nearby)
+                            else:
+                                try:
+                                    snapshots = await self.get_npcs_at_location(loc)
+                                    witness_ids = [s.npc_id for s in snapshots]
+                                except Exception:
+                                    witness_ids = []
+    
+                        # Ensure primary NPC is in witnesses
+                        primary_npc = next(
+                            (n.get("npc_id") for n in event.get("involved_npcs", []) if n.get("role") == "primary"),
+                            None
+                        )
+                        if primary_npc is not None:
+                            try:
+                                p_id = int(primary_npc)
+                                if p_id not in witness_ids:
+                                    witness_ids.append(p_id)
+                            except Exception:
+                                pass
+    
+                        if witness_ids:
+                            await self._belief_system.process_event_for_beliefs(
+                                None,  # ctx
+                                event_text=event_text,
+                                event_type=event_type,
+                                npc_ids=[int(n) for n in witness_ids[:10]],  # cap for perf
+                                factuality=1.0,
+                            )
+                    except Exception as e:
+                        logger.warning("Belief hook (calendar) failed: %s", e)
+                    # === end belief hook ===
+    
         return results
+
     
     # ==================== RELATIONSHIP INTEGRATION ====================
     
@@ -1329,13 +1427,67 @@ class NPCOrchestrator:
         action: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Handle player action and generate NPC responses"""
+        """Handle player action and generate NPC responses (now feeds the belief system)."""
         # Use bridge system if available
         if self._npc_bridge:
-            return await self._npc_bridge.handle_player_action(action, context)
-        
-        # Otherwise use agent system
-        return await self._agent_system.process_player_action(action, context)
+            result = await self._npc_bridge.handle_player_action(action, context)
+        else:
+            result = await self._agent_system.process_player_action(action, context)
+    
+        # === Belief-system hook for conversational actions ===
+        try:
+            action_type = (action.get("type") or "").lower()
+            # Expand this set if you classify more talk-like actions
+            if action_type in {
+                "talk", "say", "speak", "chat", "gossip",
+                "threaten", "compliment", "persuade", "intimidate"
+            }:
+                # Work out listeners
+                listener_ids: List[int] = []
+                if action.get("target_npc_id") is not None:
+                    try:
+                        listener_ids = [int(action["target_npc_id"])]
+                    except Exception:
+                        listener_ids = []
+                elif context.get("affected_npcs"):
+                    try:
+                        listener_ids = [int(n) for n in context["affected_npcs"]]
+                    except Exception:
+                        listener_ids = []
+                else:
+                    # Fallback: pull nearby NPCs by location
+                    loc = action.get("target_location") or context.get("location")
+                    if loc:
+                        try:
+                            snapshots = await self.get_npcs_at_location(loc)
+                            listener_ids = [s.npc_id for s in snapshots]
+                        except Exception:
+                            listener_ids = []
+    
+                if listener_ids:
+                    topic = (action.get("metadata") or {}).get("topic", "general")
+                    text = action.get("description", "") or ""
+                    credibility = float((action.get("metadata") or {}).get("credibility", 0.75))
+    
+                    # Cap for perf; each listener forms their *own* subjective belief
+                    for nid in listener_ids[:5]:
+                        try:
+                            await self._belief_system.process_conversation_for_beliefs(
+                                None,  # ctx (governance decorator can ignore/handle None)
+                                conversation_text=text,
+                                speaker_id="player",
+                                listener_id=int(nid),
+                                topic=topic,
+                                credibility=credibility,
+                            )
+                        except Exception as inner_e:
+                            logger.debug("Belief (conversation) failed for listener %s: %s", nid, inner_e)
+        except Exception as e:
+            logger.warning("Belief hook (conversation) failed: %s", e)
+        # === end belief hook ===
+    
+        return result
+
     
     async def progress_npc_narrative(
         self,
