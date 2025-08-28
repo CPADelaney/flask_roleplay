@@ -238,9 +238,9 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                 return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
-        from nyx.nyx_agent_sdk import process_user_input_with_openai
+        from nyx.nyx_agent_sdk import process_user_input
         logger.info(f"[BG Task {conversation_id}] Processing input with Nyx agent...")
-        response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
+        response = await process_user_input(user_id, conversation_id, user_input, context)
         logger.info(f"[BG Task {conversation_id}] Nyx agent processing complete.")
 
         if not response or not response.get("success", False):
