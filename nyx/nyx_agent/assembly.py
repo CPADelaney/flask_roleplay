@@ -2002,3 +2002,77 @@ def register_expansion_tools(
     agent.register_tool("expand_lore", tools.expand_lore_context)
     agent.register_tool("check_world_state", tools.check_world_state)
     agent.register_tool("get_conflict_details", tools.get_conflict_details)
+
+# ─── Back-compat: module-level exports expected by __init__.py ────────────────
+from typing import Any, Dict, Optional
+
+_ASSEMBLER_SINGLETON: Optional[NyxResponseAssembler] = None
+
+def _get_assembler(**kwargs) -> NyxResponseAssembler:
+    global _ASSEMBLER_SINGLETON
+    if isinstance(kwargs.get("assembler"), NyxResponseAssembler):
+        return kwargs["assembler"]
+    if _ASSEMBLER_SINGLETON is None:
+        cb = kwargs.get("context_broker")
+        if cb is None:
+            # If your ContextBroker requires args, wire them here or raise:
+            cb = ContextBroker()
+        _ASSEMBLER_SINGLETON = create_assembler(
+            context_broker=cb,
+            config=kwargs.get("config"),
+            llm_model=kwargs.get("llm_model"),
+        )
+    return _ASSEMBLER_SINGLETON
+
+async def assemble_nyx_response(
+    agent_output=None,
+    context_bundle=None,
+    scene_scope=None,
+    conversation_id: Optional[str] = None,
+    user_input: str = "",
+    processing_metadata: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+) -> NyxResponse:
+    """
+    Back-compat module-level entrypoint. If you pass the 'class-style' args
+    (agent_output, context_bundle, scene_scope, conversation_id, user_input),
+    we call the class method. Otherwise, if you provide ctx+user_input we
+    delegate to the orchestrator.
+    """
+    asm = _get_assembler(**kwargs)
+
+    if agent_output is not None and context_bundle is not None and scene_scope is not None:
+        return await asm.assemble_nyx_response(
+            agent_output=agent_output,
+            context_bundle=context_bundle,
+            scene_scope=scene_scope,
+            conversation_id=conversation_id or "",
+            user_input=user_input,
+            processing_metadata=processing_metadata,
+        )
+
+    # Fallback: allow legacy pipeline that calls via orchestrator
+    ctx = kwargs.get("ctx")
+    if ctx is not None:
+        from .orchestrator import process_user_input
+        return await process_user_input(ctx, user_input, **{k: v for k, v in kwargs.items() if k not in {"ctx"}})
+
+    # Last resort: minimal safe object so callers don't explode
+    return NyxResponse(
+        id=str(uuid4()),
+        conversation_id=conversation_id or "",
+        narrative=user_input or "...",
+        world_state=WorldState(),
+        npc_dialogues=[],
+        memory_highlights=[],
+        emergent_events=[],
+        choices=[Choice(id="continue", text="Continue...", category="continuation", requirements={}, consequences={}, canon_alignment=1.0)],
+        metadata={"fallback": True},
+    )
+
+async def resolve_scene_requests(
+    *_args: Any,
+    **_kwargs: Any,
+) -> Dict[str, Any]:
+    # No-op resolver for now; keeps old imports happy.
+    return {"handled": False, "reason": "no-op"}
