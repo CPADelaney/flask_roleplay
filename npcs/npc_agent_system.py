@@ -25,6 +25,7 @@ from .lore_context_manager import LoreContextManager
 from db.connection import get_db_connection_context
 from lore.core import canon
 from lore.core.lore_system import LoreSystem
+from npcs.belief_system_integration import enhance_npc_with_belief_system
 
 logger = logging.getLogger(__name__)
 
@@ -437,7 +438,9 @@ class NPCAgentSystem:
             for row in rows:
                 npc_id = row["npc_id"]
                 if npc_id not in self.npc_agents:
-                    self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                    self.npc_agents[npc_id] = enhance_npc_with_belief_system(
+                        NPCAgent(npc_id, self.user_id, self.conversation_id)
+                    )
                     init_tasks.append(self.npc_agents[npc_id].initialize())
             
             # Wait for all initializations to complete
@@ -793,7 +796,9 @@ class NPCAgentSystem:
 
         # Make sure the NPC agent is loaded and initialized
         if npc_id not in self.npc_agents:
-            self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            self.npc_agents[npc_id] = enhance_npc_with_belief_system(
+                NPCAgent(npc_id, self.user_id, self.conversation_id)
+            )
             await self.npc_agents[npc_id].initialize()
 
         # Process the player action with the NPC agent
@@ -1505,9 +1510,11 @@ class NPCAgentSystem:
             return []
 
     async def _get_npc_agent(self, npc_id: int) -> Optional[NPCAgent]:
-        """Get or create an NPC agent."""
+        """Get or create an NPC agent with belief system attached."""
         if npc_id not in self.npc_agents:
-            self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            agent = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            agent = enhance_npc_with_belief_system(agent)
+            self.npc_agents[npc_id] = agent
             await self.npc_agents[npc_id].initialize()
         return self.npc_agents.get(npc_id)
 
