@@ -85,7 +85,9 @@ class NPCSnapshot:
     betrayal_planning: bool = False
     special_mechanics: Dict[str, Any] = field(default_factory=dict)
 
-
+    # ---- Lore (small, optional) ----
+    lore_summary: List[Dict[str, Any]] = field(default_factory=list)  # [{"type","id","name","knowledge_level"}]
+    
 class NPCStatus(Enum):
     """NPC activity status"""
     ACTIVE = "active"
@@ -132,6 +134,8 @@ class NPCOrchestrator:
         # Nyx integration
         self._nyx_bridge = None
         self._npc_bridge = None
+
+        self._include_lore_in_scene_bundle = bool(self.config.get('include_lore_in_scene_bundle', False))
         
         # Lazy-loaded systems
         self._calendar_system = None
@@ -301,6 +305,18 @@ class NPCOrchestrator:
                 'closeness': snapshot.closeness,
                 'intensity': snapshot.intensity,
             }
+
+            if self._include_lore_in_scene_bundle:
+                try:
+                    lore_ctx = await self._lore_manager.get_lore_context(npc_id, "profile")
+                    knowledge = (lore_ctx or {}).get("knowledge") or []
+                    if knowledge:
+                        npc_entry['lore'] = [
+                            {"name": k.get("name"), "lvl": k.get("knowledge_level"), "id": k.get("lore_id"), "type": k.get("lore_type")}
+                            for k in knowledge[:2]
+                        ]
+                except Exception as e:
+                    logger.debug(f"[Lore] scene-bundle fetch failed for NPC {npc_id}: {e}")
     
             if topics:
                 relevant_topics = await self._check_npc_topic_relevance(npc_id, topics)
@@ -651,6 +667,23 @@ class NPCOrchestrator:
                 limit=5
             )
             recent_memories = memory_result.get("memories", [])
+
+        # Lore summary (heavy only; keep tiny)
+        lore_summary = []
+        if not light:
+            try:
+                lore_ctx = await self._lore_manager.get_lore_context(npc_id, "profile")
+                knowledge = (lore_ctx or {}).get("knowledge") or []
+                # keep it very small to avoid blowing up payloads
+                for k in knowledge[:3]:
+                    lore_summary.append({
+                        "lore_type": k.get("lore_type"),
+                        "lore_id": k.get("lore_id"),
+                        "name": k.get("name"),
+                        "knowledge_level": k.get("knowledge_level"),
+                    })
+            except Exception as e:
+                logger.debug(f"[Lore] summary fetch failed for NPC {npc_id}: {e}")
         
         # Normalize personality traits
         traits = row_map.get("personality_traits", [])
@@ -677,6 +710,7 @@ class NPCOrchestrator:
             location=row_map["current_location"],
             canonical_events=canonical_events,
             personality_traits=traits,
+            lore_summary=lore_summary,
             dominance=row_map.get("dominance") or 50,
             cruelty=row_map.get("cruelty") or 50,
             trust=row_map.get("trust") or 0,
@@ -1198,6 +1232,80 @@ class NPCOrchestrator:
             scene["canonical_constraints"] = await self._get_canonical_constraints(location, npc_ids)
         
         return scene
+
+    # --- LORE INTEGRATION BRIDGE ----------------------------------------------
+    
+    async def get_npc_lore_context(self, npc_id: int, context_type: str = "profile") -> Dict[str, Any]:
+        """Thin wrapper to retrieve lore context with centralized error handling."""
+        try:
+            return await self._lore_manager.get_lore_context(npc_id, context_type)
+        except Exception as e:
+            logger.warning(f"[Lore] get_lore_context failed for NPC {npc_id}: {e}")
+            return {}
+    
+    def invalidate_lore_cache_for(self, lore_id: Union[int, str]):
+        """Invalidate lore context cache entries tied to a given lore_change id."""
+        try:
+            self._lore_manager.context_cache.invalidate(f"lore_change_{lore_id}")
+        except Exception as e:
+            logger.debug(f"[Lore] cache invalidate failed for id={lore_id}: {e}")
+    
+    async def handle_lore_change(
+        self,
+        lore_change: Dict[str, Any],
+        source_npc_id: int,
+        affected_npcs: List[int]
+    ) -> Dict[str, Any]:
+        """
+        Orchestrated lore change handling:
+        - Run impact + propagation via LoreContextManager
+        - Canonize significant changes (optional)
+        - Feed event into belief system + throttled consolidation
+        - Invalidate NPC and scene caches touched by these NPCs
+        """
+        # 1) Run through the manager
+        result = await self._lore_manager.handle_lore_change(lore_change, source_npc_id, affected_npcs)
+    
+        # 2) Canon (optional but usually desirable for major changes)
+        try:
+            if self.enable_canon and self.auto_canonize:
+                significance = 7 if lore_change.get("is_major_revelation") else 4
+                async with get_db_connection_context() as conn:
+                    await log_canonical_event(
+                        conn,
+                        self.user_id,
+                        self.conversation_id,
+                        f"Lore change: {lore_change.get('name','(unnamed)')} ({lore_change.get('id')})",
+                        tags=["lore", "change", lore_change.get("type", "general")],
+                        significance=significance
+                    )
+        except Exception as e:
+            logger.debug(f"[Lore] canon logging failed: {e}")
+    
+        # 3) Belief hooks + consolidation
+        try:
+            for nid in affected_npcs:
+                ctx_obj = SimpleNamespace(user_id=self.user_id, conversation_id=self.conversation_id, npc_id=nid)
+                await self._belief_system.process_event_for_beliefs(
+                    ctx=ctx_obj,
+                    event_text=f"Lore changed: {lore_change.get('name','(unnamed)')}",
+                    event_type="lore_change",
+                    npc_ids=[nid],
+                    factuality=1.0
+                )
+            await self._maybe_consolidate_beliefs(affected_npcs, topic_filter="lore_change", reason="post_lore_change")
+        except Exception as e:
+            logger.warning(f"[Lore] belief routing after lore change failed: {e}")
+    
+        # 4) Invalidate NPC + scene caches
+        for nid in affected_npcs:
+            self._notify_npc_changed(nid)
+    
+        # 5) Lore cache invalidation for this change id (if present)
+        if "id" in lore_change:
+            self.invalidate_lore_cache_for(lore_change["id"])
+    
+        return result
     
     # ==================== HELPER METHODS ====================
     
