@@ -30,7 +30,7 @@ from nyx.core.brain.base import NyxBrain
 from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
 
 # --- New scene-scoped SDK (lazy singleton) ---
-from nyx.nyx_agent_sdk.nyx_agent_sdk import NyxAgentSDK
+from nyx.nyx_agent_sdk import NyxAgentSDK
 from nyx.nyx_agent_sdk.config import NyxConfig
 
 logger = logging.getLogger(__name__)
