@@ -223,160 +223,165 @@ class NPCOrchestrator:
     async def get_scene_bundle(self, scope: 'SceneScope') -> Dict[str, Any]:
         start_time = time.time()
         scene_key = generate_scene_cache_key(scope)
-        cache_key = f"{scene_key}{SECTION_SUFFIX}"
+        cache_key = f"{scene_key}{self.SECTION_SUFFIX}"
+    
+        # Fast path: serve from cache if fresh
         if cache_key in self._bundle_cache:
             cached_bundle, cached_time = self._bundle_cache[cache_key]
             if time.time() - cached_time < self._bundle_ttl:
                 self.metrics['cache_hits'] += 1
                 return cached_bundle
-        
+    
         bundle = {
-            'section': 'npcs',  # Tag for identification
+            'section': 'npcs',
             'data': {'npcs': [], 'active_in_scene': []},
             'canonical': False,
             'last_changed_at': time.time(),
-            'priority': 8,  # NPCs are high priority
-            'version': f"npc_bundle_{time.time()}"
+            'priority': 8,
+            'version': f"npc_bundle_{time.time()}",
         }
-        
+    
         canonical_count = 0
-        
-        # Process only NPCs in the scene scope (cap at 10 for performance)
-        npc_ids = list(scope.npc_ids)[:10]
-        bundle['data']['active_in_scene'] = npc_ids  # Include active NPCs list
-        
-        # Parallel fetch (light mode, semaphore is inside _build_npc_snapshot)
-        snapshot_tasks = [
-            self.get_npc_snapshot(npc_id, force_refresh=False, light=True) 
-            for npc_id in npc_ids
-        ]
-        snapshots = await asyncio.gather(*snapshot_tasks, return_exceptions=True)
-        
-        # Build snapshot map to avoid refetching
-        snapshot_map = {}
-        
-        # Guard link_hints
+    
+        # Limit for perf
+        npc_ids = list(getattr(scope, "npc_ids", []))[:10]
+        bundle['data']['active_in_scene'] = npc_ids
+    
+        # Parallel light snapshots (DB concurrency guarded inside)
+        snapshots = await asyncio.gather(
+            *[self.get_npc_snapshot(n, force_refresh=False, light=True) for n in npc_ids],
+            return_exceptions=True,
+        )
+    
+        snapshot_map: Dict[int, NPCSnapshot] = {}
         link_hints = getattr(scope, "link_hints", {}) or {}
-        
-        for npc_id, snapshot_result in zip(npc_ids, snapshots):
-            if isinstance(snapshot_result, Exception):
-                logger.warning(f"Failed to get NPC {npc_id}: {snapshot_result}")
+        topics = getattr(scope, "topics", set()) or set()
+    
+        for npc_id, res in zip(npc_ids, snapshots):
+            if isinstance(res, Exception):
+                logger.warning(f"Failed to get NPC {npc_id}: {res}")
                 continue
-                
-            snapshot = snapshot_result
+    
+            snapshot = res
             snapshot_map[npc_id] = snapshot
-            
-            # Build minimal but complete NPC entry
+    
             npc_entry = {
                 'id': npc_id,
                 'name': snapshot.name,
                 'role': snapshot.role,
-                'canonical': bool(snapshot.canonical_events)
+                'canonical': bool(snapshot.canonical_events),
             }
-            
-            # Canonical facts FIRST (top priority per requirements)
+    
             if snapshot.canonical_events:
                 canonical_count += 1
-                # Include only most recent/relevant canonical events
                 npc_entry['canonical_events'] = snapshot.canonical_events[:2]
                 bundle['canonical'] = True
-            
-            # Core immutable traits (canon-like, never change)
+    
             npc_entry['core_traits'] = {
                 'personality': snapshot.personality_traits[:3] if snapshot.personality_traits else [],
                 'dominance': snapshot.dominance,
-                'cruelty': snapshot.cruelty
+                'cruelty': snapshot.cruelty,
             }
-            
-            # Dynamic state (current situation)
+    
             npc_entry['state'] = {
                 'status': snapshot.status,
                 'location': snapshot.location,
                 'mask_integrity': snapshot.mask_integrity,
-                'current_intent': snapshot.emotional_state.get('intent') if snapshot.emotional_state else None
+                'current_intent': snapshot.emotional_state.get('intent') if snapshot.emotional_state else None,
             }
-            
-            # Relationship to player (critical for roleplay)
+    
             npc_entry['relationship'] = {
                 'trust': snapshot.trust,
                 'respect': snapshot.respect,
                 'closeness': snapshot.closeness,
-                'intensity': snapshot.intensity
+                'intensity': snapshot.intensity,
             }
-            
-            # Scene-relevant context
-            topics = getattr(scope, "topics", set()) or set()
+    
             if topics:
                 relevant_topics = await self._check_npc_topic_relevance(npc_id, topics)
                 if relevant_topics:
                     npc_entry['relevant_topics'] = list(relevant_topics)
-            
-            # Link hints for emergent connections (guarded)
+    
             related_npcs = link_hints.get("related_npcs")
             if related_npcs:
                 relationships = await self._get_npc_relationships(npc_id, related_npcs)
                 if relationships:
                     npc_entry['relationships'] = relationships
-            
+    
             bundle['data']['npcs'].append(npc_entry)
-            
-            # Update state cache and location index
+    
+            # Update location index and scene-state cache
             old_location = self._scene_state_cache.get(npc_id, {}).get('location')
             if old_location and old_location != snapshot.location:
                 loc_set = self._location_index.get(old_location)
                 if loc_set:
                     loc_set.discard(npc_id)
-                    if not loc_set:  # Prune empty location buckets
+                    if not loc_set:
                         self._location_index.pop(old_location, None)
             if snapshot.location:
                 self._location_index[snapshot.location].add(npc_id)
-            
+    
             self._scene_state_cache[npc_id] = {
                 'status': snapshot.status,
                 'location': snapshot.location,
                 'trust': snapshot.trust,
                 'respect': snapshot.respect,
                 'closeness': snapshot.closeness,
-                'emotional_state': snapshot.emotional_state
+                'emotional_state': snapshot.emotional_state,
             }
-        
-        # Add scene-level NPC metadata
+    
         bundle['data']['canonical_count'] = canonical_count
         bundle['data']['scene_dynamics'] = await self._get_scene_dynamics(npc_ids, snapshot_map)
-        
-        # Add group dynamics if multiple NPCs (consistent naming)
+    
         if len(npc_ids) > 1:
             bundle['data']['group_dynamics'] = await self._get_group_dynamics(npc_ids, snapshot_map)
-        
-        # Cache the bundle
+    
+        # Cache bundle and wire reverse index so we can invalidate on NPC changes
         self._bundle_cache[cache_key] = (bundle, time.time())
-        
-        # Prune old cache entries
+        index = self._bundle_index  # local alias
+        for nid in npc_ids:
+            s = index.get(nid)
+            if s is None:
+                index[nid] = {cache_key}
+            else:
+                s.add(cache_key)
+    
+        # Prune expired entries (also cleans reverse index)
         self._prune_bundle_cache()
-        
+    
         # Update metrics
         elapsed = time.time() - start_time
         self.metrics['bundle_fetches'] += 1
         self.metrics['avg_bundle_time'] = (
-            (self.metrics['avg_bundle_time'] * (self.metrics['bundle_fetches'] - 1) + elapsed) 
+            (self.metrics['avg_bundle_time'] * (self.metrics['bundle_fetches'] - 1) + elapsed)
             / self.metrics['bundle_fetches']
         )
-        
+    
         return bundle
-
+    
     def _notify_npc_changed(self, npc_id: int):
         self._last_update_times[npc_id] = time.time()
-        # drop cached bundles listing this NPC
-        for ck in list(self._bundle_index.get(npc_id, set())):
+    
+        keys = self._bundle_index.pop(npc_id, set())
+        if not keys:
+            return
+    
+        for ck in keys:
             self._bundle_cache.pop(ck, None)
-        self._bundle_index.pop(npc_id, None)
+    
+        # Optional: after mass invalidation, trim any empty sets left behind
+        for nid, s in list(self._bundle_index.items()):
+            if not s:
+                self._bundle_index.pop(nid, None)
     
     # helper: invalidate NPC bundles for a *scene* key (called by ContextBroker)
     def invalidate_npc_bundles_for_scene_key(self, scene_key: str):
-        key = f"{scene_key}{SECTION_SUFFIX}"
-        if key in self._bundle_cache:
-            self._bundle_cache.pop(key, None)
-        # also prune from reverse index
+        key = f"{scene_key}{self.SECTION_SUFFIX}"
+    
+        # Drop the cached bundle
+        self._bundle_cache.pop(key, None)
+    
+        # Remove this key from every NPC’s reverse index set
         for nid, keys in list(self._bundle_index.items()):
             if key in keys:
                 keys.discard(key)
@@ -384,11 +389,21 @@ class NPCOrchestrator:
                     self._bundle_index.pop(nid, None)
     
     def _prune_bundle_cache(self):
-        """Remove expired entries from bundle cache"""
+        """Remove expired entries from bundle cache and clean reverse index."""
         now = time.time()
-        for key, (_, timestamp) in list(self._bundle_cache.items()):
-            if now - timestamp > self._bundle_ttl:
-                self._bundle_cache.pop(key, None)
+        expired = [k for k, (_, ts) in self._bundle_cache.items() if now - ts > self._bundle_ttl]
+        if not expired:
+            return
+    
+        for k in expired:
+            self._bundle_cache.pop(k, None)
+    
+        # Scrub expired keys from reverse index
+        expired_set = set(expired)
+        for nid, keys in list(self._bundle_index.items()):
+            keys.difference_update(expired_set)
+            if not keys:
+                self._bundle_index.pop(nid, None)
     
     async def get_scene_delta(self, scope: 'SceneScope', since_ts: float) -> Dict[str, Any]:
         """
