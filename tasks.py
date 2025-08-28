@@ -30,8 +30,7 @@ from nyx.core.brain.base import NyxBrain
 from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
 
 # --- New scene-scoped SDK (lazy singleton) ---
-from nyx.nyx_agent_sdk import NyxAgentSDK
-from nyx.nyx_agent.config import NyxConfig
+from nyx.nyx_agent_sdk import NyxAgentSDK, NyxSDKConfig
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +99,12 @@ _SDK: Optional[NyxAgentSDK] = None
 async def _get_nyx_sdk() -> NyxAgentSDK:
     global _SDK
     if _SDK is None:
-        _SDK = NyxAgentSDK(NyxConfig())
+        sdk_config = NyxSDKConfig(
+            request_timeout_seconds=60.0,  # Customize as needed
+            retry_on_failure=True,
+            enable_telemetry=True,
+        )
+        _SDK = NyxAgentSDK(sdk_config)
         await _SDK.initialize_agent()
     return _SDK
 
