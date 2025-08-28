@@ -126,93 +126,80 @@ class NPCBeliefSystemIntegration:
         agent_type=AgentType.NPC,
         action_type="process_conversation_for_beliefs",
         action_description="Processing conversation for NPC belief formation",
-        id_from_context=lambda ctx: "belief_system",
+        id_from_context=lambda ctx: "belief_system"
     )
     async def process_conversation_for_beliefs(
-        self,
+        self, 
         ctx,
         conversation_text: str,
         speaker_id: Union[int, str],
         listener_id: int,
         topic: str = "general",
-        credibility: float = 0.7,
+        credibility: float = 0.7
     ) -> Dict[str, Any]:
         """
         Process a conversation to generate beliefs for the listening NPC.
-
-        Args:
-            conversation_text: The content of what was said
-            speaker_id: ID of the speaker (NPC ID or 'player')
-            listener_id: NPC ID of the listener
-            topic: Topic of conversation
-            credibility: How credible the speaker is (0.0-1.0)
-
-        Returns:
-            Information about the beliefs formed
+        - If speaker is 'player', credibility is used as-is.
+        - If speaker is an NPC, credibility is weighted by current trust between the two NPCs.
         """
         if not self.memory_system:
             await self.initialize()
-
+    
         belief_system = self.get_belief_system_for_npc(listener_id)
         await belief_system.initialize()
-
-        # Base factuality from speaker credibility
-        factuality = credibility
-
-        # If the speaker is an NPC, adjust by dynamic trust (consistent with orchestrator)
+    
+        # Base factuality from input
+        factuality = float(credibility)
+    
+        # If the speaker is an NPC, weight by relationship trust via the dynamic relationship system
         if isinstance(speaker_id, int):
-            trust_level = 0.5  # default in case lookup fails
             try:
-                # Lazy import to avoid heavy module load/cycles
+                # Lazy import to avoid heavy deps on module import
                 from logic.dynamic_relationships import OptimizedRelationshipManager
-
-                drm = OptimizedRelationshipManager(self.user_id, self.conversation_id)
-                state = await drm.get_relationship_state("npc", listener_id, "npc", speaker_id)
-                trust_level = float(state.dimensions.trust)
-                # Normalize if 0–100
-                if trust_level > 1.0:
-                    trust_level = trust_level / 100.0
-                trust_level = max(0.0, min(1.0, trust_level))
+                rel_mgr = OptimizedRelationshipManager(self.user_id, self.conversation_id)
+                state = await rel_mgr.get_relationship_state("npc", listener_id, "npc", speaker_id)
+                # state.dimensions.trust is typically 0..100
+                trust_0_1 = max(0.0, min(1.0, float(state.dimensions.trust) / 100.0))
+                # Trust gently scales credibility; never drops it to zero
+                factuality = factuality * (0.3 + 0.7 * trust_0_1)
             except Exception as e:
-                logger.warning(f"Relationship state lookup failed; using default trust. err={e}")
-
-            # Blend credibility with trust emphasis (keeps some weight on base credibility)
-            factuality = factuality * (0.3 + (trust_level * 0.7))
-
+                logger.warning(f"[Beliefs] trust lookup failed (speaker={speaker_id}, listener={listener_id}): {e}")
+                # fallback: neutral trust
+                factuality = factuality * 0.65
+    
         try:
             belief_result = await belief_system.form_subjective_belief_from_observation(
                 observation=conversation_text,
-                factuality=factuality,
+                factuality=factuality
             )
-
+    
             if "error" not in belief_result:
-                # Store the memory of the conversation for the listener
-                speaker_description = "player" if speaker_id == "player" else f"NPC {speaker_id}"
+                speaker_desc = "player" if speaker_id == "player" else f"NPC {speaker_id}"
                 await self.memory_system.remember(
                     entity_type="npc",
                     entity_id=listener_id,
-                    memory_text=f"{speaker_description} said: {conversation_text}",
+                    memory_text=f"{speaker_desc} said: {conversation_text}",
                     importance="medium",
                     tags=["conversation", topic],
-                    emotional=True,
+                    emotional=True
                 )
-
+    
             return {
                 "conversation_processed": True,
                 "belief_formed": "error" not in belief_result,
                 "belief_details": belief_result,
                 "speaker_id": speaker_id,
                 "listener_id": listener_id,
-                "topic": topic,
+                "topic": topic
             }
-
+    
         except Exception as e:
             logger.error(f"Error forming belief from conversation for NPC {listener_id}: {e}")
             return {
                 "conversation_processed": False,
                 "error": str(e),
                 "speaker_id": speaker_id,
-                "listener_id": listener_id,
+                "listener_id": listener_id
             }
 
     @with_governance(
@@ -471,3 +458,4 @@ def enhance_npc_with_belief_system(npc_agent: NPCAgent) -> NPCAgent:
     npc_agent.form_cultural_belief_about = form_cultural_belief_about
 
     return npc_agent
+
