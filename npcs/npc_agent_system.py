@@ -1,7 +1,7 @@
 # npcs/npc_agent_system.py
 """
 Main system that integrates NPC agents with the game loop, using OpenAI Agents SDK.
-Updated to use centralized ChatGPT integration.
+Updated to use centralized ChatGPT integration & orchestrator wiring fixes.
 """
 
 import logging
@@ -9,6 +9,8 @@ import asyncio
 import random
 from typing import List, Dict, Any, Optional, Set, Tuple, Union
 from dataclasses import dataclass
+from contextlib import asynccontextmanager
+import json
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field, validator
@@ -151,6 +153,13 @@ class ModerationCheck(BaseModel):
     is_appropriate: bool = True
     reasoning: str = ""
 
+# --- Small utilities ---
+def _safe_json_loads(s: str) -> Dict[str, Any]:
+    try:
+        return json.loads((s or "").strip().strip("`").strip())
+    except Exception:
+        return {}
+
 # Fallback functions for when agents aren't available
 async def _fallback_moderation_check(text: str) -> ModerationCheck:
     """Fallback moderation check using async OpenAI client."""
@@ -168,7 +177,7 @@ async def _fallback_moderation_check(text: str) -> ModerationCheck:
 - is_appropriate: boolean (true if content is OK)
 - reasoning: brief explanation
 
-Flag content with: explicit violence, sexual content, illegal activities, hate speech."""
+Flag content with: sexual content involving minors."""
             },
             {
                 "role": "user",
@@ -202,7 +211,7 @@ class NPCAgentSystem:
         self,
         user_id: int,
         conversation_id: int,
-        connection_pool
+        connection_pool=None
     ):
         """Initialize the agent system for a specific user & conversation."""
         self.user_id = user_id
@@ -232,6 +241,17 @@ class NPCAgentSystem:
         # Schedule periodic memory maintenance
         self._setup_memory_maintenance_schedule()
 
+    # --- Uniform connection acquisition (works with or without pool) ---
+    @asynccontextmanager
+    async def _acquire_conn(self):
+        """Yield a connection from pool if present, otherwise from global context."""
+        if self.connection_pool is not None:
+            async with self.connection_pool.acquire() as conn:
+                yield conn
+        else:
+            async with get_db_connection_context() as conn:
+                yield conn
+
     def _setup_memory_maintenance_schedule(self):
         """Schedule periodic memory maintenance for all NPCs."""
         async def run_maintenance_cycle():
@@ -258,9 +278,9 @@ class NPCAgentSystem:
     async def _get_lore_system(self):
         """Lazy-load the lore system."""
         if self._lore_system is None:
-            self._lore_system = await LoreSystem.get_instance(
-                self.user_id, self.conversation_id
-            )
+            lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+            await lore_system.initialize()
+            self._lore_system = lore_system
         return self._lore_system
 
     async def update_npc_directive(self, npc_id: int, directive: Dict[str, Any]) -> Dict[str, Any]:
@@ -409,7 +429,7 @@ class NPCAgentSystem:
             params.append(npc_ids)
 
         # Using the provided connection pool - READ ONLY
-        async with self.connection_pool.acquire() as conn:
+        async with self._acquire_conn() as conn:
             rows = await conn.fetch(query, *params)
             
             # Create tasks to initialize agents concurrently
@@ -431,6 +451,19 @@ class NPCAgentSystem:
             npc_count=npc_count,
             initialized_ids=list(self.npc_agents.keys())
         ).model_dump_json()
+
+    # --- Orchestrator-friendly wrapper (dict in/out) ---
+    async def process_player_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Wrapper to match NPCOrchestrator expectations (non-tool)."""
+        try:
+            action_model = PlayerAction(**(action or {}))
+            context_model = ActionContext(**(context or {}))
+            result_json = await self.handle_player_action(action_model, context_model)
+            return _safe_json_loads(result_json)
+        except Exception as e:
+            logger.error(f"process_player_action wrapper failed: {e}")
+            return {"npc_responses": []}
+
         
     @function_tool(strict_mode=False)
     async def handle_player_action(
@@ -527,7 +560,7 @@ class NPCAgentSystem:
         if location:
             try:
                 # Using the provided connection pool - READ ONLY
-                async with self.connection_pool.acquire() as conn:
+                async with self._acquire_conn() as conn:
                     rows = await conn.fetch(
                         """
                         SELECT npc_id
@@ -598,7 +631,7 @@ class NPCAgentSystem:
         # Fallback: if the action is "talk", get the last 3 recently active NPCs
         if player_action.get("type") == "talk":
             try:
-                async with self.connection_pool.acquire() as conn:
+                async with self._acquire_conn() as conn:
                     rows = await conn.fetch(
                         """
                         SELECT DISTINCT npc_id
@@ -733,7 +766,7 @@ class NPCAgentSystem:
         logger.debug("Fetching current location from CurrentRoleplay")
         try:
             # Using the provided connection pool
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 row = await conn.fetchrow("""
                     SELECT value
                     FROM CurrentRoleplay
@@ -860,67 +893,65 @@ class NPCAgentSystem:
         Returns:
             JSON string with current time data
         """
-        year, month, day, time_of_day = None, None, None, None
+        y, m, d, tod = None, None, None, None
         try:
-            # Using the provided connection pool
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 rows = await conn.fetch(
                     """
                     SELECT key, value
                     FROM CurrentRoleplay
-                    WHERE key IN ('CurrentYear', 'CurrentMonth', 'CurrentDay', 'TimeOfDay')
-                      AND user_id = $1
-                      AND conversation_id = $2
+                    WHERE key IN ('Year','Month','Day','TimeOfDay',
+                                  'CurrentYear','CurrentMonth','CurrentDay')
+                      AND user_id = $1 AND conversation_id = $2
                     """,
                     self.user_id, self.conversation_id
                 )
-                for row in rows:
-                    key = row["key"]
-                    value = row["value"]
-                    if key == "CurrentYear":
-                        year = int(value) if value.isdigit() else 2023
-                    elif key == "CurrentMonth":
-                        month = value
-                    elif key == "CurrentDay":
-                        day = int(value) if value.isdigit() else 1
-                    elif key == "TimeOfDay":
-                        time_of_day = value
-
+                kv = {r["key"]: r["value"] for r in rows}
+                year_val = kv.get("Year") or kv.get("CurrentYear")
+                month_val = kv.get("Month") or kv.get("CurrentMonth")
+                day_val = kv.get("Day") or kv.get("CurrentDay")
+                tod = kv.get("TimeOfDay") or "Morning"
+                y = int(year_val) if year_val and str(year_val).isdigit() else 2023
+                d = int(day_val) if day_val and str(day_val).isdigit() else 1
+                m = month_val or "January"
         except Exception as e:
             logger.error(f"Error getting game time: {e}")
+            y, m, d, tod = 2023, "January", 1, "afternoon"
+        return GameTime(year=y, month=m, day=d, time_of_day=tod).model_dump_json()
 
-        # Return with defaults
-        return GameTime(
-            year=year or 2023,
-            month=month or "January",
-            day=day or 1,
-            time_of_day=time_of_day or "afternoon"
-        ).model_dump_json()
+    # Internal helper: parsed time dict (for internal use)
+    async def _get_current_time_dict(self) -> Dict[str, Any]:
+        try:
+            raw = await self.get_current_game_time()
+            data = _safe_json_loads(raw)
+            return data if data else {"year": 2023, "month": "January", "day": 1, "time_of_day": "afternoon"}
+        except Exception:
+            return {"year": 2023, "month": "January", "day": 1, "time_of_day": "afternoon"}
 
     @function_tool(strict_mode=False)
     async def process_npc_scheduled_activities(self) -> str:
         """
         Process scheduled activities for all NPCs using the agent system.
         This doesn't directly update NPC state but processes activities.
-
+    
         Returns:
             JSON string with scheduled activity results
         """
         logger.info("Processing scheduled activities")
-
+    
         try:
-            # Get current game time
-            time_data = await self.get_current_game_time()
+            # Get current game time (parsed dict)
+            time_data = await self._get_current_time_dict()
             base_context = {
-                "year": time_data.year,
-                "month": time_data.month,
-                "day": time_data.day,
-                "time_of_day": time_data.time_of_day,
+                "year": time_data["year"],
+                "month": time_data["month"],
+                "day": time_data["day"],
+                "time_of_day": time_data["time_of_day"],
                 "activity_type": "scheduled"
             }
-
+    
             # Fetch all NPC data for activities - READ ONLY
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 rows = await conn.fetch("""
                     SELECT npc_id, npc_name, schedule, current_location,
                            dominance, cruelty
@@ -936,7 +967,6 @@ class NPCAgentSystem:
                     schedule = row["schedule"]
                     if schedule and isinstance(schedule, str):
                         try:
-                            import json
                             schedule = json.loads(schedule)
                         except json.JSONDecodeError:
                             schedule = {}
@@ -948,17 +978,17 @@ class NPCAgentSystem:
                         "dominance": row["dominance"],
                         "cruelty": row["cruelty"]
                     }
-
+    
             total_npcs = len(npc_data)
             if total_npcs == 0:
                 return ScheduledActivitiesResult(
                     npc_responses=[],
                     count=0,
-                    time_of_day=time_data.time_of_day
+                    time_of_day=time_data["time_of_day"]
                 ).model_dump_json()
-
+    
             logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
-
+    
             # Process NPCs in batches
             batch_size = 20
             npc_responses = []
@@ -982,7 +1012,7 @@ class NPCAgentSystem:
                     # Generate and execute an action
                     action = await self.npc_agents[npc_id].make_decision(npc_context)
                     batch_tasks.append((npc_id, action, npc_context))
-
+    
                 # Process batch results
                 for npc_id, action, npc_context in batch_tasks:
                     try:
@@ -993,22 +1023,22 @@ class NPCAgentSystem:
                         npc_responses.append(result)
                     except Exception as e:
                         logger.error(f"Error processing scheduled activity for NPC {npc_id}: {e}")
-
+    
                 # Small delay between batches
                 if i + batch_size < total_npcs:
                     await asyncio.sleep(0.1)
-
+    
             return ScheduledActivitiesResult(
                 npc_responses=npc_responses,
                 count=len(npc_responses),
-                time_of_day=time_data.time_of_day
+                time_of_day=time_data["time_of_day"]
             ).model_dump_json()
-
+    
         except Exception as e:
             error_msg = f"Error processing NPC scheduled activities: {e}"
             logger.error(error_msg)
             raise NPCSystemError(error_msg)
-
+        
     async def run_memory_maintenance_direct(self) -> Dict[str, Any]:
         """
         Direct method for running memory maintenance without agent wrapper.
@@ -1274,7 +1304,7 @@ class NPCAgentSystem:
                 triggered=False,
                 error=str(e)
             ).model_dump_json()
-
+    
     async def process_command(self, command: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a command from the game system using the system agent.
@@ -1292,36 +1322,36 @@ class NPCAgentSystem:
                 context = None
                 if "context" in parameters:
                     context = ActionContext(**parameters["context"])
-                result = await self.handle_player_action(player_action, context)
-                return result.model_dump()
+                result_json = await self.handle_player_action(player_action, context)
+                return _safe_json_loads(result_json)
                 
             elif command == "batch_update" and all(k in parameters for k in ["npc_ids", "update_type", "update_data"]):
                 update_data = BatchUpdateData(**parameters.get("update_data", {}))
-                result = await self.batch_update_npcs(
+                result_json = await self.batch_update_npcs(
                     parameters["npc_ids"],
                     parameters["update_type"],
                     update_data
                 )
-                return result.model_dump()
+                return _safe_json_loads(result_json)
                 
             elif command == "initialize_agents":
-                result = await self.initialize_agents(parameters.get("npc_ids"))
-                return result.model_dump()
+                result_json = await self.initialize_agents(parameters.get("npc_ids"))
+                return _safe_json_loads(result_json)
                 
             elif command == "process_scheduled_activities":
-                result = await self.process_npc_scheduled_activities()
-                return result.model_dump()
+                result_json = await self.process_npc_scheduled_activities()
+                return _safe_json_loads(result_json)
                 
             elif command == "run_memory_maintenance":
-                result = await self.run_memory_maintenance()
-                return result.model_dump()
+                result_json = await self.run_memory_maintenance()
+                return _safe_json_loads(result_json)
                 
             elif command == "generate_flashback" and all(k in parameters for k in ["npc_id", "context_text"]):
-                result = await self.generate_npc_flashback(
+                result_json = await self.generate_npc_flashback(
                     parameters["npc_id"],
                     parameters["context_text"]
                 )
-                return result.model_dump()
+                return _safe_json_loads(result_json)
                 
             else:
                 return {
@@ -1343,18 +1373,18 @@ class NPCAgentSystem:
                 context = ActionContext(**parameters["context"])
             
             # Call the method directly with models
-            result = await self.handle_player_action(player_action, context)
-            return result.model_dump()
+            result_json = await self.handle_player_action(player_action, context)
+            return _safe_json_loads(result_json)
             
         elif command == "batch_update":
             # Convert update_data to model
             update_data = BatchUpdateData(**parameters.get("update_data", {}))
-            result = await self.batch_update_npcs(
+            result_json = await self.batch_update_npcs(
                 parameters["npc_ids"],
                 parameters["update_type"],
                 update_data
             )
-            return result.model_dump()
+            return _safe_json_loads(result_json)
         
         # For other commands, use the existing approach
         input_data = {
@@ -1372,14 +1402,14 @@ class NPCAgentSystem:
             
             # Return the result
             return result.final_output.result
-            
+                
     async def get_npc_name(self, npc_id: int) -> str:
         """
         Get the name of an NPC by ID.
         READ-ONLY operation.
         """
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 row = await conn.fetchrow("""
                     SELECT npc_name
                     FROM NPCStats
@@ -1457,20 +1487,19 @@ class NPCAgentSystem:
 
     async def _get_current_time(self) -> Optional[Dict[str, Any]]:
         """Get current game time - READ ONLY."""
-        return await self.get_current_game_time()
+        return await self._get_current_time_dict()
 
     async def _get_active_npcs(self) -> List[Dict[str, Any]]:
         """Get all active NPCs in the current conversation - READ ONLY."""
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 rows = await conn.fetch("""
                     SELECT npc_id, npc_name, current_location, schedule
                     FROM NPCStats
                     WHERE user_id = $1 AND conversation_id = $2
-                    AND is_active = true
+                      AND status IN ('active','idle','observing')
                 """, self.user_id, self.conversation_id)
-                
-                return [dict(row) for row in rows]
+            return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Error getting active NPCs: {e}")
             return []
@@ -1485,7 +1514,7 @@ class NPCAgentSystem:
     async def _is_npc_in_conflict(self, npc_id: int) -> bool:
         """Check if an NPC is currently involved in a conflict - READ ONLY."""
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 row = await conn.fetchrow("""
                     SELECT COUNT(*) as count
                     FROM ConflictNPCs
@@ -1556,17 +1585,26 @@ class NPCAgentSystem:
         return None
 
     def _is_same_time_period(self, time1: Any, time2: Dict[str, Any]) -> bool:
-        """Check if two times are in the same time period."""
+        """Check if an activity time and current game time refer to the same period."""
         try:
-            # Simple check - are they on the same day and time period
+            # Normalize time1
             if isinstance(time1, str):
-                # Parse timestamp if it's a string
-                time1 = datetime.fromisoformat(time1.replace('Z', '+00:00'))
-            
-            # Check if same day
-            return (time1.date() == datetime.now().date() and 
-                    time2.get("time_of_day") == "current")
-            
+                s = time1
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                t1 = datetime.fromisoformat(s)
+            elif isinstance(time1, (int, float)):
+                t1 = datetime.fromtimestamp(float(time1))
+            elif isinstance(time1, datetime):
+                t1 = time1
+            else:
+                return False
+
+            y = time2.get("year")
+            d = time2.get("day")
+            # Month name can be messy across locales; match year/day + require a time_of_day label
+            same_day = (t1.year == int(y) and t1.day == int(d)) if (y and d) else (t1.date() == datetime.now().date())
+            return same_day and bool(time2.get("time_of_day"))
         except Exception as e:
             logger.error(f"Error comparing time periods: {e}")
             return False
@@ -1661,7 +1699,7 @@ class NPCAgentSystem:
                 })
                 
                 # Find existing social link
-                async with self.connection_pool.acquire() as conn:
+                async with self._acquire_conn() as conn:
                     link = await conn.fetchrow("""
                         SELECT link_id FROM SocialLinks
                         WHERE user_id = $1 AND conversation_id = $2
@@ -1730,7 +1768,7 @@ class NPCAgentSystem:
     async def _get_npc_active_conflict(self, npc_id: int) -> Optional[Dict[str, Any]]:
         """Get the active conflict an NPC is involved in - READ ONLY."""
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 row = await conn.fetchrow("""
                     SELECT c.*, cn.faction, cn.role, cn.influence_level
                     FROM Conflicts c
@@ -1830,7 +1868,7 @@ class NPCAgentSystem:
     async def _get_npc_stats(self, npc_id: int) -> Optional[Dict[str, Any]]:
         """Get NPC stats - READ ONLY."""
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 row = await conn.fetchrow("""
                     SELECT * FROM NPCStats
                     WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
@@ -1860,7 +1898,7 @@ class NPCAgentSystem:
     async def _get_relationship(self, npc1_id: int, npc2_id: int) -> Dict[str, Any]:
         """Get relationship data between two NPCs - READ ONLY."""
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 row = await conn.fetchrow("""
                     SELECT * FROM SocialLinks
                     WHERE user_id = $1 AND conversation_id = $2
@@ -1871,12 +1909,13 @@ class NPCAgentSystem:
                 """, self.user_id, self.conversation_id, npc1_id, npc2_id)
                 
                 if row:
+                    rm = dict(row)
                     return {
-                        "trust": row.get("trust_level", 50),
-                        "respect": row.get("respect_level", 50),
-                        "affection": row.get("affection_level", 50),
-                        "tension": row.get("tension_level", 0),
-                        "link_level": row.get("link_level", 50)
+                        "trust": rm.get("trust_level", 50),
+                        "respect": rm.get("respect_level", 50),
+                        "affection": rm.get("affection_level", 50),
+                        "tension": rm.get("tension_level", 0),
+                        "link_level": rm.get("link_level", 50)
                     }
                 return {
                     "trust": 50,
@@ -1901,7 +1940,7 @@ class NPCAgentSystem:
     async def _get_workplace_rivals(self, npc_id: int, location: str) -> List[Dict[str, Any]]:
         """Get NPCs who are rivals at the same workplace - READ ONLY."""
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._acquire_conn() as conn:
                 # Get NPCs at same location
                 rows = await conn.fetch("""
                     SELECT n.npc_id, n.npc_name
