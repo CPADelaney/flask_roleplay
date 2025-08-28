@@ -24,6 +24,12 @@ from db.connection import get_db_connection_context
 from lore.core import canon
 from lore.core.lore_system import LoreSystem
 
+from openai import AsyncOpenAI
+from agents import Agent, Runner
+from agents.models.openai_responses import OpenAIResponsesModel
+from agents.model_settings import ModelSettings
+from pydantic import BaseModel, Field
+
 logger = logging.getLogger(__name__)
 
 class LoreContextCache:
@@ -69,6 +75,27 @@ class LoreContextCache:
         self.invalidation_triggers.clear()
         self.last_access.clear()
 
+# --- Structured output schemas ---
+
+class BeliefUpdate(BaseModel):
+    """One predicted belief update for an NPC."""
+    belief: str = Field(..., description="Concise statement of the belief being updated or created.")
+    change: str = Field(..., description="One of: reinforce | weaken | replace | new")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Model's confidence in this update.")
+    rationale: str = Field(..., description="Brief reasoning for why this change occurs.")
+    # Optional target if 'replace'
+    replaces_belief: str | None = Field(None, description="If change=='replace', what belief is replaced?")
+
+class RelationshipImpact(BaseModel):
+    """Predicted impact of a lore change on one relationship edge."""
+    target_npc_id: int = Field(..., description="Other NPC id in the dyad.")
+    deltas: dict[str, int] = Field(
+        ..., 
+        description="Integer deltas in [-100,100] for dimensions like trust, affection, respect, tension."
+    )
+    likelihood: float = Field(..., ge=0.0, le=1.0, description="Probability this impact manifests.")
+    rationale: str = Field(..., description="Brief justification tied to the lore change + current link.")
+
 class LoreImpactAnalyzer:
     """Analyzes how lore changes affect NPC behavior."""
     
@@ -77,6 +104,16 @@ class LoreImpactAnalyzer:
         self.conversation_id = conversation_id
         self.impact_history = []
         self.npc_behavior_changes = defaultdict(list)
+
+        self._oai_client: AsyncOpenAI | None = None
+        self._belief_agent: Agent | None = None
+        self._rel_agent: Agent | None = None
+
+    def _ensure_oai(self):
+        if self._oai_client is None:
+            # Uses OPENAI_API_KEY from env
+            self._oai_client = AsyncOpenAI()
+        return self._oai_client
         
     async def analyze_lore_impact(self, lore_change: Dict[str, Any], affected_npcs: List[int]) -> Dict[str, Any]:
         """Analyze how a lore change affects NPC behavior."""
@@ -321,19 +358,132 @@ class LoreImpactAnalyzer:
         # If no direct contradiction, assume it doesn't contradict
         return False
         
-    async def _predict_belief_updates(self, npc_beliefs: Dict[str, Any], 
-                                    lore_change: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Predict how NPC beliefs might update based on lore change."""
-        # Implementation would use AI to predict belief updates
-        # Placeholder implementation
-        return []
+    async def _predict_belief_updates(
+        self, npc_beliefs: Dict[str, Any], lore_change: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Predict how NPC beliefs might update based on a lore change, using:
+          - OpenAI Agents SDK (Agent + Runner)
+          - OpenAI Responses API (structured outputs)
+        Returns a list of dicts matching BeliefUpdate.
+        """
+        try:
+            # Ensure client & agent exist
+            oai = self._ensure_oai()
+            if self._belief_agent is None:
+                self._belief_agent = Agent(
+                    name="Belief Update Predictor",
+                    # Clear, constrained instructions: produce ONLY the structured output
+                    instructions=(
+                        "You analyze NPC beliefs in light of a lore change and output concise, "
+                        "actionable belief updates. Do not write prose; return only the JSON "
+                        "that matches the output schema. Use at most 5 updates, each focused."
+                        "\n\nRules:\n"
+                        "- change ∈ {reinforce, weaken, replace, new}\n"
+                        "- confidence ∈ [0,1]\n"
+                        "- If change == 'replace', set replaces_belief.\n"
+                        "- Keep rationale brief (≤ 2 sentences)."
+                    ),
+                    # Use the Responses API via the Agents SDK model wrapper
+                    model=OpenAIResponsesModel(
+                        model="gpt-5-nano",   # fast + supports structured outputs
+                        openai_client=oai,
+                    ),
+                    # Get a LIST of BeliefUpdate back (Agents SDK will use structured outputs)
+                    output_type=list[BeliefUpdate]
+                )
+
+            # Compose compact input payload
+            # Keep it short; the model sees the instructions above.
+            prompt = (
+                "NPC beliefs (JSON):\n"
+                f"{json.dumps(npc_beliefs, ensure_ascii=False)}\n\n"
+                "Lore change (JSON):\n"
+                f"{json.dumps(lore_change, ensure_ascii=False)}\n\n"
+                "Return the list of belief updates."
+            )
+
+            result = await Runner.run(self._belief_agent, prompt)
+            updates: List[BeliefUpdate] = result.final_output or []
+            # Convert Pydantic -> plain dicts for your system
+            return [u.model_dump() for u in updates]
+
+        except Exception as e:
+            logger.warning(f"Belief update prediction failed: {e}")
+            return []
+
         
-    async def _analyze_relationship_impacts(self, npc_id: int, 
-                                          lore_change: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Analyze how lore change affects NPC's relationships."""
-        # Implementation would analyze relationship impacts
-        # Placeholder implementation
-        return []
+    async def _analyze_relationship_impacts(
+        self, npc_id: int, lore_change: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Analyze how a lore change could shift this NPC's relationships to others
+        (trust/affection/respect/tension deltas), with structured outputs.
+        Returns a list of dicts matching RelationshipImpact.
+        """
+        try:
+            # Fetch the immediate neighbors (READ ONLY)
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT entity2_id AS other_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND entity1_type = 'npc' AND entity1_id = $3
+                      AND entity2_type = 'npc'
+                    """,
+                    self.user_id, self.conversation_id, npc_id
+                )
+            neighbors = [
+                {"npc_id": int(r["other_id"]), "link_type": r["link_type"], "trust": int(r["link_level"])}
+                for r in rows
+            ]
+
+            # If no neighbors, nothing to analyze
+            if not neighbors:
+                return []
+
+            # Ensure client & agent exist
+            oai = self._ensure_oai()
+            if self._rel_agent is None:
+                self._rel_agent = Agent(
+                    name="Relationship Impact Analyzer",
+                    instructions=(
+                        "You forecast how a lore change shifts dyadic relationship dimensions "
+                        "(trust, affection, respect, tension) between the focal NPC and each neighbor. "
+                        "For each neighbor, return at most one impact object with integer deltas in "
+                        "[-100, 100] and a brief rationale tied to the lore. Only return the JSON "
+                        "list matching the output schema—no extra text."
+                    ),
+                    model=OpenAIResponsesModel(
+                        model="gpt-5-nano",
+                        openai_client=oai,
+                    ),
+                    output_type=list[RelationshipImpact]
+                )
+
+            # Small, information-dense prompt
+            payload = {
+                "focal_npc_id": npc_id,
+                "neighbors": neighbors,              # current link_type + trust proxy
+                "lore_change": lore_change,          # name, description, flags, etc.
+                "dimensions": ["trust", "affection", "respect", "tension"],
+                "delta_range": [-100, 100]
+            }
+            prompt = (
+                "Relationship context (JSON):\n"
+                f"{json.dumps(payload, ensure_ascii=False)}\n\n"
+                "Return the list of predicted impacts."
+            )
+
+            result = await Runner.run(self._rel_agent, prompt)
+            impacts: List[RelationshipImpact] = result.final_output or []
+            return [i.model_dump() for i in impacts]
+
+        except Exception as e:
+            logger.warning(f"Relationship impact analysis failed: {e}")
+            return []
+
 
     async def _get_relationship(self, npc1_id: int, npc2_id: int) -> Dict[str, Any]:
         """Get the relationship between two NPCs - READ ONLY operation."""
@@ -348,7 +498,7 @@ class LoreImpactAnalyzer:
                         OR
                         (entity1_type = 'npc' AND entity1_id = $4 AND entity2_type = 'npc' AND entity2_id = $3)
                     )
-                """, self.user_id, self.conversation_id, npc1_id, npc2_id, npc2_id, npc1_id)
+                """, self.user_id, self.conversation_id, npc1_id, npc2_id)
                 
                 if row:
                     return {
@@ -478,7 +628,7 @@ class LorePropagationSystem:
                         OR
                         (entity1_type = 'npc' AND entity1_id = $4 AND entity2_type = 'npc' AND entity2_id = $3)
                     )
-                """, self.user_id, self.conversation_id, npc1_id, npc2_id, npc2_id, npc1_id)
+                """, self.user_id, self.conversation_id, npc1_id, npc2_id)
                 
                 if row:
                     return {
@@ -618,3 +768,4 @@ class LoreContextManager:
             "impact_analysis": impact_analysis,
             "propagation_result": propagation_result
         }
+
