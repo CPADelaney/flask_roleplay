@@ -1,7 +1,0 @@
-1. Ensure everything is integrated
-2. IMplement Nyx governance
-3. Implement NPCs having certain knowledge/lack thereof about lore
-4. Have NPCs treat you/other NPCs differently depending on how close/distant they are (social links)
-5. Limit NPC knowledge to things they would reasonably know
-6. Have NPCs learn more via gossip in the background
-7. Archetype consistency with setting (eg., add 'giantess' if setting is part giantess colony, or have an explanation in-universe why there are non giantesses)
