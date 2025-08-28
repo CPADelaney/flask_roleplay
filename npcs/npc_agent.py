@@ -87,6 +87,12 @@ Return JSON: { "description": "<text>" }
 else:
     activity_generator = None
 
+def _safe_json_loads(s: str) -> Dict[str, Any]:
+    try:
+        return json.loads(s.strip().strip("`").strip())
+    except Exception:
+        return {}
+
 # Fallback generation functions using async OpenAI client
 async def _fallback_generate_outcome(action_data: Dict[str, Any]) -> Dict[str, Any]:
     """Fallback outcome generation using async OpenAI client."""
@@ -463,21 +469,15 @@ class NPCContext:
             'mask': LRUCache(capacity=5, default_ttl=300)  # 5 minutes
         }
 
+    @staticmethod
     async def get_lore_system(user_id: int, conversation_id: int):
         """
         Get an initialized instance of the LoreSystem.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            
-        Returns:
-            Initialized LoreSystem instance
         """
         from lore.core.lore_system import LoreSystem
         lore_system = LoreSystem.get_instance(user_id, conversation_id)
         await lore_system.initialize()
-        return lore_system    
+        return lore_system
         
     async def get_memory_system(self) -> MemorySystem:
         """Lazy-load the memory system."""
@@ -544,72 +544,72 @@ class NPCContext:
 async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> str:
     """
     Get the NPC's stats and traits from the database.
-
-    Returns:
-        JSON string with NPC stats
+    Returns a JSON string with NPC stats (tool contract).
     """
     with custom_span("get_npc_stats"):
         npc_id = ctx.context.npc_id
         user_id = ctx.context.user_id
         conversation_id = ctx.context.conversation_id
-        
-        # Updated to use async DB connection
+
         async with get_db_connection_context() as conn:
-            async with conn.cursor() as cursor:
-                await cursor.execute(
-                    """
-                    SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity,
-                           hobbies, personality_traits, likes, dislikes, schedule, current_location, sex
-                    FROM NPCStats
-                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-                    """,
-                    (npc_id, user_id, conversation_id),
-                )
-                row = await cursor.fetchone()
-                if not row:
-                    return NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}").model_dump_json()
+            row = await conn.fetchrow(
+                """
+                SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity,
+                       hobbies, personality_traits, likes, dislikes, schedule, current_location, sex
+                FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """,
+                npc_id, user_id, conversation_id
+            )
 
-        # Parse JSON fields
-        def _parse_json_field(field):
-            if field is None:
-                return []
-            if isinstance(field, str):
+        if not row:
+            stats = NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}")
+            ctx.context.current_stats = stats.model_dump()
+            return stats.model_dump_json()
+
+        row_map = dict(row)
+
+        def _parse_json_field(v, default_list=False):
+            if v is None:
+                return [] if default_list else {}
+            if isinstance(v, (list, dict)):
+                return v
+            if isinstance(v, str):
                 try:
-                    return json.loads(field)
+                    parsed = json.loads(v)
+                    if isinstance(parsed, (list, dict)):
+                        return parsed
                 except json.JSONDecodeError:
-                    return []
-            if isinstance(field, list):
-                return field
-            return []
+                    pass
+            return [] if default_list else {}
 
-        hobbies = _parse_json_field(row[7])
-        personality_traits = _parse_json_field(row[8])
-        likes = _parse_json_field(row[9])
-        dislikes = _parse_json_field(row[10])
-        schedule = _parse_json_field(row[11])
+        hobbies = _parse_json_field(row_map.get("hobbies"), default_list=True)
+        personality_traits = _parse_json_field(row_map.get("personality_traits"), default_list=True)
+        likes = _parse_json_field(row_map.get("likes"), default_list=True)
+        dislikes = _parse_json_field(row_map.get("dislikes"), default_list=True)
+        schedule = _parse_json_field(row_map.get("schedule"))  # expect dict
 
         stats = NPCStats(
             npc_id=npc_id,
-            npc_name=row[0],
-            dominance=row[1],
-            cruelty=row[2],
-            closeness=row[3],
-            trust=row[4],
-            respect=row[5],
-            intensity=row[6],
+            npc_name=row_map.get("npc_name", f"NPC_{npc_id}"),
+            dominance=row_map.get("dominance", 50.0),
+            cruelty=row_map.get("cruelty", 50.0),
+            closeness=row_map.get("closeness", 50.0),
+            trust=row_map.get("trust", 50.0),
+            respect=row_map.get("respect", 50.0),
+            intensity=row_map.get("intensity", 50.0),
             hobbies=hobbies,
             personality_traits=personality_traits,
             likes=likes,
             dislikes=dislikes,
-            schedule=schedule,
-            current_location=row[12],
-            sex=row[13]
+            schedule=schedule if isinstance(schedule, dict) else {},
+            current_location=row_map.get("current_location"),
+            sex=row_map.get("sex"),
         )
-        
-        # Cache the stats
+
         ctx.context.current_stats = stats.model_dump()
         return stats.model_dump_json()
-
+        
 @function_tool(strict_mode=False)
 async def execute_npc_action(
     ctx: RunContextWrapper[NPCContext],
@@ -618,14 +618,7 @@ async def execute_npc_action(
 ) -> str:
     """
     Execute the chosen NPC action with Nyx governance.
-    Updated to use fallback generation if agents aren't available.
-
-    Args:
-        action: The action to execute
-        context: Additional context information
-
-    Returns:
-        JSON string with action execution result
+    Returns a JSON string (ActionResult schema) by contract.
     """
     with function_span("execute_npc_action"):
         perf_start = time.perf_counter()
@@ -633,12 +626,10 @@ async def execute_npc_action(
         npc_id = ctx.context.npc_id
         user_id = ctx.context.user_id
         conversation_id = ctx.context.conversation_id
-        
+
         try:
-            # Check with Nyx governor before executing
             governor = await get_nyx_governor(user_id, conversation_id)
-            
-            # Skip permission check for directive-sourced actions
+
             if not action.decision_metadata or action.decision_metadata.get("source") != "nyx_directive":
                 permission = await governor.check_action_permission(
                     npc_id=npc_id,
@@ -646,23 +637,18 @@ async def execute_npc_action(
                     action_details=action.model_dump(),
                     context=context
                 )
-                
-                # If not approved, replace with override or default action
                 if not permission.get("approved", True):
                     logger.info(f"Nyx rejected action for NPC {npc_id}: {action.type} - {action.description}")
-                    
                     if permission.get("override_action"):
-                        # Use Nyx's override
-                        override = permission["override_action"]
+                        ov = permission["override_action"]
                         action = NPCAction(
-                            type=override.get("type", "observe"),
-                            description=override.get("description", "follow Nyx's guidance"),
-                            target=override.get("target", "environment"),
+                            type=ov.get("type", "observe"),
+                            description=ov.get("description", "follow Nyx's guidance"),
+                            target=ov.get("target", "environment"),
                             weight=1.0,
                             decision_metadata={"source": "nyx_override"}
                         )
                     else:
-                        # Default safe action if no override provided
                         action = NPCAction(
                             type="observe",
                             description="observe quietly as directed by Nyx",
@@ -670,10 +656,9 @@ async def execute_npc_action(
                             weight=1.0,
                             decision_metadata={"source": "nyx_restriction"}
                         )
-            
-            # Record action
+
             ctx.context.record_decision(action.model_dump())
-            
+
             try:
                 outcome_payload = {
                     "action_type": action.type,
@@ -682,13 +667,14 @@ async def execute_npc_action(
                     "context": context
                 }
 
-                # Use agent if available, otherwise fallback
                 if action_outcome_generator:
                     outcome_result = await Runner.run(
                         starting_agent=action_outcome_generator,
                         input=json.dumps(outcome_payload, ensure_ascii=False)
                     )
-                    parsed = json.loads(outcome_result.output.strip())
+                    parsed = _safe_json_loads(outcome_result.output)
+                    if not parsed:
+                        parsed = await _fallback_generate_outcome(outcome_payload)
                 else:
                     parsed = await _fallback_generate_outcome(outcome_payload)
 
@@ -697,25 +683,20 @@ async def execute_npc_action(
                 target_reactions = parsed.get("target_reactions", [])
 
             except Exception as gpt_err:
-                # Fallback to a minimal deterministic line
                 logger.warning(f"Outcome generation failed: {gpt_err}")
                 outcome = f"{action.description.capitalize()} succeeds."
                 emotional_impact = random.randint(-1, 1)
                 target_reactions = []
-            
-            # Create memory of the action if significant
+
+            # Memory: only notable actions
             if abs(emotional_impact) > 2 or action.type in ["dominate", "praise", "mock", "command"]:
                 memory_system = await ctx.context.get_memory_system()
-                
                 memory_text = f"I {action.description} resulting in {outcome}"
-                
-                # Determine tags
                 tags = [action.type, "action"]
                 if emotional_impact > 2:
                     tags.append("positive_outcome")
                 elif emotional_impact < -2:
                     tags.append("negative_outcome")
-                    
                 await memory_system.remember(
                     entity_type="npc",
                     entity_id=ctx.context.npc_id,
@@ -723,35 +704,31 @@ async def execute_npc_action(
                     importance="medium",
                     tags=tags
                 )
-            
-            # Create the result
+
             result = ActionResult(
                 outcome=outcome,
                 emotional_impact=emotional_impact,
                 target_reactions=target_reactions
             )
-            
-            # Record performance
+
             elapsed = time.perf_counter() - perf_start
             ctx.context.perf_metrics['action_time'].append(elapsed)
-            
-            # Report to Nyx - critical for governance
+
             try:
                 await report_action_to_nyx(ctx, action, result)
             except Exception as reporting_error:
                 logger.error(f"Error reporting to Nyx: {reporting_error}")
-            
+
             return result.model_dump_json()
-            
+
         except Exception as e:
             elapsed = time.perf_counter() - perf_start
             logger.error(f"Error executing action after {elapsed:.2f}s: {e}")
-            
             return ActionResult(
                 outcome=f"NPC attempted to {action.description} but encountered an error: {str(e)}",
                 emotional_impact=-1
             ).model_dump_json()
-
+            
 async def report_action_to_nyx(
     ctx: RunContextWrapper[NPCContext],
     action: NPCAction, 
@@ -888,22 +865,6 @@ async def get_nyx_governor(user_id: int, conversation_id: int):
     """
     from nyx.nyx_governance import NyxGovernor
     return NyxGovernor(user_id, conversation_id)
-
-async def get_lore_system(user_id: int, conversation_id: int):
-    """
-    Get an initialized instance of the LoreSystem.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        
-    Returns:
-        Initialized LoreSystem instance
-    """
-    from lore.core.lore_system import LoreSystem
-    lore_system = LoreSystem.get_instance(user_id, conversation_id)
-    await lore_system.initialize()
-    return lore_system
 
 async def get_conflict_system(user_id: int, conversation_id: int):
     """
@@ -1273,153 +1234,130 @@ Generate a single action as JSON with these fields:
         return result
         
     async def _get_affected_npcs(self, lore_change: Dict[str, Any]) -> List[int]:
-        """Get list of NPCs affected by a lore change."""
-        from lore.core.lore_system import LoreSystem
-        
-        affected_npcs = set()  # Use set to avoid duplicates
-        
+        affected = set()
+        change_type = lore_change.get('type', 'unknown')
+        scope = lore_change.get('scope', 'local')
+        entity_id = lore_change.get('entity_id')
+        entity_type = lore_change.get('entity_type')
+        location = lore_change.get('location')
+        faction_id = lore_change.get('faction_id')
+        culture_id = lore_change.get('culture_id')
+    
         try:
-            # Get lore change details
-            change_type = lore_change.get('type', 'unknown')
-            scope = lore_change.get('scope', 'local')
-            entity_id = lore_change.get('entity_id')
-            entity_type = lore_change.get('entity_type')
-            location = lore_change.get('location')
-            faction_id = lore_change.get('faction_id')
-            culture_id = lore_change.get('culture_id')
-            
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    
-                    # 1. If scope is global, affect all NPCs in the conversation
-                    if scope == 'global':
-                        await cursor.execute("""
-                            SELECT npc_id FROM NPCStats
-                            WHERE user_id = %s AND conversation_id = %s
-                        """, (self.user_id, self.conversation_id))
-                        
-                        rows = await cursor.fetchall()
-                        affected_npcs.update([row[0] for row in rows])
-                        
-                    # 2. Location-based changes affect NPCs in that location
-                    elif location:
-                        await cursor.execute("""
-                            SELECT npc_id FROM NPCStats
-                            WHERE user_id = %s AND conversation_id = %s
-                            AND current_location = %s
-                        """, (self.user_id, self.conversation_id, location))
-                        
-                        rows = await cursor.fetchall()
-                        affected_npcs.update([row[0] for row in rows])
-                    
-                    # 3. Faction-based changes affect NPCs in that faction
-                    if faction_id:
-                        await cursor.execute("""
-                            SELECT n.npc_id 
-                            FROM NPCStats n
-                            LEFT JOIN NPCFactionMemberships fm ON n.npc_id = fm.npc_id
-                            WHERE n.user_id = %s AND n.conversation_id = %s
-                            AND fm.faction_id = %s
-                        """, (self.user_id, self.conversation_id, faction_id))
-                        
-                        rows = await cursor.fetchall()
-                        affected_npcs.update([row[0] for row in rows])
-                    
-                    # 4. Culture-based changes affect NPCs of that culture
-                    if culture_id:
-                        await cursor.execute("""
-                            SELECT n.npc_id 
-                            FROM NPCStats n
-                            LEFT JOIN NPCCulturalAffiliations ca ON n.npc_id = ca.npc_id
-                            WHERE n.user_id = %s AND n.conversation_id = %s
-                            AND ca.culture_id = %s
-                        """, (self.user_id, self.conversation_id, culture_id))
-                        
-                        rows = await cursor.fetchall()
-                        affected_npcs.update([row[0] for row in rows])
-                    
-                    # 5. Get NPCs with relationships to the entity
-                    if entity_id and entity_type == 'npc':
-                        # Get NPCs who have relationships with the affected NPC
-                        await cursor.execute("""
-                            SELECT DISTINCT npc_id FROM NPCRelationships
-                            WHERE user_id = %s AND conversation_id = %s
-                            AND (npc_id = %s OR target_npc_id = %s)
-                        """, (self.user_id, self.conversation_id, entity_id, entity_id))
-                        
-                        rows = await cursor.fetchall()
-                        affected_npcs.update([row[0] for row in rows])
-                    
-                    # 6. Get NPCs with high knowledge levels who would know about the change
-                    if change_type in ['historical_event', 'political_change', 'religious_change']:
-                        # NPCs with high intelligence or knowledge stats
-                        await cursor.execute("""
-                            SELECT npc_id FROM NPCStats
-                            WHERE user_id = %s AND conversation_id = %s
-                            AND (
-                                personality_traits::text LIKE '%knowledgeable%'
-                                OR personality_traits::text LIKE '%scholar%'
-                                OR personality_traits::text LIKE '%wise%'
-                                OR personality_traits::text LIKE '%informed%'
-                            )
-                        """, (self.user_id, self.conversation_id))
-                        
-                        rows = await cursor.fetchall()
-                        affected_npcs.update([row[0] for row in rows])
-                    
-                    # 7. Get NPCs based on lore change metadata
-                    if 'affected_entities' in lore_change:
-                        for entity in lore_change['affected_entities']:
-                            if entity.get('type') == 'npc':
-                                affected_npcs.add(entity.get('id'))
-                    
-                    # 8. Get NPCs who witnessed the event (if applicable)
-                    if 'witnesses' in lore_change:
-                        affected_npcs.update(lore_change['witnesses'])
-                    
-                    # 9. For belief or religious changes, get NPCs with matching beliefs
-                    if change_type == 'religious_change' and 'deity_id' in lore_change:
-                        await cursor.execute("""
-                            SELECT n.npc_id 
-                            FROM NPCStats n
-                            LEFT JOIN NPCBeliefs b ON n.npc_id = b.npc_id
-                            WHERE n.user_id = %s AND n.conversation_id = %s
-                            AND b.deity_id = %s
-                        """, (self.user_id, self.conversation_id, lore_change['deity_id']))
-                        
-                        rows = await cursor.fetchall()
-                        affected_npcs.update([row[0] for row in rows])
-                    
-                    # 10. Get NPCs in positions of authority who would need to know
-                    if change_type in ['political_change', 'law_change', 'leadership_change']:
-                        await cursor.execute("""
-                            SELECT npc_id FROM NPCStats
-                            WHERE user_id = %s AND conversation_id = %s
-                            AND (
-                                dominance > 70
-                                OR personality_traits::text LIKE '%leader%'
-                                OR personality_traits::text LIKE '%authority%'
-                                OR personality_traits::text LIKE '%noble%'
-                            )
-                        """, (self.user_id, self.conversation_id))
-                        
-                        rows = await cursor.fetchall()
-                        affected_npcs.update([row[0] for row in rows])
-            
-            # Remove the current NPC from the affected list (they're already handling it)
-            affected_npcs.discard(self.npc_id)
-            
-            # Convert to sorted list for consistent ordering
-            affected_list = sorted(list(affected_npcs))
-            
-            logger.info(f"Lore change type '{change_type}' affects {len(affected_list)} NPCs: {affected_list}")
-            
-            return affected_list
-            
+                if scope == 'global':
+                    rows = await conn.fetch(
+                        "SELECT npc_id FROM NPCStats WHERE user_id = $1 AND conversation_id = $2",
+                        self.user_id, self.conversation_id
+                    )
+                    affected.update(r["npc_id"] for r in rows)
+    
+                elif location:
+                    rows = await conn.fetch(
+                        """
+                        SELECT npc_id FROM NPCStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND current_location = $3
+                        """,
+                        self.user_id, self.conversation_id, location
+                    )
+                    affected.update(r["npc_id"] for r in rows)
+    
+                if faction_id:
+                    rows = await conn.fetch(
+                        """
+                        SELECT n.npc_id
+                        FROM NPCStats n
+                        LEFT JOIN NPCFactionMemberships fm ON n.npc_id = fm.npc_id
+                        WHERE n.user_id = $1 AND n.conversation_id = $2 AND fm.faction_id = $3
+                        """,
+                        self.user_id, self.conversation_id, faction_id
+                    )
+                    affected.update(r["npc_id"] for r in rows)
+    
+                if culture_id:
+                    rows = await conn.fetch(
+                        """
+                        SELECT n.npc_id
+                        FROM NPCStats n
+                        LEFT JOIN NPCCulturalAffiliations ca ON n.npc_id = ca.npc_id
+                        WHERE n.user_id = $1 AND n.conversation_id = $2 AND ca.culture_id = $3
+                        """,
+                        self.user_id, self.conversation_id, culture_id
+                    )
+                    affected.update(r["npc_id"] for r in rows)
+    
+                if entity_id and entity_type == 'npc':
+                    rows = await conn.fetch(
+                        """
+                        SELECT DISTINCT npc_id FROM NPCRelationships
+                        WHERE user_id = $1 AND conversation_id = $2
+                          AND (npc_id = $3 OR target_npc_id = $3)
+                        """,
+                        self.user_id, self.conversation_id, entity_id
+                    )
+                    affected.update(r["npc_id"] for r in rows)
+    
+                if change_type in ['historical_event', 'political_change', 'religious_change']:
+                    rows = await conn.fetch(
+                        """
+                        SELECT npc_id FROM NPCStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND (
+                            personality_traits::text ILIKE '%knowledgeable%'
+                            OR personality_traits::text ILIKE '%scholar%'
+                            OR personality_traits::text ILIKE '%wise%'
+                            OR personality_traits::text ILIKE '%informed%'
+                        )
+                        """,
+                        self.user_id, self.conversation_id
+                    )
+                    affected.update(r["npc_id"] for r in rows)
+    
+            if 'affected_entities' in lore_change:
+                for e in lore_change['affected_entities']:
+                    if e.get('type') == 'npc':
+                        affected.add(e.get('id'))
+    
+            if 'witnesses' in lore_change:
+                affected.update(lore_change['witnesses'])
+    
+            if change_type == 'religious_change' and 'deity_id' in lore_change:
+                async with get_db_connection_context() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT n.npc_id
+                        FROM NPCStats n
+                        LEFT JOIN NPCBeliefs b ON n.npc_id = b.npc_id
+                        WHERE n.user_id = $1 AND n.conversation_id = $2 AND b.deity_id = $3
+                        """,
+                        self.user_id, self.conversation_id, lore_change['deity_id']
+                    )
+                affected.update(r["npc_id"] for r in rows)
+    
+            if change_type in ['political_change', 'law_change', 'leadership_change']:
+                async with get_db_connection_context() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT npc_id FROM NPCStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND (
+                            dominance > 70
+                            OR personality_traits::text ILIKE '%leader%'
+                            OR personality_traits::text ILIKE '%authority%'
+                            OR personality_traits::text ILIKE '%noble%'
+                        )
+                        """,
+                        self.user_id, self.conversation_id
+                    )
+                affected.update(r["npc_id"] for r in rows)
+    
+            affected.discard(self.npc_id)
+            out = sorted(affected)
+            logger.info(f"Lore change '{change_type}' affects {len(out)} NPCs: {out}")
+            return out
+    
         except Exception as e:
             logger.error(f"Error determining affected NPCs for lore change: {e}")
             return []
-        
+            
     async def _update_state_from_impact(self, impact: Dict[str, Any]):
         """Update NPC state based on lore impact analysis."""
         # Update beliefs
@@ -1435,74 +1373,68 @@ Generate a single action as JSON with these fields:
             await self._update_behavior(impact["behavior_changes"])
 
     async def _update_beliefs(self, belief_updates: List[Dict[str, Any]]):
-        """Update NPC beliefs based on lore changes."""
         try:
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    for update in belief_updates:
-                        belief_type = update.get("type")
-                        belief_value = update.get("value")
-                        belief_strength = update.get("strength", 0.5)
-                        
-                        # Update or insert belief
-                        await cursor.execute("""
-                            INSERT INTO NPCBeliefs (npc_id, user_id, conversation_id, belief_type, belief_value, strength)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (npc_id, user_id, conversation_id, belief_type) 
-                            DO UPDATE SET belief_value = EXCLUDED.belief_value, strength = EXCLUDED.strength
-                        """, (self.npc_id, self.user_id, self.conversation_id, belief_type, belief_value, belief_strength))
-                        
-                        # Create memory of belief change
-                        memory_system = await self.context.get_memory_system()
-                        await memory_system.remember(
-                            entity_type="npc",
-                            entity_id=self.npc_id,
-                            memory_text=f"My beliefs about {belief_type} changed to {belief_value}",
-                            importance="high",
-                            tags=["belief_change", belief_type]
-                        )
-                        
+                for u in belief_updates:
+                    await conn.execute(
+                        """
+                        INSERT INTO NPCBeliefs (npc_id, user_id, conversation_id, belief_type, belief_value, strength)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (npc_id, user_id, conversation_id, belief_type)
+                        DO UPDATE SET belief_value = EXCLUDED.belief_value, strength = EXCLUDED.strength
+                        """,
+                        self.npc_id, self.user_id, self.conversation_id,
+                        u.get("type"), u.get("value"), u.get("strength", 0.5)
+                    )
+                    memory_system = await self.context.get_memory_system()
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=self.npc_id,
+                        memory_text=f"My beliefs about {u.get('type')} changed to {u.get('value')}",
+                        importance="high",
+                        tags=["belief_change", u.get("type")]
+                    )
         except Exception as e:
             logger.error(f"Error updating beliefs: {e}")
-
+    
     async def _apply_relationship_impacts(self, relationship_impacts: List[Dict[str, Any]]):
-        """Update NPC relationships based on lore changes."""
         try:
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    for impact in relationship_impacts:
-                        target_npc_id = impact.get("target_npc_id")
-                        stat_changes = impact.get("stat_changes", {})
-                        
-                        # Get current relationship stats
-                        await cursor.execute("""
-                            SELECT trust, respect, closeness 
-                            FROM NPCRelationships
-                            WHERE user_id = %s AND conversation_id = %s 
-                            AND npc_id = %s AND target_npc_id = %s
-                        """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id))
-                        
-                        row = await cursor.fetchone()
-                        if row:
-                            current_trust, current_respect, current_closeness = row
-                        else:
-                            current_trust = current_respect = current_closeness = 50.0
-                        
-                        # Apply changes
-                        new_trust = max(0, min(100, current_trust + stat_changes.get("trust", 0)))
-                        new_respect = max(0, min(100, current_respect + stat_changes.get("respect", 0)))
-                        new_closeness = max(0, min(100, current_closeness + stat_changes.get("closeness", 0)))
-                        
-                        # Update relationship
-                        await cursor.execute("""
-                            INSERT INTO NPCRelationships 
-                            (user_id, conversation_id, npc_id, target_npc_id, trust, respect, closeness)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (user_id, conversation_id, npc_id, target_npc_id)
-                            DO UPDATE SET trust = EXCLUDED.trust, respect = EXCLUDED.respect, closeness = EXCLUDED.closeness
-                        """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id, 
-                              new_trust, new_respect, new_closeness))
-                        
+                for imp in relationship_impacts:
+                    target_npc_id = imp.get("target_npc_id")
+                    sc = imp.get("stat_changes", {})
+                    row = await conn.fetchrow(
+                        """
+                        SELECT trust, respect, closeness
+                        FROM NPCRelationships
+                        WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3 AND target_npc_id = $4
+                        """,
+                        self.user_id, self.conversation_id, self.npc_id, target_npc_id
+                    )
+                    if row:
+                        ct, cr, cc = row["trust"], row["respect"], row["closeness"]
+                    else:
+                        ct = cr = cc = 50.0
+    
+                    new_trust = max(0, min(100, ct + sc.get("trust", 0)))
+                    new_respect = max(0, min(100, cr + sc.get("respect", 0)))
+                    new_closeness = max(0, min(100, cc + sc.get("closeness", 0)))
+    
+                    await conn.execute(
+                        """
+                        INSERT INTO NPCRelationships
+                          (user_id, conversation_id, npc_id, target_npc_id, trust, respect, closeness, last_interaction)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                        ON CONFLICT (user_id, conversation_id, npc_id, target_npc_id)
+                        DO UPDATE SET
+                          trust = EXCLUDED.trust,
+                          respect = EXCLUDED.respect,
+                          closeness = EXCLUDED.closeness,
+                          last_interaction = EXCLUDED.last_interaction
+                        """,
+                        self.user_id, self.conversation_id, self.npc_id, target_npc_id,
+                        new_trust, new_respect, new_closeness
+                    )
         except Exception as e:
             logger.error(f"Error updating relationships: {e}")
 
@@ -1597,47 +1529,31 @@ Generate a single action as JSON with these fields:
         context: Dict[str, Any] = None
     ) -> ActionResult:
         """
-        Process a scene directive from Nyx.
-        
-        Args:
-            directive_data: The directive data
-            context: Additional context
-            
-        Returns:
-            Result of the directive execution
+        Process a scene directive from Nyx and return ActionResult.
         """
         context = context or {}
         context["source"] = "nyx_scene_directive"
-        
-        # Convert directive to action
-        action_type = directive_data.get("type", "action")
-        description = directive_data.get("description", "follow scene directive")
-        target = directive_data.get("target", "scene")
-        
+    
         action = NPCAction(
-            type=action_type,
-            description=description,
-            target=target,
+            type=directive_data.get("type", "action"),
+            description=directive_data.get("description", "follow scene directive"),
+            target=directive_data.get("target", "scene"),
             weight=1.0,
             decision_metadata={
                 "source": "nyx_scene_directive",
                 "scene_id": directive_data.get("scene_id")
             }
         )
-        
-        # Execute the action
-        result = await execute_npc_action(
+    
+        result_json = await execute_npc_action(
             RunContextWrapper(self.context),
             action,
             context
         )
-        
-        # Provide feedback to Nyx about directive completion
+        result_dict = _safe_json_loads(result_json)
+    
         try:
-            # Report completion to Nyx
             from nyx.integrate import remember_with_governance
-            
-            # Report directive completion through governance memory system
             await remember_with_governance(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
@@ -1650,8 +1566,8 @@ Generate a single action as JSON with these fields:
             )
         except Exception as e:
             logger.error(f"Error reporting directive completion: {e}")
-        
-        return result
+    
+        return ActionResult(**result_dict) if result_dict else ActionResult(outcome="completed", emotional_impact=0)
 
     async def process_player_action(
         self,
@@ -1660,50 +1576,36 @@ Generate a single action as JSON with these fields:
     ) -> Dict[str, Any]:
         """
         Process a player action directed at this NPC.
-        
-        Args:
-            player_action: The player's action
-            context: Additional context information
-            
-        Returns:
-            NPC's response to the action
+        Returns a plain dict; 'result' is a dict parsed from the tool's JSON string.
         """
         with trace(workflow_name=f"NPC {self.npc_id} Process Player Action"):
             context_obj = context or {}
-            
             try:
-                # Create perception context
                 perception_context = {
                     "player_action": player_action,
                     "text": player_action.get("description", ""),
-                    "description": f"Player {player_action.get('description', 'did something')}"
+                    "description": f"Player {player_action.get('description', 'did something')}",
                 }
                 perception_context.update(context_obj)
-                
-                # Perceive environment
-                perception = await self.perceive_environment(perception_context)
-                
-                # Make a decision
+    
+                _ = await self.perceive_environment(perception_context)
                 action = await self.make_decision(perception_context)
-                
-                # Execute the action
-                result = await execute_npc_action(
+    
+                result_json = await execute_npc_action(
                     RunContextWrapper(self.context),
                     action,
                     perception_context
                 )
-                
-                # Create and return response
+                result_obj = _safe_json_loads(result_json)
+    
                 return {
                     "npc_id": self.npc_id,
                     "action": action.model_dump(),
-                    "result": result.model_dump()
+                    "result": result_obj
                 }
-                
+    
             except Exception as e:
                 logger.error(f"Error processing player action for NPC {self.npc_id}: {e}")
-                
-                # Return basic error response
                 return {
                     "npc_id": self.npc_id,
                     "action": {
@@ -1716,7 +1618,8 @@ Generate a single action as JSON with these fields:
                         "emotional_impact": 0
                     }
                 }
-                
+    
+                    
     async def get_resource_stats(self) -> Dict[str, Any]:
         """Get statistics about resource pool usage."""
         stats = {}
@@ -1781,6 +1684,8 @@ Generate a single action as JSON with these fields:
                 
             # Get current time and location
             time_data = await self._get_current_time()
+            if not time_data:
+                return None
             current_location = await self._get_current_location()
             
             # Get NPC name from stats
@@ -1833,70 +1738,71 @@ Generate a single action as JSON with these fields:
             logger.error(f"Error performing scheduled activity: {e}")
             return None
 
-    async def _get_current_schedule(self) -> Dict[str, Any]:
-        """Get the NPC's current schedule."""
+    async def _get_current_schedule(self) -> Optional[Dict[str, Any]]:
+        """Use NPCStats.schedule; robust JSON handling."""
         try:
-            # Refactored to use async connection
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        SELECT schedule
-                        FROM NPCStats
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """, (self.npc_id, self.user_id, self.conversation_id))
-                    
-                    row = await cursor.fetchone()
-                    
-                    if row and row[0]:
-                        return row[0]
+                row = await conn.fetchrow(
+                    """
+                    SELECT schedule
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """,
+                    self.npc_id, self.user_id, self.conversation_id
+                )
+            if not row:
+                return None
+            val = row["schedule"]
+            if isinstance(val, dict):
+                return val
+            if isinstance(val, str):
+                try:
+                    parsed = json.loads(val)
+                    return parsed if isinstance(parsed, dict) else None
+                except Exception:
                     return None
+            return None
         except Exception as e:
             logger.error(f"Error getting NPC schedule: {e}")
             return None
-
-    async def _get_current_time(self) -> Dict[str, Any]:
-        """Get current game time information."""
+    
+    async def _get_current_time(self) -> Optional[Dict[str, Any]]:
+        """Use the same time source as the orchestrator: CurrentRoleplay."""
         try:
-            # Refactored to use async connection
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        SELECT year, month, day, time_of_day
-                        FROM GameTime
-                        WHERE user_id = %s AND conversation_id = %s
-                    """, (self.user_id, self.conversation_id))
-                    
-                    row = await cursor.fetchone()
-                    
-                    if row:
-                        return {
-                            "year": row[0],
-                            "month": row[1],
-                            "day": row[2],
-                            "time_of_day": row[3]
-                        }
-                    return None
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value FROM CurrentRoleplay
+                    WHERE key IN ('Year','Month','Day','TimeOfDay')
+                      AND user_id = $1 AND conversation_id = $2
+                    """,
+                    self.user_id, self.conversation_id
+                )
+            if not rows:
+                return None
+            m = {r["key"]: r["value"] for r in rows}
+            return {
+                "year": int(m.get("Year", 1)),
+                "month": int(m.get("Month", 1)),
+                "day": int(m.get("Day", 1)),
+                "time_of_day": m.get("TimeOfDay", "Morning"),
+            }
         except Exception as e:
             logger.error(f"Error getting current time: {e}")
             return None
-
+    
     async def _get_current_location(self) -> str:
-        """Get NPC's current location."""
         try:
-            # Refactored to use async connection
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        SELECT current_location
-                        FROM NPCStats
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """, (self.npc_id, self.user_id, self.conversation_id))
-                    
-                    row = await cursor.fetchone()
-                    
-                    if row:
-                        return row[0]
-                    return "unknown"
+                row = await conn.fetchrow(
+                    """
+                    SELECT current_location
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """,
+                    self.npc_id, self.user_id, self.conversation_id
+                )
+            return row["current_location"] if row and row["current_location"] else "unknown"
         except Exception as e:
             logger.error(f"Error getting NPC location: {e}")
             return "unknown"
@@ -2022,49 +1928,86 @@ Generate a single action as JSON with these fields:
             return {"status": "error", "error": str(e)}
 
     async def _get_nearby_npcs(self, location: str) -> List[Dict[str, Any]]:
-        """Get NPCs in the same location."""
         try:
-            # Refactored to use async connection
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        SELECT npc_id, npc_name, dominance, cruelty 
-                        FROM NPCStats
-                        WHERE user_id = %s AND conversation_id = %s
-                        AND current_location = %s
-                        AND npc_id != %s
-                    """, (self.user_id, self.conversation_id, location, self.npc_id))
-                    
-                    rows = await cursor.fetchall()
-                    return [dict(row) for row in rows]
+                rows = await conn.fetch(
+                    """
+                    SELECT npc_id, npc_name, dominance, cruelty
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND current_location = $3
+                      AND npc_id <> $4
+                    """,
+                    self.user_id, self.conversation_id, location, self.npc_id
+                )
+            return [dict(r) for r in rows]
         except Exception as e:
             logger.error(f"Error getting nearby NPCs: {e}")
             return []
-
-    async def _get_relationship(self, target_npc_id: int) -> Dict[str, Any]:
-        """Get relationship data between this NPC and target NPC."""
+    
+    async def _get_relationship(self, target_npc_id: int) -> Optional[Dict[str, Any]]:
         try:
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        SELECT trust, respect, closeness, last_interaction
-                        FROM NPCRelationships
-                        WHERE user_id = %s AND conversation_id = %s
-                        AND npc_id = %s AND target_npc_id = %s
-                    """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id))
-                    
-                    row = await cursor.fetchone()
-                    if row:
-                        return {
-                            "trust": row[0],
-                            "respect": row[1],
-                            "closeness": row[2],
-                            "last_interaction": row[3]
-                        }
-                    return None
+                row = await conn.fetchrow(
+                    """
+                    SELECT trust, respect, closeness, last_interaction
+                    FROM NPCRelationships
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND npc_id = $3 AND target_npc_id = $4
+                    """,
+                    self.user_id, self.conversation_id, self.npc_id, target_npc_id
+                )
+            if not row:
+                return None
+            rm = dict(row)
+            return {
+                "trust": rm.get("trust", 50.0),
+                "respect": rm.get("respect", 50.0),
+                "closeness": rm.get("closeness", 50.0),
+                "last_interaction": rm.get("last_interaction"),
+            }
         except Exception as e:
             logger.error(f"Error getting relationship: {e}")
             return None
+    
+    async def _update_relationship_in_db(self, target_npc_id: int, changes: Dict[str, Any]) -> None:
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT trust, respect, closeness
+                    FROM NPCRelationships
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND npc_id = $3 AND target_npc_id = $4
+                    """,
+                    self.user_id, self.conversation_id, self.npc_id, target_npc_id
+                )
+                if row:
+                    current_trust, current_respect, current_closeness = row["trust"], row["respect"], row["closeness"]
+                else:
+                    current_trust = current_respect = current_closeness = 50.0
+    
+                new_trust = max(0, min(100, current_trust + changes.get("trust", 0)))
+                new_respect = max(0, min(100, current_respect + changes.get("respect", 0)))
+                new_closeness = max(0, min(100, current_closeness + changes.get("closeness", 0)))
+    
+                await conn.execute(
+                    """
+                    INSERT INTO NPCRelationships
+                      (user_id, conversation_id, npc_id, target_npc_id, trust, respect, closeness, last_interaction)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                    ON CONFLICT (user_id, conversation_id, npc_id, target_npc_id)
+                    DO UPDATE SET
+                      trust = EXCLUDED.trust,
+                      respect = EXCLUDED.respect,
+                      closeness = EXCLUDED.closeness,
+                      last_interaction = EXCLUDED.last_interaction
+                    """,
+                    self.user_id, self.conversation_id, self.npc_id, target_npc_id,
+                    new_trust, new_respect, new_closeness
+                )
+        except Exception as e:
+            logger.error(f"Error updating relationship in db: {e}")
 
     def _determine_interaction_type(self, relationship: Dict[str, Any], context: Dict[str, Any]) -> str:
         """Determine the type of interaction based on relationship and context."""
@@ -2104,11 +2047,9 @@ Generate a single action as JSON with these fields:
                     "location": context.get("location", "unknown")
                 }, ensure_ascii=False)
 
-                result = await Runner.run(
-                    starting_agent=interaction_detail_generator,
-                    input=payload
-                )
-                return json.loads(result.output.strip())["details"]
+                res = await Runner.run(starting_agent=interaction_detail_generator, input=payload)
+                parsed = _safe_json_loads(res.output)
+                return parsed.get("details", f"{interaction_type.replace('_',' ')} with {target_npc['npc_name']}")
             else:
                 # Use fallback
                 return await _fallback_generate_interaction_details(
@@ -2142,47 +2083,6 @@ Generate a single action as JSON with these fields:
         
         return changes
 
-    async def _update_relationship_in_db(self, target_npc_id: int, changes: Dict[str, Any]) -> None:
-        """Update relationship stats in the database."""
-        try:
-            async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    # Get current values
-                    await cursor.execute("""
-                        SELECT trust, respect, closeness
-                        FROM NPCRelationships
-                        WHERE user_id = %s AND conversation_id = %s
-                        AND npc_id = %s AND target_npc_id = %s
-                    """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id))
-                    
-                    row = await cursor.fetchone()
-                    if row:
-                        current_trust, current_respect, current_closeness = row
-                    else:
-                        current_trust = current_respect = current_closeness = 50.0
-                    
-                    # Apply changes
-                    new_trust = max(0, min(100, current_trust + changes.get("trust", 0)))
-                    new_respect = max(0, min(100, current_respect + changes.get("respect", 0)))
-                    new_closeness = max(0, min(100, current_closeness + changes.get("closeness", 0)))
-                    
-                    # Update or insert
-                    await cursor.execute("""
-                        INSERT INTO NPCRelationships 
-                        (user_id, conversation_id, npc_id, target_npc_id, trust, respect, closeness, last_interaction)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                        ON CONFLICT (user_id, conversation_id, npc_id, target_npc_id)
-                        DO UPDATE SET 
-                            trust = EXCLUDED.trust,
-                            respect = EXCLUDED.respect,
-                            closeness = EXCLUDED.closeness,
-                            last_interaction = EXCLUDED.last_interaction
-                    """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id,
-                          new_trust, new_respect, new_closeness))
-                    
-        except Exception as e:
-            logger.error(f"Error updating relationship in db: {e}")
-
     async def _generate_work_activity(self, work_type: str, location: str) -> Dict[str, Any]:
         """LLM-based work activity description with fallback."""
         try:
@@ -2196,7 +2096,7 @@ Generate a single action as JSON with these fields:
                     "npc_name": npc_name
                 })
                 res = await Runner.run(activity_generator, payload)
-                desc = json.loads(res.output.strip())["description"]
+                desc = _safe_json_loads(res.output).get("description", f"working at {location}")
             else:
                 desc = await _fallback_generate_activity("work", work_type, location, npc_name)
         except Exception as e:
@@ -2222,7 +2122,7 @@ Generate a single action as JSON with these fields:
                     "npc_name": npc_name
                 })
                 res = await Runner.run(activity_generator, payload)
-                desc = json.loads(res.output.strip())["description"]
+                desc = _safe_json_loads(res.output).get("description", f"relaxing at {location}")
             else:
                 desc = await _fallback_generate_activity("relax", relax_type, location, npc_name)
         except Exception as e:
@@ -2272,17 +2172,16 @@ Generate a single action as JSON with these fields:
         """Update NPC's current location."""
         try:
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        UPDATE NPCStats
-                        SET current_location = %s
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """, (new_location, self.npc_id, self.user_id, self.conversation_id))
-                    
-            # Update cache
+                await conn.execute(
+                    """
+                    UPDATE NPCStats
+                    SET current_location = $1
+                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+                    """,
+                    new_location, self.npc_id, self.user_id, self.conversation_id
+                )
             if self.context.current_stats:
                 self.context.current_stats["current_location"] = new_location
-                
         except Exception as e:
             logger.error(f"Error updating location: {e}")
 
@@ -2363,6 +2262,9 @@ Generate a single action as JSON with these fields:
         except Exception as e:
             logger.error(f"Error updating relationships: {e}")
 
+    def _importance_label(self, val: float) -> str:
+        return "high" if val >= 0.85 else "medium" if val >= 0.55 else "low"
+
     async def _record_activity(self, action: Dict[str, Any], result: Dict[str, Any], context: Dict[str, Any]) -> None:
         """Record an activity in memory."""
         try:
@@ -2376,7 +2278,7 @@ Generate a single action as JSON with these fields:
                 entity_type="npc",
                 entity_id=self.npc_id,
                 memory_text=memory_text,
-                importance=self._calculate_memory_importance(action, result),
+                importance=self._importance_label(self._calculate_memory_importance(action, result)),
                 tags=["activity", action.get("type", "unknown")]
             )
             
@@ -2391,7 +2293,7 @@ Generate a single action as JSON with these fields:
             time = context.get("time_of_day", "unknown time")
             
             if action_type == "socialize":
-                target = result.get("target_npc", "someone")
+                target = result.get("interaction", {}).get("target_npc", "someone")
                 interaction = result.get("interaction", {}).get("details", "had an interaction")
                 return f"At {time} in {location}, I {interaction} with {target}."
             elif action_type == "work":
@@ -2439,18 +2341,15 @@ Generate a single action as JSON with these fields:
         """Get NPC data from database."""
         try:
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        SELECT * FROM NPCStats
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """, (npc_id, self.user_id, self.conversation_id))
-                    
-                    row = await cursor.fetchone()
-                    if row:
-                        # Convert row to dict
-                        columns = [desc[0] for desc in cursor.description]
-                        return dict(zip(columns, row))
-                    return {}
+                row = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """,
+                    npc_id, self.user_id, self.conversation_id
+                )
+            return dict(row) if row else {}
         except Exception as e:
             logger.error(f"Error getting NPC data: {e}")
             return {}
